@@ -2,6 +2,16 @@
 
 const releases = [
     {
+        version: "26.10.03.01",
+        date: "October 3, 2026",
+        highlights: [
+            "⏱️ Free-trial off-period lockout fix: When the hosted free-trial window is off, sending a chat message without a personal key (Gemini, OpenAI, or xAI) or superuser access now opens the API key dialog instead of calling hosted inference. Users who have entered their own key are no longer blocked.",
+            "👋 Welcome & agreement polish: Further refinements to the welcome screen and first-time legal agreement dialog, and 'Coming Soon' labeling was removed from the Open Source option.",
+            "🆓 Open source edition: Added an open-source build (`npm run dev:oss`, `.env.oss.example`) and an opensource subdomain entry point.",
+            "🔄 landsurv-core sync: Added a GitHub workflow to sync exports to the public `landsurv-core` repository, with CI, lint, and test scaffolding regenerated on every export.",
+        ],
+    },
+    {
         version: "26.10.01.01",
         date: "October 1, 2026",
         highlights: [
