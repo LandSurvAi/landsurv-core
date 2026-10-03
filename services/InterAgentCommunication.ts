@@ -1126,7 +1126,7 @@ if (typeof window !== 'undefined') {
     /** Dump the full or filtered activity log. */
     log: (filter?: { command?: string; agent?: string; phase?: CacpLogPhase }) => {
       const entries = filterEntries(interAgentComm.getLog(), filter);
-       
+      // eslint-disable-next-line no-console
       console.table(entries.map(e => ({
         seq: e.seq,
         time: new Date(e.timestamp).toISOString().slice(11, 23),
@@ -1144,7 +1144,7 @@ if (typeof window !== 'undefined') {
     /** Last N entries (default 20). */
     tail: (n = 20) => {
       const entries = interAgentComm.getLog().slice(-n);
-       
+      // eslint-disable-next-line no-console
       console.table(entries);
       return entries;
     },
@@ -1160,7 +1160,7 @@ if (typeof window !== 'undefined') {
         byPhase[e.phase] = (byPhase[e.phase] ?? 0) + 1;
       }
       const out = { total: entries.length, byPhase, byCommand, byPair, service: interAgentComm.getStats() };
-       
+      // eslint-disable-next-line no-console
       console.log(out);
       return out;
     },
@@ -1208,7 +1208,7 @@ if (typeof window !== 'undefined') {
         const fresh = entries.filter(e => e.seq > lastSeq);
         if (fresh.length === 0) return;
         lastSeq = entries[entries.length - 1].seq;
-         
+        // eslint-disable-next-line no-console
         for (const e of fresh) console.log(`[CACP ${e.phase}] ${e.from} → ${e.to}: ${e.command}`, e.data ?? e.preview);
       });
       return 'watching — call __cacp.watch() again to stop';

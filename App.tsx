@@ -143,6 +143,7 @@ import { DataProcessingAddendumSubdomainPage } from './components/DataProcessing
 import { SubprocessorsSubdomainPage } from './components/SubprocessorsSubdomainPage.tsx';
 import { StandardsSubdomainPage } from './components/StandardsSubdomainPage.tsx';
 import { DocumentationSubdomainPage } from './components/DocumentationSubdomainPage.tsx';
+import { OpenSourceSubdomainPage } from './components/OpenSourceSubdomainPage.tsx';
 import { Roadmap2026Page } from './components/Roadmap2026Page.tsx';
 import InvestorInquiryForm from './components/InvestorInquiryForm.tsx';
 import HelpModal from './components/HelpModal.tsx';
@@ -707,6 +708,9 @@ const landingPageConfig = {
     'staging-documentation': { title: "LandSurv.ai Documentation (Staging)", component: DocumentationSubdomainPage, isFullPage: true },
     'docs': { title: "LandSurv.ai Documentation", component: DocumentationSubdomainPage, isFullPage: true },
     'staging-docs': { title: "LandSurv.ai Documentation (Staging)", component: DocumentationSubdomainPage, isFullPage: true },
+    // Open Source Initiative & Licenses portal
+    'opensource': { title: "Open Source Initiative", component: OpenSourceSubdomainPage, isFullPage: true },
+    'staging-opensource': { title: "Open Source Initiative (Staging)", component: OpenSourceSubdomainPage, isFullPage: true },
 };
 
 const numberToAlpha = (num: number): string => {
@@ -8326,6 +8330,13 @@ const AppContent = () => {
       });
     }
 
+    // Free-trial off period: block hosted inference unless a key or superuser is present.
+    if (isLocked && !isSuperUser && !hasApiKey && !settings.userApiKey && !settings.openaiApiKey && !settings.xaiApiKey) {
+      setIsLockDismissed(false);
+      setShowApiKeyModal(true);
+      return;
+    }
+
     // Check if user has their own API key and hasn't confirmed yet
     if (settings.userApiKey && !hasConfirmedApiKey) {
       if (isDemoApiKey(settings.userApiKey)) {
@@ -9664,8 +9675,8 @@ const AppContent = () => {
               // the existing point (see verb-semantics rule in system prompt) � let
               // that case fall through to the renumber loop, which now honors numeric
               // re-emits as updates.
-              const newPoints = parsedJson.points as SurveyPoint[];
-              const newLines = parsedJson.lines as SurveyLine[] || [];
+              let newPoints = parsedJson.points as SurveyPoint[];
+              let newLines = parsedJson.lines as SurveyLine[] || [];
               const allExistingPointNumbers = new Set(pointLists.flatMap(l => l.points).map(p => p.pointNumber));
               const hasConflict = agent === AgentType.DEED_READER
                 && parsedJson.replacePoints !== true
@@ -11286,6 +11297,7 @@ const AppContent = () => {
       }
     }
   }, [
+    isLocked, isSuperUser, hasApiKey,
     activeAgent, rawChat, deedChat, stationingChat, pointEditorChat, gpsStakeoutChat, lsvzChat, planExpertChat, dxfChat, imageAnalyzerChat, gisFile, gisChat, gisChatHistory, contouringChat, profileChat,
     standardsComplianceChat, standardsComplianceChatHistory, standardsComplianceSourceMode, standardsComplianceChecks,
     standardsComplianceControlFile, standardsComplianceSubjectFile, standardsComplianceLastReport,

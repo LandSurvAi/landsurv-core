@@ -128,6 +128,6 @@ export default defineConfig(({ mode }) => {
         'process.env.API_KEY': JSON.stringify(geminiKey),
         'process.env.GEMINI_API_KEY': JSON.stringify(geminiKey),
         'import.meta.env.VITE_APP_VERSION': JSON.stringify(buildVersion)
-      },
+      }
     };
 });

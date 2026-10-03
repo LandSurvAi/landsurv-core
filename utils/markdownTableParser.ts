@@ -117,7 +117,7 @@ export function parseMarkdownTable(markdown: string): CodeDefinition[] {
  */
 export function extractMarkdownTable(response: string): string | null {
   // First, normalize the response - sometimes AI outputs \n as literal text instead of newlines
-  const normalizedResponse = response
+  let normalizedResponse = response
     .replace(/\\n/g, '\n')  // Replace literal \n with actual newlines
     .replace(/\r\n/g, '\n') // Normalize Windows line endings
     .replace(/\r/g, '\n');  // Normalize Mac line endings

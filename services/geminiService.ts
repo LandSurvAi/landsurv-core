@@ -1896,7 +1896,7 @@ export const getAutoModelForAgent = (
 // FIX: Renamed 'startChat' to 'startGeminiChat' to match usage in App.tsx.
 // The optional modelOverride parameter allows users to override the model per-agent from the UI.
 export const startGeminiChat = (agentType: AgentType, fileContext: string | SessionFile | SessionFile[], model: string, settings: Settings, trainingContext?: SessionFile, modelOverride?: string, cadLayerContext?: string, draftingStyleEntries?: DraftingStyleEntry[], autoHighThinkingModel: string = 'gemini-3.7-flash'): Chat => {
-  const modelForAgent = modelOverride
+  let modelForAgent = modelOverride
     || (model === 'auto' ? getAutoModelForAgent(agentType, autoHighThinkingModel) : model);
     let additionalConfig: Record<string, unknown> = {};
 

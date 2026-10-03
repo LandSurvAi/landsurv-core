@@ -354,7 +354,7 @@ export async function fetchParcelsForBbox(
       }
       cx /= outerRing.length;
       cy /= outerRing.length;
-      const [lx, ly] = ptConvert ? ptConvert([cx, cy]) : [cx, cy];
+      let [lx, ly] = ptConvert ? ptConvert([cx, cy]) : [cx, cy];
       labelPoints.push({ x: lx, y: ly, parcelId, owner, deedBook, deedPage, block, unit, deedRef });
     }
     for (const ring of rings) {

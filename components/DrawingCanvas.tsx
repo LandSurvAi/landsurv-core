@@ -1907,7 +1907,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         const eNorm = normalizeAngleRad(endAngle);
                         const cNorm = normalizeAngleRad(clickAngle);
 
-                        const inArc = false;
+                        let inArc = false;
                         if (!isLeftCurve) {
                             // Clockwise in world (CCW or CW in screen depending on Y flip)
                             // Let's sample points along the arc for robust hit testing
@@ -4106,7 +4106,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         });
                     }
                 }
-                 
+                // eslint-disable-next-line no-console
                 console.log('[Linetype Debug]', {
                     standardLinetypesCount: standardLinetypes?.length ?? 0,
                     lookupKeys: Array.from(linetypeLookup.keys()),
@@ -8917,8 +8917,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     if (isOrthoEnabled) {
                         target = applyOrthoConstraint(anchor, target);
                     }
-                    const dx = target.easting - anchor.easting;
-                    const dy = target.northing - anchor.northing;
+                    let dx = target.easting - anchor.easting;
+                    let dy = target.northing - anchor.northing;
                     const mag = Math.hypot(dx, dy);
                     const dirX = mag > 1e-9 ? dx / mag : 1;
                     const dirY = mag > 1e-9 ? dy / mag : 0;

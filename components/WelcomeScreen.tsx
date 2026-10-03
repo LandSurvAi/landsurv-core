@@ -184,7 +184,6 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   <div className="space-y-1 pl-2">
                     <h4 className="text-base font-semibold text-white light-theme:text-gray-900 flex items-center gap-2">
                       Free Software
-                      <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 light-theme:text-emerald-700">Coming Soon</span>
                     </h4>
                     <p className="text-sm text-gray-400 light-theme:text-gray-600 leading-relaxed">
                       Open-source software you can use, study, and build on, plus ways to support the project.
@@ -232,10 +231,10 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
               <div className="space-y-1">
                 <h3 className="text-xl font-semibold tracking-tight text-white light-theme:text-gray-900 flex items-center gap-2">
                   Free Software
-                  <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 light-theme:text-emerald-700">Coming Soon</span>
+                  <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 light-theme:text-emerald-700">Now Open Source</span>
                 </h3>
                 <p className="text-sm text-gray-400 light-theme:text-gray-600 max-w-xl">
-                  The majority of LandSurv.ai will be open source, free to use, study, and build on. The code is not public yet. In the meantime, you can help keep the project going with a small contribution.
+                  The core of LandSurv.ai is open source, free to use, study, and build on. You can help keep the project going with a small contribution.
                 </p>
               </div>
 
@@ -249,7 +248,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                         <h4 className="text-base font-semibold text-white light-theme:text-gray-900">
                           landsurv-core
                         </h4>
-                        <span className="text-xs text-gray-400">Public release coming soon</span>
+                        <span className="text-xs text-gray-400">Public on GitHub</span>
                       </div>
                       <a
                         href="https://www.apache.org/licenses/LICENSE-2.0"
@@ -264,25 +263,26 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
 
                     <div className="space-y-2 text-sm text-gray-300 light-theme:text-gray-700 leading-relaxed">
                       <p>
-                        LandSurv.ai is planned to be free and open-source software (FOSS), usable for personal or commercial work at no cost.
+                        landsurv-core is free and open-source software (FOSS), usable for personal or commercial work at no cost. It includes the COGO/coordinate-geometry engine, boundary closure, DXF I/O, contouring/TIN, the CAD drawing canvas, point editor, and CAD Manager — runnable entirely locally with your own AI provider key (Gemini, OpenAI, Anthropic, or xAI).
                       </p>
                       <p>
-                        Once the source code is public, you will be able to read exactly how it works, adapt it to your own workflow, and contribute improvements back to the community.
+                        The source code is public now — read exactly how it works, adapt it to your own workflow, and contribute improvements back to the community.
                       </p>
                       <p>
-                        It will be released under the permissive Apache 2.0 license, which lets you use, modify, and distribute the software, including in commercial products, with very few restrictions.
+                        Released under the permissive Apache 2.0 license, which lets you use, modify, and distribute the software, including in commercial products, with very few restrictions.
                       </p>
                     </div>
                   </div>
 
                   <div className="space-y-2 pt-2">
-                    <button
-                      type="button"
-                      disabled
-                      className="w-full py-2.5 px-4 rounded-md font-semibold text-sm text-gray-400 bg-gray-700/60 cursor-not-allowed flex items-center justify-center light-theme:bg-gray-200 light-theme:text-gray-500"
+                    <a
+                      href="https://github.com/LandSurvAi/landsurv-core"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full py-2.5 px-4 rounded-md font-semibold text-sm text-white bg-emerald-600 hover:bg-emerald-500 shadow-md shadow-emerald-900/40 transition-colors flex items-center justify-center"
                     >
-                      Coming Soon
-                    </button>
+                      View on GitHub
+                    </a>
                   </div>
                 </div>
 

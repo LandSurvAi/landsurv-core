@@ -36,7 +36,7 @@ const DEFAULTS_VERSION = 2;
 type StoredGemini3Config = Partial<Gemini3Config> & { defaultsVersion?: number };
 
 declare global {
-   
+  // eslint-disable-next-line no-var
   var __gemini3Config: Gemini3Config | undefined;
 }
 

@@ -1203,7 +1203,7 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
     } catch (err) {
       console.warn('[CadManagerPage] Active session restore failed:', err);
     }
-     
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**

@@ -90,7 +90,7 @@ export const SymbolLibraryPanel: React.FC<SymbolLibraryPanelProps> = ({
 
   // Filter symbols based on search and category
   const filteredSymbols = useMemo(() => {
-    const symbols = searchQuery 
+    let symbols = searchQuery 
       ? searchSymbols(searchQuery) 
       : getSymbolsByCategory(selectedCategory);
     

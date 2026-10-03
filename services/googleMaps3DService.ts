@@ -152,7 +152,7 @@ export class GoogleMaps3DService {
           const z = data[i + 2];
           
           // Calculate height using nearby terrain data
-          const height = terrainData.elevation;
+          let height = terrainData.elevation;
           
           // Add some variation based on distance from center
           const distance = Math.sqrt(x * x + z * z);

@@ -599,7 +599,7 @@ function trimExteriorBridges(surface: TinSurface, edgeFactor = 2.4): TinSurface 
   const kept = tris.filter((_, t) => !exterior[t]);
   const floor = Math.max(3, Math.floor(tris.length * 0.35));
   const removedCount = tris.length - kept.length;
-   
+  // eslint-disable-next-line no-console
   console.log(
     `[TIN trim] in=${tris.length} tris, median=${median.toFixed(2)}, cutoff=${cutoff.toFixed(2)}, ` +
     `removed(exterior)=${removedCount}, out=${kept.length}`,
@@ -736,7 +736,7 @@ export function importTinSurfaceFromSessionFile(file: SessionFile): TinSurface {
   const bytes = file.fileData ? decodeBase64ToBytes(file.fileData) : null;
 
   if (ext.endsWith('.xml') || ext.endsWith('.landxml') || content.includes('<LandXML')) {
-     
+    // eslint-disable-next-line no-console
     console.log('[TIN import] branch=LandXML (explicit topology)');
     return trimExteriorBridges(parseLandXml(content, name));
   }
@@ -744,7 +744,7 @@ export function importTinSurfaceFromSessionFile(file: SessionFile): TinSurface {
   if (ext.endsWith('.tin')) {
     try {
       const native = parseNativeTin(content, name);
-       
+      // eslint-disable-next-line no-console
       console.log(`[TIN import] branch=native .tin (explicit topology), ${native.triangles.length} source triangles`);
       return trimExteriorBridges(native);
     } catch (nativeErr) {
@@ -755,7 +755,7 @@ export function importTinSurfaceFromSessionFile(file: SessionFile): TinSurface {
         // authoritative — no convex-hull rebuild, no bridges, so NO trim needed.
         const parsed = parseCarlsonTinBinary(rawBytes);
         if (parsed && parsed.triangles.length > 0) {
-           
+          // eslint-disable-next-line no-console
           console.log(`[TIN import] branch=Carlson binary REAL topology, ${parsed.vertices.length} vertices, ${parsed.triangles.length} triangles`);
           return {
             id: createTinId('tin-import-carlson'),
@@ -780,7 +780,7 @@ export function importTinSurfaceFromSessionFile(file: SessionFile): TinSurface {
           }));
           const rebuilt = buildTinFromPoints(surveyPoints, { name, color: '#06b6d4' });
           if (rebuilt && rebuilt.triangles.length > 0) {
-             
+            // eslint-disable-next-line no-console
             console.log(`[TIN import] branch=Carlson binary REBUILD (convex-hull Delaunay), ${extracted.length} extracted points → ${rebuilt.triangles.length} triangles`);
             // Erode only outward-reaching boundary bridges so no edge crosses
             // the concave footprint, without punching interior holes.
