@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Test" Language="1033" Version="1.0.0.0" Manufacturer="Test" UpgradeCode="12345678-1234-1234-1234-123456789abc">
+    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" Manufacturer="Test" Platform="x64" />
+    <Media Id="1" Cabinet="test.cab" EmbedCab="yes" />
+    <Feature Id="ProductFeature" Title="Test" Level="1">
+      <ComponentRef Id="DllComponent" />
+    </Feature>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Test">
+          <Component Id="DllComponent" Guid="11111111-1111-1111-1111-111111111111" Win64="yes">
+            <File Id="TestTxt" Name="testfile.txt" Source="testfile.txt" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+  </Product>
+</Wix>
+

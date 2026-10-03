@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en" style="background-color:#111827;color-scheme:dark">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Disable HTTP caching of the entry document so dev / new deployments always
+         fetch a fresh module graph and never serve a stale React bundle. -->
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    
+    <!-- Favicon - Multiple sizes for best browser support -->
+    <link rel="icon" type="image/png" href="/favicon-32.png" sizes="32x32" />
+    <link rel="icon" type="image/png" href="/favicon-192.png" sizes="192x192" />
+    <!-- Apple Touch Icon for iOS home screen (without rounded corners applied by iOS) -->
+    <link rel="apple-touch-icon" href="/favicon-192.png" />
+    <!-- Web App Manifest for PWA installation -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Windows Tile support (pinned to Start menu) -->
+    <meta name="msapplication-config" content="browserconfig.xml" />
+    <meta name="msapplication-TileColor" content="#111827" />
+    <meta name="msapplication-TileImage" content="/favicon-192.png" />
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#111827" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="LandSurv.ai" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <!-- Force dark color scheme at the browser/OS level so Edge on light-mode Windows
+         doesn't apply a white UA stylesheet before our CSS loads. -->
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="__LANDSURV_META_DESCRIPTION__" />
+    <meta name="keywords" content="surveying, civil engineering, AI agents, geospatial analysis, survey tools" />
+    <meta property="og:title" content="__LANDSURV_META_TITLE__" />
+    <meta property="og:description" content="__LANDSURV_META_DESCRIPTION__" />
+    <meta property="og:image" content="https://landsurv.ai/favicon-512.png" />
+    <meta property="og:url" content="__LANDSURV_META_URL__" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="__LANDSURV_META_TITLE__" />
+    <meta name="twitter:description" content="__LANDSURV_META_DESCRIPTION__" />
+    <meta name="twitter:image" content="https://landsurv.ai/favicon-512.png" />
+    <link rel="canonical" href="__LANDSURV_META_URL__" />
+    <title>__LANDSURV_META_TITLE__</title>
+    
+    <!-- Resource hints for optimal performance -->
+    <link rel="preconnect" href="https://esm.sh" crossorigin>
+    <link rel="dns-prefetch" href="https://cdn.tailwindcss.com">
+    <link rel="dns-prefetch" href="https://www.google-analytics.com">
+    <!-- Service Worker + dynamic imports handle chunk loading and caching -->
+    <!-- Vite handles dynamic imports and lazy loading automatically -->
+    
+    <!-- Structured Data for SEO Rich Results -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "LandSurv.ai",
+      "url": "__LANDSURV_META_URL__",
+      "logo": "https://landsurv.ai/favicon-512.png",
+      "description": "__LANDSURV_META_DESCRIPTION__",
+      "sameAs": ["https://github.com/msersen/LandSurv.ai-Refactored"],
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "@language": "en",
+        "contactType": "Customer Support",
+        "url": "https://landsurv.ai"
+      }
+    }
+    </script>
+    
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "__LANDSURV_META_TITLE__",
+      "description": "__LANDSURV_META_DESCRIPTION__",
+      "url": "__LANDSURV_META_URL__",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "Web",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      }
+    }
+    </script>
+    
+    <!-- Google Analytics - Only load in production -->
+    <script>
+      if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        window.addEventListener('load', function() {
+          const script = document.createElement('script');
+          script.async = true;
+          script.src = 'https://www.googletagmanager.com/gtag/js?id=G-467H2YZ5E4';
+          document.head.appendChild(script);
+          
+          window.dataLayer = window.dataLayer || [];
+          window.gtag = window.gtag || function(){window.dataLayer.push(arguments);};
+          window.gtag('js', new Date());
+          window.gtag('config', 'G-467H2YZ5E4', {
+            'cookie_domain': 'auto',
+            'cookie_flags': 'SameSite=None;Secure',
+            'send_page_view': true
+          });
+        });
+      }
+    </script>
+  
+  <!--
+    FUTURE GEMINI: This import map is critical for loading all external dependencies.
+    Do not remove it. Add new major dependencies here to keep them centralized.
+  -->
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.1.1/",
+    "react": "https://esm.sh/react@^19.1.1",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.1/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.14.0",
+    "jspdf": "https://esm.sh/jspdf@2.5.1",
+    "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@5.4.54",
+    "tesseract.js": "https://esm.sh/tesseract.js@5.1.0",
+    "jszip": "https://esm.sh/jszip@3.10.1",
+    "dxf-writer": "https://esm.sh/dxf-writer@^1.18.0",
+    "pdfjs-dist/": "https://esm.sh/pdfjs-dist@5.4.54/",
+    "proj4": "https://esm.sh/proj4@2.11.0",
+    "qrcode": "https://esm.sh/qrcode@1.5.3",
+    "docx": "https://esm.sh/docx@8.5.0"
+  }
+}
+</script>
+<script>
+  // Capture PWA beforeinstallprompt early before any React components mount
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    window.deferredInstallPrompt = e;
+  });
+</script>
+<script>
+  // Apply reduced-motion preference as early as possible so initial paint matches the
+  // user's choice. Animations are ON by default: only the explicit Settings toggle
+  // (localStorage 'landsurv_reduced_motion' === 'true') disables them. OS-level
+  // prefers-reduced-motion is intentionally ignored so animations don't silently
+  // get turned off for users who never asked for it inside LandSurv.
+  try {
+    if (localStorage.getItem('landsurv_reduced_motion') === 'true') {
+      document.documentElement.setAttribute('data-reduced-motion', 'true');
+    }
+  } catch (e) { /* ignore */ }
+</script>
+<style>
+  /* Reduce-motion override: kills all infinite/looping animations app-wide.
+     Driven solely by html[data-reduced-motion="true"], which the early-paint
+     script above sets from the explicit Settings toggle (with OS prefers-reduced-motion
+     as a fallback only when the user has not made an explicit choice). */
+  html[data-reduced-motion="true"] *,
+  html[data-reduced-motion="true"] *::before,
+  html[data-reduced-motion="true"] *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  /* Default to normal document scrolling. Interactive viewports opt into lock mode. */
+  html, body {
+    width: 100%;
+    min-height: 100%;
+    margin: 0;
+    overflow-x: hidden;
+  }
+  body {
+    min-height: 100dvh;
+    overflow-y: auto;
+  }
+  #root {
+    width: 100%;
+    min-height: 100dvh;
+  }
+  /* Scene-graph (canvas) lock: fill EXACTLY the visible viewport so pinch-zoom
+     and pan are captured by the canvas instead of scrolling/zooming the page.
+     Using --app-height (visualViewport height) — not height:100%, which on
+     mobile resolves to the larger toolbar-hidden viewport and left a gap at the
+     bottom of the screen. 100dvh is the no-JS fallback. */
+  html[data-landsurv-scroll-locked="true"],
+  body[data-landsurv-scroll-locked="true"] {
+    height: var(--app-height, 100dvh);
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  #root[data-landsurv-scroll-locked="true"] {
+    height: var(--app-height, 100dvh);
+    overflow: hidden;
+  }
+  body.resizing, body.resizing * {
+    cursor: col-resize !important;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+  }
+  body.resizing-vertical, body.resizing-vertical * {
+    cursor: row-resize !important;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+  }
+  body.panning, body.panning * {
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+  }
+  body.label-dragging, body.label-dragging * {
+    cursor: grabbing !important;
+    user-select: none;
+  }
+  /* For the top error banner which is positioned with left-1/2 */
+  @keyframes fade-in-down {
+    0% {
+      opacity: 0;
+      transform: translate3d(-50%, -10px, 0);
+    }
+    100% {
+      opacity: 1;
+      transform: translate3d(-50%, 0, 0);
+    }
+  }
+  .animate-fade-in-down {
+    animation: fade-in-down 0.3s ease-out forwards;
+  }
+
+  /* For modal backdrop */
+  @keyframes fade-in {
+    0% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+  .animate-fade-in {
+    animation: fade-in 0.2s ease-out forwards;
+  }
+
+  /* For modal panel, which is centered by flexbox */
+  @keyframes modal-panel-fade-in-down {
+    0% {
+      opacity: 0;
+      transform: translate3d(0, -10px, 0) scale(0.98);
+    }
+    100% {
+      opacity: 1;
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+  }
+  .animate-modal-panel-fade-in-down {
+    animation: modal-panel-fade-in-down 0.3s ease-out forwards;
+  }
+
+  @keyframes fade-in-up {
+    0% {
+      opacity: 0;
+      transform: translate3d(0, 10px, 0);
+    }
+    100% {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
+  }
+  .animate-fade-in-up {
+    animation: fade-in-up 0.2s ease-out forwards;
+  }
+
+  /* Tooltip for new sidebar */
+  .has-tooltip:hover .tooltip {
+    opacity: 1;
+    transform: translateX(0);
+    visibility: visible;
+    transition-delay: 0.5s;
+  }
+
+  /* Light Theme Styles */
+  body.light-theme { background-color: #f3f4f6; color: #111827; }
+  .light-theme .bg-gray-900 { background-color: #ffffff; }
+  .light-theme .text-gray-100 { color: #1f2937; }
+  .light-theme .text-gray-200 { color: #374151; }
+  .light-theme .text-gray-300 { color: #4b5563; }
+  .light-theme .text-gray-400 { color: #6b7280; }
+  .light-theme .text-gray-500 { color: #6b7280; }
+  .light-theme .bg-gray-800 { background-color: #f9fafb; }
+  .light-theme .bg-gray-800\/50 { background-color: rgba(249, 250, 251, 0.5); }
+  .light-theme .bg-gray-700 { background-color: #e5e7eb; }
+  .light-theme .bg-gray-700\/50 { background-color: rgba(229, 231, 235, 0.5); }
+  .light-theme .bg-gray-700\/80 { background-color: rgba(229, 231, 235, 0.8); }
+  .light-theme .border-gray-700 { border-color: #d1d5db; }
+  .light-theme .border-gray-700\/50 { border-color: rgba(209, 213, 219, 0.5); }
+  .light-theme .border-gray-600 { border-color: #d1d5db; }
+  .light-theme .bg-gray-900\/50 { background-color: rgba(255, 255, 255, 0.5); }
+  .light-theme .hover\:bg-gray-700:hover { background-color: #e5e7eb; }
+  .light-theme .hover\:bg-gray-600:hover { background-color: #d1d5db; }
+  .light-theme .hover\:text-white:hover { color: #111827; }
+  .light-theme .bg-blue-600 { background-color: #3b82f6; } /* User chat bubble */
+  .light-theme .text-white { color: #ffffff; }
+  .light-theme .bg-gray-800\/60 { background-color: rgba(249, 250, 251, 0.6); }
+  .light-theme .has-tooltip .tooltip { background-color: #1f2937; color: #f9fafb; }
+  .light-theme .bg-gray-900\/80 { background-color: rgba(249, 250, 251, 0.8); }
+
+  /* Initial Agent Selection light theme */
+  .light-theme .hover\:border-cyan-500:hover { border-color: #06b6d4; }
+  .light-theme .hover\:border-green-500:hover { border-color: #22c55e; }
+  .light-theme .hover\:border-orange-500:hover { border-color: #f97316; }
+  .light-theme .hover\:border-indigo-500:hover { border-color: #6366f1; }
+  .light-theme .hover\:border-purple-500:hover { border-color: #a855f7; }
+  .light-theme .hover\:border-yellow-500:hover { border-color: #eab308; }
+  .light-theme .hover\:border-blue-500:hover { border-color: #3b82f6; }
+  .light-theme .hover\:bg-gray-800:hover { background-color: #f3f4f6; }
+
+  /* 
+    FUTURE GEMINI: This is the initial loading spinner shown before the React app mounts.
+    Do not remove it. Its visibility is controlled by a small script in App.tsx's useEffect.
+  */
+    #initial-loader {
+    position: fixed;
+    inset: 0;
+    background-color: #111827; /* bg-gray-900 */
+    background-image:
+      linear-gradient(rgba(56, 224, 255, 0.14) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(56, 224, 255, 0.14) 1px, transparent 1px),
+      linear-gradient(rgba(56, 224, 255, 0.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(56, 224, 255, 0.07) 1px, transparent 1px);
+    background-size: 128px 128px, 128px 128px, 32px 32px, 32px 32px;
+    background-position: center center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    opacity: 1;
+    transition: opacity 0.6s ease-out;
+    contain: layout style paint;
+  }
+  #initial-loader.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .loader-spinner {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+    border: 5px solid #4b5563; /* border-gray-600 */
+    border-bottom-color: #22d3ee; /* border-cyan-400 */
+    border-radius: 50%;
+    display: inline-block;
+    box-sizing: border-box;
+    animation: rotation 1s linear infinite;
+    contain: layout style paint;
+  }
+  @keyframes rotation {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  @keyframes pulse-border {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(var(--pulse-color), 0.7); }
+    50% { box-shadow: 0 0 0 4px rgba(var(--pulse-color), 0); }
+  }
+  .animate-pulse-border {
+    animation: pulse-border 2.5s infinite;
+  }
+
+  @keyframes pulse-thinking {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(var(--pulse-color), 0.7);
+    }
+    50% {
+      /* Combine a larger, fading agent-color pulse with a slightly smaller, visible red pulse */
+      box-shadow: 0 0 0 8px rgba(var(--pulse-color), 0), 0 0 0 4px rgba(239, 68, 68, 0.6);
+    }
+  }
+  .animate-pulse-thinking {
+      animation: pulse-thinking 1.8s infinite;
+  }
+
+  @keyframes pulse-yellow-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.7); } /* yellow-400 */
+    50% { box-shadow: 0 0 0 4px rgba(250, 204, 21, 0); }
+  }
+  .animate-pulse-yellow-glow {
+    animation: pulse-yellow-glow 2s infinite;
+  }
+
+  @keyframes pulse-bg {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.8; }
+  }
+  .animate-pulse-bg {
+    animation: pulse-bg 1.5s infinite ease-in-out;
+  }
+
+  @keyframes gradient-shift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+  .animate-gradient-shift {
+    background-size: 200% 200%;
+    animation: gradient-shift 8s ease infinite;
+  }
+
+  /* Load Points CTA — pulsing red, modern professional */
+  @keyframes pulse-red-cta {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55), 0 0 22px 2px rgba(220, 38, 38, 0.45);
+      transform: translateZ(0) scale(1);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(239, 68, 68, 0), 0 0 32px 6px rgba(220, 38, 38, 0.25);
+      transform: translateZ(0) scale(1.025);
+    }
+  }
+  .animate-pulse-red-cta {
+    animation: pulse-red-cta 2.1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes shimmer-red-cta {
+    0% { background-position: -180% 0; }
+    100% { background-position: 280% 0; }
+  }
+  .shimmer-red-cta::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,0.28) 50%, transparent 65%);
+    background-size: 220% 100%;
+    animation: shimmer-red-cta 3.2s linear infinite;
+    pointer-events: none;
+    mix-blend-mode: overlay;
+  }
+
+  /* Boundary Editor CTA — pulsing green twin of the red Load Points CTA */
+  @keyframes pulse-green-cta {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55), 0 0 22px 2px rgba(22, 163, 74, 0.45);
+      transform: translateZ(0) scale(1);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(34, 197, 94, 0), 0 0 32px 6px rgba(22, 163, 74, 0.25);
+      transform: translateZ(0) scale(1.025);
+    }
+  }
+  .animate-pulse-green-cta {
+    animation: pulse-green-cta 2.1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes shimmer-green-cta {
+    0% { background-position: -180% 0; }
+    100% { background-position: 280% 0; }
+  }
+  .shimmer-green-cta::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,0.28) 50%, transparent 65%);
+    background-size: 220% 100%;
+    animation: shimmer-green-cta 3.2s linear infinite;
+    pointer-events: none;
+    mix-blend-mode: overlay;
+  }
+
+  /* CAD Manager New Standards CTA — pulsing lavender (twin of red/green CTAs) */
+  @keyframes pulse-lavender-cta {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(167, 139, 250, 0.55), 0 0 22px 2px rgba(139, 92, 246, 0.45);
+      transform: translateZ(0) scale(1);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(167, 139, 250, 0), 0 0 32px 6px rgba(139, 92, 246, 0.25);
+      transform: translateZ(0) scale(1.025);
+    }
+  }
+  .animate-pulse-lavender-cta {
+    animation: pulse-lavender-cta 2.1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes shimmer-lavender-cta {
+    0% { background-position: -180% 0; }
+    100% { background-position: 280% 0; }
+  }
+  .shimmer-lavender-cta::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,0.28) 50%, transparent 65%);
+    background-size: 220% 100%;
+    animation: shimmer-lavender-cta 3.2s linear infinite;
+    pointer-events: none;
+    mix-blend-mode: overlay;
+  }
+
+  /* Point Editor Load Points CTA — pulsing yellow (matches Point Editor agent color) */
+  @keyframes pulse-yellow-cta {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.55), 0 0 22px 2px rgba(234, 179, 8, 0.45);
+      transform: translateZ(0) scale(1);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(250, 204, 21, 0), 0 0 32px 6px rgba(234, 179, 8, 0.25);
+      transform: translateZ(0) scale(1.025);
+    }
+  }
+  .animate-pulse-yellow-cta {
+    animation: pulse-yellow-cta 2.1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes shimmer-yellow-cta {
+    0% { background-position: -180% 0; }
+    100% { background-position: 280% 0; }
+  }
+  .shimmer-yellow-cta::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,0.28) 50%, transparent 65%);
+    background-size: 220% 100%;
+    animation: shimmer-yellow-cta 3.2s linear infinite;
+    pointer-events: none;
+    mix-blend-mode: overlay;
+  }
+
+  /* Point List toolbar button — pulsing pink to draw attention when points load / agent opens */
+  @keyframes pulse-pink-cta {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(244, 114, 182, 0.6), 0 0 22px 2px rgba(236, 72, 153, 0.5);
+      transform: translateZ(0) scale(1);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(244, 114, 182, 0), 0 0 32px 6px rgba(236, 72, 153, 0.28);
+      transform: translateZ(0) scale(1.06);
+    }
+  }
+  .animate-pulse-pink-cta {
+    animation: pulse-pink-cta 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    color: rgb(244, 114, 182);
+  }
+
+  /* CAD Manager New Standards CTA — pulsing indigo (matches CAD Manager agent color) */
+  @keyframes pulse-indigo-cta {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(129, 140, 248, 0.55), 0 0 22px 2px rgba(99, 102, 241, 0.45);
+      transform: translateZ(0) scale(1);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(129, 140, 248, 0), 0 0 32px 6px rgba(99, 102, 241, 0.25);
+      transform: translateZ(0) scale(1.025);
+    }
+  }
+  .animate-pulse-indigo-cta {
+    animation: pulse-indigo-cta 2.1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes shimmer-indigo-cta {
+    0% { background-position: -180% 0; }
+    100% { background-position: 280% 0; }
+  }
+  .shimmer-indigo-cta::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,0.28) 50%, transparent 65%);
+    background-size: 220% 100%;
+    animation: shimmer-indigo-cta 3.2s linear infinite;
+    pointer-events: none;
+    mix-blend-mode: overlay;
+  }
+
+  /* Civil Drafter AI Draw CTA — pulsing fuchsia (matches Civil Drafter agent color) */
+  @keyframes pulse-fuchsia-cta {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(232, 121, 249, 0.55), 0 0 22px 2px rgba(217, 70, 239, 0.45);
+      transform: translateZ(0) scale(1);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(232, 121, 249, 0), 0 0 32px 6px rgba(217, 70, 239, 0.25);
+      transform: translateZ(0) scale(1.025);
+    }
+  }
+  .animate-pulse-fuchsia-cta {
+    animation: pulse-fuchsia-cta 2.1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes shimmer-fuchsia-cta {
+    0% { background-position: -180% 0; }
+    100% { background-position: 280% 0; }
+  }
+  .shimmer-fuchsia-cta::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,0.28) 50%, transparent 65%);
+    background-size: 220% 100%;
+    animation: shimmer-fuchsia-cta 3.2s linear infinite;
+    pointer-events: none;
+    mix-blend-mode: overlay;
+  }
+
+  /* Profile & X-Section New Profile CTA — pulsing sky (matches Profile agent color) */
+  @keyframes pulse-sky-cta {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.55), 0 0 22px 2px rgba(14, 165, 233, 0.45);
+      transform: translateZ(0) scale(1);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(56, 189, 248, 0), 0 0 32px 6px rgba(14, 165, 233, 0.25);
+      transform: translateZ(0) scale(1.025);
+    }
+  }
+  .animate-pulse-sky-cta {
+    animation: pulse-sky-cta 2.1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes shimmer-sky-cta {
+    0% { background-position: -180% 0; }
+    100% { background-position: 280% 0; }
+  }
+  .shimmer-sky-cta::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,0.28) 50%, transparent 65%);
+    background-size: 220% 100%;
+    animation: shimmer-sky-cta 3.2s linear infinite;
+    pointer-events: none;
+    mix-blend-mode: overlay;
+  }
+
+  /* Hide scrollbar but keep functionality */
+  .scrollbar-hide {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;  /* Chrome, Safari and Opera */
+  }
+
+  /* Scope touch gesture capture to interactive viewports so regular pages stay scrollable. */
+  .gesture-capture {
+    touch-action: none;
+  }
+
+  /* Smooth horizontal marquee — duplicated content scrolls seamlessly
+     by translating -50% (half the duplicated track). */
+  @keyframes lsa-marquee {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
+  }
+  .lsa-marquee {
+    display: flex;
+    width: max-content;
+    animation: lsa-marquee 12s linear infinite;
+    will-change: transform;
+  }
+  .lsa-marquee-mask {
+    overflow: hidden;
+    white-space: nowrap;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%);
+            mask-image: linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%);
+  }
+  .lsa-marquee-item {
+    padding-right: 2rem;
+    flex-shrink: 0;
+  }
+
+</style>
+<script>
+  // Keep browser-native page zoom disabled while the app manages its own viewport.
+  (() => {
+    const preventDefault = event => event.preventDefault();
+    const preventCtrlZoom = event => {
+      if (event.ctrlKey) {
+        event.preventDefault();
+      }
+    };
+
+    document.addEventListener('gesturestart', preventDefault, { passive: false });
+    document.addEventListener('gesturechange', preventDefault, { passive: false });
+    document.addEventListener('wheel', preventCtrlZoom, { passive: false });
+  })();
+</script>
+</head>
+  <body class="bg-gray-900 text-gray-100">
+    <div id="initial-loader">
+      <div style="text-align: center;">
+        <h1 style="font-size: 3.75rem; font-weight: 800; letter-spacing: -0.05em; color: #e5e7eb; margin-bottom: 2rem; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';">
+          Land<span style="color: #22d3ee;">Surv</span><span style="color: #34d399;">.ai</span><sup style="font-size: 0.5em; vertical-align: super; margin-left: 2px;">™</sup>
+        </h1>
+        <div class="loader-spinner"></div>
+      </div>
+    </div>
+    <div id="root"></div>
+    <!-- Hide loader immediately for sitemap/XML paths to prevent blocking crawlers -->
+    <script>
+      if (window.location.pathname === '/sitemap' || window.location.pathname === '/sitemap.xml') {
+        const loader = document.getElementById('initial-loader');
+        if (loader) {
+          loader.style.display = 'none';
+        }
+      }
+    </script>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

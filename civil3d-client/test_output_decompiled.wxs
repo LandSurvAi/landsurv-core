@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Product Id="{FA5F3E35-6D26-42EF-88C3-6E56DA14B2DC}" Codepage="1252" Language="1033" Manufacturer="Test" Name="Test" UpgradeCode="{12345678-1234-1234-1234-123456789ABC}" Version="1.0.0.0">
+        <Package Comments="This installer database contains the logic and data required to install Test." Compressed="yes" Description="Test" InstallerVersion="200" Languages="1033" Manufacturer="Test" Platform="x64" />
+        <Directory Id="TARGETDIR" Name="SourceDir">
+            <Directory Id="ProgramFiles64Folder">
+                <Directory Id="INSTALLFOLDER" Name="Test">
+                    <Component Id="DllComponent" Guid="{11111111-1111-1111-1111-111111111111}" Win64="yes">
+                        <File Id="TestDll" Name="LandsurvConnector.dll" KeyPath="yes" ShortName="tyv2mxi1.dll" DiskId="1" Source="SourceDir\File\TestDll" />
+                    </Component>
+                </Directory>
+            </Directory>
+        </Directory>
+        <Feature Id="ProductFeature" Level="1" Title="Test">
+            <ComponentRef Id="DllComponent" />
+        </Feature>
+        <Media Id="1" Cabinet="test.cab" EmbedCab="yes" />
+        <Property Id="ALLUSERS" Value="1" />
+    </Product>
+</Wix>

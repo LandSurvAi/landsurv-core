@@ -1,0 +1,8 @@
+
+export const deedSuggestedQuestionsText = 
+`Plot this deed on the canvas.
+What is the area of this parcel in acres?
+Calculate the closure for this traverse. Is it a closed loop?
+List all the calls in a table format.
+Does this deed mention any monuments?
+Identify the Point of Beginning.`;

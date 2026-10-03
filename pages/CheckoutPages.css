@@ -1,0 +1,278 @@
+.checkout-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 20px;
+  background-color: #111827;
+  background-image:
+    linear-gradient(rgba(34, 211, 238, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+  color: #d1d5db;
+}
+
+.checkout-page.success {
+  background-color: #111827;
+}
+
+.checkout-page.cancel {
+  background-color: #111827;
+}
+
+.checkout-container {
+  background: rgba(31, 41, 55, 0.98);
+  border: 1px solid #374151;
+  border-radius: 8px;
+  padding: 32px;
+  max-width: 640px;
+  width: 100%;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+  text-align: center;
+}
+
+.checkout-brand {
+  border-bottom: 1px solid #374151;
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+}
+
+.checkout-wordmark {
+  color: #f3f4f6;
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.checkout-wordmark .brand-surv {
+  color: #22d3ee;
+}
+
+.checkout-wordmark .brand-ai {
+  color: #4ade80;
+}
+
+.checkout-wordmark sup {
+  color: #9ca3af;
+  font-size: 10px;
+  margin-left: 2px;
+  vertical-align: top;
+}
+
+.checkout-brand p {
+  color: #22d3ee;
+  font-size: 11px;
+  font-weight: 600;
+  margin: 8px 0 0;
+  text-transform: uppercase;
+}
+
+.success-icon,
+.cancel-icon {
+  align-items: center;
+  border-radius: 50%;
+  display: inline-flex;
+  font-size: 28px;
+  height: 56px;
+  justify-content: center;
+  margin-bottom: 16px;
+  width: 56px;
+}
+
+.success-icon {
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.45);
+  color: #4ade80;
+}
+
+.cancel-icon {
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  color: #f87171;
+}
+
+.checkout-container h1 {
+  margin: 0 0 10px 0;
+  font-size: 28px;
+  color: #f9fafb;
+  font-weight: 700;
+}
+
+.success-message,
+.cancel-message {
+  color: #d1d5db;
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 0 auto 24px;
+  max-width: 500px;
+}
+
+.details {
+  background: #111827;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  padding: 20px;
+  margin: 24px 0;
+  text-align: left;
+}
+
+.details h3 {
+  margin: 0 0 16px 0;
+  color: #f3f4f6;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.details ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.details li {
+  color: #cbd5e1;
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 7px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.details .purchase-summary {
+  border-bottom: 1px solid #374151;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+}
+
+.details .purchase-summary li {
+  color: #f3f4f6;
+  font-weight: 600;
+}
+
+.details .purchase-summary li::before {
+  content: '✓';
+  color: #4ade80;
+  font-weight: 700;
+}
+
+.details .next-steps-heading {
+  margin-top: 0;
+}
+
+.help-section {
+  background: rgba(127, 29, 29, 0.2);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 8px;
+  padding: 24px;
+  margin: 20px 0;
+  text-align: left;
+}
+
+.help-section h3 {
+  margin: 0 0 12px 0;
+  color: #fca5a5;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.help-section p {
+  margin: 0 0 12px 0;
+  color: #fecaca;
+  font-size: 14px;
+}
+
+.help-section ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.help-section li {
+  color: #fecaca;
+  font-size: 14px;
+  line-height: 1.8;
+  padding: 6px 0;
+}
+
+.checkout-note {
+  color: #9ca3af;
+  font-size: 13px;
+  margin: 0 0 18px;
+}
+
+.buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 30px;
+}
+
+.buttons button {
+  flex: 1;
+}
+
+.btn-primary,
+.btn-secondary {
+  padding: 14px 24px;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s;
+  border: none;
+  display: inline-block;
+  text-align: center;
+}
+
+.btn-primary {
+  background: #0891b2;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #0e7490;
+  box-shadow: 0 8px 20px rgba(8, 145, 178, 0.24);
+  transform: translateY(-2px);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background: #374151;
+  color: #f3f4f6;
+}
+
+.btn-secondary:hover {
+  background: #4b5563;
+}
+
+.btn-secondary:active {
+  background: #374151;
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+  .checkout-container {
+    padding: 24px 18px;
+  }
+
+  .checkout-container h1 {
+    font-size: 24px;
+  }
+
+  .success-icon,
+  .cancel-icon {
+    font-size: 24px;
+  }
+
+  .details,
+  .help-section {
+    padding: 16px;
+  }
+
+  .buttons {
+    flex-direction: column;
+  }
+}

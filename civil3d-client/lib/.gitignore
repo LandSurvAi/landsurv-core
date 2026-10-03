@@ -1,0 +1,2 @@
+# Never commit proprietary Autodesk reference assemblies (compile-only).
+*.dll

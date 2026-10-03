@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en" style="background:#0f172a;color:#e2e8f0;">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Offline | LandSurv.ai</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: radial-gradient(circle at top right, #164e63 0%, #0f172a 60%);
+      }
+      .card {
+        width: min(34rem, calc(100vw - 2rem));
+        background: rgba(2, 6, 23, 0.8);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 14px;
+        padding: 1.2rem 1.4rem;
+        box-shadow: 0 16px 40px rgba(15, 23, 42, 0.45);
+      }
+      h1 {
+        margin: 0 0 0.4rem 0;
+        font-size: 1.4rem;
+      }
+      p {
+        margin: 0.3rem 0;
+        color: #cbd5e1;
+        line-height: 1.4;
+      }
+      .actions {
+        margin-top: 1rem;
+        display: flex;
+        gap: 0.6rem;
+      }
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 0.55rem 0.9rem;
+        font-weight: 600;
+        background: #22d3ee;
+        color: #082f49;
+        cursor: pointer;
+      }
+      .secondary {
+        background: transparent;
+        color: #cbd5e1;
+        border: 1px solid rgba(148, 163, 184, 0.4);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>LandSurv.ai is offline</h1>
+      <p>Your device is not currently connected to the internet.</p>
+      <p>Cached tools remain available, but live API workflows will resume once your connection returns.</p>
+      <div class="actions">
+        <button type="button" onclick="location.reload()">Try again</button>
+        <button type="button" class="secondary" onclick="location.href='/'">Open cached app</button>
+      </div>
+    </main>
+  </body>
+</html>

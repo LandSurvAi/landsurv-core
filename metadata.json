@@ -1,0 +1,8 @@
+{
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "name": "WORKING (beta) LandSurv.ai 25.11.04 b",
+  "description": "LandSurv.ai offers a complete suite of AI tools for surveyors and civil engineers. Analyze RAW data, plot deeds, visualize DXF files, and perform GPS stakeout."
+}

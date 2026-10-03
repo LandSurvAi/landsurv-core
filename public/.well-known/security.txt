@@ -1,0 +1,6 @@
+Contact: mailto:security@landsurv.ai
+Contact: mailto:legal@landsurv.ai
+Expires: 2027-07-13T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://compliance.landsurv.ai/.well-known/security.txt
+Policy: https://compliance.landsurv.ai

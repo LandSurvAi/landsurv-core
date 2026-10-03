@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!-- MSI Package Definition -->
+  <Package Name="LandsurvConnector for Civil 3D" 
+           Manufacturer="LandSurv.ai" 
+                    Version="26.09.07.09"
+           Language="1033" 
+           Scope="perMachine"
+           UpgradeCode="12345678-1234-1234-1234-123456789abc">
+    
+    <!-- Upgrade configuration.
+         Windows Installer only compares the FIRST THREE fields of ProductVersion,
+         so YY.MM.DD.NN builds from the same day (e.g. 26.9.5.7 vs 26.9.5.10) look
+         identical to it and a plain MajorUpgrade would NOT replace the old install.
+         AllowSameVersionUpgrades makes the detect range inclusive so the already-
+         installed build is found and removed before the new one installs. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version is already installed." />
+    
+    <!-- Media for cabinet embedding -->
+    <Media Id="1" Cabinet="install.cab" EmbedCab="yes" />
+
+    <!-- Features -->
+    <Feature Id="ProductFeature" Title="LandsurvConnector">
+      <ComponentRef Id="LandsurvConnectorDLL" />
+      <ComponentRef Id="LandsurvConnectorConfig" />
+      <ComponentRef Id="LandsurvConnectorDeps" />
+      <ComponentRef Id="LandsurvConnectorPDB" />
+      <ComponentRef Id="NewtonsoftJsonDLL" />
+    </Feature>
+
+    <!-- Installation directory structure (64-bit Program Files) -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="LandSurv.ai">
+        
+        <!-- Main DLL -->
+        <Component Id="LandsurvConnectorDLL" Bitness="always64">
+          <File Id="FilLandsurvDll" Source="sources/LandsurvConnector.dll" Compressed="yes" KeyPath="yes" />
+        </Component>
+
+        <!-- Config file -->
+        <Component Id="LandsurvConnectorConfig" Bitness="always64">
+          <File Id="FilLandsurvConfig" Source="sources/LandsurvConnector.dll.config" Compressed="yes" KeyPath="yes" />
+        </Component>
+
+        <!-- Dependencies file -->
+        <Component Id="LandsurvConnectorDeps" Bitness="always64">
+          <File Id="FilLandsurvDeps" Source="sources/LandsurvConnector.deps.json" Compressed="yes" KeyPath="yes" />
+        </Component>
+
+        <!-- Debug symbols -->
+        <Component Id="LandsurvConnectorPDB" Bitness="always64">
+          <File Id="FilLandsurvPdb" Source="sources/LandsurvConnector.pdb" Compressed="yes" KeyPath="yes" />
+        </Component>
+
+        <!-- Newtonsoft.Json dependency -->
+        <Component Id="NewtonsoftJsonDLL" Bitness="always64">
+          <File Id="FilNewtonsoftJsonDll" Source="sources/Newtonsoft.Json.dll" Compressed="yes" KeyPath="yes" />
+        </Component>
+
+      </Directory>
+    </StandardDirectory>
+
+  </Package>
+
+</Wix>

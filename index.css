@@ -1,0 +1,137 @@
+@import "tailwindcss";
+
+/* Force dark color scheme regardless of OS preference.
+   This prevents Edge/Chrome on light-mode Windows from applying white UA
+   backgrounds to native elements (inputs, scrollbars, body) before our
+   Tailwind classes land. */
+:root {
+  color-scheme: dark;
+}
+
+@layer components {
+  /* Slow pulsing animation for card titles - white to agent color */
+  .title-pulse {
+    animation: titlePulse 4s ease-in-out infinite;
+    animation-delay: var(--pulse-delay, 0s);
+  }
+
+  @keyframes titlePulse {
+    0%, 100% {
+      color: var(--pulse-color);
+    }
+    50% {
+      color: #f3f4f6; /* gray-100 / white */
+    }
+  }
+
+  /* Fade from white/theme color to the agent's accent color using CSS variables */
+  .fade-color-to-theme {
+    animation: fadeToTheme 4s ease-in-out forwards;
+  }
+
+  @keyframes fadeToTheme {
+    0% {
+      color: var(--color-end);
+    }
+    100% {
+      color: var(--color-start);
+    }
+  }
+
+  /* Pulse animation for trial countdown - GREEN */
+  .pulse-green {
+    animation: pulseGreen 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8), 0 4px 8px rgba(0, 0, 0, 0.6);
+  }
+
+  @keyframes pulseGreen {
+    0%, 100% {
+      opacity: 1;
+      color: rgb(34, 197, 94); /* green-500 */
+    }
+    50% {
+      opacity: 0.7;
+      color: rgb(22, 163, 74); /* green-600 */
+    }
+  }
+
+  /* Pulse animation for trial ending soon - RED */
+  .pulse-red {
+    animation: pulseRed 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8), 0 4px 8px rgba(0, 0, 0, 0.6);
+  }
+
+  @keyframes pulseRed {
+    0%, 100% {
+      opacity: 1;
+      color: rgb(239, 68, 68); /* red-500 */
+    }
+    50% {
+      opacity: 0.7;
+      color: rgb(220, 38, 38); /* red-600 */
+    }
+  }
+
+  /* Holiday bounce animation for Christmas season */
+  @keyframes bounce-gentle {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-8px);
+    }
+  }
+
+  .holiday-bounce {
+    animation: bounce-gentle 1.5s ease-in-out infinite;
+  }
+
+  /* Shimmer animation for AI thinking indicator */
+  @keyframes shimmer {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(400%);
+    }
+  }
+
+  .animate-shimmer {
+    animation: shimmer 1.5s ease-in-out infinite;
+  }
+
+  /* Indeterminate sliding progress bar (used by long-running agent ops). */
+  @keyframes pulse-slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+  }
+  .animate-pulse-slide {
+    animation: pulse-slide 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  /* Soft fade-in-down for completion banners and toast-like reveals. */
+  @keyframes fade-in-down {
+    0%   { opacity: 0; transform: translateY(-6px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fade-in-down {
+    animation: fade-in-down 0.35s ease-out both;
+  }
+
+    /* Slim custom scrollbar for tight grids (district chips, source lists). */
+  .custom-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+  .custom-scroll::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.3); border-radius: 3px; }
+  .custom-scroll::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.3); border-radius: 3px; }
+  .custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(139, 92, 246, 0.5); }
+
+  /* Faint futuristic background grid — matches DrawingCanvas style */
+  .aesthetic-grid {
+    background-image:
+      linear-gradient(rgba(56, 224, 255, 0.14) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(56, 224, 255, 0.14) 1px, transparent 1px),
+      linear-gradient(rgba(56, 224, 255, 0.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(56, 224, 255, 0.07) 1px, transparent 1px) !important;
+    background-size: 128px 128px, 128px 128px, 32px 32px, 32px 32px !important;
+    background-position: center center !important;
+  }
+}

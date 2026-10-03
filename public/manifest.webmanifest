@@ -1,0 +1,100 @@
+{
+  "name": "LandSurv.ai",
+  "short_name": "LandSurv",
+  "description": "AI-powered toolkit for surveying and civil engineering workflows.",
+  "id": "/?source=pwa",
+  "start_url": "/",
+  "scope": "/",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui"
+  ],
+  "display": "standalone",
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
+  "handle_links": "preferred",
+  "orientation": "portrait-primary",
+  "background_color": "#111827",
+  "theme_color": "#111827",
+  "prefer_related_applications": false,
+  "categories": [
+    "business",
+    "productivity",
+    "utilities"
+  ],
+  "icons": [
+    {
+      "src": "/favicon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/favicon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Raw Crawler",
+      "short_name": "RAW",
+      "description": "Open the RAW Crawler workflow",
+      "url": "/?agent=raw"
+    },
+    {
+      "name": "Boundary Agent",
+      "short_name": "Boundary",
+      "description": "Open boundary analysis workflows",
+      "url": "/?agent=deed"
+    },
+    {
+      "name": "Civil Plans",
+      "short_name": "Plans",
+      "description": "Open plan interpretation workflows",
+      "url": "/?agent=plans"
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "/?source=file-launch",
+      "accept": {
+        "application/octet-stream": [
+          ".tin"
+        ],
+        "application/xml": [
+          ".xml",
+          ".landxml"
+        ],
+        "text/xml": [
+          ".xml",
+          ".landxml"
+        ]
+      }
+    }
+  ],
+  "share_target": {
+    "action": "/?source=share-target",
+    "method": "GET",
+    "params": {
+      "title": "share-title",
+      "text": "share-text",
+      "url": "share-url"
+    }
+  }
+}

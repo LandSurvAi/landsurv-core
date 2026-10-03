@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Codepage="65001" Manufacturer="LandSurv.ai" ProductCode="{A7EDBA9E-B837-4C19-AB79-252C587971B4}" Language="1033" Name="LandsurvConnector for Civil 3D" Version="1.0.0.0" UpgradeCode="{12345678-1234-1234-1234-123456789ABC}">
+    <StandardDirectory Id="ProgramFilesFolder">
+      <Directory Id="INSTALLFOLDER" Name="LandSurv.ai">
+        <Component Id="LandsurvConnectorDLL" Guid="{F9216DB9-DCD8-5C66-B97B-0110624D23F4}" Bitness="always64">
+          <File Id="filmvdXWs7kI95ZsWNqd1K6FUamDCc" ShortName="rdvu5g9v.dll" Name="LandsurvConnector.dll" KeyPath="yes" Source="SourceDir\File\filmvdXWs7kI95ZsWNqd1K6FUamDCc" />
+        </Component>
+        <Component Id="LandsurvConnectorConfig" Guid="{E80FDC2F-AC9C-5536-8896-4AFABA2AA065}" Bitness="always64">
+          <File Id="filH2mISdImZkpSOkbFqnk6lJJMAqo" ShortName="ccrexa0v.con" Name="LandsurvConnector.dll.config" KeyPath="yes" Source="SourceDir\File\filH2mISdImZkpSOkbFqnk6lJJMAqo" />
+        </Component>
+        <Component Id="LandsurvConnectorDeps" Guid="{98C94A76-D696-592A-AB09-CEAD8F7853BC}" Bitness="always64">
+          <File Id="filiYOkgIR26TF01QWgrkfUvv8_ZJQ" ShortName="p6xvifdd.jso" Name="LandsurvConnector.deps.json" KeyPath="yes" Source="SourceDir\File\filiYOkgIR26TF01QWgrkfUvv8_ZJQ" />
+        </Component>
+        <Component Id="LandsurvConnectorPDB" Guid="{861E731B-C9A7-513C-AA60-359FD0C6CFA1}" Bitness="always64">
+          <File Id="fil7Y78DNjP3NlytCeYUMexXtjiJAs" ShortName="9qthgazg.pdb" Name="LandsurvConnector.pdb" KeyPath="yes" Source="SourceDir\File\fil7Y78DNjP3NlytCeYUMexXtjiJAs" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="ProductFeature" Title="LandsurvConnector" Level="1">
+      <ComponentRef Id="LandsurvConnectorDLL" />
+      <ComponentRef Id="LandsurvConnectorConfig" />
+      <ComponentRef Id="LandsurvConnectorDeps" />
+      <ComponentRef Id="LandsurvConnectorPDB" />
+    </Feature>
+    <Media Id="1" Cabinet="cab1.cab" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+  </Package>
+</Wix>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<browserconfig>
+  <msapplication>
+    <tile>
+      <square150x150logo src="/favicon-192.png" />
+      <square310x310logo src="/favicon-512.png" />
+      <wide310x150logo src="/favicon-512.png" />
+      <!-- Dark theme background matching the app -->
+      <TileColor>#111827</TileColor>
+    </tile>
+    <!-- Notification tiles for Windows notifications -->
+    <notification>
+      <polling-uri src="https://landsurv.ai/notification" />
+      <polling-uri2 src="https://landsurv.ai/notification?id=2" />
+      <polling-uri3 src="https://landsurv.ai/notification?id=3" />
+      <polling-uri4 src="https://landsurv.ai/notification?id=4" />
+      <polling-uri5 src="https://landsurv.ai/notification?id=5" />
+      <frequency>30</frequency>
+      <cycle>1</cycle>
+    </notification>
+  </msapplication>
+</browserconfig>

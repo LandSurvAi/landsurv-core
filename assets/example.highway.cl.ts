@@ -1,0 +1,9 @@
+
+export const exampleHighwayCl = `CL,Complex-Highway-Example,1000.00
+PI,5000.00,5000.00,PI-1
+PI,6500.00,5300.00,PI-2
+PI,7800.00,4800.00,PI-3
+PI,8500.00,6000.00,PI-4
+PI,8000.00,7500.00,PI-5
+PI,8200.00,9000.00,PI-6
+`.trim();
