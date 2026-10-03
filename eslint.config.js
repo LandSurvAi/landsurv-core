@@ -34,6 +34,8 @@ export default tseslint.config(
       '@typescript-eslint/no-require-imports': 'warn',
       '@typescript-eslint/no-this-alias': 'warn',
       'no-empty': 'warn',
+      'no-regex-spaces': 'warn',
+      'no-extra-boolean-cast': 'warn',
     },
   },
 );
