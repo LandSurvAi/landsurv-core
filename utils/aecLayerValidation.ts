@@ -290,7 +290,7 @@ export function suggestCompliantLayer(
   
   let discipline = 'C'; // Default to Civil
   let major = 'MISC';
-  let status = isExisting ? '-E' : '';
+  const status = isExisting ? '-E' : '';
   
   // Determine discipline
   if (cat.includes('survey') || cat.includes('control') || cat.includes('monument') || cat.includes('boundary')) {

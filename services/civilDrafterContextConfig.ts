@@ -84,7 +84,7 @@ const STORAGE_KEY = 'landsurv_civil_drafter_context_config';
 type StoredConfig = Partial<CivilDrafterContextConfig>;
 
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __civilDrafterContextConfig: CivilDrafterContextConfig | undefined;
 }
 

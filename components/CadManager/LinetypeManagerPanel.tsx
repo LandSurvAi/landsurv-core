@@ -300,7 +300,7 @@ export const LinetypeManagerPanel: React.FC<LinetypeManagerPanelProps> = ({
   );
 
   const addNew = useCallback(() => {
-    let base = 'CUSTOM';
+    const base = 'CUSTOM';
     let i = 1;
     while (linetypes.some(lt => lt.name === `${base}_${i}`)) i++;
     const name = `${base}_${i}`;

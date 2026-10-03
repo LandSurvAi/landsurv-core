@@ -163,7 +163,7 @@ export function directCurve(startPoint: Point, tangentBearing: number, radius: n
 export function formatBearing(radians: number): string {
     if (isNaN(radians)) return "Invalid Bearing";
 
-    let rad = (radians + 2 * Math.PI) % (2 * Math.PI);
+    const rad = (radians + 2 * Math.PI) % (2 * Math.PI);
 
     const degrees = rad * (180 / Math.PI);
     
@@ -181,7 +181,7 @@ export function formatBearing(radians: number): string {
 
     // Calculate DMS with proper carry-over handling
     let deg = Math.floor(angle);
-    let minutesFull = (angle - deg) * 60;
+    const minutesFull = (angle - deg) * 60;
     let min = Math.floor(minutesFull);
     let sec = Math.round((minutesFull - min) * 60);
 

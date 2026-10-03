@@ -288,7 +288,7 @@ function clusterByCrossCorridorOffset(points: OrderablePoint[], clusterCount: nu
     const idx = Math.round(((i + 0.5) / clusterCount) * (samples.length - 1));
     return samples[idx].offset;
   });
-  let assignments = new Array<number>(samples.length).fill(0);
+  const assignments = new Array<number>(samples.length).fill(0);
 
   for (let iteration = 0; iteration < 20; iteration++) {
     const sums = new Array<number>(clusterCount).fill(0);

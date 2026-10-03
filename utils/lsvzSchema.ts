@@ -251,9 +251,9 @@ type ExtraInDocs    = Exclude<DocumentedKey, keyof SessionState>;
 // that silently disables the check (which is exactly how the schema drifted
 // out of sync once before). Document the field instead.
 type AssertNever<T extends never> = T;
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+ 
 type _DocumentedKeysMustCoverSessionState = AssertNever<MissingFromDocs>;
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+ 
 type _DocsMustNotInventKeys = AssertNever<ExtraInDocs>;
 
 // ----------------------------------------------------------------------------

@@ -9664,8 +9664,8 @@ const AppContent = () => {
               // the existing point (see verb-semantics rule in system prompt) � let
               // that case fall through to the renumber loop, which now honors numeric
               // re-emits as updates.
-              let newPoints = parsedJson.points as SurveyPoint[];
-              let newLines = parsedJson.lines as SurveyLine[] || [];
+              const newPoints = parsedJson.points as SurveyPoint[];
+              const newLines = parsedJson.lines as SurveyLine[] || [];
               const allExistingPointNumbers = new Set(pointLists.flatMap(l => l.points).map(p => p.pointNumber));
               const hasConflict = agent === AgentType.DEED_READER
                 && parsedJson.replacePoints !== true

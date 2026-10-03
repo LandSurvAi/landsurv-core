@@ -46,7 +46,7 @@ export function generateContoursWithSettings(
   contourSettings: ContourSettings
 ): { lines: SurveyLine[]; labels: ContourLabel[]; elevationReport: ElevationFilterReport } {
   // Filter points if description filter is specified
-  let pointsToContour = filterPointsByDescription(
+  const pointsToContour = filterPointsByDescription(
     points,
     contourSettings.pointFilterDescription
   );

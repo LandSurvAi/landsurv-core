@@ -63,7 +63,7 @@ export function getAppEnvironment(): AppEnvironment {
     return 'production';
   }
 
-  if (Boolean((import.meta as any)?.env?.DEV)) {
+  if ((import.meta as any)?.env?.DEV) {
     return 'development';
   }
 

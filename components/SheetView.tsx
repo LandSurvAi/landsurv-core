@@ -570,7 +570,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
             })),
         }));
     // hasAutoScaledRef is a ref (mutable) — intentionally not in deps
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
     }, [extents]);
 
     /** Change sheet size and re-suggest scale for auto-centered viewports. */

@@ -234,7 +234,7 @@ export default function AutoDraftPanel({
     } catch (e) {
       setAoiPreview({ status: 'fail', error: e instanceof Error ? e.message : String(e) });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [points, lines, projectEpsg]);
 
   // Resolve the AOI in the background as soon as the panel opens.

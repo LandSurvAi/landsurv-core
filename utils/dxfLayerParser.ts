@@ -67,10 +67,10 @@ function _parse(dxf: string): DxfParseResult {
   const layerTableBlock = dxf.match(/\bLAYER\b[\s\S]*?(?=\bENDTAB\b)/i);
   if (layerTableBlock) {
     // Each layer entry starts with group code 0 = LAYER
-    const entries = layerTableBlock[0].split(/(?=^  0\r?\n.*LAYER)/m);
+    const entries = layerTableBlock[0].split(/(?=^ {2}0\r?\n.*LAYER)/m);
     for (const entry of entries) {
-      const nameMatch  = entry.match(/^  2\r?\n(.+)$/m);
-      const ltMatch    = entry.match(/^  6\r?\n(.+)$/m);
+      const nameMatch  = entry.match(/^ {2}2\r?\n(.+)$/m);
+      const ltMatch    = entry.match(/^ {2}6\r?\n(.+)$/m);
       const colorMatch = entry.match(/^ 62\r?\n(.+)$/m);
       if (!nameMatch) continue;
       const name = nameMatch[1].trim();
@@ -88,7 +88,7 @@ function _parse(dxf: string): DxfParseResult {
   const entityStats = new Map<string, { count: number; types: Set<string> }>();
 
   // Extract the ENTITIES section text only — avoid re-scanning defs/blocks
-  const entitiesStart = dxf.search(/^  0\r?\nSECTION\b[\s\S]*?^  2\r?\nENTITIES\b/m);
+  const entitiesStart = dxf.search(/^ {2}0\r?\nSECTION\b[\s\S]*?^ {2}2\r?\nENTITIES\b/m);
   const entitiesText  = entitiesStart >= 0 ? dxf.slice(entitiesStart) : dxf;
 
   const ENTITY_TYPES = new Set([

@@ -152,8 +152,8 @@ const parseGeometryBasedClFile = (content: string): Centerline | null => {
     const tangentInP1 = geomPoints[i - 1] || geomPoints[0];
     const tangentInP2 = pcPoint;
 
-    let tangentOutP1 = ptPoint;
-    let tangentOutP2 = geomPoints.find((p, idx) => idx > ptIndex && (p.type === 'L' || p.type === 'PC')) || geomPoints[ptIndex + 1];
+    const tangentOutP1 = ptPoint;
+    const tangentOutP2 = geomPoints.find((p, idx) => idx > ptIndex && (p.type === 'L' || p.type === 'PC')) || geomPoints[ptIndex + 1];
 
     if (tangentInP1 && tangentOutP2) {
       const intersection = lineIntersection(
