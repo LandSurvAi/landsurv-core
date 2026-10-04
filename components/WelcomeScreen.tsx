@@ -54,7 +54,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   return (
     <div 
       onClick={onClose} 
-      className={`fixed inset-0 z-[101] flex items-center justify-center p-3 sm:p-4 md:p-6 overflow-y-auto animate-fade-in ${
+      className={`fixed inset-0 z-[20000] flex items-center justify-center p-3 sm:p-4 md:p-6 overflow-y-auto animate-fade-in ${
         isChristmasSeason 
           ? 'bg-gradient-to-b from-red-950/40 via-gray-950/85 to-green-950/40 backdrop-blur-md' 
           : 'bg-gray-950/85 backdrop-blur-md'

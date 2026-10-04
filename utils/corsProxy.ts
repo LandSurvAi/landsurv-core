@@ -82,6 +82,54 @@ export async function fetchViaProxy(
   throw new Error(`All CORS proxies failed for ${targetUrl}: ${errors.join('; ')}`);
 }
 
+async function looksLikeImage(blob: Blob): Promise<boolean> {
+  if (blob.size < 8) return false;
+  if (blob.type.startsWith('image/')) return true;
+  const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+  const png = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
+  const jpeg = head[0] === 0xff && head[1] === 0xd8;
+  return png || jpeg;
+}
+
+/**
+ * Fetch an image as a Blob through the proxy list. A proxy that answers 200
+ * with an error page is skipped; as a last resort the image is loaded through
+ * an <img> element and re-encoded.
+ */
+export async function fetchImageBlobViaProxy(targetUrl: string, perProxyTimeoutMs = 15000): Promise<Blob> {
+  const errors: string[] = [];
+  for (const proxy of PROXIES) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), perProxyTimeoutMs);
+    try {
+      const res = await fetch(proxy.wrap(targetUrl), { signal: controller.signal });
+      if (!res.ok) {
+        errors.push(`${proxy.id}=${res.status}`);
+        continue;
+      }
+      const blob = await res.blob();
+      if (await looksLikeImage(blob)) return blob;
+      errors.push(`${proxy.id}=not-image`);
+    } catch (e: unknown) {
+      errors.push(`${proxy.id}=${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  try {
+    const img = await loadImageViaProxy(targetUrl);
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    canvas.getContext('2d')!.drawImage(img, 0, 0);
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (blob) return blob;
+  } catch (e: unknown) {
+    errors.push(`img=${e instanceof Error ? e.message : String(e)}`);
+  }
+  throw new Error(`All CORS proxies failed for image ${targetUrl}: ${errors.join('; ')}`);
+}
+
 /**
  * Load a binary image (PNG/JPEG) through the proxy list, retrying with the
  * next proxy in priority order on each failure. Resolves to an HTMLImageElement

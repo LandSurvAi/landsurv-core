@@ -128,7 +128,12 @@ const ApiKeyOrPayModal: React.FC<ApiKeyOrPayModalProps> = ({
   const handleClose = () => {
     if (onClose) onClose();
   };
-
+  const hasActiveKey = Boolean(
+    hasGoogleApiKey ||
+    hasLandSurvKey ||
+    hasServiceAccess ||
+    (currentKeyDetails && currentKeyDetails.status === 'active')
+  );
   const getAgentName = (): string => {
     switch (trigger) {
       case 'rinex':
@@ -201,6 +206,13 @@ const ApiKeyOrPayModal: React.FC<ApiKeyOrPayModalProps> = ({
               </p>
               <p className="text-blue-100 text-xs mt-0.5">
                 Available again in <span className="font-mono font-bold text-cyan-200">{formatCountdown(timeUntilAvailable)}</span>
+              </p>
+            </>
+          ) : hasActiveKey ? (
+            <>
+              <h2 className="text-base font-bold text-white">Active Key Connected</h2>
+              <p className="text-blue-100 text-xs mt-0.5">
+                Inference is active and running with your connected key.
               </p>
             </>
           ) : isPremium ? (

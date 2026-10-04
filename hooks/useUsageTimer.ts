@@ -130,8 +130,8 @@ export const useUsageTimer = (
       updateCycle();
       setIsInitialized(true);
 
-      const storedServiceKey = localStorage.getItem(SERVICE_KEY_STORAGE);
-      setHasLandSurvKey(false);
+      const storedServiceKey = localStorage.getItem(SERVICE_KEY_STORAGE) || (storedApiKey?.startsWith('lsa_') ? storedApiKey : null);
+      setHasLandSurvKey(Boolean(storedServiceKey || storedApiKey?.startsWith('lsa_')));
       if (storedServiceKey) void verifyServiceKey(storedServiceKey);
     };
 
@@ -182,8 +182,12 @@ export const useUsageTimer = (
     localStorage.removeItem(SUPERUSER_STORAGE);
     setHasApiKey(true);
     setIsSuperUser(false);
+    if (trimmedKey.startsWith('lsa_')) {
+      setHasLandSurvKey(true);
+      void verifyServiceKey(trimmedKey);
+    }
     return true;
-  }, []);
+  }, [verifyServiceKey]);
 
   const unlockWithServiceKey = useCallback(async (serviceKey: string): Promise<'active' | 'expired' | 'invalid'> => {
     const trimmedKey = serviceKey.trim();

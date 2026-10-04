@@ -2,10 +2,12 @@
 import React, { useState, useCallback } from 'react';
 import { DxfIcon, UploadIcon, HomeIcon } from './icons';
 import { useErrorReporter } from '../contexts/AppStateContext';
+import { parseDxfLayers } from '../utils/dxfLayerParser';
 
 interface DxfUploadOptions {
   smoothSplines?: boolean;
   quantizationBits?: 16 | 32;
+  splineLayers?: string[];
 }
 
 interface DxfInputProps {
@@ -18,6 +20,10 @@ const DxfInput: React.FC<DxfInputProps> = ({ onDxfUploaded, onGoBack, backButton
   const [isDragging, setIsDragging] = useState(false);
   const [smoothSplines, setSmoothSplines] = useState(false);
   const [quantizationBits, setQuantizationBits] = useState<16 | 32>(16);
+  const [splineLayersText, setSplineLayersText] = useState('');
+  const [pending, setPending] = useState<{ name: string; content: string; layers: { name: string; entityCount: number }[] } | null>(null);
+  const [selectedLayers, setSelectedLayers] = useState<Set<string>>(new Set());
+  const [layerSearch, setLayerSearch] = useState('');
   const { reportError } = useErrorReporter();
 
   const handleFile = useCallback((file: File) => {
@@ -25,6 +31,13 @@ const DxfInput: React.FC<DxfInputProps> = ({ onDxfUploaded, onGoBack, backButton
       const reader = new FileReader();
       reader.onload = (e) => {
         const content = e.target?.result as string;
+        if (smoothSplines) {
+          const layers = parseDxfLayers(content).layers.map(l => ({ name: l.name, entityCount: l.entityCount }));
+          setPending({ name: file.name, content, layers });
+          setSelectedLayers(new Set());
+          setLayerSearch('');
+          return;
+        }
         onDxfUploaded(content, file.name, { smoothSplines, quantizationBits });
       };
       reader.readAsText(file);
@@ -32,6 +45,12 @@ const DxfInput: React.FC<DxfInputProps> = ({ onDxfUploaded, onGoBack, backButton
       reportError({ title: 'Invalid file', message: 'Please upload a valid .dxf file.' });
     }
   }, [onDxfUploaded, reportError, smoothSplines, quantizationBits]);
+
+  const confirmLoad = useCallback(() => {
+    if (!pending) return;
+    onDxfUploaded(pending.content, pending.name, { smoothSplines, quantizationBits, splineLayers: Array.from(selectedLayers) });
+    setPending(null);
+  }, [pending, onDxfUploaded, smoothSplines, quantizationBits, selectedLayers]);
 
   const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -104,7 +123,7 @@ const DxfInput: React.FC<DxfInputProps> = ({ onDxfUploaded, onGoBack, backButton
         <p className="text-gray-400 mt-2">or click to browse local files</p>
       </div>
 
-      <div className="mt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+      <div className="mt-4 flex flex-col items-stretch justify-center gap-3 w-full max-w-lg">
         <label className="flex items-center gap-2.5 text-xs sm:text-sm text-gray-300 bg-gray-900/60 border border-gray-700 hover:border-indigo-400/60 rounded-lg px-3.5 py-2 cursor-pointer transition-colors select-none">
           <input
             type="checkbox"
@@ -141,6 +160,52 @@ const DxfInput: React.FC<DxfInputProps> = ({ onDxfUploaded, onGoBack, backButton
             </button>
           </div>
         )}
+
+        {pending && (() => {
+          const term = layerSearch.trim().toLowerCase();
+          const visible = term ? pending.layers.filter(l => l.name.toLowerCase().includes(term)) : pending.layers;
+          return (
+          <div className="bg-gray-900/80 border border-gray-700 rounded-lg p-3 text-left">
+            <div className="flex items-center justify-between mb-2 text-xs text-gray-300">
+              <span className="font-medium truncate">{pending.name} — layers to smooth (none checked = all)</span>
+              <span className="flex gap-2 shrink-0">
+                <button type="button" className="text-indigo-300 hover:underline" onClick={() => setSelectedLayers(prev => new Set([...prev, ...visible.map(l => l.name)]))}>{term ? 'Select shown' : 'All'}</button>
+                <button type="button" className="text-indigo-300 hover:underline" onClick={() => setSelectedLayers(prev => { const next = new Set(prev); visible.forEach(l => next.delete(l.name)); return next; })}>{term ? 'Clear shown' : 'None'}</button>
+              </span>
+            </div>
+            <input
+              type="search"
+              value={layerSearch}
+              onChange={(e) => setLayerSearch(e.target.value)}
+              placeholder="Search layers (matches anywhere in name)"
+              className="w-full mb-2 text-xs bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-400"
+            />
+            <div className="max-h-48 overflow-y-auto grid grid-cols-1 gap-1">
+              {visible.length === 0 && <span className="text-xs text-gray-500">No matching layers</span>}
+              {visible.map(l => (
+                <label key={l.name} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedLayers.has(l.name)}
+                    onChange={(e) => setSelectedLayers(prev => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(l.name); else next.delete(l.name);
+                      return next;
+                    })}
+                    className="w-3.5 h-3.5 rounded border-gray-600 text-indigo-500 bg-gray-800"
+                  />
+                  <span className="font-mono truncate">{l.name}</span>
+                  <span className="text-gray-500 ml-auto">{l.entityCount}</span>
+                </label>
+              ))}
+            </div>
+            <div className="mt-3 flex gap-2 justify-end">
+              <button type="button" onClick={() => setPending(null)} className="px-3 py-1.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200">Cancel</button>
+              <button type="button" onClick={confirmLoad} className="px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white font-semibold">Load</button>
+            </div>
+          </div>
+          );
+        })()}
       </div>
     </div>
   );

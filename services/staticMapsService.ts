@@ -17,7 +17,13 @@
  * Gemini Vision inlineData part.
  */
 
+import { readPersisted, writePersisted } from '../utils/mapTileCache.ts';
+
 export type StaticMapSource = 'user-maps' | 'user-gemini' | 'proxy' | 'naip-proxy';
+
+// Google imagery is kept short-lived to stay within Maps terms; NAIP is public domain.
+const STATIC_PERSIST_TTL_MS = 24 * 60 * 60 * 1000;
+const NAIP_PERSIST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface StaticMapRequest {
   lat: number;
@@ -268,6 +274,11 @@ export async function getStaticMap(req: StaticMapRequest, keys: StaticMapKeys = 
     const naipUrl = `${NAIP_PROXY}?${buildNaipParams(req)}`;
     const cached = naipCacheGet(naipUrl);
     if (cached) return cached;
+    const persistedNaip = await readPersisted<StaticMapResult>(`naip|${naipUrl}`, NAIP_PERSIST_TTL_MS);
+    if (persistedNaip) {
+      naipCacheSet(naipUrl, persistedNaip);
+      return persistedNaip;
+    }
     try {
       const { blob, response } = await fetchImageWithResponse(naipUrl);
       const base = { ...(await blobToDataUrl(blob)), source: 'naip-proxy' as const };
@@ -280,6 +291,7 @@ export async function getStaticMap(req: StaticMapRequest, keys: StaticMapKeys = 
         }
       }
       naipCacheSet(naipUrl, result);
+      void writePersisted(`naip|${naipUrl}`, result);
       return result;
     } catch (e) {
       errors.push(`naip-proxy: ${e instanceof Error ? e.message : String(e)}`);
@@ -288,10 +300,18 @@ export async function getStaticMap(req: StaticMapRequest, keys: StaticMapKeys = 
   }
 
   // 1. Explicit user Maps key.
+  const staticKey = `static|${buildParams(req).toString()}`;
+  const persistedStatic = await readPersisted<StaticMapResult>(staticKey, STATIC_PERSIST_TTL_MS);
+  if (persistedStatic) return persistedStatic;
+  const remember = (result: StaticMapResult): StaticMapResult => {
+    void writePersisted(staticKey, result);
+    return result;
+  };
+
   if (keys.mapsKey) {
     try {
       const blob = await fetchImage(`${UPSTREAM}?${buildParams(req, keys.mapsKey)}`);
-      return { ...(await blobToDataUrl(blob)), source: 'user-maps' };
+      return remember({ ...(await blobToDataUrl(blob)), source: 'user-maps' });
     } catch (e) {
       errors.push(`user-maps: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -301,7 +321,7 @@ export async function getStaticMap(req: StaticMapRequest, keys: StaticMapKeys = 
   if (keys.geminiKey && await probeKeyForStaticMaps(keys.geminiKey)) {
     try {
       const blob = await fetchImage(`${UPSTREAM}?${buildParams(req, keys.geminiKey)}`);
-      return { ...(await blobToDataUrl(blob)), source: 'user-gemini' };
+      return remember({ ...(await blobToDataUrl(blob)), source: 'user-gemini' });
     } catch (e) {
       errors.push(`user-gemini: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -310,7 +330,7 @@ export async function getStaticMap(req: StaticMapRequest, keys: StaticMapKeys = 
   // 3. Backend proxy.
   try {
     const blob = await fetchImage(`${PROXY}?${buildParams(req)}`);
-    return { ...(await blobToDataUrl(blob)), source: 'proxy' };
+    return remember({ ...(await blobToDataUrl(blob)), source: 'proxy' });
   } catch (e) {
     errors.push(`proxy: ${e instanceof Error ? e.message : String(e)}`);
   }

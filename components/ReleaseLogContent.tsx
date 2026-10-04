@@ -2,6 +2,17 @@
 
 const releases = [
     {
+        version: "26.10.04.04",
+        date: "October 4, 2026",
+        highlights: [
+            "🖥️ GPU-Accelerated 2D Canvas: Added WebGPU rendering for CAD linework and basemap imagery (`webgpuLines`, `webgpuBasemap`), with a floating-origin canvas context so large survey coordinates no longer lose precision and lines render crisp instead of fuzzy.",
+            "🗺️ Basemap Tile Caching: Added a grid-aligned basemap tile planner with an in-memory bitmap cache and persistent IndexedDB storage. NAIP imagery is retained for 7 days and Google static imagery for 24 hours, so repeat views load without refetching.",
+            "🌐 CORS Proxy Failover: Centralized CORS-proxy handling with automatic failover between proxies for map imagery requests.",
+            "📐 DXF Layer-Selective Smoothing: When smoothing is enabled on import, a searchable layer picker (All / None / Select shown) lets you apply T-spline smoothing only to chosen layers; leaving none checked smooths all layers.",
+            "🔷 DXF SOLID / TRACE / 3DFACE Support: These entities are now imported as perimeter wireframe lines.",
+        ],
+    },
+    {
         version: "26.10.04.03",
         date: "October 4, 2026",
         highlights: [

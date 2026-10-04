@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { askPublicConcierge, PublicChatMessage } from '../services/publicChatService';
 import { BrainCircuitIcon, LightbulbIcon, SendIcon } from './icons';
 import { useAppState } from '../contexts/AppStateContext.tsx';
+import { useUIState } from '../contexts/UIStateContext.tsx';
 
 /**
  * Public-facing concierge chat ("Ask LandSurv.ai").
@@ -375,7 +376,10 @@ export const ConciergeOverlay: React.FC = () => {
     }
   };
 
-  if (!state.open) return null;
+  const uiState = useUIState();
+  const showWelcome = uiState?.showWelcome;
+
+  if (!state.open || showWelcome) return null;
 
   return (
     <ConciergeDialog

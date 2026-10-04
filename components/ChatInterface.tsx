@@ -21,6 +21,7 @@ interface ChatInterfaceProps {
   toolsContent?: React.ReactNode;
   toolsIcon?: React.ReactNode;
   toolsTitle?: string;
+  chatBarAccessories?: React.ReactNode;
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -68,7 +69,7 @@ const themeClasses: { [key in AgentType]?: { gradient: string; accent: string; }
     [AgentType.COGO_AGENT]: { gradient: 'from-violet-500 to-purple-600', accent: 'accent-violet-500' },
 };
 
-export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, onStopGenerating, isLoading, suggestedQuestions, onToggleExpand, thinkingTime, currentModelName, headerControls, toolsContent, toolsIcon, toolsTitle }) => {
+export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, onStopGenerating, isLoading, suggestedQuestions, onToggleExpand, thinkingTime, currentModelName, headerControls, toolsContent, toolsIcon, toolsTitle, chatBarAccessories }) => {
   const [input, setInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -295,6 +296,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMe
       </div>
 
       <div className="flex-shrink-0 p-3 border-t border-gray-700 bg-gray-900/50 light-theme:border-gray-300 light-theme:bg-white/50">
+        {/* Accessories / Action Buttons row immediately above chat bar */}
+        {chatBarAccessories && (
+          <div className="mb-2">
+            {chatBarAccessories}
+          </div>
+        )}
+
         {/* Tools Row - Above input */}
         {toolsContent && (
           <div className="flex items-center gap-2 mb-2 pl-2">

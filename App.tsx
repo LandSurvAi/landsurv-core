@@ -299,7 +299,7 @@ import {
 import { DEFAULT_SETTINGS, COMPATIBLE_VERSIONS, isVersionCompatible } from './utils/sessionDefaults.ts';
 import { mergeSettingsWithDefaults, migrateMessage } from './utils/sessionMigration.ts';
 // FIX: Added ProfileIcon to the imports for the new Profile Agent.
-import { HomeIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, GridIcon, UndoIcon, RedoIcon } from './components/icons.tsx';
+import { HomeIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon } from './components/icons.tsx';
 import { suggestedQuestionsText } from './assets/suggested_questions.ts';
 import { userSuggestedQuestionsText } from './assets/user_suggested_questions.ts';
 import { deedSuggestedQuestionsText } from './assets/deed_suggested_questions.ts';
@@ -1493,6 +1493,12 @@ const AppContent = () => {
   // (~5482) � i.e. only appears when there's something to look at.
   const [showVisionHUD, setShowVisionHUD] = useState(false);
   const [showAutoDraftPanel, setShowAutoDraftPanel] = useState(false);
+  const [isHeaderZoomMenuOpen, setIsHeaderZoomMenuOpen] = useState(false);
+  const [isHeaderZoomToPointOpen, setIsHeaderZoomToPointOpen] = useState(false);
+  const [isHeaderFindPointsOpen, setIsHeaderFindPointsOpen] = useState(false);
+  const [headerZoomPointNumber, setHeaderZoomPointNumber] = useState('');
+  const [headerFindPointsQuery, setHeaderFindPointsQuery] = useState('');
+  const [isHeaderScaleMenuOpen, setIsHeaderScaleMenuOpen] = useState(false);
   // Track point count when last scan ran so we know when to re-scan
   const lastVisionPointCountRef = useRef<number>(0);
   // Civil Drafter turns since the underlying chat was last reset (for auto-reset).
@@ -1918,6 +1924,7 @@ const AppContent = () => {
     isInitialized: usageTimerInitialized,
     addCredits,
     unlockWithApiKey,
+    unlockWithServiceKey,
     resetTimer
   } = useUsageTimer();
 
@@ -1975,6 +1982,32 @@ const AppContent = () => {
       isCheckoutPage,
     });
   }, [pageMode, isCheckoutPage]);
+
+  // Full-blown LandSurv Enabling Key / Service Access check:
+  // A user with an active LSAI key is not subject to the 4hr free-tier off cycle timer.
+  const hasLsaiEnablingKey = Boolean(
+    isSuperUser ||
+    hasServiceAccess ||
+    hasLandSurvKey ||
+    isDemoApiKey(settings.userApiKey) ||
+    Boolean(settings.userApiKey?.startsWith('lsa_')) ||
+    (currentKeyDetails?.keyType === 'LandSurv Enabling Key' && currentKeyDetails?.status !== 'expired')
+  );
+
+  // Free-tier time lock: only pauses free users who do not have an active LSAI enabling key.
+  const isFreeTierTimeLocked = Boolean(isLocked && !hasLsaiEnablingKey);
+
+  const isServiceEnabled = hasLsaiEnablingKey;
+  const isInferenceEnabled = Boolean(
+    isSuperUser ||
+    computeCredits > 0 ||
+    hasApiKey ||
+    Boolean(settings.userApiKey?.trim()) ||
+    Boolean(settings.openaiApiKey?.trim()) ||
+    Boolean(settings.xaiApiKey?.trim()) ||
+    Boolean(settings.anthropicApiKey?.trim())
+  );
+  const hasServiceAndInference = Boolean(isServiceEnabled && isInferenceEnabled);
 
   const isRestrictedApiKey = apiKeyEntitlements?.accessProfile === 'restricted';
   const hasFable5Entitlement = isSuperUser || Boolean(
@@ -2070,10 +2103,16 @@ const AppContent = () => {
   const [isAccessStatusExpanded, setIsAccessStatusExpanded] = useState(false);
 
   const activeKeyStatusLabel = useMemo(() => {
-    if (isSuperUser) return '?? SUPERUSER';
+    if (isSuperUser) return '👑 SUPERUSER';
+    if (hasServiceAndInference) {
+      if (isDemoApiKey(settings.userApiKey) || settings.userApiKey?.startsWith('lsa_')) {
+        return '🔑 LandSurv Enabling Key (Active)';
+      }
+      return '🟢 Service & Inference Active';
+    }
     if (!hasApiKey) {
-      if (computeCredits > 0) return `?? Credits: ${computeCredits.toLocaleString()}`;
-      return '?? No API Key';
+      if (computeCredits > 0) return `⚡ Credits: ${computeCredits.toLocaleString()}`;
+      return '⚠️ No API Key';
     }
     if (isDemoApiKey(settings.userApiKey)) {
       if (typeof demoKeyInfo?.remainingMs === 'number') {
@@ -2084,26 +2123,31 @@ const AppContent = () => {
       }
       return '? Purchased key';
     }
-    return '?? Using your API Key';
-  }, [computeCredits, demoKeyInfo, formatDuration, hasApiKey, isSuperUser, settings.userApiKey]);
+    return '🔑 Using your API Key';
+  }, [computeCredits, demoKeyInfo, formatDuration, hasApiKey, isSuperUser, settings.userApiKey, hasServiceAndInference]);
 
   const activeKeyStatusDetail = useMemo(() => {
     if (isSuperUser) return 'superuser mode | all access limits bypassed';
+    if (hasServiceAndInference) {
+      return 'service and inference enabled | continuous 24/7 access';
+    }
     if (!hasApiKey) {
       if (computeCredits > 0) return `inference: ${computeCredits.toLocaleString()} hosted units | click to manage`;
       return 'inference unavailable until a key or hosted units are added';
     }
     if (isDemoApiKey(settings.userApiKey)) return 'inference: hosted (purchased key) | click to open Settings';
     return 'inference: your API key | BYOK | click to open Settings';
-  }, [computeCredits, hasApiKey, isSuperUser, settings.userApiKey]);
+  }, [computeCredits, hasApiKey, isSuperUser, settings.userApiKey, hasServiceAndInference]);
 
   const activeKeyStatusTone = isSuperUser
     ? 'text-red-400 border-red-500/50'
-    : !hasApiKey
-      ? (computeCredits > 0 ? 'text-emerald-300 border-emerald-500/50' : 'text-[#ff9b91] border-[#ff9b91]/50')
-      : isDemoApiKey(settings.userApiKey)
-        ? 'text-cyan-300 border-cyan-500/50'
-        : 'text-yellow-300 border-yellow-500/50';
+    : hasServiceAndInference
+      ? 'text-emerald-400 border-emerald-500/50'
+      : !hasApiKey
+        ? (computeCredits > 0 ? 'text-emerald-300 border-emerald-500/50' : 'text-[#ff9b91] border-[#ff9b91]/50')
+        : isDemoApiKey(settings.userApiKey)
+          ? 'text-cyan-300 border-cyan-500/50'
+          : 'text-yellow-300 border-yellow-500/50';
 
   // The experimental Gemini 3 controls apply when a Gemini 3.x model is active
   // (directly or via Auto high-thinking). Reachable only from context-aware
@@ -2523,19 +2567,14 @@ const AppContent = () => {
 
   // Reset dismiss state whenever the lock becomes active (e.g. key removed)
   useEffect(() => {
-    if ((!hasApiKey || isLocked) && !isSuperUser) {
+    if (isFreeTierTimeLocked) {
       setIsLockDismissed(false);
     }
-  }, [hasApiKey, isLocked, isSuperUser]);
+  }, [isFreeTierTimeLocked]);
 
-  // Auto-open the API key / payment modal when the app is locked
-  useEffect(() => {
-    if (shouldSuppressApiKeyModal) return;
-    if (!usageTimerInitialized) return; // wait until localStorage has been read
-    if (isLocked && !isLockDismissed && !isSuperUser && !hasApiKey) {
-      setShowApiKeyModal(true);
-    }
-  }, [usageTimerInitialized, isLocked, isLockDismissed, isSuperUser, hasApiKey, shouldSuppressApiKeyModal]);
+  // REMOVED: Auto-open API key modal when 4hr timer trips.
+  // Instead, the app does nothing when the timer trips; the 15-minute host cost reminder dialog
+  // is shown only when the user attempts inference without a key.
 
   // Ensure modal is closed on SEO/info/checkouts and other non-app modes.
   useEffect(() => {
@@ -2552,9 +2591,9 @@ const AppContent = () => {
 
     const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
     const interval = window.setInterval(() => {
-      // Don't show if user is already looking at payment or key dialog
+      // Don't show if user is already looking at payment or key dialog, or welcome screen
       setShowHostCostReminder((prev) => {
-        if (prev || showApiKeyModal || showUpgradeModal || isLocked) return prev;
+        if (prev || showApiKeyModal || showUpgradeModal || showWelcome) return prev;
         return true;
       });
     }, FIFTEEN_MINUTES_MS);
@@ -2562,7 +2601,7 @@ const AppContent = () => {
     return () => {
       window.clearInterval(interval);
     };
-  }, [shouldSuppressApiKeyModal, isSuperUser, hasServiceAccess, showApiKeyModal, showUpgradeModal, isLocked]);
+  }, [shouldSuppressApiKeyModal, isSuperUser, hasServiceAccess, showApiKeyModal, showUpgradeModal, showWelcome]);
 
   // When settings.userApiKey changes, check if it's already confirmed for this specific key.
   useEffect(() => {
@@ -2624,6 +2663,10 @@ const AppContent = () => {
   };
 
   const handleApiKeySubmit = (apiKey: string): boolean => {
+    const trimmed = apiKey.trim();
+    if (trimmed.startsWith('lsa_')) {
+      void unlockWithServiceKey(trimmed);
+    }
     const success = unlockWithApiKey(apiKey);
     if (success) {
       setShowApiKeyModal(false);
@@ -2652,6 +2695,25 @@ const AppContent = () => {
     }
     return success;
   };
+
+  const handleServiceKeySubmit = useCallback(async (serviceKey: string): Promise<boolean> => {
+    const trimmed = serviceKey.trim();
+    if (!trimmed) return false;
+    applyKeyToSettings(trimmed);
+    const result = await unlockWithServiceKey(trimmed);
+    if (result !== 'invalid') {
+      setShowApiKeyModal(false);
+      setHasConfirmedApiKey(true);
+      addNotification({
+        kind: 'api-key',
+        severity: 'info',
+        title: 'Enabling key active',
+        message: 'Your LandSurv Enabling Key is active and verified.',
+      });
+      return true;
+    }
+    return handleApiKeySubmit(trimmed);
+  }, [unlockWithServiceKey]);
 
   const handleSettingsApiKeySubmit = (apiKey: string): boolean => {
     // If empty, clear the stored key and confirmation
@@ -3504,6 +3566,11 @@ const AppContent = () => {
   }, [setShowWelcome, setIsInitialScreen]);
 
   const handleDeedSubmitted = useCallback((file: SessionFile) => {
+    if (isFreeTierTimeLocked) {
+      setIsLockDismissed(false);
+      setShowHostCostReminder(true);
+      return;
+    }
     try {
       if (initializedAgents.has(AgentType.DEED_READER)) {
             if (deedFile) {
@@ -3587,7 +3654,7 @@ const AppContent = () => {
       setError(`Initialization Error: ${errorMessage}`);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, deedFile, settings, clearHighlights, startChatWithOverride]);
+  }, [isFreeTierTimeLocked, activeModel, showView, startSession, logActionToFieldbook, initializedAgents, deedFile, settings, clearHighlights, startChatWithOverride]);
 
 
 
@@ -4326,6 +4393,7 @@ const AppContent = () => {
   // text. Returns null (caller falls back to the text-heuristic builder above)
   // when there are no page images to look at or no API key is configured.
   const runVisualComplianceAudit = useCallback(async (mode: ComplianceSourceMode): Promise<StandardsComplianceReport | null> => {
+    if (isFreeTierTimeLocked) return null;
     if (!standardsComplianceSubjectFile) return null;
     const subjectImages = standardsComplianceSubjectFile.rasterImageData;
     if (!subjectImages || subjectImages.length === 0) return null;
@@ -4464,7 +4532,7 @@ const AppContent = () => {
     }
   }, [initializedAgents, logActionToFieldbook, setIsAddingData, showView, startChatWithOverride, startSession]);
 
-  const handleDxfUploaded = useCallback((content: string, name: string, options?: { smoothSplines?: boolean; quantizationBits?: 16 | 32 }) => {
+  const handleDxfUploaded = useCallback((content: string, name: string, options?: { smoothSplines?: boolean; quantizationBits?: 16 | 32; splineLayers?: string[] }) => {
     try {
         // Parse geometry immediately so DXF drawing is rendered on canvas without delay
         const existingPointCount = pointListsRef.current.flatMap(l => l.points).length;
@@ -4473,13 +4541,15 @@ const AppContent = () => {
         const parsedDxf = parseDxfGeometry(content, {
             startingPointNumber: existingPointCount + 1,
             smoothSplines,
+            splineLayers: options?.splineLayers,
             splineOptions: {
                 quantizationBits,
                 adaptiveQuantization: true,
             },
         });
 
-        const splineSuffix = smoothSplines ? ` (smooth ${quantizationBits}-bit weighted T-splines applied)` : '';
+        const splineLayerNote = options?.splineLayers?.length ? ` on layers ${options.splineLayers.join(', ')}` : '';
+        const splineSuffix = smoothSplines ? ` (smooth ${quantizationBits}-bit weighted T-splines applied${splineLayerNote})` : '';
         const drawnSummary = `${parsedDxf.lines.length} lines/curves and ${parsedDxf.points.length} points across ${parsedDxf.layers.length} layers${splineSuffix}`;
 
         // Add parsed points and lines to the project state
@@ -4915,7 +4985,12 @@ const AppContent = () => {
 
   // Zoning Agent handlers
   const handleZoningSearch = useCallback(async (searchData: { state: string; county: string; municipality: string; zoningDistrict?: string; desiredUse?: string }) => {
-    console.log('[Zoning] ?? handleZoningSearch called with:', searchData);
+    console.log('[Zoning] 🔍 handleZoningSearch called with:', searchData);
+    if (isFreeTierTimeLocked) {
+      setIsLockDismissed(false);
+      setShowHostCostReminder(true);
+      return;
+    }
     try {
       startSession();
       const { state: zState, county: zCounty, municipality: zMuni, zoningDistrict: zDistrict, desiredUse: zUse } = searchData;
@@ -5459,6 +5534,11 @@ const AppContent = () => {
 
 
   const handleTitleSearchDeedSubmitted = useCallback((file: SessionFile) => {
+    if (isFreeTierTimeLocked) {
+      setIsLockDismissed(false);
+      setShowHostCostReminder(true);
+      return;
+    }
     try {
       if (!initializedAgents.has(AgentType.TITLE_SEARCH)) {
         startSession();
@@ -5495,7 +5575,7 @@ const AppContent = () => {
       const errorMessage = err instanceof Error ? err.message : 'Failed to initialize Title Search Agent.';
       setError(`Initialization Error: ${errorMessage}`);
     }
-  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, settings, startChatWithOverride]);
+  }, [isFreeTierTimeLocked, activeModel, showView, startSession, logActionToFieldbook, initializedAgents, settings, startChatWithOverride]);
 
   const initializePointEditor = useCallback(() => {
     if (initializedAgents.has(AgentType.POINT_EDITOR)) return;
@@ -8389,9 +8469,27 @@ const AppContent = () => {
       });
     }
 
-    // Free-trial off period: block hosted inference unless a key or superuser is present.
-    if (isLocked && !isSuperUser && !hasApiKey && !settings.userApiKey && !settings.openaiApiKey && !settings.xaiApiKey) {
+    // Free-trial off period: block inference when 4hr timer trips unless continuous service access or superuser is present.
+    // Instead of bringing up the API key box, show the 15-minute host cost reminder dialog.
+    if (isFreeTierTimeLocked) {
       setIsLockDismissed(false);
+      setShowHostCostReminder(true);
+      return;
+    }
+
+    const hasAnyInferenceKey = Boolean(
+      isSuperUser ||
+      computeCredits > 0 ||
+      hasApiKey ||
+      hasLandSurvKey ||
+      hasServiceAccess ||
+      settings.userApiKey?.trim() ||
+      settings.openaiApiKey?.trim() ||
+      settings.xaiApiKey?.trim() ||
+      settings.anthropicApiKey?.trim()
+    );
+
+    if (!hasAnyInferenceKey) {
       setShowApiKeyModal(true);
       return;
     }
@@ -11356,7 +11454,7 @@ const AppContent = () => {
       }
     }
   }, [
-    isLocked, isSuperUser, hasApiKey,
+    isFreeTierTimeLocked, isLocked, isSuperUser, hasApiKey,
     activeAgent, rawChat, deedChat, stationingChat, pointEditorChat, gpsStakeoutChat, lsvzChat, planExpertChat, dxfChat, imageAnalyzerChat, gisFile, gisChat, gisChatHistory, contouringChat, profileChat,
     standardsComplianceChat, standardsComplianceChatHistory, standardsComplianceSourceMode, standardsComplianceChecks,
     standardsComplianceControlFile, standardsComplianceSubjectFile, standardsComplianceLastReport,
@@ -12506,6 +12604,11 @@ const AppContent = () => {
   // Investigate closure deterministically, then compare the parsed calls with
   // the uploaded deed to explain likely transcription or source errors.
   const handleInvestigateClosure = useCallback(async (fileId: string) => {
+    if (isFreeTierTimeLocked) {
+      setIsLockDismissed(false);
+      setShowHostCostReminder(true);
+      return;
+    }
     const targetFile = boundaryFiles.find(f => f.id === fileId);
     if (!targetFile) return;
     const { investigateClosure } = await import('./utils/closureSolver.ts');
@@ -12557,7 +12660,7 @@ const AppContent = () => {
         ? { ...current, reviewStatus: 'unavailable', reviewError }
         : current);
     }
-  }, [boundaryFiles, pointMap, deedFile, agentModelOverrides, resolveModelForAgent, activeModel, settings.userApiKey, logActionToFieldbook]);
+  }, [isFreeTierTimeLocked, boundaryFiles, pointMap, deedFile, agentModelOverrides, resolveModelForAgent, activeModel, settings.userApiKey, logActionToFieldbook]);
 
   const handleApplyClosureHypothesis = useCallback((hypothesis: DeedClosureHypothesis) => {
     if (!closureInvestigation || hypothesis.rowIndex === undefined || !hypothesis.proposedPatch) return;
@@ -15522,46 +15625,7 @@ const AppContent = () => {
                             )}
                             <button onClick={handleGoBackToInitialScreen} className="p-2 rounded-full hover:bg-gray-700 text-gray-300 transition-colors" title="Go to Home Screen"><HomeIcon className="w-6 h-6"/></button>
                             
-                            {/* API Key Status � terminal-styled access panel */}
-                            {(() => {
-                              const onKeyStatusClick = isSuperUser
-                                ? handleSuperUserReset
-                                : hasApiKey
-                                  ? () => setIsSettingsVisible(true)
-                                  : handleUnlockClick;
-                              const keyStatusTitle = isSuperUser
-                                ? 'Click to reset app state (superuser mode)'
-                                : hasApiKey
-                                  ? (isDemoApiKey(settings.userApiKey) ? 'Purchased key � click to open Settings' : 'Using your API key � click to open Settings')
-                                  : computeCredits > 0
-                                    ? 'Click to manage your credits'
-                                    : 'Enter your Gemini API key to enable AI features';
-                              return (
-                                <div className="group relative z-[90] h-8 min-w-0 w-[min(31rem,48vw)] overflow-visible">
-                                  <button
-                                    type="button"
-                                    onClick={onKeyStatusClick}
-                                    onMouseEnter={() => setIsAccessStatusExpanded(true)}
-                                    onMouseLeave={() => setIsAccessStatusExpanded(false)}
-                                    onFocus={() => setIsAccessStatusExpanded(true)}
-                                    onBlur={() => setIsAccessStatusExpanded(false)}
-                                    aria-label={`Access status: ${activeKeyStatusLabel}. ${activeKeyStatusDetail}`}
-                                    style={{ maxHeight: isAccessStatusExpanded ? '4rem' : '2rem' }}
-                                    className={`absolute left-0 top-0 z-[100] flex w-full flex-col overflow-hidden rounded border bg-[#05090d]/95 px-3 py-1.5 text-left font-mono shadow-[0_8px_24px_rgba(0,0,0,0.35)] transition-[max-height,box-shadow,border-color] duration-200 hover:shadow-[0_12px_32px_rgba(0,0,0,0.55)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60 ${activeKeyStatusTone}`}
-                                    title={keyStatusTitle}
-                                  >
-                                    <span className="flex h-5 w-full shrink-0 items-center gap-2 whitespace-nowrap text-[11px] font-bold">
-                                      <span className="text-emerald-400" aria-hidden="true">$</span>
-                                      <span className="truncate">{activeKeyStatusLabel}</span>
-                                      <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-current shadow-[0_0_8px_currentColor]" aria-hidden="true" />
-                                    </span>
-                                    <span className="mt-1 block h-5 w-full shrink-0 truncate border-t border-white/10 pt-1 text-[10px] font-medium text-slate-300">
-                                      <span className="text-cyan-400" aria-hidden="true">�</span> {activeKeyStatusDetail}
-                                    </span>
-                                  </button>
-                                </div>
-                              );
-                            })()}
+                            
                             
                             {activeVisualPanel === 'canvas' && (
                                 <>
@@ -15597,6 +15661,22 @@ const AppContent = () => {
                             )}
                             
                             <button onClick={() => setIsGridVisible(v => !v)} className={`p-2 rounded-full transition-colors ${isGridVisible ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-700'}`} title={isGridVisible ? 'Hide background grid' : 'Show background grid'}><GridIcon className={`w-6 h-6 ${isGridVisible ? 'text-white' : 'text-gray-400'}`}/></button>
+                            <button
+                                onClick={() => {
+                                    setSettings(prev => ({
+                                        ...prev,
+                                        googleMaps: {
+                                            ...prev.googleMaps,
+                                            enabled: !prev.googleMaps?.enabled,
+                                            ...(!prev.googleMaps?.enabled ? { mapType: 'naip' as const, scale: 2 } : {}),
+                                        },
+                                    }));
+                                }}
+                                className={`px-2.5 py-1 rounded text-xs font-bold font-mono transition-colors ${settings.googleMaps?.enabled ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
+                                title={settings.googleMaps?.enabled ? 'Map Imagery: ON (Click to toggle)' : 'Map Imagery: OFF (Click to toggle)'}
+                            >
+                                MAP
+                            </button>
                             {/* C3D Sync — mirror of the DLL connector: Sync button + active-drawing dropdown */}
                             {isC3DConnected && (
                                 <div className="relative flex items-center">
@@ -15667,6 +15747,22 @@ const AppContent = () => {
                                     <>
                                     <DrawingCanvas 
                                         ref={canvas2dRef}
+                                        isDesktop={isDesktop}
+                                        isChatPanelVisible={isChatPanelVisible}
+                                        chatPanelWidth={chatPanelWidth}
+                                        keyInfo={{
+                                            label: activeKeyStatusLabel,
+                                            detail: activeKeyStatusDetail,
+                                            tone: activeKeyStatusTone,
+                                            hasServiceAndInference,
+                                            isServiceEnabled,
+                                            isInferenceEnabled,
+                                            onClick: isSuperUser
+                                                ? handleSuperUserReset
+                                                : hasApiKey
+                                                  ? () => setIsSettingsVisible(true)
+                                                  : handleUnlockClick,
+                                        }}
                                         initialTransform={canvasTransform}
                                         points={streamPreviewPoints.length > 0 ? [...points, ...streamPreviewPoints.filter(sp => !points.some(p => p.pointNumber === sp.pointNumber))] : points} 
                                         lines={streamPreviewLines.length > 0 ? [...visibleLines, ...streamPreviewLines] : visibleLines} 
@@ -15959,17 +16055,7 @@ const AppContent = () => {
                                             onDismiss={() => setShowAutoDraftPanel(false)}
                                         />
                                     )}
-                                    {/* Auto Draft trigger pill � shown when Civil Drafter is active */}
-                                    {activeAgent === AgentType.CIVIL_DRAFTER && !showAutoDraftPanel && (
-                                        <button
-                                            onClick={() => setShowAutoDraftPanel(true)}
-                                            className="absolute bottom-24 right-4 z-[55] flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-violet-700/80 hover:bg-violet-600/90 border border-violet-400/30 text-white text-xs font-semibold shadow-lg backdrop-blur-sm transition-all active:scale-95"
-                                            title="Open Auto Draft panel"
-                                        >
-                                            <span>?</span>
-                                            <span>Auto Draft</span>
-                                        </button>
-                                    )}
+                                    
                                     {/* Floating Point List Panel */}
                                     {isPointListPanelVisible && (
                                         <PointListPanel
@@ -16132,6 +16218,11 @@ const AppContent = () => {
                                                 summary={deedSummary ?? undefined}
                                                 computingTractIds={computingTractIds}
                                                 onComputeTract={(tractId, pob) => {
+                                                    if (isFreeTierTimeLocked) {
+                                                        setIsLockDismissed(false);
+                                                        setShowHostCostReminder(true);
+                                                        return;
+                                                    }
                                                     const t = deedSummary?.tracts.find(x => x.tractId === tractId);
                                                     if (!t) return;
                                                     pendingTractIdRef.current = tractId;
@@ -16150,6 +16241,11 @@ const AppContent = () => {
                                                     );
                                                 }}
                                                 onComputeAll={() => {
+                                                    if (isFreeTierTimeLocked) {
+                                                        setIsLockDismissed(false);
+                                                        setShowHostCostReminder(true);
+                                                        return;
+                                                    }
                                                     pendingTractIdRef.current = null;
                                                     pendingTractPobRef.current = null;
                                                     if (deedSummary) {
@@ -16157,7 +16253,14 @@ const AppContent = () => {
                                                     }
                                                     void handleSendMessage('Extract all boundary descriptions from this deed.');
                                                 }}
-                                                onParseNow={() => { void handleSendMessage('Extract all boundary descriptions from this deed.'); }}
+                                                onParseNow={() => {
+                                                    if (isFreeTierTimeLocked) {
+                                                        setIsLockDismissed(false);
+                                                        setShowHostCostReminder(true);
+                                                        return;
+                                                    }
+                                                    void handleSendMessage('Extract all boundary descriptions from this deed.');
+                                                }}
                                                 pointMap={pointMap}
                                                 selectedPointNumber={selectedPoint?.pointNumber}
                                                 onCompute={(id, pob) => {
@@ -16439,6 +16542,24 @@ const AppContent = () => {
                                     thinkingTime={thinkingTime}
                                     currentModelName={currentModelName}
                                     headerControls={chatHeaderControls}
+                                    chatBarAccessories={
+                                        activeAgent === AgentType.CIVIL_DRAFTER ? (
+                                            <div className="flex items-center gap-2 px-1">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowAutoDraftPanel(true)}
+                                                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 border border-violet-400/40 text-white text-xs font-bold shadow-md shadow-violet-950/40 transition-all active:scale-95"
+                                                    title="Open Auto Draft workflow panel"
+                                                >
+                                                    <span className="text-sm">⚡</span>
+                                                    <span>Auto Draft</span>
+                                                </button>
+                                                <span className="text-[11px] text-gray-400">
+                                                    One-shot automated survey &amp; linework drafting
+                                                </span>
+                                            </div>
+                                        ) : undefined
+                                    }
                                     toolsContent={
                                         activeAgent === AgentType.COGO_AGENT ? (
                                             <CogoPanel 
@@ -16725,30 +16846,30 @@ const AppContent = () => {
             </div>
           )}
           
-          {isDocVisible && <Suspense fallback={<LoadingFallback />}><LsvzDocumentation onClose={() => setIsDocVisible(false)} activeAgent={activeAgent} /></Suspense>}
-          {isTechPageVisible && <Suspense fallback={<LoadingFallback />}><TechnologiesPage onClose={() => setIsTechPageVisible(false)} activeAgent={activeAgent}/></Suspense>}
-          {isInvestorFormVisible && <InvestorInquiryForm onClose={() => setIsInvestorFormVisible(false)} activeAgent={activeAgent} />}
-          {isReleaseLogVisible && <Suspense fallback={<LoadingFallback />}><ReleaseLog onClose={() => setIsReleaseLogVisible(false)} activeAgent={activeAgent} /></Suspense>}
+          {!showWelcome && isDocVisible && <Suspense fallback={<LoadingFallback />}><LsvzDocumentation onClose={() => setIsDocVisible(false)} activeAgent={activeAgent} /></Suspense>}
+          {!showWelcome && isTechPageVisible && <Suspense fallback={<LoadingFallback />}><TechnologiesPage onClose={() => setIsTechPageVisible(false)} activeAgent={activeAgent}/></Suspense>}
+          {!showWelcome && isInvestorFormVisible && <InvestorInquiryForm onClose={() => setIsInvestorFormVisible(false)} activeAgent={activeAgent} />}
+          {!showWelcome && isReleaseLogVisible && <Suspense fallback={<LoadingFallback />}><ReleaseLog onClose={() => setIsReleaseLogVisible(false)} activeAgent={activeAgent} /></Suspense>}
           {/* Experimental Gemini 3 controls � visible for Civil Plan Expert, Boundary Agent, and Civil Drafter when gemini-3.x is selected. Toggle from the chat header "Gemini 3" button. */}
-          {canConfigureGemini3 && showGemini3Panel && (
+          {!showWelcome && canConfigureGemini3 && showGemini3Panel && (
             <Gemini3ControlsPanel activeAgent={activeAgent} onClose={() => setShowGemini3Panel(false)} />
           )}
-          {activeAgent === AgentType.CIVIL_DRAFTER && showCivilDrafterContextPanel && (
+          {!showWelcome && activeAgent === AgentType.CIVIL_DRAFTER && showCivilDrafterContextPanel && (
             <CivilDrafterContextPanel
               volume={civilDrafterContextVolume}
               modelName={currentModelName}
               onClose={() => setShowCivilDrafterContextPanel(false)}
             />
           )}
-          {cacpManifestAgent && (
+          {!showWelcome && cacpManifestAgent && (
             <CacpManifestModal agent={cacpManifestAgent} onClose={() => setCacpManifestAgent(null)} />
           )}
-          {isHelpModalVisible && <HelpModal onClose={() => setIsHelpModalVisible(false)} activeAgent={activeAgent} onShowAbout={showAbout} onShowForwardThinking={showForwardThinking} onShowTech={showTech} onShowDisclaimer={showDisclaimer} onShowErrorConsole={() => setIsErrorConsoleVisible(true)} onShowReleaseLog={showReleaseLog} />}
-          {isAboutVisible && <AboutPage onClose={() => setIsAboutVisible(false)} onShowTech={showTech} onShowDoc={showDoc} onShowReleaseLog={showReleaseLog} />}
-          {isForwardThinkingVisible && <ForwardThinkingPage onClose={() => setIsForwardThinkingVisible(false)} />}
-          {isDisclaimerVisible && <DisclaimerPage onClose={() => setIsDisclaimerVisible(false)} />}
-          {isLegalPageVisible && <LegalPage onClose={() => setIsLegalPageVisible(false)} />}
-          {showLegalGate && (
+          {!showWelcome && isHelpModalVisible && <HelpModal onClose={() => setIsHelpModalVisible(false)} activeAgent={activeAgent} onShowAbout={showAbout} onShowForwardThinking={showForwardThinking} onShowTech={showTech} onShowDisclaimer={showDisclaimer} onShowErrorConsole={() => setIsErrorConsoleVisible(true)} onShowReleaseLog={showReleaseLog} />}
+          {!showWelcome && isAboutVisible && <AboutPage onClose={() => setIsAboutVisible(false)} onShowTech={showTech} onShowDoc={showDoc} onShowReleaseLog={showReleaseLog} />}
+          {!showWelcome && isForwardThinkingVisible && <ForwardThinkingPage onClose={() => setIsForwardThinkingVisible(false)} />}
+          {!showWelcome && isDisclaimerVisible && <DisclaimerPage onClose={() => setIsDisclaimerVisible(false)} />}
+          {!showWelcome && isLegalPageVisible && <LegalPage onClose={() => setIsLegalPageVisible(false)} />}
+          {!showWelcome && showLegalGate && (
             <LegalAgreementGate
               onSigned={() => {
                 setHasLegalSignature(true);
@@ -17239,7 +17360,7 @@ const AppContent = () => {
 
           {/* Periodic 15-minute Host Cost Reminder Popup */}
           <HostCostReminderModal
-            isOpen={showHostCostReminder}
+            isOpen={!showWelcome && showHostCostReminder}
             onClose={() => setShowHostCostReminder(false)}
             onOpenUpgrade={() => {
               setShowHostCostReminder(false);
@@ -17251,11 +17372,11 @@ const AppContent = () => {
               setShowWelcome(true);
             }}
           />
-          {isErrorConsoleVisible && <ErrorConsole isOpen={isErrorConsoleVisible} onClose={() => setIsErrorConsoleVisible(false)} />}
-          {isReleaseStagesModalVisible && <ReleaseStagesModal isOpen={isReleaseStagesModalVisible} onClose={() => setIsReleaseStagesModalVisible(false)} />}
+          {!showWelcome && isErrorConsoleVisible && <ErrorConsole isOpen={isErrorConsoleVisible} onClose={() => setIsErrorConsoleVisible(false)} />}
+          {!showWelcome && isReleaseStagesModalVisible && <ReleaseStagesModal isOpen={isReleaseStagesModalVisible} onClose={() => setIsReleaseStagesModalVisible(false)} />}
 
           {/* Contour Generations Manager � persistent across agents (v26.05.19.3) */}
-          {isContourManagementVisible && (
+          {!showWelcome && isContourManagementVisible && (
             <ContourManagementPanel
               generations={contourGenerations}
               inclusionBoundaries={inclusionBoundaries}
@@ -17272,7 +17393,7 @@ const AppContent = () => {
           )}
 
           {/* Claude 4.7 Vertex AI settings panel (v26.05.19.3) */}
-          {isClaudeSettingsVisible && (
+          {!showWelcome && isClaudeSettingsVisible && (
             <ClaudeSettingsPanel
               selectedModel={claudeSettingsModel || undefined}
               lockModel={Boolean(claudeSettingsModel)}
@@ -17285,8 +17406,9 @@ const AppContent = () => {
           
           {/* Dedicated Keys Modal */}
           <ApiKeyOrPayModal 
-            isOpen={!shouldSuppressApiKeyModal && showApiKeyModal} 
+            isOpen={!shouldSuppressApiKeyModal && !showWelcome && showApiKeyModal} 
             onSubmitApiKey={handleApiKeySubmit}
+            onSubmitServiceKey={handleServiceKeySubmit}
             trigger={apiKeyModalTrigger}
             initialTab={apiKeyModalInitialTab}
             onOpenUpgrade={() => {
@@ -17298,7 +17420,7 @@ const AppContent = () => {
             hasLandSurvKey={hasLandSurvKey}
             hasServiceAccess={hasServiceAccess}
             serviceAccessExpiresAt={serviceAccessExpiresAt}
-            isFreeTierLocked={isLocked}
+            isFreeTierLocked={isFreeTierTimeLocked}
             remainingTime={remainingTime}
             timeUntilAvailable={timeUntilAvailable}
             currentKeyDetails={currentKeyDetails}
@@ -17313,9 +17435,9 @@ const AppContent = () => {
             onClose={() => {
               setShowApiKeyModal(false);
               // If locked, X acts the same as Browse Without Key
-              if (isLocked && !isSuperUser) setIsLockDismissed(true);
+              if (isFreeTierTimeLocked && !isSuperUser) setIsLockDismissed(true);
             }}
-            onDismiss={isLocked && !isSuperUser ? () => {
+            onDismiss={isFreeTierTimeLocked && !isSuperUser ? () => {
               setIsLockDismissed(true);
               setShowApiKeyModal(false);
             } : undefined}
@@ -17323,7 +17445,7 @@ const AppContent = () => {
 
           {/* Dedicated Upgrade and Payment Modal */}
           <UpgradeModal
-            isOpen={showUpgradeModal}
+            isOpen={!showWelcome && showUpgradeModal}
             onClose={() => setShowUpgradeModal(false)}
             onOpenKeyModal={() => {
               setShowUpgradeModal(false);
@@ -17427,7 +17549,7 @@ const AppContent = () => {
           />
 
           {/* BYOK API Key Confirmation Modal (Google / OpenAI / xAI / Anthropic) */}
-          {showApiKeyConfirmation && (
+          {!showWelcome && showApiKeyConfirmation && (
             <div className="fixed inset-0 bg-gray-900/80 z-50 flex items-center justify-center p-4 animate-fade-in">
               <div className="bg-gray-800 border border-cyan-500 rounded-lg shadow-xl p-6 max-w-md w-full animate-modal-panel-fade-in-down">
                 <h3 className="text-lg font-bold text-cyan-400 mb-4">Using Your API Key</h3>
@@ -17465,13 +17587,13 @@ const AppContent = () => {
           )}
           
           {/* FIX: Passed missing onExport and defaultFileName props to DxfExportModal to resolve a TypeScript error. */}
-          {isDxfExportModalOpen && <DxfExportModal
+          {!showWelcome && isDxfExportModalOpen && <DxfExportModal
             isOpen={isDxfExportModalOpen}
             onClose={() => setIsDxfExportModalOpen(false)}
             onExport={handleExportDxf}
             defaultFileName={defaultFileNameBase}
           />}
-          {isSessionSaveModalOpen && <SessionSaveModal
+          {!showWelcome && isSessionSaveModalOpen && <SessionSaveModal
             isOpen={isSessionSaveModalOpen}
             onClose={() => setIsSessionSaveModalOpen(false)}
             onSave={handleSaveSession}
@@ -17482,11 +17604,11 @@ const AppContent = () => {
             activeAgent={activeAgent}
             associatedFiles={[rawFile?.name, deedFile?.name, centerlines[0]?.name]}
           />}
-           {projectionPrompt && <ProjectionSelectionModal onConfirm={handleConfirmProjection} onClose={() => setProjectionPrompt(null)} />}
+           {!showWelcome && projectionPrompt && <ProjectionSelectionModal onConfirm={handleConfirmProjection} onClose={() => setProjectionPrompt(null)} />}
 
           {/* C3D Sync Center — webapp-side sync wizard (Phase 2) */}
           <C3DSyncCenter
-            isOpen={showSyncCenter}
+            isOpen={!showWelcome && showSyncCenter}
             onClose={() => setShowSyncCenter(false)}
             isC3DConnected={isC3DConnected}
             sendToC3D={sendToC3D}
@@ -17638,7 +17760,7 @@ const AppContent = () => {
           {/* Civil 3D Integration Panels — live cloud session/QR auth requires the backend, hidden in OSS build */}
           {!isOssBuild() && (
           <C3DConnectPanel
-            isOpen={showC3DConnectPanel}
+            isOpen={!showWelcome && showC3DConnectPanel}
             onClose={() => setShowC3DConnectPanel(false)}
             isTrialActive={hasApiKey}
             hasApiKey={!!settings.userApiKey}
@@ -17653,7 +17775,7 @@ const AppContent = () => {
           
           {/* C3D Debug Dialog - shows when clicking connected indicator */}
           <C3DDebugDialog
-            isOpen={showC3DDebugDialog}
+            isOpen={!showWelcome && showC3DDebugDialog}
             onClose={() => setShowC3DDebugDialog(false)}
             sessionToken={c3dSessionToken}
             isConnected={isC3DConnected}

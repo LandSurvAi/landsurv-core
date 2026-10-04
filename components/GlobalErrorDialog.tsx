@@ -7,10 +7,14 @@
 import React from 'react';
 import FloatingErrorBanner from './FloatingErrorBanner';
 import { useAppState } from '../contexts/AppStateContext';
+import { useUIState } from '../contexts/UIStateContext';
 
 const GlobalErrorDialog: React.FC = () => {
   const { criticalError, dismissCriticalError } = useAppState();
-  if (!criticalError) return null;
+  const uiState = useUIState();
+  const showWelcome = uiState?.showWelcome;
+
+  if (!criticalError || showWelcome) return null;
   return <FloatingErrorBanner message={criticalError} onClose={dismissCriticalError} />;
 };
 

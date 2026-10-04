@@ -100,6 +100,8 @@ export interface DxfParseOptions {
    * If true, converts long strings of linear segments and polylines into smooth weighted T-splines.
    */
   smoothSplines?: boolean;
+  /** Restrict smoothing/quantization to these layers (case-insensitive). Empty or omitted = all layers. */
+  splineLayers?: string[];
   /**
    * Spline tension/tightness options.
    */
@@ -117,6 +119,7 @@ export function parseDxfGeometry(
 
   const startingPointNumber = options.startingPointNumber ?? 1;
   const smoothSplines = Boolean(options.smoothSplines);
+  const splineLayerSet = new Set((options.splineLayers ?? []).map(l => l.trim().toUpperCase()).filter(Boolean));
   const splineOptions = options.splineOptions ?? { tension: 0.5 };
 
   const layerDefs = new Map<string, { colorIndex?: number; lineType?: string }>();
@@ -262,6 +265,57 @@ export function parseDxfGeometry(
               lineType,
             });
             stats.circles++;
+          }
+          break;
+        }
+
+        case 'SOLID':
+        case 'TRACE':
+        case '3DFACE': {
+          // Parse corner coordinates. SOLID/TRACE order vertices 1, 2, 4, 3 (bowtie order).
+          // We output perimeter wireframe line segments to avoid rogue opaque triangular blotches.
+          const x1 = parseFloat(currentGroupCodes[10]?.[0] || 'NaN');
+          const y1 = parseFloat(currentGroupCodes[20]?.[0] || 'NaN');
+          const z1 = parseFloat(currentGroupCodes[30]?.[0] || '0');
+          const x2 = parseFloat(currentGroupCodes[11]?.[0] || 'NaN');
+          const y2 = parseFloat(currentGroupCodes[21]?.[0] || 'NaN');
+          const z2 = parseFloat(currentGroupCodes[31]?.[0] || '0');
+          const x3 = parseFloat(currentGroupCodes[12]?.[0] || 'NaN');
+          const y3 = parseFloat(currentGroupCodes[22]?.[0] || 'NaN');
+          const z3 = parseFloat(currentGroupCodes[32]?.[0] || '0');
+          const x4Raw = currentGroupCodes[13]?.[0];
+          const y4Raw = currentGroupCodes[23]?.[0];
+          const z4Raw = currentGroupCodes[33]?.[0] || '0';
+          const x4 = x4Raw !== undefined ? parseFloat(x4Raw) : x3;
+          const y4 = y4Raw !== undefined ? parseFloat(y4Raw) : y3;
+          const z4 = z4Raw !== undefined ? parseFloat(z4Raw) : z3;
+
+          if (!isNaN(x1) && !isNaN(y1) && !isNaN(x2) && !isNaN(y2) && !isNaN(x3) && !isNaN(y3)) {
+            // For SOLID and TRACE, perimeter is 1->2->4->3->1 (when 4 vertices exist)
+            const isFourPt = !isNaN(x4) && !isNaN(y4) && (x4 !== x3 || y4 !== y3);
+            const perimeter = isFourPt
+              ? [
+                  [x1, y1, z1, x2, y2, z2],
+                  [x2, y2, z2, x4, y4, z4],
+                  [x4, y4, z4, x3, y3, z3],
+                  [x3, y3, z3, x1, y1, z1],
+                ]
+              : [
+                  [x1, y1, z1, x2, y2, z2],
+                  [x2, y2, z2, x3, y3, z3],
+                  [x3, y3, z3, x1, y1, z1],
+                ];
+
+            for (const [px1, py1, pz1, px2, py2, pz2] of perimeter) {
+              rawLineSegments.push({
+                x1: px1, y1: py1, z1: pz1,
+                x2: px2, y2: py2, z2: pz2,
+                layer,
+                color: entityColor,
+                lineType,
+              });
+              stats.lines++;
+            }
           }
           break;
         }
@@ -544,7 +598,8 @@ export function parseDxfGeometry(
 
     const smoothedLines: SurveyLine[] = [...unbundled];
     for (const segs of polyGroups.values()) {
-      if (segs.length >= 2 && !segs.some(s => s.isCircle)) {
+      const layerSelected = splineLayerSet.size === 0 || splineLayerSet.has((segs[0].layer ?? '').toUpperCase());
+      if (layerSelected && segs.length >= 2 && !segs.some(s => s.isCircle)) {
         smoothedLines.push(...convertSegmentsToWeightedTSpline(segs, splineOptions));
       } else {
         smoothedLines.push(...segs);

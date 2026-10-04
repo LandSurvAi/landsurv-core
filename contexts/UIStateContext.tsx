@@ -1,21 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import type { VisualPanel } from '../types';
 
-// Import DevOps settings check function (defined inline to avoid circular dependency)
-function getDevOpsAlwaysShowWelcome(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    const stored = localStorage.getItem('landsurv-devops-settings');
-    if (stored) {
-      const settings = JSON.parse(stored);
-      return settings.alwaysShowWelcome === true;
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return false;
-}
-
 // Type definitions for UI state
 export type PageMode = 'app' | 'landing' | 'xml_sitemap';
 
@@ -154,27 +139,11 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
   const [pageMode, setPageMode] = useState<PageMode | null>(null);
   const [landingContent, setLandingContent] = useState<{ title: string; content: React.FC<any> } | null>(null);
   
-  // Welcome dialog: use sessionStorage to show only once per tab session
-  // Unless DevOps setting overrides to always show
-  const [showWelcome, setShowWelcome] = useState<boolean>(() => {
-    // Check if DevOps override is enabled
-    if (getDevOpsAlwaysShowWelcome()) {
-      return true; // Always show when DevOps setting is enabled
-    }
-    // Check if welcome was already shown in this tab session
-    if (typeof window !== 'undefined') {
-      return sessionStorage.getItem('landsurv-welcome-shown') !== 'true';
-    }
-    return true;
-  });
-  
-  // When welcome is closed, mark it as shown for this tab session
-  // (unless DevOps override is enabled, in which case we don't persist)
+  // Welcome dialog shows on every app load.
+  const [showWelcome, setShowWelcome] = useState<boolean>(true);
+
   const handleSetShowWelcome = (show: boolean) => {
     setShowWelcome(show);
-    if (!show && typeof window !== 'undefined' && !getDevOpsAlwaysShowWelcome()) {
-      sessionStorage.setItem('landsurv-welcome-shown', 'true');
-    }
   };
   
   const [isInitialScreen, setIsInitialScreen] = useState(true);

@@ -34,7 +34,9 @@ import { solveRigidCornerAlign } from '../utils/cornerAlign.ts';
 import { buildSymbolMatchers, resolveSymbol } from '../utils/symbolResolver.ts';
 import { findMatchingSymbol, libraryToSymbolDefinition } from '../data/surveySymbolLibrary.ts';
 import { buildAnnotationMatchers, resolveAnnotation, renderAnnotationTemplate } from '../utils/annotationResolver.ts';
-import { loadImageViaProxy } from '../utils/corsProxy.ts';
+import { fetchImageBlobViaProxy } from '../utils/corsProxy.ts';
+import { getCachedBitmap, planMapTiles, mapWithConcurrency, decodeImageCached, trackTileLoad, subscribeTileActivity, getPendingTileCount, type PlannedTile } from '../utils/mapTileCache.ts';
+import { WebGpuBasemap, GpuLineBatch, parseCssColor, type BasemapLayer, type BasemapSource, type WorldQuad } from '../utils/webgpuBasemap.ts';
 import { buildParcelLabelLines, resolveParcelTextStyle } from '../utils/parcelLabelFormatter.ts';
 import { applyAnnotationTextCase, resolveAnnotationCategoryTextStyle, resolveAnnotationTextSize } from '../utils/annotationTextStyle.ts';
 import { getStaticMap, type StaticMapRequest } from '../services/staticMapsService.ts';
@@ -46,6 +48,7 @@ import type { StandardDefinition } from '../contexts/types/CadManager.types';
 import { convertLinearUnits, getLinearUnitAbbreviation, type LinearUnit } from '../utils/linearUnits.ts';
 import { LayersIcon, RedrawIcon, ZoomExtentsIcon, ScaleIcon, AttributeScaleIcon, DownloadIcon, ZoomToPointIcon, XMarkIcon, EyeIcon, PencilSquareIcon, BreaklineIcon, InclusionLineIcon, ExclusionLineIcon, ScissorsIcon, UndoIcon, RedoIcon, ExtendIcon, PolylineIcon, ListBulletIcon, CircleIcon } from './icons.tsx';
 import proj4 from 'proj4';
+import { createFloatingOriginContext } from '../utils/floatingOriginContext.ts';
 
 /**
  * Compute the unique circular arc that starts at `start`, leaves tangent to
@@ -120,6 +123,9 @@ export interface DrawingCanvasHandles {
   getTransform: () => { scale: number; offsetX: number; offsetY: number };
   setTransform: (transform: { scale: number; offsetX: number; offsetY: number }) => void;
 }
+
+import { CanvasTerminal } from './CanvasTerminal';
+import { parseCanvasCommand, executeCanvasCommand, type CommandContext } from '../utils/canvasCommands';
 
 interface DrawingCanvasProps {
     /** Initial 2D canvas transform (scale/zoom & pan offsets) restored from saved session state. */
@@ -329,6 +335,26 @@ interface DrawingCanvasProps {
      *  Used as a fallback when a SurveyLine has a layer but no explicit lineType — common
      *  for lines created before the linetype system existed or imported from DXF. */
     layerLinetypeMap?: Record<string, string>;
+    /** Key info passed from App.tsx for display in the interactive command terminal. */
+    keyInfo?: {
+        label: string;
+        detail: string;
+        tone?: string;
+        onClick?: () => void;
+        hasServiceAndInference?: boolean;
+        isServiceEnabled?: boolean;
+        isInferenceEnabled?: boolean;
+    };
+    /** Whether the screen is in desktop breakpoint (>=768px). */
+    isDesktop?: boolean;
+    /** Whether the agent chat panel is currently open/visible. */
+    isChatPanelVisible?: boolean;
+    /** Current width in pixels of the agent chat panel in desktop mode. */
+    chatPanelWidth?: number;
+    onRedo?: () => void;
+    canRedo?: boolean;
+    canUndo?: boolean;
+    onClearAll?: () => void;
 }
 
 type OsnapMode = 'endpoint' | 'midpoint' | 'intersection' | 'center' | 'nearest' | 'perpendicular' | 'tangent';
@@ -374,6 +400,97 @@ export interface EntityGrip {
     y: number;
     quadrantIndex?: number;
     line: SurveyLine;
+}
+
+export interface ViewToolbarPosition {
+    x?: number;
+    y?: number;
+    isDocked?: boolean;
+}
+
+/**
+ * Calculates toolbar position and docking state during or after drag operations.
+ * When dragging within snapThreshold of the right edge in desktop mode, it snaps
+ * directly to the right edge (the agent chat boundary) and sets isDocked: true.
+ */
+export function calculateToolbarDockingPosition(params: {
+    rawX: number;
+    rawY: number;
+    maxW: number;
+    maxH: number;
+    toolbarW: number;
+    toolbarH: number;
+    isDesktop: boolean;
+    snapThreshold?: number;
+}): { x: number; y: number; isDocked: boolean } {
+    const { rawX, rawY, maxW, maxH, toolbarW, toolbarH, isDesktop, snapThreshold = 36 } = params;
+    const clampedY = Math.max(8, Math.min(maxH - toolbarH - 8, rawY));
+    const rightDockX = maxW - toolbarW - 16;
+    const isSnappingToRight = isDesktop && (rawX >= rightDockX - snapThreshold);
+    const newX = isSnappingToRight
+        ? rightDockX
+        : Math.max(8, Math.min(rightDockX, rawX));
+
+    return {
+        x: newX,
+        y: clampedY,
+        isDocked: isSnappingToRight,
+    };
+}
+
+/**
+ * If the toolbar is NOT docked but positioned behind the agent chat (e.g. user opens
+ * the agent chat in desktop mode), computes the pushed-out position so the toolbar
+ * remains visible on the canvas and does not get lost behind the chat drawer.
+ * Returns null if no push-out is needed.
+ */
+export function calculateToolbarPushOutOfChat(params: {
+    currentPos: ViewToolbarPosition | null;
+    containerWidth: number;
+    isDesktop: boolean;
+    isChatPanelVisible: boolean;
+    chatPanelWidth: number;
+    toolbarWidth: number;
+    windowWidth?: number;
+}): ViewToolbarPosition | null {
+    const {
+        currentPos,
+        containerWidth,
+        isDesktop,
+        isChatPanelVisible,
+        chatPanelWidth,
+        toolbarWidth,
+        windowWidth = typeof window !== 'undefined' ? window.innerWidth : 1200,
+    } = params;
+
+    // If docked or null (default docked), CSS right: 1rem keeps it anchored to right edge
+    const isDocked = currentPos ? (currentPos.isDocked ?? false) : true;
+    if (isDocked) return null;
+
+    const currentX = currentPos?.x;
+    if (currentX === undefined) return null;
+
+    let availableWidth = containerWidth;
+    if (isDesktop && isChatPanelVisible) {
+        const expectedWidth = windowWidth - chatPanelWidth;
+        if (expectedWidth > 0 && expectedWidth < availableWidth) {
+            availableWidth = expectedWidth;
+        }
+    }
+    if (availableWidth <= 0) return null;
+
+    const maxAllowedX = Math.max(16, availableWidth - toolbarWidth - 16);
+
+    // If toolbar is positioned behind the agent chat (or off the right edge)
+    if (currentX > maxAllowedX) {
+        return {
+            ...currentPos,
+            x: maxAllowedX,
+            isDocked: false, // Stays undocked, pushed out only to be visible
+        };
+    }
+
+    return null;
 }
 
 const RUNNING_OSNAP_STORAGE_KEY = 'landsurv.runningOsnaps.v1';
@@ -580,7 +697,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             viewOriginY: 0,
         },
         onSetOrientationTuple,
+        isDesktop: propIsDesktop,
+        isChatPanelVisible: propIsChatPanelVisible,
+        chatPanelWidth: propChatPanelWidth,
     } = props;
+    const isDesktop = propIsDesktop ?? (typeof window !== 'undefined' ? window.innerWidth >= 768 : true);
+    const isChatPanelVisible = propIsChatPanelVisible ?? true;
+    const chatPanelWidth = propChatPanelWidth ?? 450;
     const { addNotification, setSettings } = useAppState();
     const { reportError } = useErrorReporter();
 
@@ -597,6 +720,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     console.log('[DC] render — boundaryFiles:', boundaryFiles ? boundaryFiles.length : 'undef', 'points:', points.length);
     
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const gpuCanvasRef = useRef<HTMLCanvasElement>(null);
+    const gpuBasemapRef = useRef<WebGpuBasemap | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [transform, setTransform] = useState<{ scale: number; offsetX: number; offsetY: number }>(() => initialTransform || { scale: 1, offsetX: 0, offsetY: 0 });
     const transformRef = useRef(transform);
@@ -876,18 +1001,117 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [isSelectionMode, setIsSelectionMode] = useState(false);
     const [isBoxSelectMode, setIsBoxSelectMode] = useState(false);
     
-    // Toolbar dragging state - two separate toolbars
-    const [viewToolbarPosition, setViewToolbarPosition] = useState({ x: 16, y: 16 }); // view/navigation tools at top
-    const [editToolbarPosition, setEditToolbarPosition] = useState({ x: 16, y: window.innerHeight - 130 }); // drawing/editing tools at bottom with proper spacing
+    // Toolbar orientation: default vertical, flippable to horizontal
+    const [toolbarOrientation, setToolbarOrientation] = useState<'vertical' | 'horizontal'>(() => {
+        try {
+            const saved = localStorage.getItem('landsurv-canvas-toolbar-orientation');
+            return saved === 'horizontal' ? 'horizontal' : 'vertical';
+        } catch {
+            return 'vertical';
+        }
+    });
+
+    const toolbarRef = useRef<HTMLDivElement>(null);
+    // Toolbar dragging and docking state - defaults to docked on the right edge just under the north arrow
+    const [viewToolbarPosition, setViewToolbarPosition] = useState<ViewToolbarPosition | null>(() => {
+        try {
+            const saved = localStorage.getItem('landsurv-canvas-toolbar-position');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (Number.isFinite(parsed.y) && parsed.y > 0) {
+                    const hasFiniteX = Number.isFinite(parsed.x) && parsed.x > 0;
+                    let isDocked: boolean;
+                    if (parsed.isDocked !== undefined) {
+                        isDocked = Boolean(parsed.isDocked);
+                    } else if (!hasFiniteX) {
+                        isDocked = true;
+                    } else if (typeof window !== 'undefined' && parsed.x >= window.innerWidth - 120) {
+                        isDocked = true;
+                    } else {
+                        isDocked = false;
+                    }
+                    return {
+                        x: hasFiniteX ? parsed.x : undefined,
+                        y: parsed.y,
+                        isDocked,
+                    };
+                }
+            }
+        } catch { /* ignore */ }
+        return null;
+    });
+
+    const latestToolbarPosRef = useRef<ViewToolbarPosition | null>(viewToolbarPosition);
+    latestToolbarPosRef.current = viewToolbarPosition;
+
     const [isViewToolbarDragging, setIsViewToolbarDragging] = useState(false);
-    const [isEditToolbarDragging, setIsEditToolbarDragging] = useState(false);
-    const viewToolbarDragStart = useRef<{ x: number; y: number; toolbarX: number; toolbarY: number } | null>(null);
-    const editToolbarDragStart = useRef<{ x: number; y: number; toolbarX: number; toolbarY: number } | null>(null);
+    const viewToolbarDragStart = useRef<{ clientX: number; clientY: number; toolbarX: number; toolbarY: number } | null>(null);
+    const viewToolbarRafRef = useRef<number | null>(null);
+
+    // If toolbar is NOT docked but positioned behind the agent chat (e.g. chat just expanded or container resized),
+    // push it out so it remains visible and does not get lost behind the chat.
+    const pushToolbarOutOfChatIfNeeded = useCallback(() => {
+        if (isViewToolbarDragging) return;
+        const container = containerRef.current;
+        if (!container) return;
+
+        const currentPos = latestToolbarPosRef.current;
+        const toolbarW = toolbarRef.current?.offsetWidth ?? (toolbarOrientation === 'vertical' ? 50 : 380);
+
+        const nextPos = calculateToolbarPushOutOfChat({
+            currentPos,
+            containerWidth: container.clientWidth,
+            isDesktop,
+            isChatPanelVisible,
+            chatPanelWidth,
+            toolbarWidth: toolbarW,
+            windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1200,
+        });
+
+        if (nextPos) {
+            latestToolbarPosRef.current = nextPos;
+            setViewToolbarPosition(nextPos);
+            try {
+                localStorage.setItem('landsurv-canvas-toolbar-position', JSON.stringify(nextPos));
+            } catch { /* ignore */ }
+        }
+    }, [isViewToolbarDragging, isDesktop, isChatPanelVisible, chatPanelWidth, toolbarOrientation]);
+
+    // Handle chat panel expand/collapse transitions & width updates
+    useEffect(() => {
+        pushToolbarOutOfChatIfNeeded();
+        const t1 = setTimeout(pushToolbarOutOfChatIfNeeded, 60);
+        const t2 = setTimeout(pushToolbarOutOfChatIfNeeded, 160);
+        const t3 = setTimeout(pushToolbarOutOfChatIfNeeded, 320);
+        return () => {
+            clearTimeout(t1);
+            clearTimeout(t2);
+            clearTimeout(t3);
+        };
+    }, [isChatPanelVisible, chatPanelWidth, isDesktop, pushToolbarOutOfChatIfNeeded]);
+
+    // Adjust position if orientation toggle causes toolbar to exceed container bounds
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+        const maxH = container.clientHeight;
+        const toolbarH = toolbarRef.current?.offsetHeight ?? (toolbarOrientation === 'vertical' ? 450 : 50);
+        if (maxH > 0 && viewToolbarPosition?.y !== undefined) {
+            const maxY = Math.max(8, maxH - toolbarH - 8);
+            if (viewToolbarPosition.y > maxY) {
+                setViewToolbarPosition(prev => prev ? { ...prev, y: maxY } : null);
+            }
+        }
+        pushToolbarOutOfChatIfNeeded();
+    }, [toolbarOrientation, pushToolbarOutOfChatIfNeeded]);
+
+    // Terminal incoming notification/event feed
+    const [terminalIncoming, setTerminalIncoming] = useState<{ text: string; tone?: 'normal' | 'ok' | 'error' | 'info' } | null>(null);
     
     // Helper to determine flyout direction based on toolbar position
     const getFlyoutDirection = useCallback((toolbarX: number, toolbarY: number) => {
-        const screenWidth = window.innerWidth;
-        const screenHeight = window.innerHeight;
+        const screenWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
+        const screenHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
         
         // Determine if closer to top or bottom
         const isCloserToTop = toolbarY < screenHeight / 2;
@@ -921,17 +1145,22 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     // Track pending animation frame to prevent multiple queued draws
     const animationFrameRef = useRef<number | null>(null);
     
-    const [wmsImages, setWmsImages] = useState<{ image: HTMLImageElement; bbox: [number, number, number, number]; opacity: number }[]>([]);
+    const [wmsImages, setWmsImages] = useState<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: WorldQuad; opacity: number }[]>([]);
     const [offlineImages, setOfflineImages] = useState<Map<string, HTMLImageElement>>(new Map());
     const [googleOverlayImage, setGoogleOverlayImage] = useState<{
         image: HTMLImageElement;
         bbox: [number, number, number, number];
+        /** All tiles to draw; absent for single-image overlays. */
+        tiles?: { image: HTMLImageElement; bbox: [number, number, number, number]; quad?: WorldQuad }[];
         opacity: number;
         source: 'user-maps' | 'user-gemini' | 'proxy' | 'naip-proxy';
         mapType: NonNullable<StaticMapRequest['maptype']>;
     } | null>(null);
     const [googleOverlayDiagnostic, setGoogleOverlayDiagnostic] = useState<{ tone: 'info' | 'error'; message: string } | null>(null);
     const googleOverlaySeqRef = useRef(0);
+    const overlayTilesRef = useRef<{ image: HTMLImageElement; bbox: [number, number, number, number]; quad?: WorldQuad; source: 'user-maps' | 'user-gemini' | 'proxy' | 'naip-proxy' }[]>([]);
+    const naipMercatorEpsgRef = useRef<Set<number>>(new Set());
+    const [pendingTiles, setPendingTiles] = useState(0);
     const lastOverlayDiagnosticNotificationRef = useRef<string | null>(null);
 
     useEffect(() => {
@@ -1763,34 +1992,105 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
     // ── Flood ring chains (memoized — expensive O(n²) only runs when data changes) ──
     const floodRings = useMemo(() => {
-        const byPid = new Map<string, Array<{x:number;y:number}>>();
+        const byPid = new Map<string, Array<{ x: number; y: number }>>();
         // Group segments by polylineId
-        const groups = new Map<string, Array<{a:{x:number;y:number}; b:{x:number;y:number}}>>();
+        const groups = new Map<string, Array<{ a: { x: number; y: number }; b: { x: number; y: number }; curve?: { center: { x: number; y: number }; radius: number; startAngle: number; endAngle: number; anticlockwise: boolean } }>>();
         for (const line of lines) {
             if (line.type !== 'flood' || line.hidden) continue;
             const pid = line.polylineId ?? `${line.layer ?? 'flood'}_nopid`;
             const a = line.fromPt ? { x: line.fromPt.x, y: line.fromPt.y } : (() => { const p = pointMap.get(line.from); return p ? { x: p.easting, y: p.northing } : null; })();
             const b = line.toPt ? { x: line.toPt.x, y: line.toPt.y } : (() => { const p = pointMap.get(line.to); return p ? { x: p.easting, y: p.northing } : null; })();
             if (!a || !b) continue;
+
+            let curve: { center: { x: number; y: number }; radius: number; startAngle: number; endAngle: number; anticlockwise: boolean } | undefined;
+            if (line.isCurve && line.curveRadius && line.arcLength) {
+                const radius = line.curveRadius;
+                const centralAngle = line.arcLength / radius;
+                const isLeftCurve = line.curveDirection === 'left';
+                let centerX: number | null = null;
+                let centerY: number | null = null;
+
+                if (line.circleCenter) {
+                    centerX = line.circleCenter.x;
+                    centerY = line.circleCenter.y;
+                } else {
+                    const signedDeltaArc = isLeftCurve ? -centralAngle : centralAngle;
+                    const chordStrArc = line.chordBearing || line.bearing;
+                    const chordRadArc = chordStrArc ? parseBearingToRadians(chordStrArc) : null;
+                    const tangentAngle: number | null = chordRadArc !== null
+                        ? chordRadArc - signedDeltaArc / 2
+                        : (line.tangentBearing ? parseBearingToRadians(line.tangentBearing) : null);
+                    if (tangentAngle !== null) {
+                        const canvasTangentAngle = Math.PI / 2 - tangentAngle;
+                        const centerOffsetAngle = isLeftCurve
+                            ? canvasTangentAngle + Math.PI / 2
+                            : canvasTangentAngle - Math.PI / 2;
+                        centerX = a.x + radius * Math.cos(centerOffsetAngle);
+                        centerY = a.y + radius * Math.sin(centerOffsetAngle);
+                    }
+                }
+
+                if (centerX !== null && centerY !== null) {
+                    const startAngle = Math.atan2(a.y - centerY, a.x - centerX);
+                    const endAngle = isLeftCurve ? startAngle + centralAngle : startAngle - centralAngle;
+                    curve = {
+                        center: { x: centerX, y: centerY },
+                        radius,
+                        startAngle,
+                        endAngle,
+                        anticlockwise: !isLeftCurve,
+                    };
+                }
+            }
+
             if (!groups.has(pid)) groups.set(pid, []);
-            groups.get(pid)!.push({ a, b });
+            groups.get(pid)!.push({ a, b, curve });
         }
         for (const [pid, pool] of groups) {
             if (pool.length < 2) continue;
             const remaining = pool.slice();
             const first = remaining.splice(0, 1)[0];
-            const ring: {x:number;y:number}[] = [first.a, first.b];
+            const ring: { x: number; y: number }[] = [];
+
+            const appendSeg = (seg: typeof first, reverse: boolean) => {
+                if (seg.curve) {
+                    const numSamples = Math.max(12, Math.round((seg.curve.radius * Math.abs(seg.curve.endAngle - seg.curve.startAngle)) / 4));
+                    const sAng = reverse ? seg.curve.endAngle : seg.curve.startAngle;
+                    const eAng = reverse ? seg.curve.startAngle : seg.curve.endAngle;
+                    for (let s = (ring.length === 0 ? 0 : 1); s <= numSamples; s++) {
+                        const t = s / numSamples;
+                        const ang = sAng + (eAng - sAng) * t;
+                        ring.push({
+                            x: seg.curve.center.x + seg.curve.radius * Math.cos(ang),
+                            y: seg.curve.center.y + seg.curve.radius * Math.sin(ang),
+                        });
+                    }
+                } else {
+                    const startPt = reverse ? seg.b : seg.a;
+                    const endPt = reverse ? seg.a : seg.b;
+                    if (ring.length === 0) ring.push(startPt);
+                    ring.push(endPt);
+                }
+            };
+
+            appendSeg(first, false);
             const EPS = 0.001;
             let extended = true;
             while (extended && remaining.length > 0) {
                 extended = false;
                 const tail = ring[ring.length - 1];
                 for (let i = 0; i < remaining.length; i++) {
-                    const { a, b } = remaining[i];
-                    if (Math.abs(a.x - tail.x) < EPS && Math.abs(a.y - tail.y) < EPS) {
-                        ring.push(b); remaining.splice(i, 1); extended = true; break;
-                    } else if (Math.abs(b.x - tail.x) < EPS && Math.abs(b.y - tail.y) < EPS) {
-                        ring.push(a); remaining.splice(i, 1); extended = true; break;
+                    const cand = remaining[i];
+                    if (Math.hypot(cand.a.x - tail.x, cand.a.y - tail.y) < EPS) {
+                        appendSeg(cand, false);
+                        remaining.splice(i, 1);
+                        extended = true;
+                        break;
+                    } else if (Math.hypot(cand.b.x - tail.x, cand.b.y - tail.y) < EPS) {
+                        appendSeg(cand, true);
+                        remaining.splice(i, 1);
+                        extended = true;
+                        break;
                     }
                 }
             }
@@ -3470,6 +3770,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         return () => { isMounted = false; };
       }, [offlineMapAreas]);
     
+    const wmsSeqRef = useRef(0);
     const fetchWmsImages = useMemo(() => debounce(async (
         currentTransform: typeof transform,
         currentActiveWmsLayers: ActiveWmsLayer[],
@@ -3477,121 +3778,125 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         currentSettings: Settings,
         canvasElement: HTMLCanvasElement | null
     ) => {
+        const seq = ++wmsSeqRef.current;
         if (!canvasElement || !currentSettings.projection.epsg) {
             setWmsImages([]);
             return;
         }
-    
+
         const { scale, offsetX, offsetY } = currentTransform;
-        const { width, height } = canvasElement;
-    
+        const width = canvasElement.clientWidth || canvasElement.width;
+        const height = canvasElement.clientHeight || canvasElement.height;
+
         const minE_view = (0 - offsetX) / scale;
         const maxE_view = (width - offsetX) / scale;
         const maxN_view = -(0 - offsetY) / scale;
         const minN_view = -(height - offsetY) / scale;
         const viewBboxArray: [number, number, number, number] = [minE_view, minN_view, maxE_view, maxN_view];
         const projectCrs = `EPSG:${currentSettings.projection.epsg}`;
-    
+
         const activeVisibleLayers = currentActiveWmsLayers.filter(l => l.isVisible);
         if (activeVisibleLayers.length === 0) {
             setWmsImages([]);
             return;
         }
-    
-        const imagePromises = activeVisibleLayers.map(async (layer) => {
+
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const tiles = planMapTiles(viewBboxArray, width * dpr);
+
+        type WmsTileJob = { layer: ActiveWmsLayer; service: WmsService; crs: string; url: string; key: string; bbox: [number, number, number, number]; quad?: WorldQuad };
+        const jobs: WmsTileJob[] = [];
+
+        for (const layer of activeVisibleLayers) {
             const service = currentWmsServices.find(s => s.url === layer.serviceUrl);
-            if (!service) return null;
-    
-            const layerInfo = service.layers.find(l => l.name === layer.layerName);
-            if (!layerInfo) return null;
-    
-            let requestCrs = projectCrs;
-            let requestBboxArray = viewBboxArray;
-    
+            const layerInfo = service?.layers.find(l => l.name === layer.layerName);
+            if (!service || !layerInfo) continue;
+
             const isProjectCrsSupported = layerInfo.supportedCrs.some(crs => crs.includes(String(currentSettings.projection.epsg)));
-    
+            let requestCrs = projectCrs;
             if (!isProjectCrsSupported) {
-                const fallbackCrsList = ['EPSG:3857', 'EPSG:4326'];
-                const supportedFallback = fallbackCrsList.find(crs =>
+                const fallback = ['EPSG:3857', 'EPSG:4326'].find(crs =>
                     layerInfo.supportedCrs.some(supported => supported.includes(crs.split(':')[1]))
                 );
-    
-                if (supportedFallback) {
-                    try {
-                        const corners_proj = [
-                            [viewBboxArray[0], viewBboxArray[1]], [viewBboxArray[2], viewBboxArray[1]],
-                            [viewBboxArray[0], viewBboxArray[3]], [viewBboxArray[2], viewBboxArray[3]]
-                        ];
-                        
-                        const corners_reproj = corners_proj.map(c => proj4(projectCrs, supportedFallback, c));
-                        
-                        const minX_reproj = Math.min(...corners_reproj.map(c => c[0]));
-                        const minY_reproj = Math.min(...corners_reproj.map(c => c[1]));
-                        const maxX_reproj = Math.max(...corners_reproj.map(c => c[0]));
-                        const maxY_reproj = Math.max(...corners_reproj.map(c => c[1]));
-                        
-                        requestCrs = supportedFallback;
-                        requestBboxArray = [minX_reproj, minY_reproj, maxX_reproj, maxY_reproj];
-                    } catch (e) {
-                        console.error(`Projection from ${projectCrs} to ${supportedFallback} failed:`, e);
-                        return null;
-                    }
-                } else {
+                if (!fallback) {
                     console.warn(`Layer ${layer.layerName} from ${service.title} supports neither project CRS nor common web CRSs.`);
-                    return null;
+                    continue;
                 }
+                requestCrs = fallback;
             }
-            
-            let finalBboxArray = requestBboxArray;
-            // WMS 1.3.0 spec requires axis order swap for geographic CRS like EPSG:4326 (lat,lon instead of lon,lat).
-            if (requestCrs === 'EPSG:4326') {
-                const [minX, minY, maxX, maxY] = requestBboxArray;
-                finalBboxArray = [minY, minX, maxY, maxX];
+
+            for (const tile of tiles) {
+                let requestBbox = tile.bbox;
+                if (requestCrs !== projectCrs) {
+                    try {
+                        const corners = [
+                            [tile.bbox[0], tile.bbox[1]], [tile.bbox[2], tile.bbox[1]],
+                            [tile.bbox[0], tile.bbox[3]], [tile.bbox[2], tile.bbox[3]],
+                        ].map(c => proj4(projectCrs, requestCrs, c));
+                        requestBbox = [
+                            Math.min(...corners.map(c => c[0])), Math.min(...corners.map(c => c[1])),
+                            Math.max(...corners.map(c => c[0])), Math.max(...corners.map(c => c[1])),
+                        ];
+                    } catch (e) {
+                        console.error(`Projection from ${projectCrs} to ${requestCrs} failed:`, e);
+                        continue;
+                    }
+                }
+
+                // WMS 1.3.0 uses lat,lon axis order for EPSG:4326.
+                const [bx0, by0, bx1, by1] = requestBbox;
+                const bboxString = (requestCrs === 'EPSG:4326' ? [by0, bx0, by1, bx1] : [bx0, by0, bx1, by1]).join(',');
+
+                const wmsUrl = new URL(service.url);
+                wmsUrl.searchParams.set('service', 'WMS');
+                wmsUrl.searchParams.set('request', 'GetMap');
+                wmsUrl.searchParams.set('layers', layer.layerName);
+                wmsUrl.searchParams.set('styles', '');
+                wmsUrl.searchParams.set('version', '1.3.0');
+                wmsUrl.searchParams.set('width', String(tile.sizePx));
+                wmsUrl.searchParams.set('height', String(tile.sizePx));
+                wmsUrl.searchParams.set('CRS', requestCrs);
+                wmsUrl.searchParams.set('bbox', bboxString);
+                wmsUrl.searchParams.set('format', 'image/png');
+                wmsUrl.searchParams.set('transparent', 'true');
+
+                let drawBbox = tile.bbox;
+                let quad: WorldQuad | undefined;
+                if (requestCrs !== projectCrs) {
+                    // The fetched rectangle is axis-aligned in the request CRS, so it is a rotated quad in project coordinates.
+                    try {
+                        const [qx0, qy0, qx1, qy1] = requestBbox;
+                        quad = [
+                            proj4(requestCrs, projectCrs, [qx0, qy1]) as [number, number],
+                            proj4(requestCrs, projectCrs, [qx1, qy1]) as [number, number],
+                            proj4(requestCrs, projectCrs, [qx1, qy0]) as [number, number],
+                            proj4(requestCrs, projectCrs, [qx0, qy0]) as [number, number],
+                        ];
+                        const xs = quad.map(c => c[0]);
+                        const ys = quad.map(c => c[1]);
+                        drawBbox = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+                    } catch {
+                        continue;
+                    }
+                }
+
+                jobs.push({ layer, service, crs: requestCrs, url: wmsUrl.toString(), key: `wms|${wmsUrl.toString()}`, bbox: drawBbox, quad });
             }
-            const requestBboxString = finalBboxArray.join(',');
-    
-            const wmsUrl = new URL(service.url);
-            wmsUrl.searchParams.set('service', 'WMS');
-            wmsUrl.searchParams.set('request', 'GetMap');
-            wmsUrl.searchParams.set('layers', layer.layerName);
-            wmsUrl.searchParams.set('styles', '');
-            // Forcibly request WMS 1.3.0 for better consistency across servers.
-            wmsUrl.searchParams.set('version', '1.3.0');
-            wmsUrl.searchParams.set('width', String(width));
-            wmsUrl.searchParams.set('height', String(height));
-            // The parameter is 'CRS' for 1.3.0. By forcing this version, we can use 'CRS' consistently.
-            wmsUrl.searchParams.set('CRS', requestCrs);
-            wmsUrl.searchParams.set('bbox', requestBboxString);
-            wmsUrl.searchParams.set('format', 'image/png');
-            wmsUrl.searchParams.set('transparent', 'true');
-    
-            const proxiedUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(wmsUrl.toString())}`;
-            const drawingBbox = viewBboxArray;
-    
-            // Load via the prioritized CORS-proxy list (api.codetabs.com is
-            // primary as of 2026-05-17; allorigins / corsproxy.io are tried
-            // next on failure). This used to be a single hard-coded
-            // allorigins.win Image() call, which silently failed when the
-            // proxy started returning 408s — image just never appeared on
-            // the canvas with no UI error. The helper logs failures to
-            // console and tries each proxy in turn.
+        }
+
+        const loaded = await mapWithConcurrency(jobs, 3, async job => {
+            if (seq !== wmsSeqRef.current) return null;
             try {
-                const img = await loadImageViaProxy(wmsUrl.toString());
-                return { image: img, bbox: drawingBbox, opacity: layer.opacity };
+                const bitmap = await getCachedBitmap(job.key, () => fetchImageBlobViaProxy(job.url));
+                return { image: bitmap as CanvasImageSource, bbox: job.bbox, quad: job.quad, opacity: job.layer.opacity };
             } catch (err) {
-                console.error(`[WMS] All proxies failed for ${service.title} / ${layer.layerName}`, err);
-                // Fallback diagnostic: fetch through the (likely-failing) primary
-                // proxy directly so any returned error text is logged.
-                fetch(proxiedUrl)
-                    .then(res => res.text())
-                    .then(text => console.error(`[WMS] Primary proxy diagnostic body for ${service.title}:`, text.slice(0, 500)))
-                    .catch(() => {});
+                console.error(`[WMS] Tile failed for ${job.service.title} / ${job.layer.layerName}`, err);
                 return null;
             }
         });
 
-        const loadedImages = (await Promise.all(imagePromises)).filter((img): img is { image: HTMLImageElement; bbox: [number, number, number, number]; opacity: number } => img !== null);
-        setWmsImages(loadedImages);
+        if (seq !== wmsSeqRef.current) return;
+        setWmsImages(loaded.filter((t): t is { image: CanvasImageSource; bbox: [number, number, number, number]; quad?: WorldQuad; opacity: number } => t !== null));
     }, 500), []);
 
 
@@ -3694,144 +3999,131 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 return;
             }
 
-            // Pad + snap the request extent to a stable grid so small pans and
-            // zooms reuse a cached image instead of re-fetching the backend
-            // proxy (which is slow and bounded by a per-IP daily limit). We draw
-            // into the returned extent, so a larger snapped rectangle stays
-            // geometrically exact — only the cache key is stabilized.
-            const pad = 0.2;
-            const rawMinX = minEView - projWidth * pad;
-            const rawMaxX = maxEView + projWidth * pad;
-            const rawMinY = minNView - projHeight * pad;
-            const rawMaxY = maxNView + projHeight * pad;
-            const niceStep = (span: number) => {
-                const raw = span / 6;
-                if (!(raw > 0) || !Number.isFinite(raw)) return span || 1;
-                const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-                const norm = raw / mag;
-                const nice = norm >= 5 ? 5 : norm >= 2 ? 2 : 1;
-                return nice * mag;
-            };
-            const stepX = niceStep(rawMaxX - rawMinX);
-            const stepY = niceStep(rawMaxY - rawMinY);
-            const snapMinX = Math.floor(rawMinX / stepX) * stepX;
-            const snapMaxX = Math.ceil(rawMaxX / stepX) * stepX;
-            const snapMinY = Math.floor(rawMinY / stepY) * stepY;
-            const snapMaxY = Math.ceil(rawMaxY / stepY) * stepY;
-            const snapWidth = snapMaxX - snapMinX;
-            const snapHeight = snapMaxY - snapMinY;
+            // Fixed power-of-two tiles in project coordinates: zooming back to an
+            // earlier level asks for the same tiles, which come from the cache.
+            const naipPxWidth = Math.min(canvasElement.width, (canvasElement.clientWidth || canvasElement.width) * 2);
+            const naipTiles = planMapTiles([minEView, minNView, maxEView, maxNView], naipPxWidth, { tilePx: 1024, maxTiles: 16 });
+            const naipOpacity = gm.opacity ?? 1.0;
+            const naipEpsg = currentSettings.projection.epsg;
+            type NaipTile = { image: HTMLImageElement; bbox: [number, number, number, number]; quad?: WorldQuad; source: 'user-maps' | 'user-gemini' | 'proxy' | 'naip-proxy' };
 
-            // Preserve the snapped extent aspect ratio so the returned extent
-            // matches the requested bbox exactly. Honor the retina scale (2×)
-            // by requesting a higher-resolution image for the same extent.
-            const retinaScale = Math.min(2, Math.max(1, Math.round(currentSettings.googleMaps?.scale ?? 1)));
-            const capDim = 640 * retinaScale;
-            const aspect = snapWidth / snapHeight;
-            let outW = capDim;
-            let outH = capDim;
-            if (aspect >= 1) outH = Math.max(1, Math.round(capDim / aspect));
-            else outW = Math.max(1, Math.round(capDim * aspect));
-
-            // Attempt to fetch NAIP already reprojected into a target SR, then
-            // draw it 1:1 into the returned extent (converted to project coords
-            // if the request SR was not the project SR).
-            //   requestSr === project EPSG → draw returned extent directly.
-            //   requestSr === 3857         → reproject returned extent → project.
-            const runNaip = async (
-                requestBbox: [number, number, number, number],
-                requestSr: number,
+            const loadNaipTile = async (
+                reqBbox: [number, number, number, number],
+                reqSr: number,
                 extentToProject: boolean,
-            ) => {
-                const staticMap = await getStaticMap({
+            ): Promise<NaipTile> => {
+                const reqW = reqBbox[2] - reqBbox[0];
+                const reqH = reqBbox[3] - reqBbox[1];
+                const aspect = reqW / reqH;
+                const long = 1024;
+                const outW = aspect >= 1 ? long : Math.max(1, Math.round(long * aspect));
+                const outH = aspect >= 1 ? Math.max(1, Math.round(long / aspect)) : long;
+                const staticMap = await trackTileLoad(() => getStaticMap({
                     lat,
                     lng,
                     width: outW,
                     height: outH,
                     maptype: 'naip',
-                    projectedBbox: requestBbox,
-                    sr: requestSr,
-                });
-
-                const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-                    const i = new Image();
-                    i.onload = () => resolve(i);
-                    i.onerror = () => reject(new Error('Overlay image decode failed'));
-                    i.src = staticMap.dataUrl;
-                });
-
-                if (seq !== googleOverlaySeqRef.current) return true;
-
-                let drawBbox: [number, number, number, number] =
-                    staticMap.extent ?? requestBbox;
-
-                if (extentToProject && staticMap.extent) {
-                    const srCrs = `EPSG:${requestSr}`;
-                    const [exMinX, exMinY, exMaxX, exMaxY] = staticMap.extent;
-                    const cs = [
-                        proj4(srCrs, projectCrs, [exMinX, exMinY]) as [number, number],
-                        proj4(srCrs, projectCrs, [exMaxX, exMinY]) as [number, number],
-                        proj4(srCrs, projectCrs, [exMaxX, exMaxY]) as [number, number],
+                    projectedBbox: reqBbox,
+                    sr: reqSr,
+                }));
+                const image = await decodeImageCached(staticMap.dataUrl);
+                let drawBbox: [number, number, number, number] = staticMap.extent ?? reqBbox;
+                let quad: WorldQuad | undefined;
+                if (extentToProject) {
+                    // The image is an axis-aligned Mercator rectangle, which is a rotated quad in project coordinates.
+                    const srCrs = `EPSG:${reqSr}`;
+                    const [exMinX, exMinY, exMaxX, exMaxY] = staticMap.extent ?? reqBbox;
+                    quad = [
                         proj4(srCrs, projectCrs, [exMinX, exMaxY]) as [number, number],
+                        proj4(srCrs, projectCrs, [exMaxX, exMaxY]) as [number, number],
+                        proj4(srCrs, projectCrs, [exMaxX, exMinY]) as [number, number],
+                        proj4(srCrs, projectCrs, [exMinX, exMinY]) as [number, number],
                     ];
-                    const xs = cs.map(c => c[0]);
-                    const ys = cs.map(c => c[1]);
+                    const xs = quad.map(c => c[0]);
+                    const ys = quad.map(c => c[1]);
                     drawBbox = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
                 }
+                return { image, bbox: drawBbox, quad, source: staticMap.source };
+            };
 
+            // Many local/State-Plane EPSGs are rejected by the USGS ImageServer;
+            // Web Mercator always works, so remember which EPSGs need it.
+            const fetchNaipTile = async (tile: PlannedTile): Promise<NaipTile> => {
+                const viaMercator = async (): Promise<NaipTile> => {
+                    const [x0, y0, x1, y1] = tile.bbox;
+                    const c = [
+                        proj4(projectCrs, 'EPSG:3857', [x0, y0]) as [number, number],
+                        proj4(projectCrs, 'EPSG:3857', [x1, y0]) as [number, number],
+                        proj4(projectCrs, 'EPSG:3857', [x1, y1]) as [number, number],
+                        proj4(projectCrs, 'EPSG:3857', [x0, y1]) as [number, number],
+                    ];
+                    if (c.some(([x, y]) => !Number.isFinite(x) || !Number.isFinite(y))) {
+                        throw new Error('Web Mercator reprojection produced non-finite coordinates');
+                    }
+                    const xs = c.map(p => p[0]);
+                    const ys = c.map(p => p[1]);
+                    return loadNaipTile([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], 3857, true);
+                };
+                if (naipMercatorEpsgRef.current.has(naipEpsg)) return viaMercator();
+                try {
+                    return await loadNaipTile(tile.bbox, naipEpsg, false);
+                } catch (firstErr) {
+                    try {
+                        const result = await viaMercator();
+                        naipMercatorEpsgRef.current.add(naipEpsg);
+                        return result;
+                    } catch {
+                        throw firstErr;
+                    }
+                }
+            };
+
+            const arrived: NaipTile[] = [];
+            let lastNaipError: unknown = null;
+            const publishNaip = (final: boolean) => {
+                if (seq !== googleOverlaySeqRef.current) return;
+                // Translucent overlays would double-darken where tiles overlap, so only show a full set.
+                if (naipOpacity < 0.99 && !final) return;
+                const freshKeys = new Set(arrived.map(t => t.bbox.join(',')));
+                const kept = naipOpacity >= 0.99
+                    ? overlayTilesRef.current.filter(t => !freshKeys.has(t.bbox.join(',')))
+                    : [];
+                const merged = [...kept, ...arrived].slice(-48);
+                if (merged.length === 0) return;
+                overlayTilesRef.current = merged;
+                const top = merged[merged.length - 1];
                 setGoogleOverlayImage({
-                    image: img,
-                    bbox: drawBbox,
-                    opacity: gm.opacity ?? 1.0,
-                    source: staticMap.source,
+                    image: top.image,
+                    bbox: top.bbox,
+                    tiles: merged.map(t => ({ image: t.image, bbox: t.bbox, quad: t.quad })),
+                    opacity: naipOpacity,
+                    source: top.source,
                     mapType: 'naip',
                 });
                 setGoogleOverlayDiagnostic(null);
-                return true;
             };
 
-            try {
-                // Preferred: reproject server-side into the project SR (exact
-                // grid alignment when the ImageServer recognizes the EPSG).
-                await runNaip(
-                    [snapMinX, snapMinY, snapMaxX, snapMaxY],
-                    currentSettings.projection.epsg,
-                    false,
-                );
-            } catch (e) {
+            await mapWithConcurrency(naipTiles, 3, async tile => {
                 if (seq !== googleOverlaySeqRef.current) return;
-                // Fallback: many local/State-Plane EPSGs are not recognized by
-                // the USGS ImageServer ("'imageSR' parameter is invalid"). Web
-                // Mercator (3857) is universally supported, so reproject the
-                // snapped extent into 3857 with proj4 and reproject the returned
-                // extent back to project coords for drawing.
                 try {
-                    const c3857 = [
-                        proj4(projectCrs, 'EPSG:3857', [snapMinX, snapMinY]) as [number, number],
-                        proj4(projectCrs, 'EPSG:3857', [snapMaxX, snapMinY]) as [number, number],
-                        proj4(projectCrs, 'EPSG:3857', [snapMaxX, snapMaxY]) as [number, number],
-                        proj4(projectCrs, 'EPSG:3857', [snapMinX, snapMaxY]) as [number, number],
-                    ];
-                    const xs = c3857.map(c => c[0]);
-                    const ys = c3857.map(c => c[1]);
-                    if (c3857.some(([x, y]) => !Number.isFinite(x) || !Number.isFinite(y))) {
-                        throw new Error('Web Mercator reprojection produced non-finite coordinates');
-                    }
-                    await runNaip(
-                        [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
-                        3857,
-                        true,
-                    );
-                } catch (e2) {
-                    if (seq !== googleOverlaySeqRef.current) return;
-                    console.warn('[GoogleOverlay] NAIP overlay fetch failed:', e, e2);
-                    setGoogleOverlayImage(null);
-                    const detail = e2 instanceof Error && e2.message ? ` ${e2.message}` : '';
-                    setGoogleOverlayDiagnostic({
-                        tone: 'error',
-                        message: `Map imagery fetch failed.${detail}`,
-                    });
+                    arrived.push(await fetchNaipTile(tile));
+                    publishNaip(false);
+                } catch (err) {
+                    lastNaipError = err;
                 }
+            });
+            if (seq !== googleOverlaySeqRef.current) return;
+
+            if (arrived.length === 0) {
+                console.warn('[GoogleOverlay] NAIP overlay fetch failed:', lastNaipError);
+                overlayTilesRef.current = [];
+                setGoogleOverlayImage(null);
+                const detail = lastNaipError instanceof Error && lastNaipError.message ? ` ${lastNaipError.message}` : '';
+                setGoogleOverlayDiagnostic({ tone: 'error', message: `Map imagery fetch failed.${detail}` });
+                return;
             }
+            publishNaip(true);
             return;
         }
 
@@ -3851,12 +4143,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 }
             );
 
-            const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-                const i = new Image();
-                i.onload = () => resolve(i);
-                i.onerror = () => reject(new Error('Overlay image decode failed'));
-                i.src = staticMap.dataUrl;
-            });
+            const img = await decodeImageCached(staticMap.dataUrl);
 
             const imageWgs = bboxFromCenterZoom(lat, lng, zoom, 640, 640);
             const projectedCorners = [
@@ -3883,6 +4170,34 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setGoogleOverlayDiagnostic(e instanceof Error ? e.message : String(e));
         }
     }, 500), []);
+
+    useEffect(() => {
+        let timer: number | undefined;
+        const sync = () => {
+            const n = getPendingTileCount();
+            if (n === 0) {
+                if (timer !== undefined) {
+                    window.clearTimeout(timer);
+                    timer = undefined;
+                }
+                setPendingTiles(0);
+                return;
+            }
+            // Delay first appearance so cache hits don't flash the indicator.
+            setPendingTiles(prev => (prev > 0 ? n : prev));
+            if (timer === undefined) {
+                timer = window.setTimeout(() => {
+                    timer = undefined;
+                    setPendingTiles(getPendingTileCount());
+                }, 250);
+            }
+        };
+        const unsubscribe = subscribeTileActivity(sync);
+        return () => {
+            unsubscribe();
+            if (timer !== undefined) window.clearTimeout(timer);
+        };
+    }, []);
 
     useEffect(() => {
         fetchGoogleOverlayImage(transform, settings, canvasRef.current);
@@ -3926,8 +4241,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             'boundaryFiles:', boundaryFiles ? boundaryFiles.length : 'undef',
             'bfVisible:', boundaryFiles ? boundaryFiles.filter(b => !b.hidden).length : 'n/a');
         if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
+        const rawCtx = canvas.getContext('2d');
+        if (!rawCtx) return;
+        const floatingCtx = createFloatingOriginContext(rawCtx);
+        const ctx = floatingCtx.ctx;
 
         const isLightTheme = settings.theme === 'light';
 
@@ -3983,19 +4300,26 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
         // --- Pass 1: Draw world-space items ---
         ctx.save();
-        ctx.translate(transform.offsetX, transform.offsetY);
-        ctx.scale(transform.scale, -transform.scale); // Flip Y-axis for standard coordinate systems
 
         // Apply Orientation Tuple (OT / UCS) View rotation and origin translation if explicitly set
         const viewAngle = orientationTuple?.viewAngle ?? (orientationTuple?.mode === 'view' ? orientationTuple.angle : 0);
         const viewOriginX = orientationTuple?.viewOriginX ?? (orientationTuple?.mode === 'view' ? orientationTuple.originX : 0);
         const viewOriginY = orientationTuple?.viewOriginY ?? (orientationTuple?.mode === 'view' ? orientationTuple.originY : 0);
 
-        if (viewAngle !== 0) {
-            ctx.translate(viewOriginX, viewOriginY);
-            ctx.rotate(viewAngle);
-            ctx.translate(-viewOriginX, -viewOriginY);
-        }
+        // Floating origin: the world point under the screen center. World coords are
+        // shifted by it before reaching the canvas to avoid float32 quantization.
+        const viewCos = Math.cos(viewAngle);
+        const viewSin = Math.sin(viewAngle);
+        const centerQx = (logicalWidth / 2 - transform.offsetX) / transform.scale;
+        const centerQy = -(logicalHeight / 2 - transform.offsetY) / transform.scale;
+        const fox = Math.round(viewOriginX + (centerQx - viewOriginX) * viewCos + (centerQy - viewOriginY) * viewSin);
+        const foy = Math.round(viewOriginY - (centerQx - viewOriginX) * viewSin + (centerQy - viewOriginY) * viewCos);
+        const rotatedOx = viewOriginX + (fox - viewOriginX) * viewCos - (foy - viewOriginY) * viewSin;
+        const rotatedOy = viewOriginY + (fox - viewOriginX) * viewSin + (foy - viewOriginY) * viewCos;
+        ctx.translate(transform.offsetX + transform.scale * rotatedOx, transform.offsetY - transform.scale * rotatedOy);
+        ctx.scale(transform.scale, -transform.scale); // Flip Y-axis for standard coordinate systems
+        if (viewAngle !== 0) ctx.rotate(viewAngle);
+        floatingCtx.enable(fox, foy);
 
             const inverseScale = 1 / transform.scale;
             const annotationScalingMode = settings.pointAttributeScaling;
@@ -4013,26 +4337,128 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         // mitred joints between contour segments.
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
+        ctx.miterLimit = 3;
         
+        // Basemaps draw on the WebGPU canvas when available; Canvas2D below is the fallback.
+        const gpuBasemap = gpuBasemapRef.current;
+        const useGpuBasemap = !!gpuBasemap && gpuBasemap.ready;
+        const gpuLayers: BasemapLayer[] = [];
+        if (gpuBasemap && useGpuBasemap) {
+            if (googleOverlayImage) {
+                for (const tile of googleOverlayImage.tiles ?? [{ image: googleOverlayImage.image, bbox: googleOverlayImage.bbox }]) {
+                    gpuLayers.push({ source: tile.image, bbox: tile.bbox, quad: tile.quad, opacity: googleOverlayImage.opacity });
+                }
+            }
+            for (const w of wmsImages) {
+                gpuLayers.push({ source: w.image as BasemapSource, bbox: w.bbox, quad: w.quad, opacity: w.opacity });
+            }
+            for (const area of offlineMapAreas) {
+                if (!area.isVisible) continue;
+                for (const layer of area.layers) {
+                    const img = offlineImages.get(`${area.id}-${layer.layerName}`);
+                    if (img) gpuLayers.push({ source: img, bbox: area.bbox, opacity: layer.opacity });
+                }
+            }
+        }
+
+        // Filled 2D layers (steep-slope, TIN shading) sit above the GPU canvas, so linework stays on Canvas2D then.
+        const gpuLineBatch: GpuLineBatch | null =
+            gpuBasemap && useGpuBasemap && !isTinShadingEnabled
+            && !lines.some(l => l.type === 'steep-slope' && l.fillPath && l.fillPath.length >= 3)
+                ? gpuBasemap.lineBatch
+                : null;
+        gpuLineBatch?.reset();
+        const gpuPxPerWorld = transform.scale * dpr;
+        const projectToDevice = (e: number, n: number): [number, number] => {
+            const dx = e - viewOriginX;
+            const dy = n - viewOriginY;
+            const rx = viewOriginX + dx * viewCos - dy * viewSin;
+            const ry = viewOriginY + dx * viewSin + dy * viewCos;
+            return [(transform.offsetX + transform.scale * rx) * dpr, (transform.offsetY - transform.scale * ry) * dpr];
+        };
+        /** Queue a straight segment on the GPU; false means the caller must draw it with Canvas2D. */
+        const tryGpuSegment = (
+            x0: number, y0: number, x1: number, y1: number,
+            color: string, widthWorld: number, dashWorld: number[], phaseWorld: number,
+        ): boolean => {
+            if (!gpuLineBatch) return false;
+            const pattern = gpuLineBatch.patternId(dashWorld.map(v => v * gpuPxPerWorld));
+            if (pattern < 0) return false;
+            const [sx0, sy0] = projectToDevice(x0, y0);
+            const [sx1, sy1] = projectToDevice(x1, y1);
+            const rgba = parseCssColor(color);
+            return gpuLineBatch.push(sx0, sy0, sx1, sy1, rgba, widthWorld * gpuPxPerWorld, phaseWorld * gpuPxPerWorld, pattern, pattern === 0 && rgba[3] >= 0.99);
+        };
+        /** Queue an arc (or full circle) as a tessellated polyline on the GPU. */
+        const tryGpuArc = (
+            cx: number, cy: number, radius: number, startAngle: number, endAngle: number,
+            color: string, widthWorld: number, dashWorld: number[], phaseWorld: number,
+        ): boolean => {
+            if (!gpuLineBatch) return false;
+            const pattern = gpuLineBatch.patternId(dashWorld.map(v => v * gpuPxPerWorld));
+            if (pattern < 0) return false;
+            const sweep = Math.abs(endAngle - startAngle);
+            const radiusPx = radius * gpuPxPerWorld;
+            const step = radiusPx > 0.3 ? 2 * Math.acos(Math.max(0, 1 - 0.15 / radiusPx)) : Math.PI / 4;
+            const segments = Math.min(2048, Math.max(8, Math.ceil(sweep / Math.max(step, 1e-4))));
+            const rgba = parseCssColor(color);
+            const widthPx = widthWorld * gpuPxPerWorld;
+            let phasePx = phaseWorld * gpuPxPerWorld;
+            let [px, py] = projectToDevice(cx + radius * Math.cos(startAngle), cy + radius * Math.sin(startAngle));
+            for (let i = 1; i <= segments; i++) {
+                const a = startAngle + ((endAngle - startAngle) * i) / segments;
+                const [qx, qy] = projectToDevice(cx + radius * Math.cos(a), cy + radius * Math.sin(a));
+                if (!gpuLineBatch.push(px, py, qx, qy, rgba, widthPx, phasePx, pattern, pattern === 0 && rgba[3] >= 0.99)) return false;
+                phasePx += Math.hypot(qx - px, qy - py);
+                px = qx;
+                py = qy;
+            }
+            return true;
+        };
+
         // Draw Google/NAIP basemap underlay
-        if (googleOverlayImage) {
-            const { image, bbox, opacity } = googleOverlayImage;
-            const [minE, minN, maxE, maxN] = bbox;
-            const worldWidth = maxE - minE;
-            const worldHeight = maxN - minN;
-            if (worldWidth > 0 && worldHeight > 0) {
-                ctx.save();
-                ctx.globalAlpha = opacity;
-                ctx.translate(minE, maxN);
-                ctx.scale(1, -1);
-                ctx.drawImage(image, 0, 0, worldWidth, worldHeight);
-                ctx.restore();
+        const drawWarpedImage = (image: CanvasImageSource, quad: WorldQuad, opacity: number) => {
+            const src = image as HTMLImageElement & ImageBitmap;
+            const iw = src.naturalWidth || src.width;
+            const ih = src.naturalHeight || src.height;
+            if (!iw || !ih) return;
+            const [tl, tr, , bl] = quad;
+            ctx.save();
+            ctx.globalAlpha = opacity;
+            ctx.translate(tl[0], tl[1]);
+            ctx.transform((tr[0] - tl[0]) / iw, (tr[1] - tl[1]) / iw, (bl[0] - tl[0]) / ih, (bl[1] - tl[1]) / ih, 0, 0);
+            ctx.drawImage(image, 0, 0, iw, ih);
+            ctx.restore();
+        };
+        if (googleOverlayImage && !useGpuBasemap) {
+            for (const tile of googleOverlayImage.tiles ?? [{ image: googleOverlayImage.image, bbox: googleOverlayImage.bbox }]) {
+                const { image, bbox } = tile;
+                const opacity = googleOverlayImage.opacity;
+                if (tile.quad) {
+                    drawWarpedImage(image, tile.quad, opacity);
+                    continue;
+                }
+                const [minE, minN, maxE, maxN] = bbox;
+                const worldWidth = maxE - minE;
+                const worldHeight = maxN - minN;
+                if (worldWidth > 0 && worldHeight > 0) {
+                    ctx.save();
+                    ctx.globalAlpha = opacity;
+                    ctx.translate(minE, maxN);
+                    ctx.scale(1, -1);
+                    ctx.drawImage(image, 0, 0, worldWidth, worldHeight);
+                    ctx.restore();
+                }
             }
         }
 
         // Draw WMS images
-        wmsImages.forEach(wmsImage => {
+        (useGpuBasemap ? [] : wmsImages).forEach(wmsImage => {
             const { image, bbox, opacity } = wmsImage;
+            if (wmsImage.quad) {
+                drawWarpedImage(image, wmsImage.quad, opacity);
+                return;
+            }
             const [minE, minN, maxE, maxN] = bbox;
             const worldWidth = maxE - minE;
             const worldHeight = maxN - minN;
@@ -4052,7 +4478,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         });
         
         // Draw offline maps
-        offlineMapAreas.filter(area => area.isVisible).forEach(area => {
+        offlineMapAreas.filter(area => area.isVisible && !useGpuBasemap).forEach(area => {
             area.layers.forEach(layer => {
                 const key = `${area.id}-${layer.layerName}`;
                 const img = offlineImages.get(key);
@@ -4616,6 +5042,27 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const bSteep = b.type === 'steep-slope' ? 0 : 1;
             return aSteep - bSteep;
         });
+
+        // Track cumulative distance per polyline chain so dashed linetypes maintain
+        // a continuous phase across vertices rather than restarting on every segment.
+        const polylineDashPhaseMap = new Map<string, number>();
+
+        // Dashed polyline segments are batched into one path per polyline so Skia keeps
+        // the dash phase and joins continuous; stroking per segment shimmers with zoom.
+        let dashBatch: { key: string; pid: string; lastX: number; lastY: number; strokeStyle: string; lineWidth: number; dash: number[] } | null = null;
+        const flushDashBatch = () => {
+            if (!dashBatch) return;
+            ctx.strokeStyle = dashBatch.strokeStyle;
+            ctx.lineWidth = dashBatch.lineWidth;
+            ctx.setLineDash(dashBatch.dash);
+            ctx.lineDashOffset = 0;
+            ctx.lineCap = 'butt';
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.lineCap = 'round';
+            dashBatch = null;
+        };
+
         orderedLines.forEach(line => {
             // Skip curve lines - they will be rendered as smooth arcs in the curve rendering pass
             if (line.isCurve) {
@@ -4638,8 +5085,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const p2Coords = p2 ? { x: p2.easting, y: p2.northing } : (line.toPt ? { x: line.toPt.x, y: line.toPt.y } : null);
 
             if (p1Coords && p2Coords) {
+                if (dashBatch && dashBatch.pid !== line.polylineId) flushDashBatch();
                 // Determine line styling
-                let strokeStyle = isLightTheme ? '#111827' : '#FFFFFF';
+                let strokeStyle = line.color || (isLightTheme ? '#111827' : '#FFFFFF');
                 let lineWidth = scaledLineWidth;
                 let isDashed = false;
 
@@ -4722,6 +5170,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const effectiveLineTypeName = resolveLineTypeName(line);
                 const complexDef = effectiveLineTypeName ? lookupLinetype(effectiveLineTypeName) : undefined;
                 if (complexDef && isComplexTextLinetype(complexDef)) {
+                    flushDashBatch();
                     drawComplexLinetype(
                         p1Coords.x, p1Coords.y,
                         p2Coords.x, p2Coords.y,
@@ -4731,11 +5180,6 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         lineWidth,
                     );
                 } else {
-                    // Draw straight line
-                    ctx.beginPath();
-                    ctx.moveTo(p1Coords.x, p1Coords.y);
-                    ctx.lineTo(p2Coords.x, p2Coords.y);
-
                     // Apply line pattern: CAD lineType takes precedence, then special types (exclusion), then solid
                     let dashPattern: number[] = [];
                     if (effectiveLineTypeName) {
@@ -4747,16 +5191,39 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         dashPattern = [dashSize, dashSize];
                     }
 
-                    if (dashPattern.length > 0) {
-                        ctx.setLineDash(dashPattern);
-                    }
-                    ctx.stroke();
-                    if (dashPattern.length > 0) {
-                        ctx.setLineDash([]);
+                    const gpuPhase = line.polylineId ? (polylineDashPhaseMap.get(line.polylineId) ?? 0) : 0;
+                    if (tryGpuSegment(p1Coords.x, p1Coords.y, p2Coords.x, p2Coords.y, strokeStyle, lineWidth, dashPattern, gpuPhase)) {
+                        if (line.polylineId && dashPattern.length > 0) {
+                            polylineDashPhaseMap.set(line.polylineId, gpuPhase + Math.hypot(p2Coords.x - p1Coords.x, p2Coords.y - p1Coords.y));
+                        }
+                    } else if (dashPattern.length > 0 && line.polylineId) {
+                        const key = `${line.polylineId}|${strokeStyle}|${lineWidth}|${dashPattern.join(',')}`;
+                        const continues = dashBatch !== null && dashBatch.key === key
+                            && Math.hypot(dashBatch.lastX - p1Coords.x, dashBatch.lastY - p1Coords.y) < 1e-6;
+                        if (continues) {
+                            ctx.lineTo(p2Coords.x, p2Coords.y);
+                            dashBatch!.lastX = p2Coords.x;
+                            dashBatch!.lastY = p2Coords.y;
+                        } else {
+                            flushDashBatch();
+                            ctx.beginPath();
+                            ctx.moveTo(p1Coords.x, p1Coords.y);
+                            ctx.lineTo(p2Coords.x, p2Coords.y);
+                            dashBatch = { key, pid: line.polylineId, lastX: p2Coords.x, lastY: p2Coords.y, strokeStyle, lineWidth, dash: dashPattern };
+                        }
+                    } else {
+                        flushDashBatch();
+                        ctx.beginPath();
+                        ctx.moveTo(p1Coords.x, p1Coords.y);
+                        ctx.lineTo(p2Coords.x, p2Coords.y);
+                        if (dashPattern.length > 0) ctx.setLineDash(dashPattern);
+                        ctx.stroke();
+                        if (dashPattern.length > 0) ctx.setLineDash([]);
                     }
                 }
             }
         });
+        flushDashBatch();
 
         // ── FEMA Flood-Zone Hatch Fill ──────────────────────────────────────
         // Uses pre-computed rings (floodRings memo) + createPattern() tile so
@@ -4891,6 +5358,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
                 ctx.beginPath();
                 ctx.arc(center.x, center.y, line.curveRadius, 0, 2 * Math.PI);
+                {
+                    const circleLineType = resolveLineTypeName(line);
+                    const circleDash = circleLineType
+                        ? getLinetypePattern(circleLineType, inverseScale, line.lineTypeScale)
+                        : (isDashed ? [5 * inverseScale, 5 * inverseScale] : []);
+                    if (tryGpuArc(center.x, center.y, line.curveRadius, 0, 2 * Math.PI, strokeStyle, lineWidth, circleDash, 0)) {
+                        ctx.beginPath();
+                        return;
+                    }
+                }
 
                 let dashPattern: number[] = [];
                 const effectiveCurveLineTypeName = resolveLineTypeName(line);
@@ -5022,10 +5499,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const ptY = centerY + radius * Math.sin(endAngle);
 
                 // Draw the arc
+                const arcLineType = resolveLineTypeName(line);
+                const arcDash = arcLineType
+                    ? getLinetypePattern(arcLineType, inverseScale, line.lineTypeScale)
+                    : (isDashed ? [5 * inverseScale, 5 * inverseScale] : []);
+                const arcPhase = line.polylineId ? (polylineDashPhaseMap.get(line.polylineId) ?? 0) : 0;
+                const arcOnGpu = tryGpuArc(centerX, centerY, radius, startAngle, endAngle, strokeStyle, lineWidth, arcDash, arcPhase);
+                if (arcOnGpu && line.polylineId && arcDash.length > 0) {
+                    polylineDashPhaseMap.set(line.polylineId, arcPhase + arcLength);
+                }
                 ctx.beginPath();
-                ctx.moveTo(p1Coords.x, p1Coords.y);
-                ctx.arc(centerX, centerY, radius, startAngle, endAngle, arcAnticlockwise);
-                ctx.lineTo(ptX, ptY); // Ensure connection ends cleanly at PT
+                if (!arcOnGpu) {
+                    ctx.moveTo(p1Coords.x, p1Coords.y);
+                    ctx.arc(centerX, centerY, radius, startAngle, endAngle, arcAnticlockwise);
+                    ctx.lineTo(ptX, ptY); // Ensure connection ends cleanly at PT
+                }
                 
                 // Apply line pattern: CAD lineType takes precedence, then special types (exclusion), then solid
                 let dashPattern: number[] = [];
@@ -5037,12 +5525,22 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     dashPattern = [dashSize, dashSize];
                 }
                 
-                if (dashPattern.length > 0) {
+                if (dashPattern.length > 0 && !arcOnGpu) {
                     ctx.setLineDash(dashPattern);
+                    ctx.lineCap = 'butt';
+                    if (line.polylineId) {
+                        const curPhase = polylineDashPhaseMap.get(line.polylineId) || 0;
+                        ctx.lineDashOffset = -curPhase;
+                        polylineDashPhaseMap.set(line.polylineId, curPhase + arcLength);
+                    } else {
+                        ctx.lineDashOffset = 0;
+                    }
                 }
-                ctx.stroke();
-                if (dashPattern.length > 0) {
+                if (!arcOnGpu) ctx.stroke();
+                if (dashPattern.length > 0 && !arcOnGpu) {
                     ctx.setLineDash([]);
+                    ctx.lineDashOffset = 0;
+                    ctx.lineCap = 'round';
                 }
 
                 // Draw curve annotation with curve parameters — but only when this looks
@@ -5165,6 +5663,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 }
             }
         });
+
+        if (gpuBasemap && useGpuBasemap) {
+            gpuBasemap.render(gpuLayers, {
+                width: logicalWidth,
+                height: logicalHeight,
+                project: (e, n) => {
+                    const [dx, dy] = projectToDevice(e, n);
+                    return { x: dx / dpr, y: dy / dpr };
+                },
+            }, gpuLineBatch);
+            if (!gpuBasemap.ready) {
+                if (gpuCanvasRef.current) gpuCanvasRef.current.style.display = 'none';
+                requestAnimationFrame(() => drawRef.current?.());
+            }
+        }
 
         // Draw visible TIN surfaces (optional elevation shading + wireframe).
         tinSurfaces.filter(t => !t.hidden).forEach(surface => {
@@ -6002,7 +6515,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     // Translate to anchor, rotate, translate back, then apply offset.
                     ctx.translate(bfFirstPt.easting + bfTxE, bfFirstPt.northing + bfTxN);
                     ctx.rotate((bfRotDeg * Math.PI) / 180);
-                    ctx.translate(-bfFirstPt.easting, -bfFirstPt.northing);
+                    ctx.translate(-(bfFirstPt.easting - fox), -(bfFirstPt.northing - foy));
+                    floatingCtx.setShift(true);
                 }
                 // Active boundary = blue, inactive (but visible) = amber. Lets the
                 // user tell at a glance which tract their transform/POB edits hit.
@@ -6813,12 +7327,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             canvas.height = Math.max(1, Math.round(height * dpr));
             canvas.style.width = width + 'px';
             canvas.style.height = height + 'px';
+            const gpuCanvas = gpuCanvasRef.current;
+            if (gpuCanvas) {
+                gpuCanvas.width = canvas.width;
+                gpuCanvas.height = canvas.height;
+            }
         };
 
         applySize();
         const resizeObserver = new ResizeObserver(() => {
             applySize();
             scheduleDraw();
+            pushToolbarOutOfChatIfNeeded();
         });
         resizeObserver.observe(container);
 
@@ -6832,8 +7352,41 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             resizeObserver.disconnect();
             mql.removeEventListener?.('change', onDprChange);
         };
+    }, [scheduleDraw, pushToolbarOutOfChatIfNeeded]);
+
+    useEffect(() => {
+        const gpuCanvas = gpuCanvasRef.current;
+        const canvas = canvasRef.current;
+        if (!gpuCanvas || !canvas) return;
+        let disposed = false;
+        let created: WebGpuBasemap | null = null;
+        try {
+            if (localStorage.getItem('landsurv-webgpu') === 'off') return;
+        } catch { /* storage unavailable */ }
+
+        gpuCanvas.width = canvas.width;
+        gpuCanvas.height = canvas.height;
+        WebGpuBasemap.create(gpuCanvas, () => {
+            gpuCanvas.style.display = 'none';
+            scheduleDraw();
+        }).then(renderer => {
+            if (!renderer) return;
+            if (disposed) {
+                renderer.dispose();
+                return;
+            }
+            created = renderer;
+            gpuBasemapRef.current = renderer;
+            scheduleDraw();
+        });
+
+        return () => {
+            disposed = true;
+            gpuBasemapRef.current = null;
+            created?.dispose();
+        };
     }, [scheduleDraw]);
-    
+
     const isOverLabelArea = useCallback((mouseX: number, mouseY: number, p: SurveyPoint) => {
         const { scale } = transform;
 
@@ -7363,6 +7916,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         if (!isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
             if (e.key === 's' || e.key === 'S') {
                 e.preventDefault();
+                setTerminalIncoming({ text: 'Command: S (SELECT) — click lines or chain [Esc to clear]', tone: 'ok' });
                 if (isSelectionMode) {
                     setIsSelectionMode(false);
                     setIsBoxSelectMode(false);
@@ -7376,6 +7930,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
             if (e.key === 'b' || e.key === 'B') {
                 e.preventDefault();
+                setTerminalIncoming({ text: 'Command: B (BOX SELECT) — drag window across entities', tone: 'ok' });
                 if (!isSelectionMode) {
                     finishDrawing();
                     setIsSelectionMode(true);
@@ -7387,6 +7942,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
             if (e.key === 't' || e.key === 'T') {
                 e.preventDefault();
+                setTerminalIncoming({ text: 'Command: T (TRIM) — click line segment to cut at intersection', tone: 'ok' });
                 if (isTrimmingLines) {
                     setIsTrimmingLines(false);
                     setTrimPoint(null);
@@ -7404,6 +7960,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
             if (e.key === 'c' || e.key === 'C') {
                 e.preventDefault();
+                setTerminalIncoming({ text: 'Command: C (CIRCLE) — pick center point or type T for TTR', tone: 'ok' });
                 if (drawingMode === 'circle') {
                     finishDrawing();
                 } else {
@@ -7425,11 +7982,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
             if (e.key === 'o' || e.key === 'O') {
                 e.preventDefault();
-                setIsOrthoEnabled(prev => !prev);
+                setIsOrthoEnabled(prev => {
+                    const next = !prev;
+                    setTerminalIncoming({ text: `ORTHO: ${next ? 'ON' : 'OFF'}`, tone: 'info' });
+                    return next;
+                });
                 return;
             }
             if (e.key === 'l' || e.key === 'L') {
                 e.preventDefault();
+                setTerminalIncoming({ text: 'Command: L (LINE) — pick start point or type length [A for Arc]', tone: 'ok' });
                 // Mid-polyline: L switches back to straight segments (CAD
                 // polyline Line submode) instead of restarting the polyline.
                 if (drawingMode === 'polylines' && polylinePoints.length > 0) {
@@ -7455,12 +8017,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 // exists, since the arc locks tangent to the previous segment.
                 if (polylinePoints.length > 0 && lastSegmentTangentRef.current) {
                     e.preventDefault();
+                    setTerminalIncoming({ text: 'Polyline Submode: ARC (tangent to previous segment)', tone: 'info' });
                     setPolylineArcMode(true);
                     return;
                 }
             }
             if (e.key === 'i' || e.key === 'I') {
                 e.preventDefault();
+                setTerminalIncoming({ text: 'Command: I (INCLUSION) — pick boundary vertices', tone: 'ok' });
                 setDrawingMode('inclusion');
                 setIsTrimmingLines(false);
                 setIsExtendingLines(false);
@@ -7609,47 +8173,69 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
     }, [isSelectionMode, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines]);
     
-    // Toolbar dragging handlers
+    // Toolbar dragging handlers (pointer-event rAF loop)
     useEffect(() => {
-        const handleMouseMove = (e: MouseEvent) => {
-            if (isViewToolbarDragging && viewToolbarDragStart.current) {
-                const deltaX = e.clientX - viewToolbarDragStart.current.x;
-                const deltaY = e.clientY - viewToolbarDragStart.current.y;
-                setViewToolbarPosition({
-                    x: viewToolbarDragStart.current.toolbarX + deltaX,
-                    y: viewToolbarDragStart.current.toolbarY + deltaY
+        const handlePointerMove = (e: PointerEvent) => {
+            if (!isViewToolbarDragging || !viewToolbarDragStart.current) return;
+            const deltaX = e.clientX - viewToolbarDragStart.current.clientX;
+            const deltaY = e.clientY - viewToolbarDragStart.current.clientY;
+
+            if (viewToolbarRafRef.current) cancelAnimationFrame(viewToolbarRafRef.current);
+            viewToolbarRafRef.current = requestAnimationFrame(() => {
+                const container = containerRef.current;
+                const maxW = container?.clientWidth ?? window.innerWidth;
+                const maxH = container?.clientHeight ?? window.innerHeight;
+                const toolbarW = toolbarRef.current?.offsetWidth ?? (toolbarOrientation === 'vertical' ? 50 : 380);
+                const toolbarH = toolbarRef.current?.offsetHeight ?? (toolbarOrientation === 'vertical' ? 450 : 50);
+
+                const rawX = viewToolbarDragStart.current!.toolbarX + deltaX;
+                const rawY = viewToolbarDragStart.current!.toolbarY + deltaY;
+
+                const nextPos = calculateToolbarDockingPosition({
+                    rawX,
+                    rawY,
+                    maxW,
+                    maxH,
+                    toolbarW,
+                    toolbarH,
+                    isDesktop,
+                    snapThreshold: 36,
                 });
-            }
-            if (isEditToolbarDragging && editToolbarDragStart.current) {
-                const deltaX = e.clientX - editToolbarDragStart.current.x;
-                const deltaY = e.clientY - editToolbarDragStart.current.y;
-                setEditToolbarPosition({
-                    x: editToolbarDragStart.current.toolbarX + deltaX,
-                    y: editToolbarDragStart.current.toolbarY + deltaY
-                });
-            }
+
+                latestToolbarPosRef.current = nextPos;
+                setViewToolbarPosition(nextPos);
+            });
         };
-        
-        const handleMouseUp = () => {
+
+        const handlePointerUp = () => {
             if (isViewToolbarDragging) {
+                if (viewToolbarRafRef.current) {
+                    cancelAnimationFrame(viewToolbarRafRef.current);
+                    viewToolbarRafRef.current = null;
+                }
                 setIsViewToolbarDragging(false);
                 viewToolbarDragStart.current = null;
-            }
-            if (isEditToolbarDragging) {
-                setIsEditToolbarDragging(false);
-                editToolbarDragStart.current = null;
+                const finalPos = latestToolbarPosRef.current;
+                if (finalPos) {
+                    setViewToolbarPosition(finalPos);
+                    try {
+                        localStorage.setItem('landsurv-canvas-toolbar-position', JSON.stringify(finalPos));
+                    } catch { /* ignore */ }
+                }
             }
         };
-        
-        if (isViewToolbarDragging || isEditToolbarDragging) {
-            window.addEventListener('mousemove', handleMouseMove);
-            window.addEventListener('mouseup', handleMouseUp);
+
+        if (isViewToolbarDragging) {
+            window.addEventListener('pointermove', handlePointerMove);
+            window.addEventListener('pointerup', handlePointerUp);
+            window.addEventListener('pointercancel', handlePointerUp);
             return () => {
-                window.removeEventListener('mousemove', handleMouseMove);
-                window.removeEventListener('mouseup', handleMouseUp);
+                window.removeEventListener('pointermove', handlePointerMove);
+                window.removeEventListener('pointerup', handlePointerUp);
+                window.removeEventListener('pointercancel', handlePointerUp);
             };
         }
-    }, [isViewToolbarDragging, isEditToolbarDragging]);
+    }, [isViewToolbarDragging, isDesktop, toolbarOrientation]);
     
     const handleContainerMouseMove = useCallback((e: React.MouseEvent) => {
         const canvas = canvasRef.current;
@@ -10094,8 +10680,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     shiftHoverAnchorRef.current = null;
                 }
             }}
-            style={{ cursor: isPanning ? 'grabbing' : (isPickingOtOrigin ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (hoveredShrinkwrapPn ? 'pointer' : (isSelectionMode ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))), overflow: 'visible' }}
+            style={{ cursor: isPanning ? 'grabbing' : (isPickingOtOrigin ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (hoveredShrinkwrapPn ? 'pointer' : (isSelectionMode ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))), overflow: 'visible', isolation: 'isolate' }}
         >
+            <canvas
+                ref={gpuCanvasRef}
+                aria-hidden="true"
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: -1, pointerEvents: 'none' }}
+            />
             <canvas
                 ref={canvasRef}
                 className="w-full h-full gesture-capture"
@@ -10173,7 +10764,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 };
 
                 return (
-                    <div className="absolute bottom-3 left-3 z-30 select-none">
+                    <div className="absolute bottom-20 left-3 z-30 select-none">
                         <div 
                             onClick={() => setIsOtPopupOpen(prev => !prev)}
                             className="p-2 rounded-xl bg-gray-900/90 hover:bg-gray-900 border border-cyan-500/40 hover:border-cyan-400 text-cyan-200 shadow-xl cursor-pointer flex items-center justify-center backdrop-blur-sm transition-all group hover:scale-105"
@@ -10429,91 +11020,6 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 </div>
             )}
 
-            {/* Combined status line: snaps/ortho and map button on single line */}
-            {(() => {
-                const mapEnabled = !!settings.googleMaps?.enabled;
-                const hasOsnapInfo = inlineOsnapOverride || runningOsnaps.size > 0 || isOrthoEnabled || isSelectionMode || isTrimmingLines || isExtendingLines || isDeletingLines || drawingMode === 'circle' || ((drawingMode === 'polylines' || drawingMode === 'breaklines' || drawingMode === 'inclusion' || drawingMode === 'exclusion') && polylinePoints.length > 0);
-                
-                // Always show if there's osnap info or we want the map button visible
-                if (!hasOsnapInfo) return null;
-                
-                return (
-                    <div className="absolute bottom-3 right-3 z-30 px-3 py-1 rounded bg-gray-900/85 border border-cyan-500/30 text-[10px] text-cyan-100 font-mono flex items-center gap-3 whitespace-nowrap">
-                        {inlineOsnapOverride ? `OSNAP NEXT: ${OSNAP_LABELS[inlineOsnapOverride]} | ` : ''}
-                        {`RUNNING: ${runningOsnapLabel}`}
-                        {` | ORTHO: ${isOrthoEnabled ? 'ON' : 'OFF'}`}
-                        {activeGrip ? ' | GRIP STRETCH: MOVE ENDPOINT [Click to place, Esc to cancel]' : (isSelectionMode ? ` | SELECT (${isBoxSelectMode ? 'BOX' : 'CLICK/DRAG'}): ${selectedLineIds.size} SELECTED [S to exit, B for box, Dbl-click to chain, D/Del to remove]` : '')}
-                        {isTrimmingLines ? ' | TRIM (T): CLICK SEGMENT TO CUT [Esc to exit]' : ''}
-                        {isExtendingLines ? ' | EXTEND: CLICK LINE [Esc to exit]' : ''}
-                        {isDeletingLines ? ' | DELETE: CLICK LINES [Esc to exit]' : ''}
-                        {drawingMode === 'polylines' && polylinePoints.length > 0 ? ` | ${polylineArcMode ? 'ARC' : 'LINE'} (A/L)` : ''}
-                        {(drawingMode === 'polylines' || drawingMode === 'breaklines' || drawingMode === 'inclusion' || drawingMode === 'exclusion') && polylinePoints.length > 0 ? ` | LEN: ${typedSegmentLength || '_'} ${getLinearUnitAbbreviation(settings.linearUnits)} (Enter)` : ''}
-                        {drawingMode === 'circle' ? (
-                            circleSubMode === 'ttr' ? (
-                                ttrStep === 1
-                                    ? ` | CIRCLE (TTR): SELECT 1ST TANGENT [T for Center/Rad] (Esc)`
-                                    : ttrStep === 2
-                                    ? ` | CIRCLE (TTR): SELECT 2ND TANGENT (Esc)`
-                                    : ` | CIRCLE (TTR): ${circleSizeParam.toUpperCase()}: ${typedCircleValue || '_' } ${getLinearUnitAbbreviation(settings.linearUnits)} [D to switch] (Enter)`
-                            ) : (
-                                !circleCenter
-                                    ? ` | CIRCLE: PICK CENTER [T for TTR] (Esc)`
-                                    : ` | CIRCLE: ${circleSizeParam.toUpperCase()}: ${typedCircleValue || (cursorWorldPosRef.current ? (Math.hypot(cursorWorldPosRef.current.x - circleCenter.easting, cursorWorldPosRef.current.y - circleCenter.northing) * (circleSizeParam === 'diameter' ? 2 : 1)).toFixed(2) : '_')} ${getLinearUnitAbbreviation(settings.linearUnits)} [D to switch, T for TTR] (Enter)`
-                            )
-                        ) : ''}
-                        {' | '}
-                        <button
-                            type="button"
-                            className="text-emerald-300 hover:text-emerald-200 transition-colors cursor-pointer"
-                            title="Toggle map imagery"
-                            onClick={() => {
-                                setSettings(prev => ({
-                                    ...prev,
-                                    googleMaps: {
-                                        ...prev.googleMaps,
-                                        enabled: !prev.googleMaps?.enabled,
-                                        ...(!prev.googleMaps?.enabled ? { mapType: 'naip' as const, scale: 2 } : {}),
-                                    },
-                                }));
-                            }}
-                        >
-                            MAP: {mapEnabled ? 'ON' : 'OFF'}
-                        </button>
-                    </div>
-                );
-            })()}
-
-            {/* Map button always visible - shows even when no osnap info */}
-            {(() => {
-                const mapEnabled = !!settings.googleMaps?.enabled;
-                const hasOsnapInfo = inlineOsnapOverride || runningOsnaps.size > 0 || isOrthoEnabled || isSelectionMode || isTrimmingLines || isExtendingLines || isDeletingLines || drawingMode === 'circle' || ((drawingMode === 'polylines' || drawingMode === 'breaklines' || drawingMode === 'inclusion' || drawingMode === 'exclusion') && polylinePoints.length > 0);
-                
-                // Only show if no osnap info (osnap+map combo already shown above)
-                if (hasOsnapInfo) return null;
-                
-                return (
-                    <div className="absolute bottom-3 right-3 z-30 px-3 py-1 rounded bg-gray-900/85 border border-cyan-500/30 text-[10px] text-cyan-100 font-mono flex items-center gap-3 whitespace-nowrap">
-                        <button
-                            type="button"
-                            className="text-emerald-300 hover:text-emerald-200 transition-colors cursor-pointer"
-                            title="Toggle map imagery"
-                            onClick={() => {
-                                setSettings(prev => ({
-                                    ...prev,
-                                    googleMaps: {
-                                        ...prev.googleMaps,
-                                        enabled: !prev.googleMaps?.enabled,
-                                        ...(!prev.googleMaps?.enabled ? { mapType: 'naip' as const, scale: 2 } : {}),
-                                    },
-                                }));
-                            }}
-                        >
-                            MAP: {mapEnabled ? 'ON' : 'OFF'}
-                        </button>
-                    </div>
-                );
-            })()}
-
             {settings.googleMaps?.enabled && googleOverlayDiagnostic && (
                 <button
                     type="button"
@@ -10533,6 +11039,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 >
                     <span>{googleOverlayDiagnostic.message}</span>
                 </button>
+            )}
+
+            {pendingTiles > 0 && (
+                <div
+                    role="status"
+                    aria-live="polite"
+                    className="absolute z-30 px-2.5 py-1 rounded bg-gray-900/85 border border-cyan-500/40 text-[11px] text-cyan-100 font-mono flex items-center gap-2 pointer-events-none"
+                    style={{ right: 12, bottom: 56 }}
+                >
+                    <svg viewBox="0 0 24 24" className="w-3 h-3 animate-spin text-cyan-300" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true">
+                        <circle cx="12" cy="12" r="9" opacity="0.25" />
+                        <path d="M21 12a9 9 0 0 0-9-9" strokeLinecap="round" />
+                    </svg>
+                    <span>Downloading map tiles ({pendingTiles} left)</span>
+                </div>
             )}
 
             {googleOverlayImage && settings.googleMaps?.enabled && (() => {
@@ -11340,32 +11861,73 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
                 </div>
             )}
-            {/* View/Navigation Toolbar */}
-            <div 
-                style={{ left: `${viewToolbarPosition.x}px`, top: `${viewToolbarPosition.y}px` }}
-                className="absolute z-20"
-                onMouseDown={(e) => {
-                    if (e.target === e.currentTarget || (e.target as HTMLElement).closest('.toolbar-drag-handle')) {
-                        setIsViewToolbarDragging(true);
-                        viewToolbarDragStart.current = {
-                            x: e.clientX,
-                            y: e.clientY,
-                            toolbarX: viewToolbarPosition.x,
-                            toolbarY: viewToolbarPosition.y
-                        };
-                        e.preventDefault();
-                    }
-                }}
-            >
-                {(() => {
-                    const viewDirection = getFlyoutDirection(viewToolbarPosition.x, viewToolbarPosition.y);
-                    const shouldFlyoutGoAbove = viewDirection.vertical === 'above';
-                    
-                    return (
-                        <>
-                            {/* Flyouts positioned above toolbar if needed */}
-                            {shouldFlyoutGoAbove && isAttributeFlyoutOpen && (
-                                <div className="absolute bottom-full mb-2 left-0 p-4 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-64 animate-fade-in-up">
+            {/* View/Navigation Toolbar — Default Vertical, flippable */}
+            {(() => {
+                const isDocked = viewToolbarPosition ? (viewToolbarPosition.isDocked ?? false) : true;
+                const containerW = containerRef.current?.clientWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 1000);
+                const toolbarW = toolbarRef.current?.offsetWidth ?? (toolbarOrientation === 'vertical' ? 50 : 380);
+                const effectiveX = isDocked ? (containerW - toolbarW - 16) : (viewToolbarPosition?.x ?? (containerW - toolbarW - 16));
+                const effectiveY = viewToolbarPosition?.y ?? 104;
+
+                const viewDirection = getFlyoutDirection(effectiveX, effectiveY);
+                const shouldFlyoutGoAbove = viewDirection.vertical === 'above';
+                const isVertical = toolbarOrientation === 'vertical';
+
+                const handleToolbarPointerDown = (e: React.PointerEvent) => {
+                    if ((e.target as HTMLElement).closest('[data-no-drag]')) return;
+                    const el = toolbarRef.current ?? (e.currentTarget.parentElement as HTMLElement | null);
+                    const container = containerRef.current;
+                    if (!container || !el) return;
+
+                    const containerRect = container.getBoundingClientRect();
+                    const elRect = el.getBoundingClientRect();
+                    const curX = elRect.left - containerRect.left;
+                    const curY = elRect.top - containerRect.top;
+
+                    setIsViewToolbarDragging(true);
+                    viewToolbarDragStart.current = {
+                        clientX: e.clientX,
+                        clientY: e.clientY,
+                        toolbarX: curX,
+                        toolbarY: curY,
+                    };
+                    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                    e.preventDefault();
+                };
+
+                const toggleOrientation = (e: React.MouseEvent) => {
+                    e.stopPropagation();
+                    setToolbarOrientation(prev => {
+                        const next = prev === 'vertical' ? 'horizontal' : 'vertical';
+                        try {
+                            localStorage.setItem('landsurv-canvas-toolbar-orientation', next);
+                        } catch { /* ignore */ }
+                        return next;
+                    });
+                };
+
+                const flyoutPlacementClass = isVertical
+                    ? (viewDirection.horizontal === 'left' ? 'right-full mr-2 top-0' : 'left-full ml-2 top-0')
+                    : (shouldFlyoutGoAbove ? 'bottom-full mb-2 left-0' : 'top-full mt-2 left-0');
+
+                const wrapperStyle: React.CSSProperties = isViewToolbarDragging
+                    ? { left: `${viewToolbarPosition?.x ?? effectiveX}px`, top: `${viewToolbarPosition?.y ?? effectiveY}px` }
+                    : isDocked
+                    ? { right: '1rem', top: `${effectiveY}px` }
+                    : { left: `${viewToolbarPosition?.x ?? effectiveX}px`, top: `${effectiveY}px` };
+
+                return (
+                    <div 
+                        ref={toolbarRef}
+                        style={{
+                            ...wrapperStyle,
+                            transition: isViewToolbarDragging ? 'none' : 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1), right 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                        }}
+                        className="absolute z-20"
+                    >
+                        {/* Flyouts with orientation-aware placement */}
+                            {isAttributeFlyoutOpen && (
+                                <div className={`absolute ${flyoutPlacementClass} p-4 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-64 animate-fade-in-up z-30`}>
                                     <label htmlFor="attributeScale" className="block text-sm font-medium text-gray-400 mb-1">Point Attribute Scale</label>
                                     <div className="flex items-center gap-4 mb-4">
                                         <input type="range" id="attributeScale" min="0.5" max="5" step="0.1" value={attributeScale} onChange={(e) => setAttributeScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
@@ -11398,8 +11960,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 </div>
                             )}
                             
-                            {shouldFlyoutGoAbove && isZoomExtentsOpen && (
-                                <div className="absolute bottom-full mb-2 left-0 p-2 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up">
+                            {isZoomExtentsOpen && (
+                                <div className={`absolute ${flyoutPlacementClass} p-2 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up z-30`}>
                                     <div className="space-y-1">
                                         <button onClick={() => { zoomExtents(); setIsZoomExtentsOpen(false); }} className="w-full p-2 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-700" title="Zoom Extents"><ZoomExtentsIcon className="w-5 h-5"/> Zoom Extents</button>
                                         <button onClick={() => {
@@ -11414,8 +11976,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 </div>
                             )}
                             
-                            {shouldFlyoutGoAbove && isZoomToPointOpen && (
-                                <div className="absolute bottom-full mb-2 left-0 p-3 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-56 animate-fade-in-up">
+                            {isZoomToPointOpen && (
+                                <div className={`absolute ${flyoutPlacementClass} p-3 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-56 animate-fade-in-up z-30`}>
                                     <form onSubmit={handleZoomToPointSubmit} className="flex items-center gap-2 mb-3">
                                         <input type="text" value={zoomToPointNumber} onChange={(e) => setZoomToPointNumber(e.target.value)} placeholder="Point Number" className="flex-1 p-1.5 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500" autoFocus />
                                         <button type="submit" className="px-3 py-1.5 text-sm font-semibold bg-cyan-600 text-white rounded-md hover:bg-cyan-700">Go</button>
@@ -11433,8 +11995,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 </div>
                             )}
 
-                            {shouldFlyoutGoAbove && isFindPointsOpen && (
-                                <div className="absolute bottom-full mb-2 left-0 p-3 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-72 animate-fade-in-up">
+                            {isFindPointsOpen && (
+                                <div className={`absolute ${flyoutPlacementClass} p-3 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-72 animate-fade-in-up z-30`}>
                                     <div className="flex items-center justify-between mb-2">
                                         <h5 className="text-xs font-bold text-gray-300 uppercase">Find Points</h5>
                                         <button onClick={() => { setIsFindPointsOpen(false); setFindPointsQuery(''); }} className="text-gray-400 hover:text-white" title="Close"><XMarkIcon className="w-4 h-4"/></button>
@@ -11462,8 +12024,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 </div>
                             )}
 
-                            {shouldFlyoutGoAbove && isDrawingToolsMenuOpen && (
-                                <div className="absolute bottom-full mb-2 right-0 p-2 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up">
+                            {isDrawingToolsMenuOpen && (
+                                <div className={`absolute ${flyoutPlacementClass} p-2 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up w-56 z-30`}>
                                     <div className="space-y-2">
                                         <button onClick={() => { 
                                             if (drawingMode === 'polylines') {
@@ -11477,7 +12039,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setExtendFromLine(null);
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'polylines' ? 'bg-yellow-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Polylines (L)"><PolylineIcon className="w-5 h-5"/> Draw Polylines</button>
+                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'polylines' ? 'bg-yellow-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Polylines (L)"><PolylineIcon className="w-5 h-5"/> Draw Polylines (L)</button>
                                         
                                         <button onClick={() => { 
                                             if (drawingMode === 'circle') {
@@ -11499,7 +12061,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setExtendFromLine(null);
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'circle' ? 'bg-sky-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Circle (C: Center/Radius, T: Tangent-Tangent-Radius)"><CircleIcon className="w-5 h-5"/> Draw Circle (C / TTR)</button>
+                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'circle' ? 'bg-sky-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Circle (C: Center/Radius, T: Tangent-Tangent-Radius)"><CircleIcon className="w-5 h-5"/> Draw Circle (C)</button>
                                         
                                         <button onClick={() => { 
                                             if (drawingMode === 'breaklines') {
@@ -11527,7 +12089,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setExtendFromLine(null);
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'inclusion' ? 'bg-green-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Inclusion Lines (I)"><InclusionLineIcon className="w-5 h-5"/> Draw Inclusion Lines</button>
+                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'inclusion' ? 'bg-green-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Inclusion Lines (I)"><InclusionLineIcon className="w-5 h-5"/> Draw Inclusion Lines (I)</button>
                                         
                                         <button onClick={() => { 
                                             if (drawingMode === 'exclusion') {
@@ -11575,7 +12137,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setIsExtendingLines(false);
                                                 setExtendFromLine(null);
                                             }
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${isTrimmingLines ? 'bg-orange-600 text-white' : 'hover:bg-gray-700'}`} title="Trim Lines"><ScissorsIcon className="w-5 h-5"/> Trim Lines</button>
+                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${isTrimmingLines ? 'bg-orange-600 text-white' : 'hover:bg-gray-700'}`} title="Trim Lines (T)"><ScissorsIcon className="w-5 h-5"/> Trim Lines (T)</button>
                                         
                                         <button onClick={() => {
                                             if (isExtendingLines) {
@@ -11608,9 +12170,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 </div>
                             )}
 
-                            {/* Dimension flyout — above position */}
-                            {shouldFlyoutGoAbove && isDimFlyoutOpen && (
-                                <div className="absolute bottom-full mb-2 right-0 p-2 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up w-52">
+                            {/* Dimension flyout */}
+                            {isDimFlyoutOpen && (
+                                <div className={`absolute ${flyoutPlacementClass} p-2 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up w-52 z-30`}>
                                     <div className="space-y-2">
                                         <p className="text-xs font-semibold text-gray-400 uppercase px-1">Dimensions</p>
                                         <button onClick={() => {
@@ -11641,18 +12203,50 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 </div>
                             )}
                             
-                            {/* Main toolbar - always at the positioned location */}
-                            <div className="p-1 bg-gray-900/50 backdrop-blur-sm rounded-xl border border-gray-700/50 shadow-lg">
-                                {/* Desktop: Single row layout */}
-                                <div className="hidden md:flex flex-row items-center gap-1">
-                                    <div className="toolbar-drag-handle px-1 cursor-move flex items-center" title="Drag to move toolbar">
-                                        <div className="flex flex-col gap-0.5">
-                                            <div className="w-1 h-1 rounded-full bg-gray-500"></div>
-                                            <div className="w-1 h-1 rounded-full bg-gray-500"></div>
-                                            <div className="w-1 h-1 rounded-full bg-gray-500"></div>
-                                        </div>
+                            {/* Main toolbar - vertical (default) or horizontal */}
+                            <div
+                                onPointerDown={handleToolbarPointerDown}
+                                style={{ touchAction: 'none' }}
+                                className={`p-1 bg-gray-900/50 backdrop-blur-sm rounded-xl border border-gray-700/50 shadow-lg flex ${isVertical ? 'flex-col items-center' : 'flex-row items-center'} gap-1`}
+                            >
+                                {/* Drag handle + Flip button */}
+                                <div className={`flex ${isVertical ? 'flex-col py-1' : 'flex-row px-1'} items-center gap-1 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300`}>
+                                    <div className="toolbar-drag-handle flex items-center justify-center p-0.5" title={isDocked ? "Drag toolbar (docked to agent chat)" : "Drag toolbar"}>
+                                        {isVertical ? (
+                                            <div className="flex flex-row gap-0.5">
+                                                <div className="w-1 h-1 rounded-full bg-current"></div>
+                                                <div className="w-1 h-1 rounded-full bg-current"></div>
+                                                <div className="w-1 h-1 rounded-full bg-current"></div>
+                                            </div>
+                                        ) : (
+                                            <div className="flex flex-col gap-0.5">
+                                                <div className="w-1 h-1 rounded-full bg-current"></div>
+                                                <div className="w-1 h-1 rounded-full bg-current"></div>
+                                                <div className="w-1 h-1 rounded-full bg-current"></div>
+                                            </div>
+                                        )}
                                     </div>
-                                    <button onClick={() => {
+                                    <button
+                                        data-no-drag
+                                        type="button"
+                                        onClick={toggleOrientation}
+                                        className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-cyan-300 transition-colors"
+                                        title={isVertical ? 'Flip toolbar to Horizontal' : 'Flip toolbar to Vertical'}
+                                        aria-label={isVertical ? 'Flip to horizontal' : 'Flip to vertical'}
+                                    >
+                                        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                                            {isVertical ? (
+                                                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h8m0 0l-3-3m3 3l-3 3M16 17H8m0 0l3 3m-3-3l3-3" />
+                                            ) : (
+                                                <path strokeLinecap="round" strokeLinejoin="round" d="M7 8v8m0 0l-3-3m3 3l3-3M17 16V8m0 0l3 3m-3-3l-3 3" />
+                                            )}
+                                        </svg>
+                                    </button>
+                                </div>
+
+                                <button
+                                    data-no-drag
+                                    onClick={() => {
                                         setIsZoomExtentsOpen(p => !p);
                                         if (!isZoomExtentsOpen) {
                                             setIsAttributeFlyoutOpen(false);
@@ -11660,9 +12254,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsLayerPanelOpen(false);
                                             setIsDrawingToolsMenuOpen(false);
                                         }
-                                    }} className={`p-3 rounded-lg transition-colors ${isZoomExtentsOpen ? 'bg-cyan-600' : 'hover:bg-gray-700'}`} title="Zoom Options"><ZoomExtentsIcon className="w-6 h-6"/></button>
-                                    
-                                    <button onClick={() => {
+                                    }}
+                                    className={`p-2.5 rounded-lg transition-colors ${isZoomExtentsOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
+                                    title="Zoom Options (ZE)"
+                                >
+                                    <ZoomExtentsIcon className="w-5 h-5"/>
+                                </button>
+                                
+                                <button
+                                    data-no-drag
+                                    onClick={() => {
                                         setIsAttributeFlyoutOpen(p => !p);
                                         if (!isAttributeFlyoutOpen) {
                                             setIsZoomExtentsOpen(false);
@@ -11670,8 +12271,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsLayerPanelOpen(false);
                                             setIsDrawingToolsMenuOpen(false);
                                         }
-                                    }} className={`p-3 rounded-lg transition-colors ${isAttributeFlyoutOpen ? 'bg-cyan-600' : 'hover:bg-gray-700'}`} title="Annotation Scale"><AttributeScaleIcon className="w-6 h-6"/></button>
-                                    <button onClick={() => {
+                                    }}
+                                    className={`p-2.5 rounded-lg transition-colors ${isAttributeFlyoutOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
+                                    title="Annotation Scale"
+                                >
+                                    <AttributeScaleIcon className="w-5 h-5"/>
+                                </button>
+
+                                <button
+                                    data-no-drag
+                                    onClick={() => {
                                         setIsLayerPanelOpen(p => !p);
                                         if (!isLayerPanelOpen) {
                                             setIsZoomExtentsOpen(false);
@@ -11679,15 +12288,25 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsZoomToPointOpen(false);
                                             setIsDrawingToolsMenuOpen(false);
                                         }
-                                    }} className={`p-3 rounded-lg transition-colors ${isLayerPanelOpen ? 'bg-cyan-600' : 'hover:bg-gray-700'}`} title="Data Visibility"><LayersIcon className="w-6 h-6"/></button>
-                                    <button
-                                        onClick={() => setIsTinShadingEnabled(v => !v)}
-                                        className={`p-3 rounded-lg transition-colors ${isTinShadingEnabled ? 'bg-cyan-600' : 'hover:bg-gray-700'}`}
-                                        title={isTinShadingEnabled ? 'TIN Shading: ON' : 'TIN Shading: OFF'}
-                                    >
-                                        <EyeIcon className="w-6 h-6"/>
-                                    </button>
-                                    <button onClick={() => {
+                                    }}
+                                    className={`p-2.5 rounded-lg transition-colors ${isLayerPanelOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
+                                    title="Data Visibility"
+                                >
+                                    <LayersIcon className="w-5 h-5"/>
+                                </button>
+
+                                <button
+                                    data-no-drag
+                                    onClick={() => setIsTinShadingEnabled(v => !v)}
+                                    className={`p-2.5 rounded-lg transition-colors ${isTinShadingEnabled ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
+                                    title={isTinShadingEnabled ? 'TIN Shading: ON' : 'TIN Shading: OFF'}
+                                >
+                                    <EyeIcon className="w-5 h-5"/>
+                                </button>
+
+                                <button
+                                    data-no-drag
+                                    onClick={() => {
                                         setIsSelectionMode(p => {
                                             const next = !p;
                                             if (next) {
@@ -11708,12 +12327,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             }
                                             return next;
                                         });
-                                    }} className={`p-3 rounded-lg transition-colors ${isSelectionMode ? 'bg-cyan-600' : 'hover:bg-gray-700'}`} title="Selection Mode — click lines to select, press D or Delete to remove, then Convert to Boundary">
-                                        <svg viewBox="0 0 24 24" className="w-6 h-6" fill="currentColor" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
-                                            <path d="M5 3 L5 18 L9 14 L11.5 20 L13.5 19.2 L11 13.2 L17 13 Z" fill="currentColor"/>
-                                        </svg>
-                                    </button>
-                                    <button onClick={() => {
+                                    }}
+                                    className={`p-2.5 rounded-lg transition-colors ${isSelectionMode ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
+                                    title="Selection Mode (S) — click lines, press D to delete, then Convert to Boundary"
+                                >
+                                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
+                                        <path d="M5 3 L5 18 L9 14 L11.5 20 L13.5 19.2 L11 13.2 L17 13 Z" fill="currentColor"/>
+                                    </svg>
+                                </button>
+
+                                <button
+                                    data-no-drag
+                                    onClick={() => {
                                         setIsDrawingToolsMenuOpen(p => !p);
                                         if (!isDrawingToolsMenuOpen) {
                                             setIsZoomExtentsOpen(false);
@@ -11723,8 +12348,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                         } else {
                                             setSelectedLineIds(new Set());
                                         }
-                                    }} className={`p-3 rounded-lg transition-colors ${isDrawingToolsMenuOpen || drawingMode !== 'none' || isTrimmingLines || isExtendingLines || isDeletingLines ? 'bg-cyan-600' : 'hover:bg-gray-700'}`} title="Drawing Tools"><PencilSquareIcon className="w-6 h-6"/></button>
-                                    <button onClick={() => {
+                                    }}
+                                    className={`p-2.5 rounded-lg transition-colors ${isDrawingToolsMenuOpen || drawingMode !== 'none' || isTrimmingLines || isExtendingLines || isDeletingLines ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
+                                    title="Drawing Tools (L, C, T, I)"
+                                >
+                                    <PencilSquareIcon className="w-5 h-5"/>
+                                </button>
+
+                                <button
+                                    data-no-drag
+                                    onClick={() => {
                                         setIsDimFlyoutOpen(p => !p);
                                         if (!isDimFlyoutOpen) {
                                             setIsZoomExtentsOpen(false);
@@ -11733,454 +12366,93 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsLayerPanelOpen(false);
                                             setIsDrawingToolsMenuOpen(false);
                                         }
-                                    }} className={`p-3 rounded-lg transition-colors ${isDimFlyoutOpen || drawingMode === 'aligned-dim' ? 'bg-cyan-600' : 'hover:bg-gray-700'}`} title="Dimension Tools">
-                                        <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                            <line x1="3" y1="19" x2="21" y2="19"/>
-                                            <line x1="3" y1="14" x2="3" y2="24" strokeWidth="1.8"/><line x1="21" y1="14" x2="21" y2="24" strokeWidth="1.8"/>
-                                            <line x1="3" y1="8" x2="21" y2="8" strokeDasharray="3,2"/>
-                                            <line x1="6" y1="19" x2="6" y2="8" strokeOpacity="0.45"/>
-                                            <line x1="18" y1="19" x2="18" y2="8" strokeOpacity="0.45"/>
-                                        </svg>
-                                    </button>
-                                    {/* CAD Standards spreadsheet editor (quick open) */}
-                                    <button
-                                        onClick={() => setIsCadStandardsEditorOpen(true)}
-                                        disabled={!cadStandard}
-                                        className={`p-3 rounded-lg transition-colors flex items-center ${cadStandard ? 'hover:bg-gray-700' : 'opacity-40 cursor-not-allowed'}`}
-                                        title={cadStandard ? `Open CAD Standards editor (${cadStandard.codes.length} codes)` : 'Load a CAD standard to edit codes'}
-                                    >
-                                        <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                            <rect x="3" y="4" width="18" height="16" rx="2"/>
-                                            <line x1="3" y1="9" x2="21" y2="9"/>
-                                            <line x1="3" y1="14" x2="21" y2="14"/>
-                                            <line x1="9" y1="4" x2="9" y2="20"/>
-                                            <line x1="15" y1="4" x2="15" y2="20"/>
-                                        </svg>
-                                    </button>
-                                    {/* Symbol exclusion mode — click points to hide their symbols */}
-                                    <button
-                                        onClick={() => setSymbolExclusionMode(m => !m)}
-                                        className={`p-3 rounded-lg transition-colors flex items-center ${symbolExclusionMode ? 'bg-red-600 hover:bg-red-700' : 'hover:bg-gray-700'}`}
-                                        title={symbolExclusionMode
-                                            ? `Exit symbol exclusion mode (${excludedSymbolDescriptions.size} description${excludedSymbolDescriptions.size === 1 ? '' : 's'} hidden) — click a point to toggle its group`
-                                            : 'Exclude point symbols: click a point to hide symbols for every point with the same description'}
-                                    >
-                                        <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                            <circle cx="12" cy="12" r="8"/>
-                                            <line x1="6" y1="6" x2="18" y2="18"/>
-                                        </svg>
-                                    </button>
-                                    {/* Floating Point List Panel toggle */}
-                                    {props.onOpenPointListPanel && (
-                                        <button
-                                            onClick={props.onOpenPointListPanel}
-                                            className={`p-3 rounded-lg transition-colors ${props.isPointListPanelOpen ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-700'} ${props.isPointListButtonPulsing && !props.isPointListPanelOpen ? 'animate-pulse-pink-cta' : ''}`}
-                                            title="Point List Panel"
-                                        >
-                                            <ListBulletIcon className="w-6 h-6"/>
-                                        </button>
-                                    )}
-                                    {props.onOpenBoundaryEditor && (boundaryFiles?.length ?? 0) > 0 && (
-                                        <button
-                                            onClick={props.onOpenBoundaryEditor}
-                                            className={`p-3 rounded-lg transition-colors ${props.isBoundaryEditorOpen ? 'bg-amber-600 hover:bg-amber-700' : 'hover:bg-gray-700'} ${props.isBoundaryEditorButtonPulsing && !props.isBoundaryEditorOpen ? 'animate-pulse-pink-cta' : ''}`}
-                                            title={props.isBoundaryEditorOpen ? 'Close Boundary Editor' : 'Open Boundary Editor'}
-                                            aria-label={props.isBoundaryEditorOpen ? 'Close Boundary Editor' : 'Open Boundary Editor'}
-                                        >
-                                            <BoundaryEditorGlyph />
-                                        </button>
-                                    )}
-                                    {props.onOpenShrinkwrap && (
-                                        <button
-                                            onClick={props.onOpenShrinkwrap}
-                                            className={`p-3 rounded-lg transition-colors ${props.isShrinkwrapOpen ? 'bg-violet-600 hover:bg-violet-700' : 'hover:bg-gray-700'}`}
-                                            title="Shrinkwrap visible survey points"
-                                        >
-                                            <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="1.8">
-                                                <path d="M5 7.5 9 4l6 1 4 4-1 7-5 4-7-2-2-5z" strokeDasharray="3 2" />
-                                                <circle cx="9" cy="9" r="1" fill="currentColor" />
-                                                <circle cx="15" cy="14" r="1" fill="currentColor" />
-                                            </svg>
-                                        </button>
-                                    )}
-                                </div>
+                                    }}
+                                    className={`p-2.5 rounded-lg transition-colors ${isDimFlyoutOpen || drawingMode === 'aligned-dim' ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
+                                    title="Dimension Tools"
+                                >
+                                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                        <line x1="3" y1="19" x2="21" y2="19"/>
+                                        <line x1="3" y1="14" x2="3" y2="24" strokeWidth="1.8"/><line x1="21" y1="14" x2="21" y2="24" strokeWidth="1.8"/>
+                                        <line x1="3" y1="8" x2="21" y2="8" strokeDasharray="3,2"/>
+                                        <line x1="6" y1="19" x2="6" y2="8" strokeOpacity="0.45"/>
+                                        <line x1="18" y1="19" x2="18" y2="8" strokeOpacity="0.45"/>
+                                    </svg>
+                                </button>
 
-                                {/* Mobile: 2-row layout */}
-                                <div className="md:hidden grid grid-cols-4 gap-1">
-                                    {/* Row 1: Drag handle + Zoom + Attribute + Layers */}
-                                    <div className="col-span-4 flex items-center gap-1">
-                                        <div className="toolbar-drag-handle px-1 cursor-move flex items-center flex-shrink-0" title="Drag to move toolbar">
-                                            <div className="flex flex-col gap-0.5">
-                                                <div className="w-1 h-1 rounded-full bg-gray-500"></div>
-                                                <div className="w-1 h-1 rounded-full bg-gray-500"></div>
-                                                <div className="w-1 h-1 rounded-full bg-gray-500"></div>
-                                            </div>
-                                        </div>
-                                        <button onClick={() => {
-                                            setIsZoomExtentsOpen(p => !p);
-                                            if (!isZoomExtentsOpen) {
-                                                setIsAttributeFlyoutOpen(false);
-                                                setIsZoomToPointOpen(false);
-                                                setIsLayerPanelOpen(false);
-                                                setIsDrawingToolsMenuOpen(false);
-                                            }
-                                        }} className={`p-2 rounded-lg flex-1 transition-colors ${isZoomExtentsOpen ? 'bg-cyan-600' : 'hover:bg-gray-700'}`} title="Zoom"><ZoomExtentsIcon className="w-4 h-4 mx-auto"/></button>
-                                        
-                                        <button onClick={() => {
-                                            setIsAttributeFlyoutOpen(p => !p);
-                                            if (!isAttributeFlyoutOpen) {
-                                                setIsZoomExtentsOpen(false);
-                                                setIsZoomToPointOpen(false);
-                                                setIsLayerPanelOpen(false);
-                                                setIsDrawingToolsMenuOpen(false);
-                                            }
-                                        }} className={`p-2 rounded-lg flex-1 transition-colors ${isAttributeFlyoutOpen ? 'bg-cyan-600' : 'hover:bg-gray-700'}`} title="Attribute"><AttributeScaleIcon className="w-4 h-4 mx-auto"/></button>
-                                        <button onClick={() => {
-                                            setIsLayerPanelOpen(p => !p);
-                                            if (!isLayerPanelOpen) {
-                                                setIsZoomExtentsOpen(false);
-                                                setIsAttributeFlyoutOpen(false);
-                                                setIsZoomToPointOpen(false);
-                                                setIsDrawingToolsMenuOpen(false);
-                                            }
-                                        }} className={`p-2 rounded-lg flex-1 transition-colors ${isLayerPanelOpen ? 'bg-cyan-600' : 'hover:bg-gray-700'}`} title="Data Visibility"><LayersIcon className="w-4 h-4 mx-auto"/></button>
-                                        <button
-                                            onClick={() => setIsTinShadingEnabled(v => !v)}
-                                            className={`p-2 rounded-lg flex-1 transition-colors ${isTinShadingEnabled ? 'bg-cyan-600' : 'hover:bg-gray-700'}`}
-                                            title={isTinShadingEnabled ? 'TIN Shading: ON' : 'TIN Shading: OFF'}
-                                        >
-                                            <EyeIcon className="w-4 h-4 mx-auto"/>
-                                        </button>
-                                    </div>
+                                {/* CAD Standards spreadsheet editor (quick open) */}
+                                <button
+                                    data-no-drag
+                                    onClick={() => setIsCadStandardsEditorOpen(true)}
+                                    disabled={!cadStandard}
+                                    className={`p-2.5 rounded-lg transition-colors flex items-center ${cadStandard ? 'hover:bg-gray-800' : 'opacity-40 cursor-not-allowed'}`}
+                                    title={cadStandard ? `Open CAD Standards editor (${cadStandard.codes.length} codes)` : 'Load a CAD standard to edit codes'}
+                                >
+                                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                        <rect x="3" y="4" width="18" height="16" rx="2"/>
+                                        <line x1="3" y1="9" x2="21" y2="9"/>
+                                        <line x1="3" y1="14" x2="21" y2="14"/>
+                                        <line x1="9" y1="4" x2="9" y2="20"/>
+                                        <line x1="15" y1="4" x2="15" y2="20"/>
+                                    </svg>
+                                </button>
 
-                                    {/* Row 2: Drawing Tools + C3D (conditional) + Undo + Redo */}
-                                    <button onClick={() => {
-                                        setIsDrawingToolsMenuOpen(p => !p);
-                                        if (!isDrawingToolsMenuOpen) {
-                                            setIsZoomExtentsOpen(false);
-                                            setIsAttributeFlyoutOpen(false);
-                                            setIsZoomToPointOpen(false);
-                                            setIsLayerPanelOpen(false);
-                                        } else {
-                                            setSelectedLineIds(new Set());
-                                        }
-                                    }} className={`p-2 rounded-lg flex items-center justify-center ${isDrawingToolsMenuOpen || drawingMode !== 'none' || isTrimmingLines || isExtendingLines || isDeletingLines ? 'bg-cyan-600' : 'hover:bg-gray-700'}`} title="Drawing Tools"><PencilSquareIcon className="w-4 h-4"/></button>
-                                    {props.onOpenShrinkwrap && (
-                                        <button
-                                            onClick={props.onOpenShrinkwrap}
-                                            className={`p-2 rounded-lg flex items-center justify-center ${props.isShrinkwrapOpen ? 'bg-violet-600' : 'hover:bg-gray-700'}`}
-                                            title="Shrinkwrap visible survey points"
-                                        >
-                                            <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                                                <path d="M5 7.5 9 4l6 1 4 4-1 7-5 4-7-2-2-5z" strokeDasharray="3 2" />
-                                            </svg>
-                                        </button>
-                                    )}
-                                    {props.onOpenBoundaryEditor && (boundaryFiles?.length ?? 0) > 0 && (
-                                        <button
-                                            onClick={props.onOpenBoundaryEditor}
-                                            className={`p-2 rounded-lg flex items-center justify-center ${props.isBoundaryEditorOpen ? 'bg-amber-600' : 'hover:bg-gray-700'} ${props.isBoundaryEditorButtonPulsing && !props.isBoundaryEditorOpen ? 'animate-pulse-pink-cta' : ''}`}
-                                            title={props.isBoundaryEditorOpen ? 'Close Boundary Editor' : 'Open Boundary Editor'}
-                                            aria-label={props.isBoundaryEditorOpen ? 'Close Boundary Editor' : 'Open Boundary Editor'}
-                                        >
-                                            <BoundaryEditorGlyph className="w-4 h-4" />
-                                        </button>
-                                    )}
-                                </div>
+                                {/* Symbol exclusion mode — click points to hide their symbols */}
+                                <button
+                                    data-no-drag
+                                    onClick={() => setSymbolExclusionMode(m => !m)}
+                                    className={`p-2.5 rounded-lg transition-colors flex items-center ${symbolExclusionMode ? 'bg-red-600 hover:bg-red-700' : 'hover:bg-gray-800'}`}
+                                    title={symbolExclusionMode
+                                        ? `Exit symbol exclusion mode (${excludedSymbolDescriptions.size} hidden)`
+                                        : 'Exclude point symbols by description'}
+                                >
+                                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                        <circle cx="12" cy="12" r="8"/>
+                                        <line x1="6" y1="6" x2="18" y2="18"/>
+                                    </svg>
+                                </button>
+
+                                {/* Floating Point List Panel toggle */}
+                                {props.onOpenPointListPanel && (
+                                    <button
+                                        data-no-drag
+                                        onClick={props.onOpenPointListPanel}
+                                        className={`p-2.5 rounded-lg transition-colors ${props.isPointListPanelOpen ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-800'} ${props.isPointListButtonPulsing && !props.isPointListPanelOpen ? 'animate-pulse-pink-cta' : ''}`}
+                                        title="Point List Panel"
+                                    >
+                                        <ListBulletIcon className="w-5 h-5"/>
+                                    </button>
+                                )}
+
+                                {props.onOpenBoundaryEditor && (boundaryFiles?.length ?? 0) > 0 && (
+                                    <button
+                                        data-no-drag
+                                        onClick={props.onOpenBoundaryEditor}
+                                        className={`p-2.5 rounded-lg transition-colors ${props.isBoundaryEditorOpen ? 'bg-amber-600 hover:bg-amber-700' : 'hover:bg-gray-800'} ${props.isBoundaryEditorButtonPulsing && !props.isBoundaryEditorOpen ? 'animate-pulse-pink-cta' : ''}`}
+                                        title={props.isBoundaryEditorOpen ? 'Close Boundary Editor' : 'Open Boundary Editor'}
+                                        aria-label={props.isBoundaryEditorOpen ? 'Close Boundary Editor' : 'Open Boundary Editor'}
+                                    >
+                                        <BoundaryEditorGlyph />
+                                    </button>
+                                )}
+
+                                {props.onOpenShrinkwrap && (
+                                    <button
+                                        data-no-drag
+                                        onClick={props.onOpenShrinkwrap}
+                                        className={`p-2.5 rounded-lg transition-colors ${props.isShrinkwrapOpen ? 'bg-violet-600 hover:bg-violet-700' : 'hover:bg-gray-800'}`}
+                                        title="Shrinkwrap visible survey points"
+                                    >
+                                        <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                            <path d="M5 7.5 9 4l6 1 4 4-1 7-5 4-7-2-2-5z" strokeDasharray="3 2" />
+                                            <circle cx="9" cy="9" r="1" fill="currentColor" />
+                                            <circle cx="15" cy="14" r="1" fill="currentColor" />
+                                        </svg>
+                                    </button>
+                                )}
                             </div>
-                            
-                            {/* Flyouts positioned below toolbar if needed */}
-                            {!shouldFlyoutGoAbove && isAttributeFlyoutOpen && (
-                                <div className="absolute top-full mt-2 left-0 p-4 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-64 animate-fade-in-up">
-                                    <label htmlFor="attributeScale" className="block text-sm font-medium text-gray-400 mb-1">Point Attribute Scale</label>
-                                    <div className="flex items-center gap-4 mb-4">
-                                        <input type="range" id="attributeScale" min="0.5" max="5" step="0.1" value={attributeScale} onChange={(e) => setAttributeScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
-                                        <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{attributeScale.toFixed(1)}x</span>
-                                    </div>
-                                    <label htmlFor="lineLabelScale" className="block text-sm font-medium text-gray-400 mb-1">Bearing &amp; Distance Scale</label>
-                                    <div className="flex items-center gap-4 mb-4">
-                                        <input type="range" id="lineLabelScale" min="0.5" max="20" step="0.1" value={lineLabelScale} onChange={(e) => setLineLabelScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
-                                        <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{lineLabelScale.toFixed(1)}x</span>
-                                    </div>
-                                    <label htmlFor="dimensionScale_below" className="block text-sm font-medium text-gray-400 mb-1">Dimension Scale</label>
-                                    <div className="flex items-center gap-4 mb-4">
-                                        <input type="range" id="dimensionScale_below" min="0.5" max="5" step="0.1" value={dimensionScale} onChange={(e) => setDimensionScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
-                                        <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{dimensionScale.toFixed(1)}x</span>
-                                    </div>
-                                    <label htmlFor="symbolScale_below" className="block text-sm font-medium text-gray-400 mb-1">Symbol Scale (global)</label>
-                                    <div className="flex items-center gap-4">
-                                        <input type="range" id="symbolScale_below" min="0.25" max="5" step="0.05" value={symbolScale} onChange={(e) => setSymbolScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
-                                        <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{symbolScale.toFixed(2)}x</span>
-                                    </div>
-                                    {setAnnotationScale && (
-                                        <>
-                                            <label htmlFor="annotationScale_below" className="block text-sm font-medium text-gray-400 mb-1 mt-3">Annotation Scale (global)</label>
-                                            <div className="flex items-center gap-4">
-                                                <input type="range" id="annotationScale_below" min="0.25" max="5" step="0.05" value={annotationScale} onChange={(e) => setAnnotationScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
-                                                <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{annotationScale.toFixed(2)}x</span>
-                                            </div>
-                                        </>
-                                    )}
-                                </div>
-                            )}
-                            
-                            {!shouldFlyoutGoAbove && isZoomExtentsOpen && (
-                                <div className="absolute top-full mt-2 left-0 p-2 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up">
-                                    <div className="space-y-1">
-                                        <button onClick={() => { zoomExtents(); setIsZoomExtentsOpen(false); }} className="w-full p-2 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-700" title="Zoom Extents"><ZoomExtentsIcon className="w-5 h-5"/> Zoom Extents</button>
-                                        <button onClick={() => {
-                                            setIsZoomExtentsOpen(false);
-                                            setIsZoomToPointOpen(true);
-                                        }} className="w-full p-2 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-700" title="Zoom to Point"><ZoomToPointIcon className="w-5 h-5"/> Zoom to Point</button>
-                                        <button onClick={() => {
-                                            setIsZoomExtentsOpen(false);
-                                            setIsFindPointsOpen(true);
-                                        }} className="w-full p-2 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-700" title="Find Points by Description"><ListBulletIcon className="w-5 h-5"/> Find Points</button>
-                                    </div>
-                                </div>
-                            )}
-                            
-                            {!shouldFlyoutGoAbove && isZoomToPointOpen && (
-                                <div className="absolute top-full mt-2 left-0 p-3 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-56 animate-fade-in-up">
-                                    <form onSubmit={handleZoomToPointSubmit} className="flex items-center gap-2 mb-3">
-                                        <input type="text" value={zoomToPointNumber} onChange={(e) => setZoomToPointNumber(e.target.value)} placeholder="Point Number" className="flex-1 p-1.5 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500" autoFocus />
-                                        <button type="submit" className="px-3 py-1.5 text-sm font-semibold bg-cyan-600 text-white rounded-md hover:bg-cyan-700">Go</button>
-                                    </form>
-                                    {points.length > 0 && (
-                                        <div className="max-h-48 overflow-y-auto pr-2">
-                                            <h5 className="text-xs font-bold text-gray-400 uppercase mb-2">Points</h5>
-                                            <div className="space-y-1">
-                                                {points.map(point => (
-                                                    <button key={point.pointNumber} onClick={() => { onZoomToPoint(point); setZoomToPointNumber(''); setIsZoomToPointOpen(false); }} className="w-full text-left p-1.5 rounded-md text-xs bg-gray-700 hover:bg-gray-600 transition-colors truncate">{point.pointNumber}</button>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-
-                            {!shouldFlyoutGoAbove && isFindPointsOpen && (
-                                <div className="absolute top-full mt-2 left-0 p-3 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-72 animate-fade-in-up">
-                                    <div className="flex items-center justify-between mb-2">
-                                        <h5 className="text-xs font-bold text-gray-300 uppercase">Find Points</h5>
-                                        <button onClick={() => { setIsFindPointsOpen(false); setFindPointsQuery(''); }} className="text-gray-400 hover:text-white" title="Close"><XMarkIcon className="w-4 h-4"/></button>
-                                    </div>
-                                    <input type="text" value={findPointsQuery} onChange={(e) => setFindPointsQuery(e.target.value)} placeholder='e.g. "show me sign points"' className="w-full p-1.5 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500 mb-2" autoFocus />
-                                    <div className="max-h-64 overflow-y-auto pr-1">
-                                        {findPointsQuery.trim() === '' ? (
-                                            <p className="text-xs text-gray-400 italic px-1">Type a description to filter the {points.length} loaded point{points.length !== 1 ? 's' : ''}.</p>
-                                        ) : findPointsMatches.length === 0 ? (
-                                            <p className="text-xs text-gray-400 italic px-1">No matching points.</p>
-                                        ) : (
-                                            <>
-                                                <p className="text-[10px] text-gray-500 uppercase mb-1 px-1">{findPointsMatches.length} match{findPointsMatches.length !== 1 ? 'es' : ''}{findPointsMatches.length >= 200 ? ' (capped)' : ''}</p>
-                                                <div className="space-y-1">
-                                                    {findPointsMatches.map(point => (
-                                                        <button key={point.pointNumber} onClick={() => onZoomToPoint(point)} className="w-full text-left p-1.5 rounded-md text-xs bg-gray-700 hover:bg-gray-600 transition-colors flex items-center gap-2" title="Zoom to this point">
-                                                            <span className="font-mono text-cyan-300 flex-shrink-0">{point.pointNumber}</span>
-                                                            <span className="text-gray-300 truncate">{point.description || '(no description)'}</span>
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-
-                            {!shouldFlyoutGoAbove && isDrawingToolsMenuOpen && (
-                                <div className="absolute top-full mt-2 right-0 p-2 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up">
-                                    <div className="space-y-2">
-                                        <button onClick={() => { 
-                                            if (drawingMode === 'polylines') {
-                                                finishDrawing();
-                                            } else {
-                                                setDrawingMode('polylines');
-                                                setIsTrimmingLines(false);
-                                                setIsExtendingLines(false);
-                                                setIsDeletingLines(false);
-                                                setTrimPoint(null);
-                                                setExtendFromLine(null);
-                                            }
-                                            setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'polylines' ? 'bg-yellow-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Polylines (L)"><PolylineIcon className="w-5 h-5"/> Draw Polylines</button>
-                                        
-                                        <button onClick={() => { 
-                                            if (drawingMode === 'circle') {
-                                                finishDrawing();
-                                            } else {
-                                                setDrawingMode('circle');
-                                                setCircleCenter(null);
-                                                setCircleSizeParam('radius');
-                                                setTypedCircleValue('');
-                                                setCircleSubMode('center-radius');
-                                                setTtrStep(1);
-                                                setTtrEntity1(null);
-                                                setTtrEntity2(null);
-                                                setTtrHoverEntity(null);
-                                                setIsTrimmingLines(false);
-                                                setIsExtendingLines(false);
-                                                setIsDeletingLines(false);
-                                                setTrimPoint(null);
-                                                setExtendFromLine(null);
-                                            }
-                                            setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'circle' ? 'bg-sky-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Circle (C: Center/Radius, T: Tangent-Tangent-Radius)"><CircleIcon className="w-5 h-5"/> Draw Circle (C / TTR)</button>
-                                        
-                                        <button onClick={() => { 
-                                            if (drawingMode === 'breaklines') {
-                                                finishDrawing();
-                                            } else {
-                                                setDrawingMode('breaklines');
-                                                setIsTrimmingLines(false);
-                                                setIsExtendingLines(false);
-                                                setIsDeletingLines(false);
-                                                setTrimPoint(null);
-                                                setExtendFromLine(null);
-                                            }
-                                            setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'breaklines' ? 'bg-pink-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Breaklines"><BreaklineIcon className="w-5 h-5"/> Draw Breaklines</button>
-                                        
-                                        <button onClick={() => { 
-                                            if (drawingMode === 'inclusion') {
-                                                finishDrawing();
-                                            } else {
-                                                setDrawingMode('inclusion');
-                                                setIsTrimmingLines(false);
-                                                setIsExtendingLines(false);
-                                                setIsDeletingLines(false);
-                                                setTrimPoint(null);
-                                                setExtendFromLine(null);
-                                            }
-                                            setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'inclusion' ? 'bg-green-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Inclusion Lines (I)"><InclusionLineIcon className="w-5 h-5"/> Draw Inclusion Lines</button>
-                                        
-                                        <button onClick={() => { 
-                                            if (drawingMode === 'exclusion') {
-                                                finishDrawing();
-                                            } else {
-                                                setDrawingMode('exclusion');
-                                                setIsTrimmingLines(false);
-                                                setIsExtendingLines(false);
-                                                setIsDeletingLines(false);
-                                                setTrimPoint(null);
-                                                setExtendFromLine(null);
-                                            }
-                                            setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'exclusion' ? 'bg-red-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Exclusion Lines"><ExclusionLineIcon className="w-5 h-5"/> Draw Exclusion Lines</button>
-
-                                        <button onClick={() => {
-                                            if (drawingMode === 'boundary-line') {
-                                                setDrawingMode('none');
-                                                resetBoundaryLineMode();
-                                            } else {
-                                                setDrawingMode('boundary-line');
-                                                setIsTrimmingLines(false);
-                                                setIsExtendingLines(false);
-                                                setIsDeletingLines(false);
-                                                setTrimPoint(null);
-                                                setExtendFromLine(null);
-                                                resetBoundaryLineMode();
-                                            }
-                                            setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'boundary-line' ? 'bg-amber-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Boundary Line (click point, enter bearing + distance)">
-                                            <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 21l18-18M6 18l3-3M15 9l3-3"/><circle cx="3" cy="21" r="1.5" fill="currentColor"/><circle cx="21" cy="3" r="1.5" fill="currentColor"/></svg>
-                                            Draw Boundary Line
-                                        </button>
-                                        
-                                        <div className="border-t border-gray-700"></div>
-                                        
-                                        <button onClick={() => {
-                                            if (isTrimmingLines) {
-                                                setIsTrimmingLines(false);
-                                                setTrimPoint(null);
-                                            } else {
-                                                setIsTrimmingLines(true);
-                                                setIsDeletingLines(false);
-                                                setDrawingMode('none');
-                                                setIsExtendingLines(false);
-                                                setExtendFromLine(null);
-                                            }
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${isTrimmingLines ? 'bg-orange-600 text-white' : 'hover:bg-gray-700'}`} title="Trim Lines"><ScissorsIcon className="w-5 h-5"/> Trim Lines</button>
-                                        
-                                        <button onClick={() => {
-                                            if (isExtendingLines) {
-                                                setIsExtendingLines(false);
-                                                setExtendFromLine(null);
-                                            } else {
-                                                setIsExtendingLines(true);
-                                                setIsDeletingLines(false);
-                                                setDrawingMode('none');
-                                                setIsTrimmingLines(false);
-                                                setTrimPoint(null);
-                                            }
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${isExtendingLines ? 'bg-blue-600 text-white' : 'hover:bg-gray-700'}`} title="Extend Lines"><ExtendIcon className="w-5 h-5"/> Extend Lines</button>
-                                        
-                                        <button onClick={() => {
-                                            if (isDeletingLines) {
-                                                setIsDeletingLines(false);
-                                            } else {
-                                                setIsDeletingLines(true);
-                                                setDrawingMode('none');
-                                                setIsTrimmingLines(false);
-                                                setIsExtendingLines(false);
-                                                setTrimPoint(null);
-                                                setExtendFromLine(null);
-                                            }
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${isDeletingLines ? 'bg-red-600 text-white' : 'hover:bg-gray-700'}`} title="Delete Lines"><XMarkIcon className="w-5 h-5"/> Delete Lines</button>
-
-                                        {selectedLineIds.size > 0 && onConvertSelectionToBoundary && (
-                                            <>
-                                                <div className="border-t border-gray-700"></div>
-                                                <button onClick={() => {
-                                                    const selected = lines.filter(l => selectedLineIds.has(l.id || `${l.from}-${l.to}`));
-                                                    onConvertSelectionToBoundary(selected);
-                                                    setSelectedLineIds(new Set());
-                                                    setIsDrawingToolsMenuOpen(false);
-                                                }} className="w-full p-2 rounded-lg text-sm flex items-center gap-2 bg-amber-700 hover:bg-amber-600 text-white" title="Convert selected lines to a Boundary object in the Boundary Editor">
-                                                    <svg viewBox="0 0 24 24" className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 21l18-18M6 18l3-3M15 9l3-3"/><circle cx="3" cy="21" r="1.5" fill="currentColor"/><circle cx="21" cy="3" r="1.5" fill="currentColor"/></svg>
-                                                    Convert to Boundary ({selectedLineIds.size})
-                                                </button>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-                            {!shouldFlyoutGoAbove && isDimFlyoutOpen && (
-                                <div className="absolute top-full mt-2 right-0 p-2 bg-gray-900/80 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up w-52">
-                                    <div className="space-y-2">
-                                        <p className="text-xs font-semibold text-gray-400 uppercase px-1">Dimensions</p>
-                                        <button onClick={() => {
-                                            if (drawingMode === 'aligned-dim') {
-                                                setDrawingMode('none');
-                                                resetDimMode();
-                                            } else {
-                                                setDrawingMode('aligned-dim');
-                                                setIsTrimmingLines(false);
-                                                setIsExtendingLines(false);
-                                                setIsDeletingLines(false);
-                                                setTrimPoint(null);
-                                                setExtendFromLine(null);
-                                                resetDimMode();
-                                            }
-                                            setIsDimFlyoutOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'aligned-dim' ? 'bg-cyan-600 text-white' : 'hover:bg-gray-700'}`} title="Aligned Dimension (3-click: P1, P2, offset)">
-                                            <svg viewBox="0 0 24 24" className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                                <line x1="4" y1="18" x2="20" y2="18"/>
-                                                <line x1="4" y1="14" x2="4" y2="22"/>
-                                                <line x1="20" y1="14" x2="20" y2="22"/>
-                                                <line x1="4" y1="7" x2="20" y2="7" strokeDasharray="3 2"/>
-                                                <path d="M7 18 L7 7M17 18 L17 7" strokeOpacity="0.4"/>
-                                            </svg>
-                                            Aligned Dimension
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-                        </>
+                        </div>
                     );
                 })()}
-            </div>
             {/* Quick-access CAD Standards spreadsheet editor (full-screen modal) */}
             {isCadStandardsEditorOpen && cadStandard && (
                 <StandardsEditor
@@ -12192,6 +12464,127 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     onClose={() => setIsCadStandardsEditorOpen(false)}
                 />
             )}
+
+            {/* Interactive CAD Command Terminal */}
+            <CanvasTerminal
+                activePrompt={
+                    drawingMode === 'polylines' && polylinePoints.length > 0
+                        ? `${polylineArcMode ? 'ARC' : 'LINE'} — Length: ${typedSegmentLength || '_'} ${getLinearUnitAbbreviation(settings.linearUnits)} (Enter to commit, A for Arc, L for Line, Esc to finish)`
+                        : drawingMode === 'circle'
+                        ? circleSubMode === 'ttr'
+                            ? ttrStep === 1
+                                ? 'CIRCLE (TTR): Select first tangent entity [T for Center/Radius, Esc]'
+                                : ttrStep === 2
+                                ? 'CIRCLE (TTR): Select second tangent entity [Esc]'
+                                : `CIRCLE (TTR): ${circleSizeParam.toUpperCase()} = ${typedCircleValue || '_'} ${getLinearUnitAbbreviation(settings.linearUnits)} [D to switch, Enter]`
+                            : !circleCenter
+                            ? 'CIRCLE: Pick center point or type T for TTR [Esc to cancel]'
+                            : `CIRCLE: ${circleSizeParam.toUpperCase()} = ${typedCircleValue || (cursorWorldPosRef.current ? (Math.hypot(cursorWorldPosRef.current.x - circleCenter.easting, cursorWorldPosRef.current.y - circleCenter.northing) * (circleSizeParam === 'diameter' ? 2 : 1)).toFixed(2) : '_')} [D to switch, Enter]`
+                        : isTrimmingLines
+                        ? 'TRIM: Click line segment to cut at intersection [Esc to exit]'
+                        : isExtendingLines
+                        ? 'EXTEND: Click line to extend [Esc to exit]'
+                        : isDeletingLines
+                        ? 'DELETE: Click line to remove [Esc to exit]'
+                        : isSelectionMode
+                        ? `SELECTION: ${selectedLineIds.size} lines selected [S to exit, B for box select, D to delete]`
+                        : drawingMode === 'boundary-align'
+                        ? 'ALIGN: Click matching lines between deeds to align'
+                        : undefined
+                }
+                commandContext={{
+                    onStartLine: () => {
+                        setDrawingMode('polylines');
+                        setIsTrimmingLines(false);
+                        setIsExtendingLines(false);
+                        setIsDeletingLines(false);
+                        setTrimPoint(null);
+                        setExtendFromLine(null);
+                        setIsSelectionMode(false);
+                        setSelectedLineIds(new Set());
+                        setPolylinePoints([]);
+                        setPolylineArcMode(false);
+                        lastSegmentTangentRef.current = null;
+                        setTypedSegmentLength('');
+                    },
+                    onStartCircle: () => {
+                        setDrawingMode('circle');
+                        setCircleCenter(null);
+                        setCircleSizeParam('radius');
+                        setTypedCircleValue('');
+                        setIsTrimmingLines(false);
+                        setIsExtendingLines(false);
+                        setIsDeletingLines(false);
+                        setTrimPoint(null);
+                        setExtendFromLine(null);
+                        setIsSelectionMode(false);
+                        setSelectedLineIds(new Set());
+                        setPolylinePoints([]);
+                    },
+                    onStartInclusion: () => {
+                        setDrawingMode('inclusion');
+                        setIsTrimmingLines(false);
+                        setIsExtendingLines(false);
+                        setIsDeletingLines(false);
+                        setTrimPoint(null);
+                        setExtendFromLine(null);
+                        setIsSelectionMode(false);
+                        setSelectedLineIds(new Set());
+                    },
+                    onToggleOrtho: () => {
+                        setIsOrthoEnabled(prev => !prev);
+                    },
+                    onToggleSelection: () => {
+                        setIsSelectionMode(p => !p);
+                    },
+                    onToggleBoxSelect: () => {
+                        setIsBoxSelectMode(p => !p);
+                    },
+                    onStartTrim: () => {
+                        setIsTrimmingLines(p => !p);
+                        setIsExtendingLines(false);
+                        setIsDeletingLines(false);
+                        setDrawingMode('none');
+                    },
+                    onUndo: props.onUndo,
+                    onRedo: props.onRedo,
+                    onZoomExtents: () => zoomExtents(),
+                    onOpenSettings: onShowSettings,
+                    onOpenKeyModal: props.keyInfo?.onClick,
+                    onCancel: () => {
+                        finishDrawing();
+                        setIsSelectionMode(false);
+                        setIsBoxSelectMode(false);
+                        setIsTrimmingLines(false);
+                        setIsExtendingLines(false);
+                        setIsDeletingLines(false);
+                        setSelectedLineIds(new Set());
+                    },
+                    onNumericInput: (val: number) => {
+                        if (drawingMode === 'circle') {
+                            setTypedCircleValue(String(val));
+                        } else if (isLinearDrawingMode(drawingMode)) {
+                            setTypedSegmentLength(String(val));
+                        }
+                    },
+                    onCoordinateInput: (pt: { easting: number; northing: number }) => {
+                        if (drawingMode === 'circle' && !circleCenter) {
+                            setCircleCenter(makeTempWorldPoint(pt.easting, pt.northing));
+                        } else if (isLinearDrawingMode(drawingMode)) {
+                            const newPt = makeTempWorldPoint(pt.easting, pt.northing);
+                            setPolylinePoints(prev => [...prev, newPt]);
+                        }
+                    },
+                    keyInfo: props.keyInfo,
+                }}
+                keyInfo={props.keyInfo}
+                incomingMessage={terminalIncoming}
+                statusBadges={{
+                    runningOsnaps: runningOsnapLabel,
+                    osnapOverride: inlineOsnapOverride ? OSNAP_LABELS[inlineOsnapOverride] : null,
+                    isOrthoEnabled,
+                }}
+            />
             {/* Symbol-exclusion hover tooltip */}
             {symbolExclusionMode && exclusionHover && (
                 <div
