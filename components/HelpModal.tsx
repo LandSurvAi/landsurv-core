@@ -34,7 +34,7 @@ const agentInfo = [
     { type: AgentType.RAW_CRAWLER, icon: BrainCircuitIcon, title: 'RAW Crawler', description: 'Analyzes surveyor .RAW files for errors, calculations, and visualization.' },
     { type: AgentType.DEED_READER, icon: CourthouseIcon, title: 'Boundary Agent', description: 'Interprets, plots, and edits property boundaries — from deeds (text or scanned PDFs), CSV bearing/distance lists, or hand entry.' },
     { type: AgentType.CIVIL_PLAN_EXPERT, icon: DocumentDuplicateIcon, title: 'Civil Plan Expert', description: 'Extracts data and features from multi-page civil engineering plans.' },
-    { type: AgentType.DXF_ANALYZER, icon: DxfAnalyzerIcon, title: 'DXF Analyzer', description: 'Queries and visualizes geometry from .dxf files.' },
+    { type: AgentType.DXF_ANALYZER, icon: DxfAnalyzerIcon, title: 'DXF Agent', description: 'Imports, draws, and inspects CAD geometry from .dxf files.' },
     { type: AgentType.CENTERLINE_STATIONING, icon: ScaleIcon, title: 'Stationing & CL', description: 'Manages centerline geometry and performs station/offset calculations.' },
     { type: AgentType.POINT_EDITOR, icon: PlumbBobIcon, title: 'Point Editor', description: 'A structured interface for managing, organizing, and calculating project points.' },
     { type: AgentType.GPS_STAKEOUT, icon: CrosshairsIcon, title: 'GPS Rover', description: 'Uses your device\'s GPS for point collection and stakeout.' },

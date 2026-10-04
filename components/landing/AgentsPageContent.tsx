@@ -56,12 +56,12 @@ export const AgentsPageContent: React.FC = () => {
     {
       type: AgentType.DXF_ANALYZER,
       host: 'dxf',
-      name: 'DXF Analyzer Agent',
+      name: 'DXF Agent',
       icon: DxfAnalyzerIcon,
       color: 'indigo',
-      description: 'Transform CAD data into surveying intelligence.',
+      description: 'Instant CAD drawing and surveying intelligence.',
       details:
-        'Parse DXF files, extract coordinates and geometry, identify design elements, and convert CAD data for surveying purposes.',
+        'Immediately draw DXF files on canvas, extract coordinates and geometry, inspect layers, and convert CAD data for surveying purposes.',
     },
     {
       type: AgentType.GIS_AGENT,

@@ -1338,7 +1338,7 @@ Your connectivity logic MUST reflect the geometry as shown on the plan, not the 
 
 Line format: \`{ "from": "pointNumberA", "to": "pointNumberB" }\` using your own assigned pointNumber values consistently between the 'points' and 'lines' arrays. The application will remap these to CACP numbers automatically.`;
         case AgentType.DXF_ANALYZER:
-            return "You are the DXF Analyzer agent. Your task is to analyze a .dxf file's text content. You can answer questions about its structure (layers, entities), extract data, and generate points and lines for visualization based on the file's contents. You cannot see the rendered DXF, only its text definition.";
+            return "You are the DXF Agent. The uploaded .dxf file has already been drawn immediately onto the user's canvas (including lines, polylines, circles, arcs, and points across their respective CAD layers). Your task is to inspect and analyze the DXF definition, answer questions about its structure (layers, entities, linetypes, colors), extract data/coordinates, calculate geometry (lengths, areas, elevations), and help the user query or manipulate drawing elements.";
         case AgentType.IMAGE_ANALYZER:
              return "You are the Image Analyzer agent. You will be given one or more images along with a text prompt. Your task is to analyze the visual content of the images to answer the user's questions, identify objects, and describe what you see. You can also associate images with survey point numbers if requested.";
         case AgentType.GIS_AGENT:

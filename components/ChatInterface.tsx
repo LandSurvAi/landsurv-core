@@ -46,7 +46,7 @@ const agentLabels: { [key in AgentType]?: string } = {
     [AgentType.FIELD_BOOK]: 'Field Book',
     [AgentType.LSVZ_AGENT]: 'LSVZ Meta-Agent',
     [AgentType.CIVIL_PLAN_EXPERT]: 'Civil Plan Expert',
-    [AgentType.DXF_ANALYZER]: 'DXF Analyzer',
+    [AgentType.DXF_ANALYZER]: 'DXF Agent',
     [AgentType.IMAGE_ANALYZER]: 'Image Analyzer',
     [AgentType.GIS_AGENT]: 'GIS Agent',
     [AgentType.STEEP_SLOPE_AGENT]: 'Steep Slope',

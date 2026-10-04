@@ -8528,13 +8528,26 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const clickY = e.clientY - rect.top;
             const clickedLine = findLineNearClick(clickX, clickY, 15);
             if (clickedLine && !isBoxSelectMode) {
-                const lineId = clickedLine.id || `${clickedLine.from}-${clickedLine.to}`;
+                // If line belongs to a polyline group, select/deselect all segments of the polyline together
+                const targetPolylineId = clickedLine.polylineId;
+                const memberLineIds: string[] = [];
+                if (targetPolylineId) {
+                    lines.forEach(l => {
+                        if (l.polylineId === targetPolylineId && !l.hidden) {
+                            memberLineIds.push(l.id || `${l.from}-${l.to}`);
+                        }
+                    });
+                } else {
+                    memberLineIds.push(clickedLine.id || `${clickedLine.from}-${clickedLine.to}`);
+                }
+
                 setSelectedLineIds(prev => {
                     const next = new Set(prev);
-                    if (next.has(lineId)) {
-                        next.delete(lineId);
+                    const allSelected = memberLineIds.every(id => next.has(id));
+                    if (allSelected) {
+                        memberLineIds.forEach(id => next.delete(id));
                     } else {
-                        next.add(lineId);
+                        memberLineIds.forEach(id => next.add(id));
                     }
                     return next;
                 });
@@ -8555,8 +8568,17 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             
             const clickedLine = findLineNearClick(clickX, clickY, 15);
             if (clickedLine?.id) {
-                // Delete immediately on click
-                onDeleteLine(clickedLine.id);
+                // If member of a polyline, delete all constituent segments together
+                const targetPolylineId = clickedLine.polylineId;
+                if (targetPolylineId) {
+                    lines.forEach(l => {
+                        if (l.polylineId === targetPolylineId && l.id) {
+                            onDeleteLine(l.id);
+                        }
+                    });
+                } else {
+                    onDeleteLine(clickedLine.id);
+                }
             }
             return;
         }

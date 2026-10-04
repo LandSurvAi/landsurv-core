@@ -397,7 +397,7 @@ agentRegistry.register({
 
 agentRegistry.register({
   agent: AgentType.DXF_ANALYZER,
-  displayName: 'DXF Analyzer',
+  displayName: 'DXF Agent',
   cacpEnabled: true,
   version: '1.0.0',
   skills: [

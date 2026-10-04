@@ -9,5 +9,5 @@
  *
  * Format: YY.MM.DD.patch  (e.g. "26.05.17.20")
  */
-export const APP_VERSION = "26.10.01.01";
+export const APP_VERSION = "26.10.04.01";
 

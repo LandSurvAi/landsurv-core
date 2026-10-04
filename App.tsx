@@ -201,6 +201,7 @@ import {
 } from './services/civilDrafterContextConfig.ts';
 import { loadClaudeConfig, setClaudeConfig, type ClaudeModel } from './services/claudeConfig.ts';
 import { generateDxf } from './utils/dxf.ts';
+import { parseDxfGeometry } from './utils/dxfGeometryParser.ts';
 import { expandChainsToLines, expandWidthCodedChains, repairBankCorridorChains, type DrafterChain } from './utils/linework.ts';
 import {
   addLineToList,
@@ -604,7 +605,7 @@ const generateSitemapXml = (): string => {
         { url: 'https://raw.landsurv.ai', title: 'RAW Crawler Agent' },
         { url: 'https://deed.landsurv.ai', title: 'Boundary Agent (formerly Deed Reader & Plotter)' },
         { url: 'https://plan.landsurv.ai', title: 'Civil Plan Expert Agent' },
-        { url: 'https://dxf.landsurv.ai', title: 'DXF Analyzer Agent' },
+        { url: 'https://dxf.landsurv.ai', title: 'DXF Agent' },
         { url: 'https://station.landsurv.ai', title: 'Stationing & CL Agent' },
         { url: 'https://point.landsurv.ai', title: 'Point Editor Agent' },
         { url: 'https://gps.landsurv.ai', title: 'GPS Stakeout Agent' },
@@ -652,7 +653,7 @@ const landingPageConfig = {
     'raw': { title: "RAW Crawler Agent", content: RawAgentContent },
     'deed': { title: "Boundary Agent (formerly Deed Reader & Plotter)", content: DeedAgentContent },
     'plan': { title: "Civil Plan Expert Agent", content: PlanAgentContent },
-    'dxf': { title: "DXF Analyzer Agent", content: DxfAgentContent },
+    'dxf': { title: "DXF Agent", content: DxfAgentContent },
     'station': { title: "Stationing & CL Agent", content: StationAgentContent },
     'point': { title: "Point Editor Agent", content: PointAgentContent },
     'gps': { title: "GPS Stakeout Agent", content: GpsAgentContent },
@@ -4438,38 +4439,70 @@ const AppContent = () => {
     }
   }, [initializedAgents, logActionToFieldbook, setIsAddingData, showView, startChatWithOverride, startSession]);
 
-  const handleDxfUploaded = useCallback((content: string, name: string) => {
+  const handleDxfUploaded = useCallback((content: string, name: string, options?: { smoothSplines?: boolean; quantizationBits?: 16 | 32 }) => {
     try {
+        // Parse geometry immediately so DXF drawing is rendered on canvas without delay
+        const existingPointCount = pointListsRef.current.flatMap(l => l.points).length;
+        const smoothSplines = Boolean(options?.smoothSplines);
+        const quantizationBits = options?.quantizationBits ?? 16;
+        const parsedDxf = parseDxfGeometry(content, {
+            startingPointNumber: existingPointCount + 1,
+            smoothSplines,
+            splineOptions: {
+                quantizationBits,
+                adaptiveQuantization: true,
+            },
+        });
+
+        const splineSuffix = smoothSplines ? ` (smooth ${quantizationBits}-bit weighted T-splines applied)` : '';
+        const drawnSummary = `${parsedDxf.lines.length} lines/curves and ${parsedDxf.points.length} points across ${parsedDxf.layers.length} layers${splineSuffix}`;
+
+        // Add parsed points and lines to the project state
+        if (parsedDxf.points.length > 0) {
+            setPointLists(prev => {
+                const workingList = prev.find(l => l.id === 'working');
+                if (!workingList) {
+                    return [...prev, { id: 'working', name: 'Unsaved Points', points: parsedDxf.points, isVisible: true }];
+                }
+                return prev.map(l => l.id === 'working' ? { ...l, points: [...l.points, ...parsedDxf.points] } : l);
+            });
+        }
+        if (parsedDxf.lines.length > 0) {
+            setLines(prev => [...prev, ...parsedDxf.lines]);
+        }
+
         if (initializedAgents.has(AgentType.DXF_ANALYZER)) {
              if (dxfFile) {
                 setGeneratedFiles(prev => [...prev, { ...dxfFile, name: `(Archived) ${dxfFile.name}` }]);
             }
-             logActionToFieldbook(`Replaced DXF file with: ${name}`);
+             logActionToFieldbook(`Replaced DXF file with: ${name} (${drawnSummary})`);
             const newChat = startChatWithOverride(AgentType.DXF_ANALYZER, content);
             setDxfChat(newChat);
             setDxfFile({ name, content });
             setDxfChatHistory([{ 
                 role: MessageRole.MODEL, 
-                text: `The <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">DXF Analyzer</strong> agent has been reset. The new active file is <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">"${name}"</strong>.`
+                text: `The <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">DXF Agent</strong> has loaded <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">"${name}"</strong> and immediately drawn <strong>${drawnSummary}</strong> on your canvas. Ask me anything about layers, entities, or geometry!`
             }]);
             setIsAddingData(false);
+            showView('canvas');
+            setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
             return;
         }
 
         startSession();
-        logActionToFieldbook(`Loaded DXF file: ${name}`);
+        logActionToFieldbook(`Loaded DXF file: ${name} (Drew ${drawnSummary})`);
         const newChat = startChatWithOverride(AgentType.DXF_ANALYZER, content);
         setDxfChat(newChat);
         setDxfFile({ name, content });
         setDxfChatHistory([{
             role: MessageRole.MODEL,
-            text: `Hello! I'm the <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">DXF Analyzer</strong> agent. I have loaded the file <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">"${name}"</strong> and am ready to analyze its contents.`,
+            text: `Hello! I'm the <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">DXF Agent</strong>. I have loaded <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">"${name}"</strong> and immediately drawn <strong>${drawnSummary}</strong> on your canvas. What would you like to inspect or calculate?`,
         }]);
         setSuggestedQuestions([
             "How many layers are in this DXF?",
-            "List all entities on the 'SURVEY_POINTS' layer.",
-            "Draw all the lines from the 'SURVEY_LINES' layer.",
-            "What is the total length of all polylines?"
+            "List all entities by layer and type.",
+            "What is the total length of all polylines?",
+            "Inspect the layer colors and linetypes."
         ]);
         setError(null);
         
@@ -4479,11 +4512,12 @@ const AppContent = () => {
         setActiveAgent(AgentType.DXF_ANALYZER);
         setInitializedAgents(prev => new Set(prev).add(AgentType.DXF_ANALYZER));
         showView('canvas');
+        setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to initialize AI chat.';
       setError(`Initialization Error: ${errorMessage}`);
     }
-  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, dxfFile, settings, startChatWithOverride]);
+  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, dxfFile, settings, startChatWithOverride, setPointLists, setLines, canvas2dRef]);
 
 
 

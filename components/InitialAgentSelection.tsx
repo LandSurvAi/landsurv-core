@@ -295,7 +295,7 @@ const agentSeoUrls: Partial<Record<AgentType, string>> = {
 const agentInfoMap: Partial<Record<AgentType, { title: string; content: React.FC }>> = {
   [AgentType.DEED_READER]:           { title: 'Boundary Agent',                 content: DeedAgentContent },
   [AgentType.CIVIL_PLAN_EXPERT]:     { title: 'Civil Plan Expert Agent',         content: PlanAgentContent },
-  [AgentType.DXF_ANALYZER]:          { title: 'DXF Analyzer Agent',              content: DxfAgentContent },
+  [AgentType.DXF_ANALYZER]:          { title: 'DXF Agent',                       content: DxfAgentContent },
   [AgentType.CENTERLINE_STATIONING]: { title: 'Stationing & CL Agent',           content: StationAgentContent },
   [AgentType.POINT_EDITOR]:          { title: 'Point Editor Agent',              content: PointAgentContent },
   [AgentType.GPS_STAKEOUT]:          { title: 'GPS Stakeout Agent',              content: GpsAgentContent },
@@ -475,8 +475,8 @@ export const homepageAgentCards = [
     },
     { 
         type: AgentType.DXF_ANALYZER, 
-        title: 'DXF Analyzer', 
-        description: 'Upload a .dxf file to parse its entities, answer questions, and visualize the geometry.',
+        title: 'DXF Agent', 
+        description: 'Upload a .dxf file to draw CAD linework instantly and inspect layers, geometry, and entities with AI.',
         icon: DxfAnalyzerIcon,
         color: 'indigo',
         actionType: 'agent' as const,

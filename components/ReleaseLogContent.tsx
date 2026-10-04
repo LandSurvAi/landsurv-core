@@ -2,6 +2,16 @@
 
 const releases = [
     {
+        version: "26.10.04.01",
+        date: "October 4, 2026",
+        highlights: [
+            "🤖 DXF Agent Rebranding: Renamed and rebranded the DXF Analyzer to 'DXF Agent' across the entire application, including navigation menus, agent selector cards, help modals, landing pages, and agent system prompts.",
+            "📐 Instant Client-Side DXF Parsing & 2D Canvas Rendering: Implemented immediate client-side DXF geometry parsing and 2D canvas drawing on file load with automatic zoomExtents, parsing LINE, LWPOLYLINE, classic POLYLINE/VERTEX/SEQEND, CIRCLE, ARC, and POINT entities with AutoCAD ACI color mapping.",
+            "🔗 Continuous Polyline Entity Chaining: Added intelligent polyline grouping and chaining so continuous line segments and polylines share matching polylineIds, enabling cohesive multi-segment selection, inspection, and deletion rather than fragmented 2-point bits.",
+            "〰️ Adaptive T-Spline Quantization: Added an on-load option to convert long strings of linear segments into weighted T-splines with curvature-adaptive quantization (dense vertex distribution at sharp angles and bends, sparse along straights and uniform curves) with selectable 16-bit or 32-bit grid resolution.",
+        ],
+    },
+    {
         version: "26.10.03.01",
         date: "October 3, 2026",
         highlights: [
