@@ -169,6 +169,8 @@ import { ProfileGenerationPanel } from './components/ProfileGenerationPanel.tsx'
 import type { ProfileGenerateParams } from './components/ProfileGenerationPanel.tsx';
 import ErrorConsole from './components/ErrorConsole.tsx';
 import ApiKeyOrPayModal, { type CheckoutSelection, type CurrentKeyDetails } from './components/ApiKeyOrPayModal.tsx';
+import { UpgradeModal } from './components/UpgradeModal.tsx';
+import { HostCostReminderModal } from './components/HostCostReminderModal.tsx';
 import { executeCheckoutRecaptcha } from './utils/recaptcha.ts';
 import AppLockOverlay from './components/AppLockOverlay.tsx';
 import { ConciergeOverlay } from './components/PublicConciergeChat.tsx';
@@ -1920,6 +1922,9 @@ const AppContent = () => {
   } = useUsageTimer();
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [showHostCostReminder, setShowHostCostReminder] = useState(false);
+  const [welcomeInitialMode, setWelcomeInitialMode] = useState<WelcomeMode>('main');
   const [isLockDismissed, setIsLockDismissed] = useState(false);
   const [apiKeyModalTrigger, setApiKeyModalTrigger] = useState<'apikey' | 'rinex' | 'lsvz'>('apikey');
   const [apiKeyModalInitialTab, setApiKeyModalInitialTab] = useState<'apikey' | 'service' | 'payment'>('apikey');
@@ -2538,6 +2543,26 @@ const AppContent = () => {
       setShowApiKeyModal(false);
     }
   }, [shouldSuppressApiKeyModal]);
+
+  // Periodic host cost reminder (every 15 minutes, independent of the 4h on / 4h off lock)
+  // Shows a polite popup that hosting costs money, linking to Upgrade/Payments and the Zelle open-source contribution card.
+  useEffect(() => {
+    if (shouldSuppressApiKeyModal) return;
+    if (isSuperUser || hasServiceAccess) return;
+
+    const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+    const interval = window.setInterval(() => {
+      // Don't show if user is already looking at payment or key dialog
+      setShowHostCostReminder((prev) => {
+        if (prev || showApiKeyModal || showUpgradeModal || isLocked) return prev;
+        return true;
+      });
+    }, FIFTEEN_MINUTES_MS);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [shouldSuppressApiKeyModal, isSuperUser, hasServiceAccess, showApiKeyModal, showUpgradeModal, isLocked]);
 
   // When settings.userApiKey changes, check if it's already confirmed for this specific key.
   useEffect(() => {
@@ -15388,8 +15413,7 @@ const AppContent = () => {
                           setShowApiKeyModal(true);
                         }}
                         onShowUpgrade={() => {
-                          setApiKeyModalInitialTab('service');
-                          setShowApiKeyModal(true);
+                          setShowUpgradeModal(true);
                         }}
                         cadStandardsLoaded={cadStandardsLoaded}
                         onLoadPoints={() => {
@@ -16607,7 +16631,7 @@ const AppContent = () => {
           {isSettingsVisible && <Suspense fallback={<LoadingFallback />}><SettingsPage settings={settings} onSettingsChange={setSettings} onClose={() => { setIsSettingsVisible(false); setPulseApiKey(false); }} onReset={handleReset} activeAgent={activeAgent} activeModel={activeModel} availableModels={visibleAvailableModels} onModelChange={handleModelChange} jobInfo={jobInfo} onJobInfoChange={setJobInfo} pulseProjection={pulseProjection} pulseApiKey={pulseApiKey} onApiKeySubmit={handleSettingsApiKeySubmit} onProviderKeySubmit={handleProviderKeySubmit} isSuperUser={isSuperUser} hasApiKey={hasApiKey} autoHighThinkingModel={autoHighThinkingModel} autoHighThinkingOptions={visibleAutoHighThinkingOptions} onAutoHighThinkingModelChange={(model) => {
             if (!confirmFableSelection(model)) return;
             setAutoHighThinkingModel(model);
-          }} /></Suspense>}
+          }} onTriggerHostCostReminder={() => setShowHostCostReminder(true)} /></Suspense>}
 
           {/* LandSurv Claw: live browser-tool status (Zoning Agent only; backend-dependent, hidden in OSS build) */}
           {!isOssBuild() && <ClawStatusBadge visible={activeAgent === AgentType.ZONING_AGENT} />}
@@ -17201,13 +17225,32 @@ const AppContent = () => {
           {showWelcome && (
             <WelcomeScreen 
               version={APP_VERSION} 
-              onClose={() => setShowWelcome(false)}
+              initialMode={welcomeInitialMode}
+              onClose={() => {
+                setShowWelcome(false);
+                setWelcomeInitialMode('main');
+              }}
               onLaunchAgenticCad={handleLaunchAgenticCad}
               onGoHome={handleGoHome}
               hasExistingPoints={pointLists.some(l => l.points.length > 0)}
               existingPointCount={pointLists.reduce((sum, l) => sum + l.points.length, 0)}
             />
           )}
+
+          {/* Periodic 15-minute Host Cost Reminder Popup */}
+          <HostCostReminderModal
+            isOpen={showHostCostReminder}
+            onClose={() => setShowHostCostReminder(false)}
+            onOpenUpgrade={() => {
+              setShowHostCostReminder(false);
+              setShowUpgradeModal(true);
+            }}
+            onOpenOpenSource={() => {
+              setShowHostCostReminder(false);
+              setWelcomeInitialMode('free-code');
+              setShowWelcome(true);
+            }}
+          />
           {isErrorConsoleVisible && <ErrorConsole isOpen={isErrorConsoleVisible} onClose={() => setIsErrorConsoleVisible(false)} />}
           {isReleaseStagesModalVisible && <ReleaseStagesModal isOpen={isReleaseStagesModalVisible} onClose={() => setIsReleaseStagesModalVisible(false)} />}
 
@@ -17240,18 +17283,59 @@ const AppContent = () => {
             />
           )}
           
-          {/* Combined API Key or Payment Modal */}
+          {/* Dedicated Keys Modal */}
           <ApiKeyOrPayModal 
             isOpen={!shouldSuppressApiKeyModal && showApiKeyModal} 
             onSubmitApiKey={handleApiKeySubmit}
             trigger={apiKeyModalTrigger}
             initialTab={apiKeyModalInitialTab}
+            onOpenUpgrade={() => {
+              setShowApiKeyModal(false);
+              setShowUpgradeModal(true);
+            }}
+            computeCredits={computeCredits}
+            hasGoogleApiKey={Boolean(settings.userApiKey && !isDemoApiKey(settings.userApiKey))}
+            hasLandSurvKey={hasLandSurvKey}
+            hasServiceAccess={hasServiceAccess}
+            serviceAccessExpiresAt={serviceAccessExpiresAt}
+            isFreeTierLocked={isLocked}
+            remainingTime={remainingTime}
+            timeUntilAvailable={timeUntilAvailable}
+            currentKeyDetails={currentKeyDetails}
+            customerEmail={appUserEmail}
+            isPremium={apiKeyModalTrigger === 'rinex' || apiKeyModalTrigger === 'lsvz'}
+            onGoHome={() => {
+              // Close modal and reset to initial screen
+              setShowApiKeyModal(false);
+              setActiveAgent(null);
+              setIsInitialScreen(true);
+            }}
+            onClose={() => {
+              setShowApiKeyModal(false);
+              // If locked, X acts the same as Browse Without Key
+              if (isLocked && !isSuperUser) setIsLockDismissed(true);
+            }}
+            onDismiss={isLocked && !isSuperUser ? () => {
+              setIsLockDismissed(true);
+              setShowApiKeyModal(false);
+            } : undefined}
+          />
+
+          {/* Dedicated Upgrade and Payment Modal */}
+          <UpgradeModal
+            isOpen={showUpgradeModal}
+            onClose={() => setShowUpgradeModal(false)}
+            onOpenKeyModal={() => {
+              setShowUpgradeModal(false);
+              setShowApiKeyModal(true);
+            }}
+            onSubmitApiKey={handleApiKeySubmit}
+            customerEmail={appUserEmail}
+            hasServiceAccess={hasServiceAccess}
+            serviceAccessExpiresAt={serviceAccessExpiresAt}
+            computeCredits={computeCredits}
             onProceedWithPayment={async (creditPackage: '1K' | '5K' | '10K') => {
-              // User chose to purchase credits with creditPackage '1K'|'5K'|'10K'
               try {
-                console.log('[Checkout] Starting purchase flow for package:', creditPackage);
-                
-                // Resolve or generate a userId for header
                 let appUserId = localStorage.getItem('landsurv_user_id');
                 if (!appUserId) {
                   appUserId = crypto?.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
@@ -17264,7 +17348,6 @@ const AppContent = () => {
                   : 'https://landsurv-backend-237999774959.us-west1.run.app';
                 
                 const fullUrl = `${backendUrl}/api/billing/purchase-credits`;
-                console.log('[Checkout] Calling backend:', fullUrl);
                 
                 const resp = await fetch(fullUrl, {
                   method: 'POST',
@@ -17276,35 +17359,24 @@ const AppContent = () => {
                   body: JSON.stringify({ creditPackage, successUrl: `${frontendUrl}/checkout/success?type=credits&credits=${creditPackage}`, cancelUrl: `${frontendUrl}/checkout/cancel?type=credits` }),
                 });
                 
-                console.log('[Checkout] Response status:', resp.status);
-                
                 if (!resp.ok) {
                   const err = await resp.json().catch(() => ({ message: `HTTP ${resp.status}` }));
                   throw new Error(err.message || 'Failed to create checkout session');
                 }
                 const data = await resp.json();
-                console.log('[Checkout] Response data:', data);
                 
                 if (data?.url) {
-                  // Backend returns session.url directly
-                  console.log('[Checkout] Redirecting to:', data.url);
                   window.location.href = data.url;
                 } else if (data?.sessionId) {
-                  // Fallback: construct Stripe URL from sessionId
-                  const stripeUrl = `https://checkout.stripe.com/pay/${data.sessionId}`;
-                  console.log('[Checkout] Redirecting to:', stripeUrl);
-                  window.location.href = stripeUrl;
+                  window.location.href = `https://checkout.stripe.com/pay/${data.sessionId}`;
                 } else if (data?.checkoutUrl) {
-                  console.log('[Checkout] Redirecting to:', data.checkoutUrl);
                   window.location.href = data.checkoutUrl;
                 } else {
-                  console.error('[Checkout] Unexpected response format:', data);
                   throw new Error('Invalid response from backend - no redirect URL');
                 }
               } catch (e: any) {
-                console.error('[Checkout] Error:', e);
                 alert('Failed to start checkout flow: ' + (e?.message || 'Unknown error'));
-                setShowApiKeyModal(true); // Re-open modal on error
+                setShowUpgradeModal(true);
               }
             }}
             onProceedWithCheckout={async (selection: CheckoutSelection) => {
@@ -17352,32 +17424,6 @@ const AppContent = () => {
               }
               window.location.href = result.url;
             }}
-            computeCredits={computeCredits}
-            hasGoogleApiKey={Boolean(settings.userApiKey && !isDemoApiKey(settings.userApiKey))}
-            hasLandSurvKey={hasLandSurvKey}
-            hasServiceAccess={hasServiceAccess}
-            serviceAccessExpiresAt={serviceAccessExpiresAt}
-            isFreeTierLocked={isLocked}
-            remainingTime={remainingTime}
-            timeUntilAvailable={timeUntilAvailable}
-            currentKeyDetails={currentKeyDetails}
-            customerEmail={appUserEmail}
-            isPremium={apiKeyModalTrigger === 'rinex' || apiKeyModalTrigger === 'lsvz'}
-            onGoHome={() => {
-              // Close modal and reset to initial screen
-              setShowApiKeyModal(false);
-              setActiveAgent(null);
-              setIsInitialScreen(true);
-            }}
-            onClose={() => {
-              setShowApiKeyModal(false);
-              // If locked, X acts the same as Browse Without Key
-              if (isLocked && !isSuperUser) setIsLockDismissed(true);
-            }}
-            onDismiss={isLocked && !isSuperUser ? () => {
-              setIsLockDismissed(true);
-              setShowApiKeyModal(false);
-            } : undefined}
           />
 
           {/* BYOK API Key Confirmation Modal (Google / OpenAI / xAI / Anthropic) */}

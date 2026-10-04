@@ -2,6 +2,32 @@
 
 const releases = [
     {
+        version: "26.10.04.03",
+        date: "October 4, 2026",
+        highlights: [
+            "⚡ Upgrade Modal Polish & Density Pass: Compacted layout and typography so the checkout button and order total stay permanently pinned in view at the bottom without scrolling away.",
+            "� Unified Compute & BYOK 4-Option Grid: Bunched the 3 compute credit packages (Starter, Growth, Pro) together with 'Prefer to avoid buying compute credits? (BYO API Key)' as a matching 4th card in the compute section, mirroring the Service Access layout while leaving the Locally Hosted Open Source option cleanly in its own spotlight section.",
+            "🛡️ Connected Service Plan Info Area: Fixed button responsiveness and ordering across both 2x2 mobile and desktop grids; the service info panel reliably renders directly below the selected plan styled with matching emerald dashed borders and left accent bar.",
+            "🎯 Focused Selection Contrast: When a service plan is selected, all non-selected package cards dim down (`opacity-40`) and strip away green highlights to subtle neutral grays (`border-gray-700/60`, `text-gray-400`), making the selected choice unmistakable.",
+            "🔑 Prominent Custom API Key Entry: Expandable key input accepts and validates all major provider keys (Google Gemini, OpenAI, Claude, Grok, and LandSurv).",
+            "🔄 Space-Saving Rolling Email Confirmation: Email entry uses a single rolling slot (Step 1: Enter email → Step 2: Re-enter to confirm match) avoiding clunky dual input fields while preventing delivery typos.",
+            "🎯 Selection Border & Color Cues: Cards display clean solid borders at rest, transitioning to a thicker 2px dashed accent border when selected, with service items highlighted in bold emerald green matching compute credit pink.",
+            "🚫 Locally Hosted & Free Software Spotlight: Added a dedicated open-source callout with a custom no-cost icon (dollar symbol with circle-backslash slashout) and direct links to the public GitHub repository and Open Source info page.",
+        ],
+    },
+    {
+        version: "26.10.04.02",
+        date: "October 4, 2026",
+        highlights: [
+            "💳 Separation of API Keys & Payment Upgrades: Completely decoupled API and Enabling Key management from payment workflows into two dedicated, focused dialogs (`ApiKeyOrPayModal` and `UpgradeModal`).",
+            "🔑 Dedicated Keys Dialog: Simplified the key entry experience to focus exclusively on LandSurv Enabling Keys and Bring-Your-Own AI keys (Google Gemini, OpenAI, xAI, Anthropic) plus key diagnostics, removing cluttered checkout carts and redundant explainers.",
+            "⚡ Streamlined Upgrade Modal: Replaced complex payment tabs with a concise, high-contrast plan selection interface for 24/7 Continuous Service (1M, 3M, 6M, 1Y) and Hosted Compute Credits (Starter, Growth, Pro).",
+            "🎨 Welcome Screen Design Alignment: Replaced heavy card fills with crisp left indicator accent bars and dashed borders matching the welcome screen, removed background number fills, and added immediate local default price fallbacks.",
+            "🔗 Direct Inter-Modal Navigation: Added fluid mutual switching with dedicated links: 'Upgrade Plans →' from the Keys dialog, and 'Use your own AI key →' / 'Already have a key? Enter Key →' from the Upgrade dialog.",
+            "☕ 15-Minute Host Cost Reminder Popup: Added a periodic, friendly hosting reminder modal (`HostCostReminderModal.tsx`) that reminds users about independent server and AI operating costs, linking directly to Upgrade/Payments or the Open Source / Zelle contribution screen.",
+        ],
+    },
+    {
         version: "26.10.04.01",
         date: "October 4, 2026",
         highlights: [

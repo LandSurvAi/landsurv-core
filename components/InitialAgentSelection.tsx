@@ -2463,12 +2463,15 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
             </button>
             <button
               onClick={onShowUpgrade}
-              className="flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-pink-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-pink-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className="flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-1.5 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-emerald-500/40 text-emerald-400 hover:text-emerald-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-emerald-500/10 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
               type="button"
               title="Purchase service access or hosted compute credits"
             >
-              <CurrencyDollarIcon className="h-4 w-4 text-pink-400" />
-              Upgrade
+              <svg className="w-5 h-5 text-emerald-400 hover:text-emerald-300 transition-colors flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <line x1="12" y1="2" x2="12" y2="22" />
+                <path d="M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+              </svg>
+              <span>Upgrade</span>
             </button>
             <button
               onClick={openCallUsMachine}

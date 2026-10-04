@@ -44,6 +44,7 @@ interface SettingsPageProps {
     autoHighThinkingModel?: string;
     autoHighThinkingOptions?: string[];
     onAutoHighThinkingModelChange?: (model: string) => void;
+    onTriggerHostCostReminder?: () => void;
 }
 
 const SettingsPage: React.FC<SettingsPageProps> = ({
@@ -52,6 +53,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     , onProviderKeySubmit
     , isSuperUser, hasApiKey
     , autoHighThinkingModel, autoHighThinkingOptions, onAutoHighThinkingModelChange
+    , onTriggerHostCostReminder
 }) => {
     const [isConfirmingReset, setIsConfirmingReset] = useState(false);
     const [showScrollIndicator, setShowScrollIndicator] = useState(true);
@@ -919,6 +921,29 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         className={`px-4 py-2 text-sm font-semibold text-white rounded-md transition-colors ${isConfirmingReset ? 'bg-red-700 hover:bg-red-800' : 'bg-red-600 hover:bg-red-700'}`}
                     >
                         {isConfirmingReset ? 'Confirm Reset?' : 'Reset Now'}
+                    </button>
+                </div>
+            </div>
+
+            {/* Developer / Testing Utilities */}
+            <div>
+                <h3 className="text-lg font-semibold text-cyan-400 mb-2">Testing &amp; Previews</h3>
+                <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 flex items-center justify-between">
+                    <div>
+                        <h4 className="font-semibold text-gray-200">Hosting Cost Reminder Popup</h4>
+                        <p className="text-xs text-gray-400 mt-0.5">Preview the 15-minute periodic reminder popup and test payment/Zelle links.</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            onClose();
+                            if (onTriggerHostCostReminder) {
+                                onTriggerHostCostReminder();
+                            }
+                        }}
+                        className="px-4 py-2 text-sm font-semibold text-white bg-cyan-600 hover:bg-cyan-500 rounded-md transition-colors whitespace-nowrap shadow-md"
+                    >
+                        Preview Popup
                     </button>
                 </div>
             </div>

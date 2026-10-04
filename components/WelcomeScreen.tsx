@@ -16,6 +16,7 @@ export interface WelcomeScreenProps {
   onGoHome?: () => void;
   hasExistingPoints?: boolean;
   existingPointCount?: number;
+  initialMode?: WelcomeMode;
 }
 
 const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ 
@@ -24,9 +25,10 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   onLaunchAgenticCad,
   onGoHome,
   hasExistingPoints = false,
-  existingPointCount = 0
+  existingPointCount = 0,
+  initialMode = 'main'
 }) => {
-  const [mode, setMode] = useState<WelcomeMode>('main');
+  const [mode, setMode] = useState<WelcomeMode>(initialMode);
   const [zelleRevealed, setZelleRevealed] = useState(false);
 
   // Check for holiday theme
