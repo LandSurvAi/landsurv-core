@@ -2386,7 +2386,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
               )}</span></span>
               <PublicConciergeChat compact />
               <a
-                href="https://www.youtube.com/@LandSurv"
+                href="https://www.youtube.com/@LandSurvAI"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-2 text-red-500 hover:bg-red-500/10 rounded-full transition-colors pointer-events-auto"

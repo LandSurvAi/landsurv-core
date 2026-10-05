@@ -96,6 +96,9 @@ export const AppStateProvider: React.FC<AppStateProviderProps> = ({ children, av
   
   const [settings, setSettings] = useState<Settings>({
     theme: 'dark',
+    userApiKey: typeof window !== 'undefined'
+      ? (localStorage.getItem('landsurv_user_api_key') || localStorage.getItem('landsurv_service_key') || undefined)
+      : undefined,
     coordinatePrecision: 2,
     projection: loadStoredProjection(),
     defaultCutSheetInfo: {

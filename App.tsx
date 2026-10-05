@@ -1991,6 +1991,10 @@ const AppContent = () => {
     hasLandSurvKey ||
     isDemoApiKey(settings.userApiKey) ||
     Boolean(settings.userApiKey?.startsWith('lsa_')) ||
+    Boolean(typeof window !== 'undefined' && (
+      localStorage.getItem('landsurv_service_key')?.startsWith('lsa_') ||
+      localStorage.getItem('landsurv_user_api_key')?.startsWith('lsa_')
+    )) ||
     (currentKeyDetails?.keyType === 'LandSurv Enabling Key' && currentKeyDetails?.status !== 'expired')
   );
 
@@ -2411,13 +2415,15 @@ const AppContent = () => {
   useEffect(() => {
     (async () => {
       const storedApiKey = localStorage.getItem('landsurv_user_api_key');
+      const storedServiceKey = localStorage.getItem('landsurv_service_key');
+      const effectiveApiKey = storedApiKey || (storedServiceKey?.startsWith('lsa_') ? storedServiceKey : null);
       const storedOpenaiKey = getProviderApiKey('openai');
       const storedXaiKey = getProviderApiKey('xai');
       const storedAnthropicKey = getProviderApiKey('anthropic');
-      if (storedApiKey || storedOpenaiKey || storedXaiKey || storedAnthropicKey) {
+      if (effectiveApiKey || storedOpenaiKey || storedXaiKey || storedAnthropicKey) {
         setSettings(prev => ({
           ...prev,
-          userApiKey: storedApiKey || prev.userApiKey,
+          userApiKey: effectiveApiKey || prev.userApiKey,
           openaiApiKey: storedOpenaiKey || prev.openaiApiKey,
           xaiApiKey: storedXaiKey || prev.xaiApiKey,
           anthropicApiKey: storedAnthropicKey || prev.anthropicApiKey,
@@ -2585,15 +2591,18 @@ const AppContent = () => {
 
   // Periodic host cost reminder (every 15 minutes, independent of the 4h on / 4h off lock)
   // Shows a polite popup that hosting costs money, linking to Upgrade/Payments and the Zelle open-source contribution card.
+  // Suppressed for superusers, service-enabled users, users with an active LandSurv Enabling Key, or users with service access.
   useEffect(() => {
     if (shouldSuppressApiKeyModal) return;
-    if (isSuperUser || hasServiceAccess) return;
+    if (isSuperUser || hasServiceAccess || hasLsaiEnablingKey || hasLandSurvKey || isServiceEnabled) return;
 
     const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
     const interval = window.setInterval(() => {
-      // Don't show if user is already looking at payment or key dialog, or welcome screen
+      // Don't show if user is already looking at payment or key dialog, or welcome screen, or has an enabling key/access
       setShowHostCostReminder((prev) => {
-        if (prev || showApiKeyModal || showUpgradeModal || showWelcome) return prev;
+        if (prev || showApiKeyModal || showUpgradeModal || showWelcome || isSuperUser || hasServiceAccess || hasLsaiEnablingKey || hasLandSurvKey || isServiceEnabled) {
+          return false;
+        }
         return true;
       });
     }, FIFTEEN_MINUTES_MS);
@@ -2601,7 +2610,14 @@ const AppContent = () => {
     return () => {
       window.clearInterval(interval);
     };
-  }, [shouldSuppressApiKeyModal, isSuperUser, hasServiceAccess, showApiKeyModal, showUpgradeModal, showWelcome]);
+  }, [shouldSuppressApiKeyModal, isSuperUser, hasServiceAccess, hasLsaiEnablingKey, hasLandSurvKey, isServiceEnabled, showApiKeyModal, showUpgradeModal, showWelcome]);
+
+  // Immediately close and dismiss host cost reminder if an enabling key or service access becomes active
+  useEffect(() => {
+    if (isSuperUser || hasServiceAccess || hasLsaiEnablingKey || hasLandSurvKey || isServiceEnabled) {
+      setShowHostCostReminder(false);
+    }
+  }, [isSuperUser, hasServiceAccess, hasLsaiEnablingKey, hasLandSurvKey, isServiceEnabled]);
 
   // When settings.userApiKey changes, check if it's already confirmed for this specific key.
   useEffect(() => {
@@ -17360,7 +17376,7 @@ const AppContent = () => {
 
           {/* Periodic 15-minute Host Cost Reminder Popup */}
           <HostCostReminderModal
-            isOpen={!showWelcome && showHostCostReminder}
+            isOpen={!showWelcome && showHostCostReminder && !hasLsaiEnablingKey && !hasServiceAccess && !hasLandSurvKey && !isSuperUser}
             onClose={() => setShowHostCostReminder(false)}
             onOpenUpgrade={() => {
               setShowHostCostReminder(false);

@@ -201,7 +201,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 </p>
                 <div className="flex items-center justify-center gap-6">
                   <a
-                    href="https://www.youtube.com/@LandSurv"
+                    href="https://www.youtube.com/@LandSurvAI"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-red-500 hover:text-red-400 hover:scale-110 transition-all"

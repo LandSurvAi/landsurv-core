@@ -86,10 +86,11 @@ export const CacpActivityIndicator: React.FC<CacpActivityIndicatorProps> = ({
       scheduleExit(key);
     });
 
+    const activeTimers = timers.current;
     return () => {
       unsub();
-      timers.current.forEach(t => clearTimeout(t));
-      timers.current.clear();
+      activeTimers.forEach(t => clearTimeout(t));
+      activeTimers.clear();
     };
   }, [scheduleExit, enabled, includeHandlerPhase]);
 

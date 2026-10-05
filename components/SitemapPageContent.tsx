@@ -16,7 +16,7 @@ const mainLinks = [
     { url: 'https://dpa.landsurv.ai', title: 'Data Processing Addendum (DPA)', description: 'Public summary of LandSurv.ai data processing commitments and controller/processor framework.' },
     { url: 'https://subprocessors.landsurv.ai', title: 'Subprocessors', description: 'Current list of subprocessors supporting platform operations and SAIF-aligned AI governance disclosures.' },
     { url: 'https://tos.landsurv.ai', title: 'Terms of Service', description: 'The full commercial contract covering use of the LandSurv.ai web app, agents, Claw browser-automation service, and Civil 3D connector.' },
-    { url: 'https://opensource.landsurv.ai', title: 'Open Source Initiative', description: 'Our roadmap and commitment to open-sourcing the majority of the LandSurv.ai codebase, highlighting CACP and .lsvz.' },
+    { url: 'https://opensource.landsurv.ai', title: 'Open Source Initiative', description: 'Our roadmap and commitment to open-sourcing the LandSurv.ai CAD engine, COGO tools, agent framework, CACP protocol, and .lsvz format under Apache-2.0.' },
     { url: 'https://documentation.landsurv.ai', title: 'Technical Documentation & Guides', description: 'Complete documentation for LandSurv.ai: platform guides, AI agent workflows, Civil 3D live sync, and API gateway reference.' },
 ];
 

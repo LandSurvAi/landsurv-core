@@ -1,6 +1,6 @@
 
 import React, { useEffect } from 'react';
-import { ContainerIcon, InteroperabilityIcon, OpenHandsIcon, BrainCircuitIcon, LsvzIcon } from './icons';
+import { ContainerIcon, InteroperabilityIcon, OpenHandsIcon, BrainCircuitIcon } from './icons';
 import { LSVZ_SCHEMA, renderExampleManifest, lsvzFieldCount, LSVZ_SPEC_VERSION, LSVZ_SPEC_RELEASE } from '../utils/lsvzSchema';
 import { APP_VERSION } from '../utils/appVersion';
 

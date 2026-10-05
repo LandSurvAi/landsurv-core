@@ -283,10 +283,10 @@ export class LsvzPersistence {
    * Retrieve cached keyframes for a given CACP Event ID.
    * Used for visual verification in CAD UI.
    * 
-   * @param eventId UUID of the CACP Event
+   * @param _eventId UUID of the CACP Event
    * @returns base64 PNG data URL, or null if not cached
    */
-  static async getKeyframe(eventId: string): Promise<string | null> {
+  static async getKeyframe(_eventId: string): Promise<string | null> {
     try {
       // In production, would query SessionState.keyframeCache[eventId]
       // For now, return null (not cached)

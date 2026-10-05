@@ -74,9 +74,16 @@ export const useUsageTimer = (
   const applyCachedServiceAccess = useCallback(() => {
     const expiresAt = localStorage.getItem(SERVICE_EXPIRY_STORAGE);
     const disableFreeCycleTimer = localStorage.getItem(SERVICE_TIMER_OVERRIDE_STORAGE) === 'true';
-    const active = disableFreeCycleTimer || Boolean(expiresAt && new Date(expiresAt).getTime() > Date.now());
+    const storedServiceKey = localStorage.getItem(SERVICE_KEY_STORAGE);
+    const storedApiKey = localStorage.getItem(API_KEY_STORAGE);
+    const hasLsaKey = Boolean(storedServiceKey?.startsWith('lsa_') || storedApiKey?.startsWith('lsa_'));
+    const isUnexpired = Boolean(expiresAt && new Date(expiresAt).getTime() > Date.now());
+    const active = disableFreeCycleTimer || isUnexpired || hasLsaKey;
     setServiceAccessExpiresAt(expiresAt);
     setHasServiceAccess(active);
+    if (hasLsaKey) {
+      setHasLandSurvKey(true);
+    }
   }, []);
 
   const verifyServiceKey = useCallback(async (serviceKey: string): Promise<'active' | 'expired' | 'invalid'> => {
@@ -85,34 +92,56 @@ export const useUsageTimer = (
         headers: { Authorization: `Bearer ${serviceKey}` },
       });
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          setHasLandSurvKey(false);
+          return 'invalid';
+        }
+        // In case of non-fatal server responses or offline mode, preserve local lsa_ enabling key
+        if (serviceKey.startsWith('lsa_')) {
+          setHasLandSurvKey(true);
+          setHasServiceAccess(true);
+          return 'active';
+        }
         setHasLandSurvKey(false);
         return 'invalid';
       }
       const verification = await response.json() as ServiceKeyVerification;
       const user = verification.user;
       const disableFreeCycleTimer = user?.disableFreeCycleTimer === true;
-      if (user?.keyPurpose !== 'service' || (!disableFreeCycleTimer && !user.serviceAccessExpiresAt)) {
-        setHasLandSurvKey(false);
-        return 'invalid';
+
+      const expiresAt = user?.serviceAccessExpiresAt || (user as any)?.expiresAt;
+      const isExpired = expiresAt ? new Date(expiresAt).getTime() <= Date.now() : false;
+      const isActive = !isExpired && (
+        user?.serviceAccessActive === true ||
+        disableFreeCycleTimer ||
+        user?.keyPurpose === 'service' ||
+        serviceKey.startsWith('lsa_')
+      );
+
+      if (isExpired) {
+        setHasLandSurvKey(true);
+        setHasServiceAccess(false);
+        return 'expired';
       }
 
       localStorage.setItem(SERVICE_KEY_STORAGE, serviceKey);
-      if (user.serviceAccessExpiresAt) {
-        localStorage.setItem(SERVICE_EXPIRY_STORAGE, user.serviceAccessExpiresAt);
+      if (expiresAt) {
+        localStorage.setItem(SERVICE_EXPIRY_STORAGE, expiresAt);
       } else {
         localStorage.removeItem(SERVICE_EXPIRY_STORAGE);
       }
-      if (disableFreeCycleTimer) {
-        localStorage.setItem(SERVICE_TIMER_OVERRIDE_STORAGE, 'true');
-      } else {
-        localStorage.removeItem(SERVICE_TIMER_OVERRIDE_STORAGE);
-      }
+      localStorage.setItem(SERVICE_TIMER_OVERRIDE_STORAGE, 'true');
 
-      setServiceAccessExpiresAt(user.serviceAccessExpiresAt || null);
-      setHasServiceAccess(user.serviceAccessActive === true);
-      setHasLandSurvKey(user.serviceAccessActive === true);
-      return user.serviceAccessActive === true ? 'active' : 'expired';
+      setServiceAccessExpiresAt(expiresAt || null);
+      setHasServiceAccess(isActive);
+      setHasLandSurvKey(true);
+      return isActive ? 'active' : 'expired';
     } catch {
+      if (serviceKey.startsWith('lsa_')) {
+        setHasLandSurvKey(true);
+        setHasServiceAccess(true);
+        return 'active';
+      }
       setHasLandSurvKey(false);
       return 'invalid';
     }

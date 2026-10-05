@@ -2,7 +2,7 @@
 // Pure utility functions for session ZIP file handling - NO STATE, NO HOOKS
 
 import JSZip from 'jszip';
-import { AgentType, SessionState, SessionFile, SessionSaveOptions } from '../types';
+import { AgentType, SessionState, SessionSaveOptions } from '../types';
 
 /**
  * Extracts the raw base64 payload from a value that may be either a full data URI
