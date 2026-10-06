@@ -2175,11 +2175,11 @@ Return ONLY valid JSON of this exact shape (no markdown fences, no commentary):
 }
 
 Rules:
-- IMPORTANT: The majority of deeds describe only ONE property or parcel of land without explicitly labeling it "Tract". Even if the deed does not use the word "Tract", you MUST return exactly ONE entry in "tracts" representing that property (e.g. tractId="Main Parcel", or use the parcel identifier/subdivision lot name like "Lot 4", "Parcel A", "Glimmerwood Tract").
+- If the deed contains a single description, return ONE tract entry.
 - If the deed contains multiple descriptions (Tract 1, Tract 2, FIRST PARCEL/SECOND PARCEL, Parcel A/B, etc.), return one entry per description.
-- NEVER return an empty tracts array if the deed contains any boundary description, metes-and-bounds, or land conveyance.
 - NEVER include bearings, distances, courses, "thence ...", points, or lines.
 - "snippet" is for visual recognition only — keep it ~200 chars max.
+- If you genuinely cannot find any tract, return "tracts": [].
 
 DEED TEXT:
 ${file.content || '(no text — see attached pages)'}`;
@@ -2196,14 +2196,7 @@ ${file.content || '(no text — see attached pages)'}`;
         }
     }
 
-    const fallback: DeedSummary = {
-        fileName: file.name,
-        tracts: [{
-            tractId: 'Main Parcel',
-            tractName: file.name.replace(/\.[^/.]+$/, ''),
-            snippet: file.content ? file.content.trim().slice(0, 300) : undefined,
-        }],
-    };
+    const fallback: DeedSummary = { fileName: file.name, tracts: [] };
 
     try {
         const response = await ai.models.generateContent({
@@ -2216,49 +2209,7 @@ ${file.content || '(no text — see attached pages)'}`;
         // Strip accidental markdown fences if the model misbehaves.
         const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
         const parsed = JSON.parse(cleaned);
-
-        const rawTracts: any[] = Array.isArray(parsed?.tracts)
-            ? parsed.tracts
-            : Array.isArray(parsed?.parcels)
-            ? parsed.parcels
-            : parsed?.tract && typeof parsed.tract === 'object'
-            ? [parsed.tract]
-            : parsed?.parcel && typeof parsed.parcel === 'object'
-            ? [parsed.parcel]
-            : Array.isArray(parsed?.descriptions)
-            ? parsed.descriptions
-            : [];
-
-        let mappedTracts = rawTracts.map((t: any, i: number) => {
-            const rawId = (typeof t.tractId === 'string' && t.tractId.trim())
-                || (typeof t.id === 'string' && t.id.trim())
-                || (typeof t.name === 'string' && t.name.trim())
-                || (typeof t.parcelId === 'string' && t.parcelId.trim())
-                || (rawTracts.length === 1 ? 'Main Parcel' : `Tract ${i + 1}`);
-            return {
-                tractId: rawId,
-                tractName: typeof t.tractName === 'string' ? t.tractName : (typeof t.name === 'string' ? t.name : undefined),
-                sourcePage: typeof t.sourcePage === 'number' ? t.sourcePage : undefined,
-                snippet: typeof t.snippet === 'string' ? t.snippet.slice(0, 400) : undefined,
-                grantor: typeof t.grantor === 'string' ? t.grantor : undefined,
-                grantee: typeof t.grantee === 'string' ? t.grantee : (typeof t.owner === 'string' ? t.owner : undefined),
-                parcelId: typeof t.parcelId === 'string' ? t.parcelId : undefined,
-                acreage: typeof t.acreage === 'string' ? t.acreage : undefined,
-            };
-        });
-
-        // If no tracts were extracted, but the deed has text or metadata, create a fallback single description tract
-        if (mappedTracts.length === 0 && (file.content?.trim() || file.fileData || file.rasterImageData)) {
-            mappedTracts = [{
-                tractId: parsed?.parcelId ? `Parcel ${parsed.parcelId}` : 'Main Parcel',
-                tractName: parsed?.owner ? `${parsed.owner} Property` : file.name.replace(/\.[^/.]+$/, ''),
-                snippet: file.content ? file.content.trim().slice(0, 300) : undefined,
-                grantor: typeof parsed?.grantor === 'string' ? parsed.grantor : undefined,
-                grantee: typeof parsed?.owner === 'string' ? parsed.owner : undefined,
-                parcelId: typeof parsed?.parcelId === 'string' ? parsed.parcelId : undefined,
-            }];
-        }
-
+        const tracts = Array.isArray(parsed?.tracts) ? parsed.tracts : [];
         return {
             fileName: file.name,
             owner: typeof parsed?.owner === 'string' ? parsed.owner : undefined,
@@ -2266,10 +2217,21 @@ ${file.content || '(no text — see attached pages)'}`;
             parcelId: typeof parsed?.parcelId === 'string' ? parsed.parcelId : undefined,
             book: typeof parsed?.book === 'string' ? parsed.book : undefined,
             page: typeof parsed?.page === 'string' ? parsed.page : undefined,
-            tracts: mappedTracts,
+            tracts: tracts
+                .filter((t: any) => t && typeof t.tractId === 'string' && t.tractId.trim())
+                .map((t: any, i: number) => ({
+                    tractId: String(t.tractId).trim() || `Tract ${i + 1}`,
+                    tractName: typeof t.tractName === 'string' ? t.tractName : undefined,
+                    sourcePage: typeof t.sourcePage === 'number' ? t.sourcePage : undefined,
+                    snippet: typeof t.snippet === 'string' ? t.snippet.slice(0, 400) : undefined,
+                    grantor: typeof t.grantor === 'string' ? t.grantor : undefined,
+                    grantee: typeof t.grantee === 'string' ? t.grantee : undefined,
+                    parcelId: typeof t.parcelId === 'string' ? t.parcelId : undefined,
+                    acreage: typeof t.acreage === 'string' ? t.acreage : undefined,
+                })),
         };
     } catch (e) {
-        console.warn('[summarizeDeed] failed — returning fallback summary:', e);
+        console.warn('[summarizeDeed] failed — returning empty summary:', e);
         return fallback;
     }
 };

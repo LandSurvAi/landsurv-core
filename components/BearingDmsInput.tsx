@@ -92,23 +92,23 @@ const BearingDmsInput: React.FC<Props> = ({ value, onCommit, inputRefs, rowKey }
         }
     };
 
-    const baseInput =
-        'w-9 h-7 bg-gray-950 border border-gray-600 hover:border-gray-500 rounded-md px-1 py-0.5 font-mono text-xs font-bold text-white text-center placeholder-gray-500 shadow-inner focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400 transition-all light-theme:bg-white light-theme:border-gray-400 light-theme:text-gray-950';
-
-    const quadBtn = (color: 'rose' | 'cyan') =>
-        `w-7 h-7 flex items-center justify-center rounded-md text-xs font-black font-mono shadow-sm transition-all active:scale-95 select-none ${
-            color === 'rose'
-                ? 'bg-rose-600 hover:bg-rose-500 text-white border border-rose-300/60 shadow-rose-950/50'
-                : 'bg-cyan-600 hover:bg-cyan-500 text-white border border-cyan-300/60 shadow-cyan-950/50'
+    const baseInput = 'w-7 bg-gray-800 border border-gray-600 rounded px-0.5 py-0.5 font-mono text-[11px] text-gray-200 text-center focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500';
+    const quadBtn = (active: boolean, color: 'rose' | 'cyan') =>
+        `w-5 h-5 flex items-center justify-center rounded text-[11px] font-bold font-mono transition-colors ${
+            active
+                ? color === 'rose'
+                    ? 'bg-rose-600/80 text-white'
+                    : 'bg-cyan-600/80 text-white'
+                : 'bg-gray-700/60 text-gray-400 hover:bg-gray-600'
         }`;
 
     return (
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
             <button
                 type="button"
                 onClick={toggleNs}
-                className={quadBtn(local.ns === 'N' ? 'cyan' : 'rose')}
-                title="Toggle North / South (N/S)"
+                className={quadBtn(true, local.ns === 'N' ? 'cyan' : 'rose')}
+                title="Toggle N/S"
             >
                 {local.ns}
             </button>
@@ -122,9 +122,8 @@ const BearingDmsInput: React.FC<Props> = ({ value, onCommit, inputRefs, rowKey }
                 placeholder="00"
                 spellCheck={false}
                 inputMode="decimal"
-                aria-label="Bearing degrees"
             />
-            <span className="text-gray-200 text-sm font-black px-0.5 select-none light-theme:text-gray-700">°</span>
+            <span className="text-gray-500 text-[10px]">°</span>
             <input
                 ref={mRef}
                 value={local.m}
@@ -135,9 +134,8 @@ const BearingDmsInput: React.FC<Props> = ({ value, onCommit, inputRefs, rowKey }
                 placeholder="00"
                 spellCheck={false}
                 inputMode="decimal"
-                aria-label="Bearing minutes"
             />
-            <span className="text-gray-200 text-sm font-black px-0.5 select-none light-theme:text-gray-700">&apos;</span>
+            <span className="text-gray-500 text-[10px]">'</span>
             <input
                 ref={sRef}
                 value={local.s}
@@ -147,14 +145,13 @@ const BearingDmsInput: React.FC<Props> = ({ value, onCommit, inputRefs, rowKey }
                 placeholder="00"
                 spellCheck={false}
                 inputMode="decimal"
-                aria-label="Bearing seconds"
             />
-            <span className="text-gray-200 text-sm font-black px-0.5 select-none light-theme:text-gray-700">&quot;</span>
+            <span className="text-gray-500 text-[10px]">"</span>
             <button
                 type="button"
                 onClick={toggleEw}
-                className={quadBtn(local.ew === 'E' ? 'cyan' : 'rose')}
-                title="Toggle East / West (E/W)"
+                className={quadBtn(true, local.ew === 'E' ? 'cyan' : 'rose')}
+                title="Toggle E/W"
             >
                 {local.ew}
             </button>

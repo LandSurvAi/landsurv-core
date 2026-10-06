@@ -299,7 +299,7 @@ import {
 import { DEFAULT_SETTINGS, COMPATIBLE_VERSIONS, isVersionCompatible } from './utils/sessionDefaults.ts';
 import { mergeSettingsWithDefaults, migrateMessage } from './utils/sessionMigration.ts';
 // FIX: Added ProfileIcon to the imports for the new Profile Agent.
-import { HomeIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon, ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon } from './components/icons.tsx';
+import { HomeIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon } from './components/icons.tsx';
 import { suggestedQuestionsText } from './assets/suggested_questions.ts';
 import { userSuggestedQuestionsText } from './assets/user_suggested_questions.ts';
 import { deedSuggestedQuestionsText } from './assets/deed_suggested_questions.ts';
@@ -316,6 +316,7 @@ import ClosureReportPanel from './components/ClosureReportPanel.tsx';
 import LegalWriterPanel from './components/LegalWriterPanel.tsx';
 import LayerManagerPanel, { type CadLayerEntry } from './components/LayerManagerPanel.tsx';
 import BoundaryEditor from './components/BoundaryEditor.tsx';
+import DeedSummaryPanel from './components/DeedSummaryPanel.tsx';
 import StandardsComplianceSummaryPanel from './components/StandardsComplianceSummaryPanel.tsx';
 
 
@@ -1377,10 +1378,6 @@ const AppContent = () => {
   // undoable even though the points and lines it produces are.
   useHistorySlice('boundaryFiles', boundaryFiles, setBoundaryFiles);
   const [isBoundaryEditorVisible, setIsBoundaryEditorVisible] = useState(false);
-  /** Whether the Boundary Dialog is docked inside the Boundary Agent chat or floating over the canvas. Defaults to true (docked). */
-  const [isBoundaryDialogDocked, setIsBoundaryDialogDocked] = useState<boolean>(true);
-  /** Whether the Boundary Dialog is minimized when docked in chat. Defaults to false (visible by default). */
-  const [isBoundaryDialogMinimized, setIsBoundaryDialogMinimized] = useState<boolean>(false);
   /** Bumped each time the user clicks "Align" in the BoundaryEditor. The token
    *  forces DrawingCanvas to re-arm the boundary-align tool even when the same
    *  movableBfId is requested twice in a row. */
@@ -3591,9 +3588,6 @@ const AppContent = () => {
       return;
     }
     try {
-      // Clear empty Manual Boundary placeholder so the real deed geometry takes center stage
-      setBoundaryFiles(prev => prev.filter(f => f.name !== 'Manual Boundary' || f.calls.some(c => Boolean(c.bearing && c.distance))));
-
       if (initializedAgents.has(AgentType.DEED_READER)) {
             if (deedFile) {
                 setGeneratedFiles(prev => [...prev, { ...deedFile, name: `(Archived) ${deedFile.name}` }]);
@@ -3609,9 +3603,7 @@ const AppContent = () => {
                 text: `The <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">Boundary Agent</strong> has been reset with the new file <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">"${file.name}"</strong>.`
             }]);
             setIsAddingData(false);
-            setIsBoundaryEditorVisible(true);
-            setIsBoundaryEditorButtonPulsing(false);
-            // Re-run deed summarizer for the replacement file.
+            // Re-run cheap deed summarizer for the replacement file.
             setDeedSummaryFileIds(['__pending__']);
             setDeedSummary(null);
             setComputingTractIds(new Set());
@@ -3621,27 +3613,8 @@ const AppContent = () => {
               try {
                 const summary = await summarizeDeed(file, CURRENT_GEMINI_MODEL, settings.userApiKey);
                 setDeedSummary(summary);
-                if (summary.tracts.length > 0) {
-                  logActionToFieldbook(`Deed summary: detected ${summary.tracts.length} description(s) — ${summary.tracts.map(t => t.tractId).join(', ')}.`);
-                }
-                // When a deed only has one description, auto-extract the boundary calls immediately
-                if (summary.tracts.length <= 1) {
-                  const singleTract = summary.tracts[0];
-                  const tractId = singleTract?.tractId || 'Main Parcel';
-                  pendingTractIdRef.current = tractId;
-                  setComputingTractIds(new Set([tractId]));
-                  const pageHint = singleTract?.sourcePage != null ? ` (source page ${singleTract.sourcePage})` : '';
-                  const nameHint = singleTract?.tractName ? ` ("${singleTract.tractName}")` : '';
-                  logActionToFieldbook(`Single deed description detected (${tractId}) — automatically computing boundary geometry...`);
-                  void handleSendMessageRef.current?.(
-                    `Extract ONLY ${tractId}${nameHint}${pageHint} from this deed. ` +
-                    `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${tractId}", points, lines }]) for this tract only.`,
-                    AgentType.DEED_READER
-                  );
-                }
               } catch (err) {
                 console.warn('[handleDeedSubmitted/replace] summarizeDeed threw:', err);
-                void handleSendMessageRef.current?.('Extract all boundary descriptions from this deed.', AgentType.DEED_READER);
               }
             })();
             return;
@@ -3670,11 +3643,10 @@ const AppContent = () => {
       setIsPointListButtonPulsing(false);
       showView('canvas');
 
-      // Show the unified Boundary & Deed Dialog immediately
-      setIsBoundaryEditorVisible(true);
-      setIsBoundaryEditorButtonPulsing(false);
-
-      // Populate summary and auto-compute if single-description deed
+      // Show the Deed Summary panel immediately � we will populate it
+      // asynchronously with the cheap `summarizeDeed()` result so the user
+      // sees a tract list (with per-tract Compute Preview buttons) BEFORE
+      // any heavy geometry parse runs.
       setDeedSummaryFileIds(['__pending__']);
       setDeedSummary(null);
       setComputingTractIds(new Set());
@@ -3685,26 +3657,12 @@ const AppContent = () => {
           const summary = await summarizeDeed(file, CURRENT_GEMINI_MODEL, settings.userApiKey);
           setDeedSummary(summary);
           if (summary.tracts.length > 0) {
-            logActionToFieldbook(`Deed summary: detected ${summary.tracts.length} description(s) — ${summary.tracts.map(t => t.tractId).join(', ')}.`);
-          }
-          // When a deed only has one description, auto-extract the boundary calls immediately
-          if (summary.tracts.length <= 1) {
-            const singleTract = summary.tracts[0];
-            const tractId = singleTract?.tractId || 'Main Parcel';
-            pendingTractIdRef.current = tractId;
-            setComputingTractIds(new Set([tractId]));
-            const pageHint = singleTract?.sourcePage != null ? ` (source page ${singleTract.sourcePage})` : '';
-            const nameHint = singleTract?.tractName ? ` ("${singleTract.tractName}")` : '';
-            logActionToFieldbook(`Single deed description detected (${tractId}) — automatically computing boundary geometry...`);
-            void handleSendMessageRef.current?.(
-              `Extract ONLY ${tractId}${nameHint}${pageHint} from this deed. ` +
-              `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${tractId}", points, lines }]) for this tract only.`,
-              AgentType.DEED_READER
-            );
+            logActionToFieldbook(`Deed summary: detected ${summary.tracts.length} tract${summary.tracts.length === 1 ? '' : 's'} � ${summary.tracts.map(t => t.tractId).join(', ')}.`);
+          } else {
+            logActionToFieldbook('Deed summary returned no tracts � use "Compute All" to force a full parse.');
           }
         } catch (err) {
           console.warn('[handleDeedSubmitted] summarizeDeed threw:', err);
-          void handleSendMessageRef.current?.('Extract all boundary descriptions from this deed.', AgentType.DEED_READER);
         }
       })();
     } catch (err) {
@@ -4044,7 +4002,7 @@ const AppContent = () => {
       // appeared off-screen). The Boundary Editor's POB row + Draw
       // Boundary's (0,0) fallback already cover the manual-entry case.
 
-      // Create an empty boundary file and show the Boundary Dialog immediately.
+      // Create an empty boundary file and hint the toolbar editor button.
       const blankFile: import('./types.ts').BoundaryFile = {
         id: `bf-blank-${Date.now()}`,
         name: 'Manual Boundary',
@@ -4052,9 +4010,8 @@ const AppContent = () => {
         calls: [],
       };
       setBoundaryFiles(prev => [...prev, blankFile]);
-      setActiveBoundaryFileId(blankFile.id);
-      setIsBoundaryEditorVisible(true);
-      setIsBoundaryEditorButtonPulsing(false);
+      setIsBoundaryEditorVisible(false);
+      setIsBoundaryEditorButtonPulsing(true);
 
       pushNavigation(AgentType.DEED_READER, 'canvas');
       setActiveAgent(AgentType.DEED_READER);
@@ -10843,8 +10800,8 @@ const AppContent = () => {
                 // preview. Without this the canvas isn't in the DOM and the
                 // boundaryFiles prop has nowhere to be drawn.
                 showView('canvas');
-                setIsBoundaryEditorVisible(true);
-                setIsBoundaryEditorButtonPulsing(false);
+                setIsBoundaryEditorVisible(false);
+                setIsBoundaryEditorButtonPulsing(true);
                 if (newFiles.length === 1) {
                   logActionToFieldbook(`Created boundary file "${newFiles[0].name}" with ${newFiles[0].calls.length} calls.`);
                 } else {
@@ -11927,16 +11884,10 @@ const AppContent = () => {
     // boundary editor open" � clear the other button's pulse so switching
     // agents doesn't leave a stale hint flashing on an unrelated toolbar icon.
     if (agent !== AgentType.POINT_EDITOR) setIsPointListButtonPulsing(false);
-    if (agent !== AgentType.DEED_READER) {
-      setIsBoundaryEditorButtonPulsing(false);
-    } else if (boundaryFiles.length > 0 || deedFile || deedSummary) {
-      setIsBoundaryEditorVisible(true);
-      setIsBoundaryEditorButtonPulsing(false);
-    }
+    if (agent !== AgentType.DEED_READER) setIsBoundaryEditorButtonPulsing(false);
     
-    // Ensure chat panel is visible for agents with tools or docked workspace panels
+    // Ensure chat panel is visible for agents with tools
     const agentsWithTools = [
-      AgentType.DEED_READER,
       AgentType.COGO_AGENT,
       AgentType.CENTERLINE_STATIONING,
       AgentType.CONTOURING_AGENT,
@@ -15479,100 +15430,6 @@ const AppContent = () => {
     </>
   );
 
-  const activeBoundaryFile = boundaryFiles.find(f => f.id === activeBoundaryFileId) ?? (boundaryFiles.length > 0 ? boundaryFiles[boundaryFiles.length - 1] : undefined);
-  const activeBoundaryCallsCount = activeBoundaryFile?.calls?.length ?? 0;
-
-  const renderBoundaryEditor = (docked: boolean) => (
-    <BoundaryEditor
-      boundaryFiles={boundaryFiles}
-      pointMap={pointMap}
-      reservedRight={isDesktop && isChatPanelVisible ? chatPanelWidth : 0}
-      reservedBottom={!isDesktop && isChatPanelVisible ? Math.floor(window.innerHeight / 2) : 0}
-      onUpdateCall={handleBoundaryCallUpdate}
-      onAddCall={handleBoundaryRowAdd}
-      onRemoveCall={handleBoundaryRowRemove}
-      onGenerateClosureReport={handleGenerateBoundaryClosureReport}
-      onInvestigateClosure={handleInvestigateClosure}
-      onWriteLegal={handleWriteBoundaryLegal}
-      onDrawToLinework={handleDrawBoundaryToLinework}
-      onClose={() => {
-        setIsBoundaryEditorVisible(false);
-        setDeedSummaryFileIds([]);
-        setDeedSummary(null);
-      }}
-      onSaveToFileManager={handleSaveBoundaryToFileManager}
-      onRenameFile={handleRenameBoundaryFile}
-      onToggleVisibility={handleToggleBoundaryVisibility}
-      onLoadFile={handleLoadBoundaryFile}
-      onTransformChange={handleBoundaryTransformChange}
-      onPobChange={handleBoundaryPobChange}
-      selectedPointNumber={selectedPoint?.pointNumber}
-      selectedFileId={activeBoundaryFileId}
-      onSelectFile={setActiveBoundaryFileId}
-      showRotatedBearings={showRotatedBearings}
-      onShowRotatedBearingsChange={setShowRotatedBearings}
-      onAssociatePoints={handleAssociatePointsToBoundary}
-      onDisassociatePoint={handleDisassociatePointFromBoundary}
-      onBestFitToPoints={handleBestFitBoundaryToPoints}
-      onAlignToOtherBoundary={(movableBfId) => setBoundaryAlignRequest({ token: Date.now(), movableBfId })}
-      onAlignCornersToPoints={(bfId) => {
-        setActiveBoundaryFileId(bfId);
-        setBoundaryCornerAlignRequest({ token: Date.now(), movableBfId: bfId });
-      }}
-      summary={deedSummary ?? undefined}
-      pendingFileName={boundaryFiles.length === 0 && !deedSummary ? (deedFile?.name ?? 'Deed') : undefined}
-      computingTractIds={computingTractIds}
-      onComputeTract={(tractId, pob) => {
-        if (isFreeTierTimeLocked) {
-          setIsLockDismissed(false);
-          setShowHostCostReminder(true);
-          return;
-        }
-        const t = deedSummary?.tracts.find(x => x.tractId === tractId);
-        if (!t) return;
-        pendingTractIdRef.current = tractId;
-        pendingTractPobRef.current = pob;
-        setComputingTractIds(prev => new Set(prev).add(tractId));
-        const pageHint = t.sourcePage != null ? ` (source page ${t.sourcePage})` : '';
-        const nameHint = t.tractName ? ` ("${t.tractName}")` : '';
-        const pobHint = pob
-          ? ` Start the boundary at the Point of Beginning E=${pob.easting.toFixed(4)}, N=${pob.northing.toFixed(4)}.`
-          : '';
-        void handleSendMessage(
-          `Extract ONLY ${t.tractId}${nameHint}${pageHint} from this deed. ` +
-          `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${t.tractId}", points, lines }]) for this tract only. ` +
-          `Do not include any other tract.` +
-          pobHint
-        );
-      }}
-      onComputeAll={() => {
-        if (isFreeTierTimeLocked) {
-          setIsLockDismissed(false);
-          setShowHostCostReminder(true);
-          return;
-        }
-        pendingTractIdRef.current = null;
-        pendingTractPobRef.current = null;
-        if (deedSummary) {
-          setComputingTractIds(new Set(deedSummary.tracts.map(t => t.tractId)));
-        }
-        void handleSendMessage('Extract all boundary descriptions from this deed.');
-      }}
-      onParseNow={() => {
-        if (isFreeTierTimeLocked) {
-          setIsLockDismissed(false);
-          setShowHostCostReminder(true);
-          return;
-        }
-        void handleSendMessage('Extract all boundary descriptions from this deed.');
-      }}
-      isDocked={docked}
-      onToggleDock={() => setIsBoundaryDialogDocked(!docked)}
-      isMinimized={isBoundaryDialogMinimized}
-      onToggleMinimize={() => setIsBoundaryDialogMinimized(prev => !prev)}
-    />
-  );
-
   // ============================================================================
   // REFACTORING: Removed FileStateProvider from here - now in App wrapper
   // ============================================================================
@@ -16032,19 +15889,9 @@ const AppContent = () => {
                                         isPointListButtonPulsing={isPointListButtonPulsing}
                                         onOpenBoundaryEditor={() => {
                                             setIsBoundaryEditorButtonPulsing(false);
-                                            if (!isBoundaryEditorVisible) {
-                                                setIsBoundaryEditorVisible(true);
-                                                setIsBoundaryDialogMinimized(false);
-                                                if (isBoundaryDialogDocked) setIsChatPanelVisible(true);
-                                            } else {
-                                                if (isBoundaryDialogDocked && isChatPanelVisible) {
-                                                    setIsBoundaryDialogMinimized(p => !p);
-                                                } else {
-                                                    setIsBoundaryEditorVisible(p => !p);
-                                                }
-                                            }
+                                            setIsBoundaryEditorVisible(p => !p);
                                         }}
-                                        isBoundaryEditorOpen={isBoundaryEditorVisible && (!isBoundaryDialogDocked || !isBoundaryDialogMinimized)}
+                                        isBoundaryEditorOpen={isBoundaryEditorVisible}
                                         isBoundaryEditorButtonPulsing={isBoundaryEditorButtonPulsing}
                                         onOpenShrinkwrap={handleOpenShrinkwrapFromCanvas}
                                         isShrinkwrapOpen={isShrinkwrapPanelVisible}
@@ -16342,10 +16189,125 @@ const AppContent = () => {
                                         );
                                     })()}
                                     {/* Boundary Editor overlay � shown when there are boundary files */}
-                                    {/* Boundary Editor: Render floating when popped out or when chat panel is closed */}
-                                    {isBoundaryEditorVisible && (boundaryFiles.length > 0 || deedSummaryFileIds.length > 0 || deedSummary || deedFile) && (!isBoundaryDialogDocked || !isChatPanelVisible || activeAgent !== AgentType.DEED_READER) && (
-                                        renderBoundaryEditor(false)
+                                    {isBoundaryEditorVisible && boundaryFiles.length > 0 && (
+                                        <BoundaryEditor
+                                            boundaryFiles={boundaryFiles}
+                                            pointMap={pointMap}
+                                          reservedRight={isDesktop && isChatPanelVisible ? chatPanelWidth : 0}
+                                          reservedBottom={!isDesktop && isChatPanelVisible ? Math.floor(window.innerHeight / 2) : 0}
+                                            onUpdateCall={handleBoundaryCallUpdate}
+                                            onAddCall={handleBoundaryRowAdd}
+                                            onRemoveCall={handleBoundaryRowRemove}
+                                            onGenerateClosureReport={handleGenerateBoundaryClosureReport}
+                                            onInvestigateClosure={handleInvestigateClosure}
+                                            onWriteLegal={handleWriteBoundaryLegal}
+                                            onDrawToLinework={handleDrawBoundaryToLinework}
+                                            onClose={() => setIsBoundaryEditorVisible(false)}
+                                            onSaveToFileManager={handleSaveBoundaryToFileManager}
+                                            onRenameFile={handleRenameBoundaryFile}
+                                            onToggleVisibility={handleToggleBoundaryVisibility}
+                                            onLoadFile={handleLoadBoundaryFile}
+                                            onTransformChange={handleBoundaryTransformChange}
+                                            onPobChange={handleBoundaryPobChange}
+                                            selectedPointNumber={selectedPoint?.pointNumber}
+                                            selectedFileId={activeBoundaryFileId}
+                                            onSelectFile={setActiveBoundaryFileId}
+                                            showRotatedBearings={showRotatedBearings}
+                                            onShowRotatedBearingsChange={setShowRotatedBearings}
+                                            onAssociatePoints={handleAssociatePointsToBoundary}
+                                            onDisassociatePoint={handleDisassociatePointFromBoundary}
+                                            onBestFitToPoints={handleBestFitBoundaryToPoints}
+                                            onAlignToOtherBoundary={(movableBfId) => setBoundaryAlignRequest({ token: Date.now(), movableBfId })}
+                                            onAlignCornersToPoints={(bfId) => {
+                                                setActiveBoundaryFileId(bfId);
+                                                setBoundaryCornerAlignRequest({ token: Date.now(), movableBfId: bfId });
+                                            }}
+                                        />
                                     )}
+                                    {/* Deed Summary Panel � shown immediately on deed upload; pre-parse state until AI extracts calls */}
+                                    {(deedSummaryFileIds.length > 0 || deedSummary) && (() => {
+                                        const summaryFiles = boundaryFiles.filter(f => deedSummaryFileIds.includes(f.id));
+                                        return (
+                                            <DeedSummaryPanel
+                                                files={summaryFiles}
+                                                pendingFileName={summaryFiles.length === 0 && !deedSummary ? (deedFile?.name ?? 'Deed') : undefined}
+                                                summary={deedSummary ?? undefined}
+                                                computingTractIds={computingTractIds}
+                                                onComputeTract={(tractId, pob) => {
+                                                    if (isFreeTierTimeLocked) {
+                                                        setIsLockDismissed(false);
+                                                        setShowHostCostReminder(true);
+                                                        return;
+                                                    }
+                                                    const t = deedSummary?.tracts.find(x => x.tractId === tractId);
+                                                    if (!t) return;
+                                                    pendingTractIdRef.current = tractId;
+                                                    pendingTractPobRef.current = pob;
+                                                    setComputingTractIds(prev => new Set(prev).add(tractId));
+                                                    const pageHint = t.sourcePage != null ? ` (source page ${t.sourcePage})` : '';
+                                                    const nameHint = t.tractName ? ` ("${t.tractName}")` : '';
+                                                    const pobHint = pob
+                                                        ? ` Start the boundary at the Point of Beginning E=${pob.easting.toFixed(4)}, N=${pob.northing.toFixed(4)}.`
+                                                        : '';
+                                                    void handleSendMessage(
+                                                        `Extract ONLY ${t.tractId}${nameHint}${pageHint} from this deed. ` +
+                                                        `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${t.tractId}", points, lines }]) for this tract only. ` +
+                                                        `Do not include any other tract.` +
+                                                        pobHint
+                                                    );
+                                                }}
+                                                onComputeAll={() => {
+                                                    if (isFreeTierTimeLocked) {
+                                                        setIsLockDismissed(false);
+                                                        setShowHostCostReminder(true);
+                                                        return;
+                                                    }
+                                                    pendingTractIdRef.current = null;
+                                                    pendingTractPobRef.current = null;
+                                                    if (deedSummary) {
+                                                        setComputingTractIds(new Set(deedSummary.tracts.map(t => t.tractId)));
+                                                    }
+                                                    void handleSendMessage('Extract all boundary descriptions from this deed.');
+                                                }}
+                                                onParseNow={() => {
+                                                    if (isFreeTierTimeLocked) {
+                                                        setIsLockDismissed(false);
+                                                        setShowHostCostReminder(true);
+                                                        return;
+                                                    }
+                                                    void handleSendMessage('Extract all boundary descriptions from this deed.');
+                                                }}
+                                                pointMap={pointMap}
+                                                selectedPointNumber={selectedPoint?.pointNumber}
+                                                onCompute={(id, pob) => {
+                                                    // v26.05.22.5 � User explicitly clicked "Compute Preview". Switch
+                                                    // to the canvas panel so the DrawingCanvas actually mounts and the
+                                                    // amber overlay can render. Without this the user sees nothing
+                                                    // because the deed-text / PDF panel is occupying the visual area.
+                                                    showView('canvas');
+                                                    // Flip overlay visible and store the optional POB override.
+                                                    // Preserve the user's current viewport; computing a silhouette
+                                                    // must not recenter or change their zoom.
+                                                    setBoundaryFiles(prev => prev.map(f =>
+                                                        f.id === id ? { ...f, hidden: false, pobOverride: pob ?? undefined } : f
+                                                    ));
+                                                }}
+                                                onAssociatePoints={handleAssociatePointsToBoundary}
+                                                onDisassociatePoint={handleDisassociatePointFromBoundary}
+                                                onBestFit={handleBestFitBoundaryToPoints}
+                                                onAlignCorners={(id) => {
+                                                    setActiveBoundaryFileId(id);
+                                                    setBoundaryCornerAlignRequest({ token: Date.now(), movableBfId: id });
+                                                }}
+                                                onCommitDraw={(id) => handleDrawBoundaryToLinework(id)}
+                                                onOpenInEditor={(id) => {
+                                                    setIsBoundaryEditorButtonPulsing(false);
+                                                    setIsBoundaryEditorVisible(true);
+                                                }}
+                                                onClose={() => { setDeedSummaryFileIds([]); setDeedSummary(null); }}
+                                            />
+                                        );
+                                    })()}
                                     </>
                                 ) : activeVisualPanel === 'cutsheet' ? (
                                     <CutSheetPanel ref={cutSheetRef} data={cutSheetData} info={cutSheetInfo} setInfo={setCutSheetInfo} settings={settings} />
@@ -16771,96 +16733,6 @@ const AppContent = () => {
                                         activeAgent === AgentType.GNSS_AGENT ? 'RINEX Tools' :
                                         activeAgent === AgentType.DRONE_AGENT ? 'Drone Tools' :
                                         undefined
-                                    }
-                                    dockedContent={
-                                        activeAgent === AgentType.DEED_READER && isBoundaryEditorVisible && isBoundaryDialogDocked && !isBoundaryDialogMinimized && (boundaryFiles.length > 0 || deedSummaryFileIds.length > 0 || deedSummary || deedFile)
-                                            ? renderBoundaryEditor(true)
-                                            : undefined
-                                    }
-                                    toolsRowAccessories={
-                                        activeAgent === AgentType.DEED_READER ? (
-                                            <div className="flex items-center gap-1.5 flex-wrap">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        if (!isBoundaryDialogDocked) {
-                                                            setIsBoundaryDialogDocked(true);
-                                                            setIsBoundaryDialogMinimized(false);
-                                                            setIsBoundaryEditorVisible(true);
-                                                        } else if (!isBoundaryEditorVisible) {
-                                                            setIsBoundaryEditorVisible(true);
-                                                            setIsBoundaryDialogMinimized(false);
-                                                        } else {
-                                                            setIsBoundaryDialogMinimized(prev => !prev);
-                                                        }
-                                                    }}
-                                                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all border shadow-sm ${
-                                                        !isBoundaryDialogDocked
-                                                            ? 'bg-cyan-950/70 text-cyan-200 border-cyan-500/60 hover:bg-cyan-900/80'
-                                                            : !isBoundaryDialogMinimized && isBoundaryEditorVisible
-                                                                ? 'bg-emerald-950/70 text-emerald-200 border-emerald-500/60 hover:bg-emerald-900/80'
-                                                                : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
-                                                    }`}
-                                                    style={{
-                                                        color: (!isBoundaryDialogMinimized && isBoundaryEditorVisible && isBoundaryDialogDocked) ? (agentThemeColors[activeAgent] || '#34d399') : undefined,
-                                                        borderColor: (!isBoundaryDialogMinimized && isBoundaryEditorVisible && isBoundaryDialogDocked) ? (agentThemeColors[activeAgent] || '#34d399') : undefined,
-                                                    }}
-                                                    title={
-                                                        !isBoundaryDialogDocked
-                                                            ? 'Boundary Dialog is floating on canvas — click to dock into chat'
-                                                            : isBoundaryDialogMinimized || !isBoundaryEditorVisible
-                                                                ? 'Expand Boundary Dialog in chat'
-                                                                : 'Minimize Boundary Dialog next to Tools'
-                                                    }
-                                                >
-                                                    <CourthouseIcon className={`w-4 h-4 ${!isBoundaryDialogDocked ? 'text-cyan-400' : 'text-emerald-400'}`} />
-                                                    <span>Dialog</span>
-                                                    {activeBoundaryCallsCount > 0 && (
-                                                        <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
-                                                            !isBoundaryDialogDocked
-                                                                ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/40'
-                                                                : !isBoundaryDialogMinimized && isBoundaryEditorVisible
-                                                                    ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40'
-                                                                    : 'bg-gray-800 text-gray-400'
-                                                        }`}>
-                                                            {activeBoundaryCallsCount}
-                                                        </span>
-                                                    )}
-                                                    <span className="text-[11px] text-gray-400 font-mono">
-                                                        {!isBoundaryDialogDocked ? 'Float' : (!isBoundaryDialogMinimized && isBoundaryEditorVisible ? '▲' : '▼')}
-                                                    </span>
-                                                </button>
-
-                                                {/* Dedicated Pop Out / Dock in Chat Button */}
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        const nextDocked = !isBoundaryDialogDocked;
-                                                        setIsBoundaryDialogDocked(nextDocked);
-                                                        setIsBoundaryDialogMinimized(false);
-                                                        setIsBoundaryEditorVisible(true);
-                                                    }}
-                                                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-bold transition-all border shadow-sm active:scale-95 ${
-                                                        isBoundaryDialogDocked
-                                                            ? 'bg-cyan-600 hover:bg-cyan-500 text-white border-cyan-400/70 shadow-cyan-950/40'
-                                                            : 'bg-gray-700 hover:bg-gray-600 text-cyan-200 border-gray-600'
-                                                    }`}
-                                                    title={isBoundaryDialogDocked ? "Pop out boundary dialog to floating window on canvas" : "Dock boundary dialog back into chat panel"}
-                                                >
-                                                    {isBoundaryDialogDocked ? (
-                                                        <>
-                                                            <ArrowTopRightOnSquareIcon className="w-4 h-4" />
-                                                            <span>Pop Out</span>
-                                                        </>
-                                                    ) : (
-                                                        <>
-                                                            <ArrowDownOnSquareIcon className="w-4 h-4" />
-                                                            <span>Dock in Chat</span>
-                                                        </>
-                                                    )}
-                                                </button>
-                                            </div>
-                                        ) : undefined
                                     }
                                 />
                             </div>
