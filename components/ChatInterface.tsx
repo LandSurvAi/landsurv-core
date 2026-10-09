@@ -22,6 +22,8 @@ interface ChatInterfaceProps {
   toolsIcon?: React.ReactNode;
   toolsTitle?: string;
   chatBarAccessories?: React.ReactNode;
+  dockedContent?: React.ReactNode;
+  toolsRowAccessories?: React.ReactNode;
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -69,7 +71,23 @@ const themeClasses: { [key in AgentType]?: { gradient: string; accent: string; }
     [AgentType.COGO_AGENT]: { gradient: 'from-violet-500 to-purple-600', accent: 'accent-violet-500' },
 };
 
-export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMessage, onStopGenerating, isLoading, suggestedQuestions, onToggleExpand, thinkingTime, currentModelName, headerControls, toolsContent, toolsIcon, toolsTitle, chatBarAccessories }) => {
+export const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
+  messages, 
+  onSendMessage, 
+  onStopGenerating, 
+  isLoading, 
+  suggestedQuestions, 
+  onToggleExpand, 
+  thinkingTime, 
+  currentModelName, 
+  headerControls, 
+  toolsContent, 
+  toolsIcon, 
+  toolsTitle, 
+  chatBarAccessories,
+  dockedContent,
+  toolsRowAccessories
+}) => {
   const [input, setInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -205,6 +223,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMe
         </div>
       </header>
 
+      {/* Docked workspace panel (e.g. Boundary Dialog) */}
+      {dockedContent && (
+        <div className="flex-shrink-0 border-b border-gray-700/80 bg-gray-900 overflow-hidden flex flex-col shadow-lg transition-all">
+          {dockedContent}
+        </div>
+      )}
+
       <div className="flex-grow overflow-y-auto p-4 space-y-6">
         {messages.map((msg, index) => (
           <div key={index} className={`flex min-w-0 items-start gap-3 ${msg.role === MessageRole.USER ? 'justify-end' : 'justify-start'}`}>
@@ -304,26 +329,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ messages, onSendMe
         )}
 
         {/* Tools Row - Above input */}
-        {toolsContent && (
-          <div className="flex items-center gap-2 mb-2 pl-2">
-            <button
-              onClick={() => setIsToolsDrawerOpen(!isToolsDrawerOpen)}
-              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
-                isToolsDrawerOpen
-                  ? 'bg-gray-700/20 border'
-                  : 'bg-gray-700 hover:bg-gray-600 border border-gray-600'
-              }`}
-              style={{
-                color: agentThemeColors[activeAgent] || '#94a3b8',
-                borderColor: isToolsDrawerOpen ? agentThemeColors[activeAgent] || '#94a3b8' : undefined,
-              }}
-              title="Toggle Tools"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-              </svg>
-              <span>{toolsTitle || 'Tools'}</span>
-            </button>
+        {(toolsContent || toolsRowAccessories) && (
+          <div className="flex items-center gap-2 mb-2 pl-2 flex-wrap">
+            {toolsContent && (
+              <button
+                onClick={() => setIsToolsDrawerOpen(!isToolsDrawerOpen)}
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                  isToolsDrawerOpen
+                    ? 'bg-gray-700/20 border'
+                    : 'bg-gray-700 hover:bg-gray-600 border border-gray-600'
+                }`}
+                style={{
+                  color: agentThemeColors[activeAgent] || '#94a3b8',
+                  borderColor: isToolsDrawerOpen ? agentThemeColors[activeAgent] || '#94a3b8' : undefined,
+                }}
+                title="Toggle Tools"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                </svg>
+                <span>{toolsTitle || 'Tools'}</span>
+              </button>
+            )}
+            {toolsRowAccessories}
           </div>
         )}
 

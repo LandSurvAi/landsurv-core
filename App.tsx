@@ -316,7 +316,6 @@ import ClosureReportPanel from './components/ClosureReportPanel.tsx';
 import LegalWriterPanel from './components/LegalWriterPanel.tsx';
 import LayerManagerPanel, { type CadLayerEntry } from './components/LayerManagerPanel.tsx';
 import BoundaryEditor from './components/BoundaryEditor.tsx';
-import DeedSummaryPanel from './components/DeedSummaryPanel.tsx';
 import StandardsComplianceSummaryPanel from './components/StandardsComplianceSummaryPanel.tsx';
 
 
@@ -1379,6 +1378,10 @@ const AppContent = () => {
   // undoable even though the points and lines it produces are.
   useHistorySlice('boundaryFiles', boundaryFiles, setBoundaryFiles);
   const [isBoundaryEditorVisible, setIsBoundaryEditorVisible] = useState(false);
+  /** Whether the Boundary Dialog is docked inside the Boundary Agent chat or floating over the canvas. Defaults to true (docked). */
+  const [isBoundaryDialogDocked, setIsBoundaryDialogDocked] = useState<boolean>(true);
+  /** Whether the Boundary Dialog is minimized when docked in chat. Defaults to false (visible by default). */
+  const [isBoundaryDialogMinimized, setIsBoundaryDialogMinimized] = useState<boolean>(false);
   /** Bumped each time the user clicks "Align" in the BoundaryEditor. The token
    *  forces DrawingCanvas to re-arm the boundary-align tool even when the same
    *  movableBfId is requested twice in a row. */
@@ -3593,6 +3596,9 @@ const AppContent = () => {
       return;
     }
     try {
+      // Clear empty Manual Boundary placeholder so the real deed geometry takes center stage
+      setBoundaryFiles(prev => prev.filter(f => f.name !== 'Manual Boundary' || f.calls.some(c => Boolean(c.bearing && c.distance))));
+
       if (initializedAgents.has(AgentType.DEED_READER)) {
             if (deedFile) {
                 setGeneratedFiles(prev => [...prev, { ...deedFile, name: `(Archived) ${deedFile.name}` }]);
@@ -3608,7 +3614,9 @@ const AppContent = () => {
                 text: `The <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">Boundary Agent</strong> has been reset with the new file <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">"${file.name}"</strong>.`
             }]);
             setIsAddingData(false);
-            // Re-run cheap deed summarizer for the replacement file.
+            setIsBoundaryEditorVisible(true);
+            setIsBoundaryEditorButtonPulsing(false);
+            // Re-run deed summarizer for the replacement file.
             setDeedSummaryFileIds(['__pending__']);
             setDeedSummary(null);
             setComputingTractIds(new Set());
@@ -3618,8 +3626,27 @@ const AppContent = () => {
               try {
                 const summary = await summarizeDeed(file, CURRENT_GEMINI_MODEL, settings.userApiKey);
                 setDeedSummary(summary);
+                if (summary.tracts.length > 0) {
+                  logActionToFieldbook(`Deed summary: detected ${summary.tracts.length} description(s) — ${summary.tracts.map(t => t.tractId).join(', ')}.`);
+                }
+                // When a deed only has one description, auto-extract the boundary calls immediately
+                if (summary.tracts.length <= 1) {
+                  const singleTract = summary.tracts[0];
+                  const tractId = singleTract?.tractId || 'Main Parcel';
+                  pendingTractIdRef.current = tractId;
+                  setComputingTractIds(new Set([tractId]));
+                  const pageHint = singleTract?.sourcePage != null ? ` (source page ${singleTract.sourcePage})` : '';
+                  const nameHint = singleTract?.tractName ? ` ("${singleTract.tractName}")` : '';
+                  logActionToFieldbook(`Single deed description detected (${tractId}) — automatically computing boundary geometry...`);
+                  void handleSendMessageRef.current?.(
+                    `Extract ONLY ${tractId}${nameHint}${pageHint} from this deed. ` +
+                    `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${tractId}", points, lines }]) for this tract only.`,
+                    AgentType.DEED_READER
+                  );
+                }
               } catch (err) {
                 console.warn('[handleDeedSubmitted/replace] summarizeDeed threw:', err);
+                void handleSendMessageRef.current?.('Extract all boundary descriptions from this deed.', AgentType.DEED_READER);
               }
             })();
             return;
@@ -3648,10 +3675,11 @@ const AppContent = () => {
       setIsPointListButtonPulsing(false);
       showView('canvas');
 
-      // Show the Deed Summary panel immediately � we will populate it
-      // asynchronously with the cheap `summarizeDeed()` result so the user
-      // sees a tract list (with per-tract Compute Preview buttons) BEFORE
-      // any heavy geometry parse runs.
+      // Show the unified Boundary & Deed Dialog immediately
+      setIsBoundaryEditorVisible(true);
+      setIsBoundaryEditorButtonPulsing(false);
+
+      // Populate summary and auto-compute if single-description deed
       setDeedSummaryFileIds(['__pending__']);
       setDeedSummary(null);
       setComputingTractIds(new Set());
@@ -3662,12 +3690,26 @@ const AppContent = () => {
           const summary = await summarizeDeed(file, CURRENT_GEMINI_MODEL, settings.userApiKey);
           setDeedSummary(summary);
           if (summary.tracts.length > 0) {
-            logActionToFieldbook(`Deed summary: detected ${summary.tracts.length} tract${summary.tracts.length === 1 ? '' : 's'} � ${summary.tracts.map(t => t.tractId).join(', ')}.`);
-          } else {
-            logActionToFieldbook('Deed summary returned no tracts � use "Compute All" to force a full parse.');
+            logActionToFieldbook(`Deed summary: detected ${summary.tracts.length} description(s) — ${summary.tracts.map(t => t.tractId).join(', ')}.`);
+          }
+          // When a deed only has one description, auto-extract the boundary calls immediately
+          if (summary.tracts.length <= 1) {
+            const singleTract = summary.tracts[0];
+            const tractId = singleTract?.tractId || 'Main Parcel';
+            pendingTractIdRef.current = tractId;
+            setComputingTractIds(new Set([tractId]));
+            const pageHint = singleTract?.sourcePage != null ? ` (source page ${singleTract.sourcePage})` : '';
+            const nameHint = singleTract?.tractName ? ` ("${singleTract.tractName}")` : '';
+            logActionToFieldbook(`Single deed description detected (${tractId}) — automatically computing boundary geometry...`);
+            void handleSendMessageRef.current?.(
+              `Extract ONLY ${tractId}${nameHint}${pageHint} from this deed. ` +
+              `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${tractId}", points, lines }]) for this tract only.`,
+              AgentType.DEED_READER
+            );
           }
         } catch (err) {
           console.warn('[handleDeedSubmitted] summarizeDeed threw:', err);
+          void handleSendMessageRef.current?.('Extract all boundary descriptions from this deed.', AgentType.DEED_READER);
         }
       })();
     } catch (err) {
@@ -4007,7 +4049,7 @@ const AppContent = () => {
       // appeared off-screen). The Boundary Editor's POB row + Draw
       // Boundary's (0,0) fallback already cover the manual-entry case.
 
-      // Create an empty boundary file and hint the toolbar editor button.
+      // Create an empty boundary file and show the Boundary Dialog immediately.
       const blankFile: import('./types.ts').BoundaryFile = {
         id: `bf-blank-${Date.now()}`,
         name: 'Manual Boundary',
@@ -4015,8 +4057,9 @@ const AppContent = () => {
         calls: [],
       };
       setBoundaryFiles(prev => [...prev, blankFile]);
-      setIsBoundaryEditorVisible(false);
-      setIsBoundaryEditorButtonPulsing(true);
+      setActiveBoundaryFileId(blankFile.id);
+      setIsBoundaryEditorVisible(true);
+      setIsBoundaryEditorButtonPulsing(false);
 
       pushNavigation(AgentType.DEED_READER, 'canvas');
       setActiveAgent(AgentType.DEED_READER);
@@ -10805,8 +10848,8 @@ const AppContent = () => {
                 // preview. Without this the canvas isn't in the DOM and the
                 // boundaryFiles prop has nowhere to be drawn.
                 showView('canvas');
-                setIsBoundaryEditorVisible(false);
-                setIsBoundaryEditorButtonPulsing(true);
+                setIsBoundaryEditorVisible(true);
+                setIsBoundaryEditorButtonPulsing(false);
                 if (newFiles.length === 1) {
                   logActionToFieldbook(`Created boundary file "${newFiles[0].name}" with ${newFiles[0].calls.length} calls.`);
                 } else {
@@ -11889,10 +11932,16 @@ const AppContent = () => {
     // boundary editor open" � clear the other button's pulse so switching
     // agents doesn't leave a stale hint flashing on an unrelated toolbar icon.
     if (agent !== AgentType.POINT_EDITOR) setIsPointListButtonPulsing(false);
-    if (agent !== AgentType.DEED_READER) setIsBoundaryEditorButtonPulsing(false);
+    if (agent !== AgentType.DEED_READER) {
+      setIsBoundaryEditorButtonPulsing(false);
+    } else if (boundaryFiles.length > 0 || deedFile || deedSummary) {
+      setIsBoundaryEditorVisible(true);
+      setIsBoundaryEditorButtonPulsing(false);
+    }
     
-    // Ensure chat panel is visible for agents with tools
+    // Ensure chat panel is visible for agents with tools or docked workspace panels
     const agentsWithTools = [
+      AgentType.DEED_READER,
       AgentType.COGO_AGENT,
       AgentType.CENTERLINE_STATIONING,
       AgentType.CONTOURING_AGENT,
