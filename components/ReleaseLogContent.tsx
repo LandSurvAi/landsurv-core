@@ -2,6 +2,19 @@
 
 const releases = [
     {
+        version: "26.10.09.01",
+        date: "October 9, 2026",
+        highlights: [
+            "🏛️ Boundary Agent Tools Shelf & Panel Docking: Added dedicated 'Deed' and 'GIS' accessory buttons to the tools shelf for the Boundary Agent, enabling quick one-click toggling and seamless switching between the Deed Boundary Editor and County Parcel GIS panel.",
+            "🗺️ County Parcel GIS Multi-Modal Architecture: Overhauled `ParcelPanel` with multi-mode tabs (Query & Fetch, Label Formatting, and Fetched Parcels List), with support for docking directly inside the tools drawer or popping out into a draggable, minimizable floating window with canvas boundary clamping.",
+            "🏷️ Cadastral Parcel Label Formatting: Added configurable parcel label styling controls supporting owner names, parcel IDs, area calculations (acres / sqft), case transformations (uppercase, title case, lowercase), and configurable CAD text styles.",
+            "✨ Homepage Hero & Header Polish: Streamlined `InitialAgentSelection.tsx` with compacted vertical padding so agent cards scroll cleanly under the glassmorphic header, paired with a refreshed cyan tagline: 'Agentic tools for Surveyors and Engineers'.",
+            "📐 FEMA & Bank Linework Reconstruction: Enhanced bank corridor chain repair (`repairBankCorridorChains`) to cluster and group candidate survey points by bank code keys (`TB`, `BB`, `TOE`, `FL`, `EW`, `GB`) and added support for space-separated bank code indices (e.g., `TB 1`).",
+            "🔑 Asynchronous API Key Validation: Made `ApiKeyModal` submission asynchronous and awaited cryptographic hash confirmation (`confirmKey`), eliminating SubtleCrypto race conditions and guaranteeing persistent key storage.",
+            "⚙️ CI & Build Memory Optimization: Increased Node build memory limits to 4GB (`--max-old-space-size=4096`) to eliminate CI heap exhaustion, and updated Cypress preview base URL configuration.",
+        ],
+    },
+    {
         version: "26.10.04.04",
         date: "October 4, 2026",
         highlights: [
