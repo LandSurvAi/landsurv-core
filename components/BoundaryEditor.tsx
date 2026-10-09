@@ -451,35 +451,46 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                 className="flex items-center justify-between px-3 py-2 border-b border-gray-700/50 cursor-grab active:cursor-grabbing"
                 onMouseDown={handleDragStart}
             >
-                <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <TableCellsIcon className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                    {isRenaming ? (
-                        <input
-                            autoFocus
-                            value={renameValue}
-                            onChange={e => setRenameValue(e.target.value)}
-                            onBlur={() => {
-                                if (onRenameFile && renameValue.trim()) onRenameFile(selectedFile.id, renameValue.trim());
-                                setIsRenaming(false);
-                            }}
-                            onKeyDown={e => {
-                                if (e.key === 'Enter') e.currentTarget.blur();
-                                if (e.key === 'Escape') setIsRenaming(false);
-                            }}
-                            className="bg-gray-800 border border-amber-500 text-amber-200 rounded px-1.5 py-0.5 text-xs flex-1 min-w-0 max-w-[180px] focus:outline-none focus:ring-1 focus:ring-amber-500"
-                        />
-                    ) : (
-                        <select
-                            value={selectedFileId}
-                            onChange={e => setSelectedFileId(e.target.value)}
-                            className="bg-gray-800 border border-gray-600 text-gray-200 rounded px-1 py-0.5 text-xs flex-1 min-w-0 max-w-[180px]"
-                        >
-                            {boundaryFiles.map(f => (
-                                <option key={f.id} value={f.id}>
-                                    {f.hidden ? '○ ' : '● '}{f.name}
-                                </option>
-                            ))}
-                        </select>
+                <div className="flex items-center gap-2 min-w-0 flex-1 mr-2 overflow-hidden">
+                    <CourthouseIcon className="w-5 h-5 text-emerald-400 shrink-0" />
+                    <div className="flex items-baseline gap-1.5 shrink-0">
+                        <h2 className="text-sm font-extrabold tracking-tight text-white light-theme:text-gray-900 whitespace-nowrap">
+                            Boundary<span className="text-cyan-400">Agent</span>
+                        </h2>
+                    </div>
+
+                    {/* Boundary file selector / tract switcher */}
+                    {boundaryFiles.length > 0 && selectedFile && (
+                        <div className="min-w-0 flex-1 max-w-[180px] overflow-hidden ml-1">
+                            {isRenaming ? (
+                                <input
+                                    autoFocus
+                                    value={renameValue}
+                                    onChange={e => setRenameValue(e.target.value)}
+                                    onBlur={() => {
+                                        if (onRenameFile && renameValue.trim() && selectedFile) onRenameFile(selectedFile.id, renameValue.trim());
+                                        setIsRenaming(false);
+                                    }}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter') e.currentTarget.blur();
+                                        if (e.key === 'Escape') setIsRenaming(false);
+                                    }}
+                                    className="bg-gray-950 border border-cyan-500 text-cyan-200 rounded-lg px-2.5 py-1 text-xs w-full focus:outline-none focus:ring-1 focus:ring-cyan-500 shadow-sm"
+                                />
+                            ) : (
+                                <select
+                                    value={selectedFileId}
+                                    onChange={e => setSelectedFileId(e.target.value)}
+                                    className="bg-gray-900 hover:bg-gray-850 border border-gray-700/80 hover:border-gray-600 text-gray-200 rounded-lg px-2.5 py-1 text-xs w-full min-w-0 truncate focus:outline-none focus:ring-1 focus:ring-cyan-500 font-medium cursor-pointer shadow-sm transition-colors light-theme:bg-gray-200 light-theme:border-gray-300 light-theme:text-gray-900"
+                                >
+                                    {boundaryFiles.map(f => (
+                                        <option key={f.id} value={f.id}>
+                                            {f.hidden ? '○ ' : '● '}{f.name} ({f.calls.length} calls)
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
+                        </div>
                     )}
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0 ml-2">
@@ -488,11 +499,16 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                         <>
                             <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleLoadCSV} />
                             <button
-                                onClick={() => fileInputRef.current?.click()}
-                                className="p-1 rounded hover:bg-gray-700 text-gray-400 hover:text-blue-400 transition-colors"
-                                title="Load boundary from CSV file"
+                                onClick={onToggleDock}
+                                className="p-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-cyan-400 transition-colors light-theme:hover:bg-gray-200"
+                                title={isDocked ? 'Pop out boundary dialog to a floating window on canvas' : 'Dock boundary dialog into Boundary Agent chat'}
+                                aria-label={isDocked ? 'Pop out boundary dialog' : 'Dock boundary dialog'}
                             >
-                                <FolderIcon className="w-3.5 h-3.5" />
+                                {isDocked ? (
+                                    <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+                                ) : (
+                                    <ArrowDownOnSquareIcon className="w-4 h-4" />
+                                )}
                             </button>
                         </>
                     )}

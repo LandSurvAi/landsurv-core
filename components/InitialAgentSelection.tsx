@@ -2304,7 +2304,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
         WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 60%, transparent 100%)',
         maskImage: 'linear-gradient(to bottom, black 0%, black 60%, transparent 100%)'
       }}>
-        <div className="backdrop-blur-md bg-gradient-to-b from-gray-900/80 via-gray-900/40 to-gray-900/5 p-4 pt-12 md:p-8 pb-24">
+        <div className="backdrop-blur-md bg-gradient-to-b from-gray-900/80 via-gray-900/40 to-gray-900/5 p-4 pt-12 md:p-8 pb-14">
           <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tighter leading-none text-gray-200 text-center mb-4">
               <span className="inline-flex items-center gap-2 align-middle">
               <span>Land<span className="text-cyan-400">Surv</span><span className="text-green-400">.ai</span><span className="relative inline-block"><sup>™</sup>{isNewYearsTheme() && (
@@ -2411,20 +2411,15 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
               </a>
               </span>
           </h1>
-          <p className="text-gray-300 max-w-lg mx-auto">
-            The AI-native toolkit for land surveyors and civil engineers.
-          </p>
-          <p className="mt-3 max-w-2xl mx-auto leading-snug">
-            <span className="inline-flex items-center px-3 py-1 rounded-full bg-gray-900/60 border border-gray-700/70 backdrop-blur-sm text-xs sm:text-sm font-medium text-cyan-300 light-theme:bg-white/70 light-theme:border-gray-300 light-theme:text-cyan-700">
-              Agentic CAD built from the ground up, with you in mind.
-            </span>
+          <p className="text-cyan-300 light-theme:text-cyan-700 max-w-lg mx-auto font-medium">
+            Agentic tools for Surveyors and Engineers
           </p>
         </div>
       </div>
 
             {/* Scrollable Cards Container - scrolls under the header */}
       <div className="flex-1 overflow-y-auto scrollbar-hide relative z-20 aesthetic-grid" onScroll={() => setShowScrollIndicator(false)}>
-        <div className="pt-48 pb-8 px-4 md:px-8">
+        <div className="pt-36 pb-8 px-4 md:px-8">
           {/* Menu bar - scrolls with content */}
           <div className="w-full max-w-5xl mx-auto mb-3 flex flex-wrap items-stretch gap-2">
             {onShowC3DConnect && (

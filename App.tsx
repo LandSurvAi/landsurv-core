@@ -1050,6 +1050,7 @@ const AppContent = () => {
     isResizingChat, setIsResizingChat,
     fabPosition, setFabPosition,
     navigationHistory, pushNavigation, goBack, canGoBack,
+    isToolsDrawerOpen, setIsToolsDrawerOpen,
   } = useUIState();
   
   // REFACTORING NOTE: Canvas and geometry state moved to CanvasStateContext
@@ -1557,6 +1558,10 @@ const AppContent = () => {
   // County parcel (tax-boundary) GIS fetch state � Boundary Agent feature.
   const [isFetchingParcels, setIsFetchingParcels] = useState(false);
   const [lastFetchedParcels, setLastFetchedParcels] = useState<import('./services/parcelGisService.ts').ParcelFeatureSummary[]>([]);
+  const [isParcelPanelVisible, setIsParcelPanelVisible] = useState(false);
+  const [isParcelPanelDocked, setIsParcelPanelDocked] = useState(true);
+  const [isParcelPanelMinimized, setIsParcelPanelMinimized] = useState(false);
+  const [activeBoundaryDockedTab, setActiveBoundaryDockedTab] = useState<'dialog' | 'gis'>('dialog');
 
   // REFACTORING NOTE: PDF highlight helper functions moved to CanvasStateContext (see top of component)
   // OLD: const addHighlights = useCallback(...);
@@ -15430,6 +15435,136 @@ const AppContent = () => {
     </>
   );
 
+  const activeBoundaryFile = boundaryFiles.find(f => f.id === activeBoundaryFileId) ?? (boundaryFiles.length > 0 ? boundaryFiles[boundaryFiles.length - 1] : undefined);
+  const activeBoundaryCallsCount = activeBoundaryFile?.calls?.length ?? 0;
+
+  const renderBoundaryEditor = (docked: boolean) => (
+    <BoundaryEditor
+      boundaryFiles={boundaryFiles}
+      pointMap={pointMap}
+      reservedRight={isDesktop && isChatPanelVisible ? chatPanelWidth : 0}
+      reservedBottom={!isDesktop && isChatPanelVisible ? Math.floor(window.innerHeight / 2) : 0}
+      onUpdateCall={handleBoundaryCallUpdate}
+      onAddCall={handleBoundaryRowAdd}
+      onRemoveCall={handleBoundaryRowRemove}
+      onGenerateClosureReport={handleGenerateBoundaryClosureReport}
+      onInvestigateClosure={handleInvestigateClosure}
+      onWriteLegal={handleWriteBoundaryLegal}
+      onDrawToLinework={handleDrawBoundaryToLinework}
+      onClose={() => {
+        setIsBoundaryEditorVisible(false);
+        setDeedSummaryFileIds([]);
+        setDeedSummary(null);
+      }}
+      onSaveToFileManager={handleSaveBoundaryToFileManager}
+      onRenameFile={handleRenameBoundaryFile}
+      onToggleVisibility={handleToggleBoundaryVisibility}
+      onLoadFile={handleLoadBoundaryFile}
+      onTransformChange={handleBoundaryTransformChange}
+      onPobChange={handleBoundaryPobChange}
+      selectedPointNumber={selectedPoint?.pointNumber}
+      selectedFileId={activeBoundaryFileId}
+      onSelectFile={setActiveBoundaryFileId}
+      showRotatedBearings={showRotatedBearings}
+      onShowRotatedBearingsChange={setShowRotatedBearings}
+      onAssociatePoints={handleAssociatePointsToBoundary}
+      onDisassociatePoint={handleDisassociatePointFromBoundary}
+      onBestFitToPoints={handleBestFitBoundaryToPoints}
+      onAlignToOtherBoundary={(movableBfId) => setBoundaryAlignRequest({ token: Date.now(), movableBfId })}
+      onAlignCornersToPoints={(bfId) => {
+        setActiveBoundaryFileId(bfId);
+        setBoundaryCornerAlignRequest({ token: Date.now(), movableBfId: bfId });
+      }}
+      summary={deedSummary ?? undefined}
+      pendingFileName={boundaryFiles.length === 0 && !deedSummary ? (deedFile?.name ?? 'Deed') : undefined}
+      computingTractIds={computingTractIds}
+      onComputeTract={(tractId, pob) => {
+        if (isFreeTierTimeLocked) {
+          setIsLockDismissed(false);
+          setShowHostCostReminder(true);
+          return;
+        }
+        const t = deedSummary?.tracts.find(x => x.tractId === tractId);
+        if (!t) return;
+        pendingTractIdRef.current = tractId;
+        pendingTractPobRef.current = pob;
+        setComputingTractIds(prev => new Set(prev).add(tractId));
+        const pageHint = t.sourcePage != null ? ` (source page ${t.sourcePage})` : '';
+        const nameHint = t.tractName ? ` ("${t.tractName}")` : '';
+        const pobHint = pob
+          ? ` Start the boundary at the Point of Beginning E=${pob.easting.toFixed(4)}, N=${pob.northing.toFixed(4)}.`
+          : '';
+        void handleSendMessage(
+          `Extract ONLY ${t.tractId}${nameHint}${pageHint} from this deed. ` +
+          `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${t.tractId}", points, lines }]) for this tract only. ` +
+          `Do not include any other tract.` +
+          pobHint
+        );
+      }}
+      onComputeAll={() => {
+        if (isFreeTierTimeLocked) {
+          setIsLockDismissed(false);
+          setShowHostCostReminder(true);
+          return;
+        }
+        pendingTractIdRef.current = null;
+        pendingTractPobRef.current = null;
+        if (deedSummary) {
+          setComputingTractIds(new Set(deedSummary.tracts.map(t => t.tractId)));
+        }
+        void handleSendMessage('Extract all boundary descriptions from this deed.');
+      }}
+      onParseNow={() => {
+        if (isFreeTierTimeLocked) {
+          setIsLockDismissed(false);
+          setShowHostCostReminder(true);
+          return;
+        }
+        void handleSendMessage('Extract all boundary descriptions from this deed.');
+      }}
+      isDocked={docked}
+      onToggleDock={() => setIsBoundaryDialogDocked(!docked)}
+      isMinimized={isBoundaryDialogMinimized}
+      onToggleMinimize={() => setIsBoundaryDialogMinimized(prev => !prev)}
+    />
+  );
+
+  const renderParcelPanel = (docked: boolean) => (
+    <ParcelPanel
+      inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
+      parcelLineCount={lines.filter((l: SurveyLine) => l.layer === 'COUNTY-PARCEL').length}
+      lastFetchedParcels={lastFetchedParcels}
+      isFetching={isFetchingParcels}
+      onFetchParcels={handleFetchParcels}
+      onClearParcels={handleClearParcels}
+      parcelLabelFormatter={parcelLabelFormatter}
+      cadTextStyles={parcelCadTextStyles}
+      propertyOwnerCategory={annotationCategories.find(c => c.id === 'property-owners') ?? null}
+      onParcelLabelFormatterChange={setParcelLabelFormatter}
+      isDocked={docked}
+      onToggleDock={() => {
+        if (docked) {
+          setIsParcelPanelDocked(false);
+          setIsParcelPanelVisible(true);
+          setIsParcelPanelMinimized(false);
+        } else {
+          setIsParcelPanelDocked(true);
+          setIsParcelPanelVisible(true);
+          setIsParcelPanelMinimized(false);
+          setActiveBoundaryDockedTab('gis');
+        }
+      }}
+      isMinimized={isParcelPanelMinimized}
+      onToggleMinimize={() => setIsParcelPanelMinimized(prev => !prev)}
+      onClose={() => {
+        setIsParcelPanelVisible(false);
+        setIsParcelPanelDocked(true);
+      }}
+      reservedRight={isDesktop && isChatPanelVisible ? chatPanelWidth : 0}
+      reservedBottom={!isDesktop && isChatPanelVisible ? Math.floor(window.innerHeight / 2) : 0}
+    />
+  );
+
   // ============================================================================
   // REFACTORING: Removed FileStateProvider from here - now in App wrapper
   // ============================================================================
@@ -15889,9 +16024,30 @@ const AppContent = () => {
                                         isPointListButtonPulsing={isPointListButtonPulsing}
                                         onOpenBoundaryEditor={() => {
                                             setIsBoundaryEditorButtonPulsing(false);
-                                            setIsBoundaryEditorVisible(p => !p);
+                                            if (!isBoundaryEditorVisible) {
+                                                setIsBoundaryEditorVisible(true);
+                                                setIsBoundaryDialogMinimized(false);
+                                                if (isBoundaryDialogDocked) setIsChatPanelVisible(true);
+                                            } else {
+                                                if (isBoundaryDialogDocked) {
+                                                    if (!isChatPanelVisible) {
+                                                        setIsChatPanelVisible(true);
+                                                        setIsBoundaryDialogMinimized(false);
+                                                    } else {
+                                                        setIsBoundaryDialogMinimized(p => !p);
+                                                    }
+                                                } else {
+                                                    setIsBoundaryEditorVisible(p => !p);
+                                                }
+                                            }
                                         }}
-                                        isBoundaryEditorOpen={isBoundaryEditorVisible}
+                                        isBoundaryEditorOpen={
+                                            isBoundaryEditorVisible && (
+                                                isBoundaryDialogDocked
+                                                    ? (isChatPanelVisible && !isBoundaryDialogMinimized)
+                                                    : true
+                                            )
+                                        }
                                         isBoundaryEditorButtonPulsing={isBoundaryEditorButtonPulsing}
                                         onOpenShrinkwrap={handleOpenShrinkwrapFromCanvas}
                                         isShrinkwrapOpen={isShrinkwrapPanelVisible}
@@ -16189,125 +16345,15 @@ const AppContent = () => {
                                         );
                                     })()}
                                     {/* Boundary Editor overlay � shown when there are boundary files */}
-                                    {isBoundaryEditorVisible && boundaryFiles.length > 0 && (
-                                        <BoundaryEditor
-                                            boundaryFiles={boundaryFiles}
-                                            pointMap={pointMap}
-                                          reservedRight={isDesktop && isChatPanelVisible ? chatPanelWidth : 0}
-                                          reservedBottom={!isDesktop && isChatPanelVisible ? Math.floor(window.innerHeight / 2) : 0}
-                                            onUpdateCall={handleBoundaryCallUpdate}
-                                            onAddCall={handleBoundaryRowAdd}
-                                            onRemoveCall={handleBoundaryRowRemove}
-                                            onGenerateClosureReport={handleGenerateBoundaryClosureReport}
-                                            onInvestigateClosure={handleInvestigateClosure}
-                                            onWriteLegal={handleWriteBoundaryLegal}
-                                            onDrawToLinework={handleDrawBoundaryToLinework}
-                                            onClose={() => setIsBoundaryEditorVisible(false)}
-                                            onSaveToFileManager={handleSaveBoundaryToFileManager}
-                                            onRenameFile={handleRenameBoundaryFile}
-                                            onToggleVisibility={handleToggleBoundaryVisibility}
-                                            onLoadFile={handleLoadBoundaryFile}
-                                            onTransformChange={handleBoundaryTransformChange}
-                                            onPobChange={handleBoundaryPobChange}
-                                            selectedPointNumber={selectedPoint?.pointNumber}
-                                            selectedFileId={activeBoundaryFileId}
-                                            onSelectFile={setActiveBoundaryFileId}
-                                            showRotatedBearings={showRotatedBearings}
-                                            onShowRotatedBearingsChange={setShowRotatedBearings}
-                                            onAssociatePoints={handleAssociatePointsToBoundary}
-                                            onDisassociatePoint={handleDisassociatePointFromBoundary}
-                                            onBestFitToPoints={handleBestFitBoundaryToPoints}
-                                            onAlignToOtherBoundary={(movableBfId) => setBoundaryAlignRequest({ token: Date.now(), movableBfId })}
-                                            onAlignCornersToPoints={(bfId) => {
-                                                setActiveBoundaryFileId(bfId);
-                                                setBoundaryCornerAlignRequest({ token: Date.now(), movableBfId: bfId });
-                                            }}
-                                        />
+                                    {/* Boundary Editor: Render floating ONLY when explicitly popped out */}
+                                    {isBoundaryEditorVisible && (boundaryFiles.length > 0 || deedSummaryFileIds.length > 0 || deedSummary || deedFile) && !isBoundaryDialogDocked && (
+                                        renderBoundaryEditor(false)
                                     )}
-                                    {/* Deed Summary Panel � shown immediately on deed upload; pre-parse state until AI extracts calls */}
-                                    {(deedSummaryFileIds.length > 0 || deedSummary) && (() => {
-                                        const summaryFiles = boundaryFiles.filter(f => deedSummaryFileIds.includes(f.id));
-                                        return (
-                                            <DeedSummaryPanel
-                                                files={summaryFiles}
-                                                pendingFileName={summaryFiles.length === 0 && !deedSummary ? (deedFile?.name ?? 'Deed') : undefined}
-                                                summary={deedSummary ?? undefined}
-                                                computingTractIds={computingTractIds}
-                                                onComputeTract={(tractId, pob) => {
-                                                    if (isFreeTierTimeLocked) {
-                                                        setIsLockDismissed(false);
-                                                        setShowHostCostReminder(true);
-                                                        return;
-                                                    }
-                                                    const t = deedSummary?.tracts.find(x => x.tractId === tractId);
-                                                    if (!t) return;
-                                                    pendingTractIdRef.current = tractId;
-                                                    pendingTractPobRef.current = pob;
-                                                    setComputingTractIds(prev => new Set(prev).add(tractId));
-                                                    const pageHint = t.sourcePage != null ? ` (source page ${t.sourcePage})` : '';
-                                                    const nameHint = t.tractName ? ` ("${t.tractName}")` : '';
-                                                    const pobHint = pob
-                                                        ? ` Start the boundary at the Point of Beginning E=${pob.easting.toFixed(4)}, N=${pob.northing.toFixed(4)}.`
-                                                        : '';
-                                                    void handleSendMessage(
-                                                        `Extract ONLY ${t.tractId}${nameHint}${pageHint} from this deed. ` +
-                                                        `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${t.tractId}", points, lines }]) for this tract only. ` +
-                                                        `Do not include any other tract.` +
-                                                        pobHint
-                                                    );
-                                                }}
-                                                onComputeAll={() => {
-                                                    if (isFreeTierTimeLocked) {
-                                                        setIsLockDismissed(false);
-                                                        setShowHostCostReminder(true);
-                                                        return;
-                                                    }
-                                                    pendingTractIdRef.current = null;
-                                                    pendingTractPobRef.current = null;
-                                                    if (deedSummary) {
-                                                        setComputingTractIds(new Set(deedSummary.tracts.map(t => t.tractId)));
-                                                    }
-                                                    void handleSendMessage('Extract all boundary descriptions from this deed.');
-                                                }}
-                                                onParseNow={() => {
-                                                    if (isFreeTierTimeLocked) {
-                                                        setIsLockDismissed(false);
-                                                        setShowHostCostReminder(true);
-                                                        return;
-                                                    }
-                                                    void handleSendMessage('Extract all boundary descriptions from this deed.');
-                                                }}
-                                                pointMap={pointMap}
-                                                selectedPointNumber={selectedPoint?.pointNumber}
-                                                onCompute={(id, pob) => {
-                                                    // v26.05.22.5 � User explicitly clicked "Compute Preview". Switch
-                                                    // to the canvas panel so the DrawingCanvas actually mounts and the
-                                                    // amber overlay can render. Without this the user sees nothing
-                                                    // because the deed-text / PDF panel is occupying the visual area.
-                                                    showView('canvas');
-                                                    // Flip overlay visible and store the optional POB override.
-                                                    // Preserve the user's current viewport; computing a silhouette
-                                                    // must not recenter or change their zoom.
-                                                    setBoundaryFiles(prev => prev.map(f =>
-                                                        f.id === id ? { ...f, hidden: false, pobOverride: pob ?? undefined } : f
-                                                    ));
-                                                }}
-                                                onAssociatePoints={handleAssociatePointsToBoundary}
-                                                onDisassociatePoint={handleDisassociatePointFromBoundary}
-                                                onBestFit={handleBestFitBoundaryToPoints}
-                                                onAlignCorners={(id) => {
-                                                    setActiveBoundaryFileId(id);
-                                                    setBoundaryCornerAlignRequest({ token: Date.now(), movableBfId: id });
-                                                }}
-                                                onCommitDraw={(id) => handleDrawBoundaryToLinework(id)}
-                                                onOpenInEditor={(id) => {
-                                                    setIsBoundaryEditorButtonPulsing(false);
-                                                    setIsBoundaryEditorVisible(true);
-                                                }}
-                                                onClose={() => { setDeedSummaryFileIds([]); setDeedSummary(null); }}
-                                            />
-                                        );
-                                    })()}
+
+                                    {/* County Parcels / GIS: Render floating ONLY when explicitly popped out */}
+                                    {activeAgent === AgentType.DEED_READER && !isParcelPanelDocked && isParcelPanelVisible && (
+                                        renderParcelPanel(false)
+                                    )}
                                     </>
                                 ) : activeVisualPanel === 'cutsheet' ? (
                                     <CutSheetPanel ref={cutSheetRef} data={cutSheetData} info={cutSheetInfo} setInfo={setCutSheetInfo} settings={settings} />
@@ -16593,18 +16639,7 @@ const AppContent = () => {
                                                 settings={settings}
                                             />
                                         ) : activeAgent === AgentType.DEED_READER ? (
-                                            <ParcelPanel
-                                                inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
-                                                parcelLineCount={lines.filter((l: SurveyLine) => l.layer === 'COUNTY-PARCEL').length}
-                                                lastFetchedParcels={lastFetchedParcels}
-                                                isFetching={isFetchingParcels}
-                                                onFetchParcels={handleFetchParcels}
-                                                onClearParcels={handleClearParcels}
-                                                parcelLabelFormatter={parcelLabelFormatter}
-                                                cadTextStyles={parcelCadTextStyles}
-                                                propertyOwnerCategory={annotationCategories.find(c => c.id === 'property-owners') ?? null}
-                                                onParcelLabelFormatterChange={setParcelLabelFormatter}
-                                            />
+                                            undefined
                                         ) : activeAgent === AgentType.CONTOURING_AGENT ? (
                                             <div className="w-full h-full bg-gray-800 text-sm text-gray-300 flex flex-col p-4 light-theme:bg-gray-50 light-theme:text-gray-600">
                                                 <h3 className="text-lg font-semibold text-amber-400 mb-3 flex-shrink-0">Contouring Agent</h3>
@@ -16733,6 +16768,162 @@ const AppContent = () => {
                                         activeAgent === AgentType.GNSS_AGENT ? 'RINEX Tools' :
                                         activeAgent === AgentType.DRONE_AGENT ? 'Drone Tools' :
                                         undefined
+                                    }
+                                    dockedContent={
+                                        (() => {
+                                            if (activeAgent !== AgentType.DEED_READER) return undefined;
+                                            const isBoundaryDialogShowing =
+                                                isBoundaryEditorVisible &&
+                                                isBoundaryDialogDocked &&
+                                                !isBoundaryDialogMinimized &&
+                                                (boundaryFiles.length > 0 || deedSummaryFileIds.length > 0 || deedSummary || deedFile);
+                                            const isParcelPanelShowing =
+                                                isParcelPanelVisible &&
+                                                isParcelPanelDocked &&
+                                                !isParcelPanelMinimized;
+
+                                            if (isBoundaryDialogShowing && isParcelPanelShowing) {
+                                                return activeBoundaryDockedTab === 'gis' ? renderParcelPanel(true) : renderBoundaryEditor(true);
+                                            }
+                                            if (isBoundaryDialogShowing) {
+                                                return renderBoundaryEditor(true);
+                                            }
+                                            if (isParcelPanelShowing) {
+                                                return renderParcelPanel(true);
+                                            }
+                                            return undefined;
+                                        })()
+                                    }
+                                    toolsRowAccessories={
+                                        activeAgent === AgentType.DEED_READER ? (
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                {/* Deed Button */}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const isBoundaryShowing =
+                                                            isBoundaryEditorVisible &&
+                                                            isBoundaryDialogDocked &&
+                                                            !isBoundaryDialogMinimized &&
+                                                            (boundaryFiles.length > 0 || deedSummaryFileIds.length > 0 || deedSummary || deedFile);
+
+                                                        if (!isBoundaryDialogDocked) {
+                                                            setIsBoundaryDialogDocked(true);
+                                                            setIsBoundaryDialogMinimized(false);
+                                                            setIsBoundaryEditorVisible(true);
+                                                            setActiveBoundaryDockedTab('dialog');
+                                                        } else if (!isBoundaryEditorVisible) {
+                                                            setIsBoundaryEditorVisible(true);
+                                                            setIsBoundaryDialogMinimized(false);
+                                                            setActiveBoundaryDockedTab('dialog');
+                                                        } else if (isBoundaryShowing && activeBoundaryDockedTab === 'dialog') {
+                                                            setIsBoundaryDialogMinimized(true);
+                                                        } else {
+                                                            setIsBoundaryDialogMinimized(false);
+                                                            setActiveBoundaryDockedTab('dialog');
+                                                        }
+                                                    }}
+                                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition-all border shadow-sm ${
+                                                        !isBoundaryDialogDocked
+                                                            ? 'bg-cyan-950/70 text-cyan-200 border-cyan-500/60 hover:bg-cyan-900/80'
+                                                            : (!isBoundaryDialogMinimized && isBoundaryEditorVisible && (activeBoundaryDockedTab === 'dialog' || !isParcelPanelVisible || isParcelPanelMinimized || !isParcelPanelDocked))
+                                                                ? 'bg-emerald-950/70 text-emerald-200 border-emerald-500/60 hover:bg-emerald-900/80'
+                                                                : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
+                                                    }`}
+                                                    style={{
+                                                        color: (!isBoundaryDialogMinimized && isBoundaryEditorVisible && isBoundaryDialogDocked && (activeBoundaryDockedTab === 'dialog' || !isParcelPanelVisible || isParcelPanelMinimized || !isParcelPanelDocked)) ? (agentThemeColors[activeAgent] || '#34d399') : undefined,
+                                                        borderColor: (!isBoundaryDialogMinimized && isBoundaryEditorVisible && isBoundaryDialogDocked && (activeBoundaryDockedTab === 'dialog' || !isParcelPanelVisible || isParcelPanelMinimized || !isParcelPanelDocked)) ? (agentThemeColors[activeAgent] || '#34d399') : undefined,
+                                                    }}
+                                                    title={
+                                                        !isBoundaryDialogDocked
+                                                            ? 'Deed Dialog is floating on canvas — click to dock into chat'
+                                                            : isBoundaryDialogMinimized || !isBoundaryEditorVisible
+                                                                ? 'Expand Deed in chat'
+                                                                : 'Minimize Deed in chat'
+                                                    }
+                                                >
+                                                    <CourthouseIcon className={`w-3.5 h-3.5 ${!isBoundaryDialogDocked ? 'text-cyan-400' : 'text-emerald-400'}`} />
+                                                    <span>Deed</span>
+                                                    {activeBoundaryCallsCount > 0 && (
+                                                        <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                                                            !isBoundaryDialogDocked
+                                                                ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/40'
+                                                                : !isBoundaryDialogMinimized && isBoundaryEditorVisible
+                                                                    ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40'
+                                                                    : 'bg-gray-800 text-gray-400'
+                                                        }`}>
+                                                            {activeBoundaryCallsCount}
+                                                        </span>
+                                                    )}
+                                                    <span className="text-[10px] text-gray-400 font-mono">
+                                                        {!isBoundaryDialogDocked ? 'Float' : (!isBoundaryDialogMinimized && isBoundaryEditorVisible && (activeBoundaryDockedTab === 'dialog' || !isParcelPanelVisible || isParcelPanelMinimized || !isParcelPanelDocked) ? '▲' : '▼')}
+                                                    </span>
+                                                </button>
+
+                                                {/* GIS Button */}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const isGisShowing =
+                                                            isParcelPanelVisible &&
+                                                            isParcelPanelDocked &&
+                                                            !isParcelPanelMinimized;
+
+                                                        if (!isParcelPanelDocked) {
+                                                            setIsParcelPanelDocked(true);
+                                                            setIsParcelPanelMinimized(false);
+                                                            setIsParcelPanelVisible(true);
+                                                            setActiveBoundaryDockedTab('gis');
+                                                        } else if (!isParcelPanelVisible) {
+                                                            setIsParcelPanelVisible(true);
+                                                            setIsParcelPanelMinimized(false);
+                                                            setActiveBoundaryDockedTab('gis');
+                                                        } else if (isGisShowing && activeBoundaryDockedTab === 'gis') {
+                                                            setIsParcelPanelMinimized(true);
+                                                        } else {
+                                                            setIsParcelPanelMinimized(false);
+                                                            setIsParcelPanelVisible(true);
+                                                            setActiveBoundaryDockedTab('gis');
+                                                        }
+                                                    }}
+                                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition-all border shadow-sm ${
+                                                        !isParcelPanelDocked
+                                                            ? 'bg-amber-950/70 text-amber-200 border-amber-500/60 hover:bg-amber-900/80'
+                                                            : (!isParcelPanelMinimized && isParcelPanelVisible && (activeBoundaryDockedTab === 'gis' || !isBoundaryEditorVisible || isBoundaryDialogMinimized || !isBoundaryDialogDocked))
+                                                                ? 'bg-orange-950/70 text-orange-200 border-orange-500/60 hover:bg-orange-900/80 shadow-orange-950/40'
+                                                                : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
+                                                    }`}
+                                                    style={{
+                                                        color: (!isParcelPanelMinimized && isParcelPanelVisible && isParcelPanelDocked && (activeBoundaryDockedTab === 'gis' || !isBoundaryEditorVisible || isBoundaryDialogMinimized || !isBoundaryDialogDocked)) ? '#fb923c' : undefined,
+                                                        borderColor: (!isParcelPanelMinimized && isParcelPanelVisible && isParcelPanelDocked && (activeBoundaryDockedTab === 'gis' || !isBoundaryEditorVisible || isBoundaryDialogMinimized || !isBoundaryDialogDocked)) ? '#f97316' : undefined,
+                                                    }}
+                                                    title={
+                                                        !isParcelPanelDocked
+                                                            ? 'County Parcels GIS is floating on canvas — click to dock into chat'
+                                                            : isParcelPanelMinimized || !isParcelPanelVisible
+                                                                ? 'Expand County Parcels GIS in chat'
+                                                                : 'Minimize County Parcels GIS in chat'
+                                                    }
+                                                >
+                                                    <GisAgentIcon className={`w-3.5 h-3.5 ${!isParcelPanelDocked ? 'text-amber-400' : 'text-orange-400'}`} />
+                                                    <span>GIS</span>
+                                                    {lastFetchedParcels.length > 0 && (
+                                                        <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                                                            !isParcelPanelDocked
+                                                                ? 'bg-amber-500/20 text-amber-200 border border-amber-400/40'
+                                                                : !isParcelPanelMinimized && isParcelPanelVisible
+                                                                    ? 'bg-orange-500/20 text-orange-200 border border-orange-400/40'
+                                                                    : 'bg-gray-800 text-gray-400'
+                                                        }`}>
+                                                            {lastFetchedParcels.length}
+                                                        </span>
+                                                    )}
+                                                    <span className="text-[10px] text-gray-400 font-mono">
+                                                        {!isParcelPanelDocked ? 'Float' : (!isParcelPanelMinimized && isParcelPanelVisible && (activeBoundaryDockedTab === 'gis' || !isBoundaryEditorVisible || isBoundaryDialogMinimized || !isBoundaryDialogDocked) ? '▲' : '▼')}
+                                                    </span>
+                                                </button>
+                                            </div>
+                                        ) : undefined
                                     }
                                 />
                             </div>
