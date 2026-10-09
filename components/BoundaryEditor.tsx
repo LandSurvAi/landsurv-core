@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
 import type { BoundaryFile, BoundaryFileCall, SurveyPoint } from '../types.ts';
 import { parseBearingToRadians, parseDistance, direct, calculateClosure } from '../utils/cogo.ts';
-import { ChevronDownIcon, ChevronUpIcon, ChevronRightIcon, XMarkIcon, TableCellsIcon, ArrowUpTrayIcon, FolderIcon, EyeIcon, EyeSlashIcon, PencilSquareIcon, TrashIcon, PlusIcon } from './icons.tsx';
+import { ChevronDownIcon, ChevronUpIcon, ChevronRightIcon, XMarkIcon, TableCellsIcon, ArrowUpTrayIcon, ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon, FolderIcon, EyeIcon, EyeSlashIcon, PencilSquareIcon, TrashIcon, PlusIcon } from './icons.tsx';
 import BearingDmsInput from './BearingDmsInput.tsx';
 
 interface BoundaryEditorProps {

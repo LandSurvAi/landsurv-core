@@ -8,7 +8,7 @@ import { useAppState } from '../contexts/AppStateContext.tsx';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
-  onSubmit: (apiKey: string) => boolean;
+  onSubmit: (apiKey: string) => boolean | Promise<boolean>;
   onClose?: () => void;
   remainingTime?: number;
   timeUntilAvailable?: number; // Time until app is available again during locked period (in seconds)
@@ -35,7 +35,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSubmit, onClose, re
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!apiKey.trim()) {
@@ -43,7 +43,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onSubmit, onClose, re
       return;
     }
 
-    const success = onSubmit(apiKey);
+    const success = await onSubmit(apiKey);
     
     if (!success) {
       addNotification({ kind: 'api-key', severity: 'error', title: 'Key', message: 'Invalid key. Check your Enabling Key or Google Gemini API key and try again.' });

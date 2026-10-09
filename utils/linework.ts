@@ -256,11 +256,11 @@ function bankCode(description: string | undefined): BankCodeInfo | undefined {
 
   let base: BankCode | undefined;
   let index = '';
-  for (const token of tokens) {
+  for (const [tokenIndex, token] of tokens.entries()) {
     const match = token.match(/^(TB|TBI|TOB|BB|BBI|BOB|TOE|FL|FLOW|EW|GB)(\d*)$/);
     if (!match) continue;
     const raw = match[1];
-    index = match[2] ?? '';
+    index = match[2] || (/^\d+$/.test(tokens[tokenIndex + 1] ?? '') ? tokens[tokenIndex + 1] : '');
     if (raw === 'TB' || raw === 'TBI' || raw === 'TOB') base = 'TB';
     else if (raw === 'BB' || raw === 'BBI' || raw === 'BOB') base = 'BB';
     else if (raw === 'TOE') base = 'TOE';
@@ -328,6 +328,7 @@ function clusterByCrossCorridorOffset(points: OrderablePoint[], clusterCount: nu
 export function repairBankCorridorChains(
   chains: DrafterChain[],
   lookup: (pointNumber: string) => ChainPointMetadata | undefined,
+  candidatePointNumbers: string[] = [],
 ): DrafterChain[] {
   const bankGroups = new Map<string, {
     info: BankCodeInfo;
@@ -363,6 +364,16 @@ export function repairBankCorridorChains(
         const point = lookup(pn);
         if (point) group.points.set(pn, { pointNumber: pn, easting: point.easting, northing: point.northing });
       }
+    }
+  }
+
+  for (const rawPn of candidatePointNumbers) {
+    const pn = String(rawPn);
+    const point = lookup(pn);
+    const info = bankCode(point?.description);
+    const group = info && bankGroups.get(info.key);
+    if (point && group) {
+      group.points.set(pn, { pointNumber: pn, easting: point.easting, northing: point.northing });
     }
   }
 

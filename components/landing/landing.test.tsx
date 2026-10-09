@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import React from 'react';
 import { RawAgentContent } from './RawAgentContent';
@@ -14,6 +14,10 @@ import { ContourAgentContent, ProfileAgentContent } from './ContourAgentContent'
 import { CogoAgentContent } from './CogoAgentContent';
 import { GpxAgentContent } from './GpxAgentContent';
 import { AgentsPageContent } from './AgentsPageContent';
+
+vi.mock('../../utils/globalSettings', () => ({
+  useGlobalSettings: () => ({ retiredAgents: ['RAW_CRAWLER', 'IMAGE_ANALYZER'] }),
+}));
 
 describe('Landing Page Components', () => {
   describe('RawAgentContent', () => {
@@ -68,9 +72,9 @@ describe('Landing Page Components', () => {
   });
 
   describe('DxfAgentContent', () => {
-    it('renders the DXF Analyzer Agent content', () => {
+    it('renders the DXF Agent content', () => {
       render(<DxfAgentContent />);
-      expect(screen.getByText('DXF Analyzer Agent')).toBeInTheDocument();
+      expect(screen.getByText('DXF Agent')).toBeInTheDocument();
     });
 
     it('describes DXF processing capabilities', () => {
@@ -207,20 +211,27 @@ describe('Landing Page Components', () => {
       expect(screen.getByRole('heading', { name: /LandSurv\.ai Agents/i })).toBeInTheDocument();
     });
 
-    it('displays all 12 agents', () => {
+    it('displays all 16 active agents', () => {
       render(<AgentsPageContent />);
-      expect(screen.getByText('RAW Crawler Agent')).toBeInTheDocument();
+      expect(screen.getByText('Civil Drafter Agent')).toBeInTheDocument();
       expect(screen.getByText(/Boundary Agent/i)).toBeInTheDocument();
       expect(screen.getByText('Civil Plan Expert Agent')).toBeInTheDocument();
-      expect(screen.getByText('DXF Analyzer Agent')).toBeInTheDocument();
+      expect(screen.getByText('DXF Agent')).toBeInTheDocument();
       expect(screen.getByText('GIS Agent')).toBeInTheDocument();
       expect(screen.getByText('Stationing & Centerline Agent')).toBeInTheDocument();
       expect(screen.getByText('Point Editor Agent')).toBeInTheDocument();
       expect(screen.getByText('GPS Stakeout Agent')).toBeInTheDocument();
       expect(screen.getByText('Contouring Agent')).toBeInTheDocument();
-      expect(screen.getByText('Image Analyzer Agent')).toBeInTheDocument();
       expect(screen.getByText('Profile & Cross Section Agent')).toBeInTheDocument();
       expect(screen.getByText('COGO Agent')).toBeInTheDocument();
+      expect(screen.getByText('RINEX Agent')).toBeInTheDocument();
+      expect(screen.getByText('AR Visualization Agent')).toBeInTheDocument();
+      expect(screen.getByText('Zoning Agent')).toBeInTheDocument();
+      expect(screen.getByText('Title Search Agent')).toBeInTheDocument();
+      expect(screen.getByText('CAD Manager')).toBeInTheDocument();
+      expect(screen.queryByText('RAW Crawler Agent')).not.toBeInTheDocument();
+      expect(screen.queryByText('Image Analyzer Agent')).not.toBeInTheDocument();
+      expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(16);
     });
 
     it('displays key capabilities section', () => {
@@ -240,7 +251,8 @@ describe('Landing Page Components', () => {
       expect(screen.getByText('Access Agent Subdomains')).toBeInTheDocument();
       // Check for subdomains text in container
       const { container } = render(<AgentsPageContent />);
-      expect(container.textContent).toContain('raw.landsurv.ai');
+      expect(container.textContent).toContain('civildrafter.landsurv.ai');
+      expect(container.textContent).not.toContain('raw.landsurv.ai');
     });
 
     it('renders with cyan color theme', () => {
