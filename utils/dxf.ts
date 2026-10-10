@@ -1,8 +1,16 @@
 import Drawing from 'dxf-writer';
-import { DEFAULT_PARCEL_LABEL_FORMATTER, type SurveyPoint, type SurveyLine, type Centerline, type CenterlinePI, type Settings, type DxfExportOptions, type PointSymbol, type CustomSymbol, type ContourLabel, type ParcelCadTextStyle, type ParcelLabel, type ParcelLabelFormatter, type AnnotationCategoryStyle } from '../types.ts';
+import { DEFAULT_PARCEL_LABEL_FORMATTER, type SurveyPoint, type SurveyLine, type Centerline, type CenterlinePI, type Settings, type DxfExportOptions, type PointSymbol, type CustomSymbol, type ContourLabel, type ParcelCadTextStyle, type ParcelLabel, type ParcelLabelFormatter, type AnnotationCategoryStyle, type AnnotationDimension } from '../types.ts';
 import { calculateCenterlineLength, calculateCurveGeometry, calculatePointFromStationOffset, formatStation } from './stationing.ts';
 import { applyAnnotationTextCase, resolveAnnotationCategoryTextStyle } from './annotationTextStyle.ts';
 import { buildParcelLabelLines, resolveEffectiveParcelTextStyle } from './parcelLabelFormatter.ts';
+import {
+    calculateLinearDimensionGeometry,
+    calculateRadialDimensionGeometry,
+    calculateDiameterDimensionGeometry,
+    calculateArcLengthDimensionGeometry,
+    calculateCurveData,
+    calculateAngularDimensionGeometry,
+} from './dimensionGeometry.ts';
 
 // A robust check for finite numbers.
 const isFiniteNumber = (val: any): val is number => typeof val === 'number' && isFinite(val);
@@ -557,6 +565,7 @@ export function generateDxf(
     parcelLabelFormatter: ParcelLabelFormatter = DEFAULT_PARCEL_LABEL_FORMATTER,
     parcelCadTextStyles: ParcelCadTextStyle[] = [],
     annotationCategories: AnnotationCategoryStyle[] = [],
+    dimensions: AnnotationDimension[] = [],
 ): string {
     const { coordinatePrecision } = settings;
     const { includePoints, includeLines, includeCenterlines, pointScale, steepSlopeFillStyle = 'solid' } = options;
@@ -581,6 +590,7 @@ export function generateDxf(
     d.addLayer('CONTOUR_MINOR', 9, 'CONTINUOUS'); // Light Gray
     d.addLayer('CONTOUR_LABELS', Drawing.ACI.WHITE, 'CONTINUOUS');
     d.addLayer('PARCEL_LABELS', Drawing.ACI.GREEN, 'CONTINUOUS');
+    d.addLayer('DIMENSIONS', Drawing.ACI.CYAN, 'CONTINUOUS');
     d.addLayer('DISCLAIMER', Drawing.ACI.CYAN, 'CONTINUOUS');
     const knownLayers = new Set([
         'POINTS',
@@ -594,6 +604,7 @@ export function generateDxf(
         'CONTOUR_MINOR',
         'CONTOUR_LABELS',
         'PARCEL_LABELS',
+        'DIMENSIONS',
         'DISCLAIMER',
     ]);
     
@@ -840,6 +851,81 @@ export function generateDxf(
         });
     }
     
+    // ── Draw Annotation Dimensions ──────────────────────────────────────────
+    if (dimensions && dimensions.length > 0) {
+        d.setActiveLayer('DIMENSIONS');
+        dimensions.forEach(dim => {
+            switch (dim.type) {
+                case 'aligned':
+                case 'horizontal':
+                case 'vertical': {
+                    const geom = calculateLinearDimensionGeometry(dim);
+                    d.drawLine(geom.p1.easting, geom.p1.northing, geom.d1.easting, geom.d1.northing);
+                    d.drawLine(geom.p2.easting, geom.p2.northing, geom.d2.easting, geom.d2.northing);
+                    d.drawLine(geom.d1.easting, geom.d1.northing, geom.d2.easting, geom.d2.northing);
+                    d.drawText(geom.midpoint.easting, geom.midpoint.northing, baseTextHeight, (geom.angle * 180) / Math.PI, geom.dimensionText);
+                    break;
+                }
+                case 'radius': {
+                    const geom = calculateRadialDimensionGeometry(dim);
+                    d.drawLine(geom.touchPoint.easting, geom.touchPoint.northing, geom.textPosition.easting, geom.textPosition.northing);
+                    d.drawLine(geom.center.easting - 2, geom.center.northing, geom.center.easting + 2, geom.center.northing);
+                    d.drawLine(geom.center.easting, geom.center.northing - 2, geom.center.easting, geom.center.northing + 2);
+                    d.drawText(geom.textPosition.easting, geom.textPosition.northing, baseTextHeight, 0, geom.dimensionText);
+                    break;
+                }
+                case 'diameter': {
+                    const geom = calculateDiameterDimensionGeometry(dim);
+                    d.drawLine(geom.touch1.easting, geom.touch1.northing, geom.touch2.easting, geom.touch2.northing);
+                    d.drawLine(geom.touch2.easting, geom.touch2.northing, geom.textPosition.easting, geom.textPosition.northing);
+                    d.drawText(geom.textPosition.easting, geom.textPosition.northing, baseTextHeight, 0, geom.dimensionText);
+                    break;
+                }
+                case 'arc-length': {
+                    const geom = calculateArcLengthDimensionGeometry(dim);
+                    d.drawLine(geom.w1Start.easting, geom.w1Start.northing, geom.w1End.easting, geom.w1End.northing);
+                    d.drawLine(geom.w2Start.easting, geom.w2Start.northing, geom.w2End.easting, geom.w2End.northing);
+                    d.drawArc(geom.center.easting, geom.center.northing, geom.dimRadius, (geom.startAngle * 180) / Math.PI, (geom.endAngle * 180) / Math.PI);
+                    d.drawText(geom.midpoint.easting, geom.midpoint.northing, baseTextHeight, 0, geom.dimensionText);
+                    break;
+                }
+                case 'curve-data': {
+                    const info = calculateCurveData({
+                        radius: dim.radius,
+                        arcLength: dim.arcLength,
+                        deltaRad: dim.deltaRad,
+                        p1: dim.p1,
+                        p2: dim.p2,
+                        chordBearing: dim.chordBearing,
+                        chordLength: dim.chordLength,
+                        tangentBearing: dim.tangentBearing,
+                        curveDirection: dim.curveDirection,
+                    });
+                    const chordMidX = (dim.p1.easting + dim.p2.easting) / 2;
+                    const chordMidY = (dim.p1.northing + dim.p2.northing) / 2;
+                    d.drawLine(chordMidX, chordMidY, dim.textPosition.easting, dim.textPosition.northing);
+                    d.drawText(dim.textPosition.easting, dim.textPosition.northing, baseTextHeight * 1.1, 0, 'CURVE DATA');
+                    info.calloutLines.forEach((lineText, idx) => {
+                        d.drawText(dim.textPosition.easting, dim.textPosition.northing - (idx + 1) * baseTextHeight * 1.5, baseTextHeight, 0, lineText);
+                    });
+                    break;
+                }
+                case 'angular': {
+                    const geom = calculateAngularDimensionGeometry(dim);
+                    d.drawArc(geom.vertex.easting, geom.vertex.northing, geom.arcRadius, (geom.startAngle * 180) / Math.PI, (geom.endAngle * 180) / Math.PI);
+                    d.drawText(geom.midpoint.easting, geom.midpoint.northing, baseTextHeight, 0, geom.dimensionText);
+                    break;
+                }
+                case 'ordinate': {
+                    d.drawLine(dim.point.easting, dim.point.northing, dim.leaderEnd.easting, dim.leaderEnd.northing);
+                    const label = dim.textOverride ?? `N: ${dim.point.northing.toFixed(2)}, E: ${dim.point.easting.toFixed(2)}`;
+                    d.drawText(dim.leaderEnd.easting, dim.leaderEnd.northing, baseTextHeight, 0, label);
+                    break;
+                }
+            }
+        });
+    }
+
     // Add a disclaimer
     d.setActiveLayer('DISCLAIMER');
     let disclaimerX = 0;

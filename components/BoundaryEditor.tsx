@@ -144,11 +144,11 @@ const RotatingScanStatus: React.FC = () => {
 // its amber pre-commit state.
 const ConfidencePill: React.FC<{ confidence: NonNullable<BoundaryFile['deedConfidence']> }> = ({ confidence }) => {
     const [open, setOpen] = useState(false);
-    const cfg = {
-        high:   { dot: 'bg-emerald-400', text: 'text-emerald-300', border: 'border-emerald-500/70', bg: 'bg-emerald-950/40', bar: 'bg-emerald-400', label: 'High confidence' },
-        medium: { dot: 'bg-amber-400',  text: 'text-amber-300',  border: 'border-amber-500/70',  bg: 'bg-amber-950/40', bar: 'bg-amber-400',  label: 'Medium confidence' },
-        low:    { dot: 'bg-rose-400',    text: 'text-rose-300',    border: 'border-rose-500/70',    bg: 'bg-rose-950/40', bar: 'bg-rose-400',    label: 'Low confidence' },
-    }[confidence.level];
+    const cfg = ({
+        high:   { dot: 'bg-emerald-400', text: 'text-emerald-200', border: 'border-emerald-500/50', bg: 'bg-emerald-900/30', label: 'High confidence' },
+        medium: { dot: 'bg-yellow-400',  text: 'text-yellow-200',  border: 'border-yellow-500/50',  bg: 'bg-yellow-900/30',  label: 'Medium confidence' },
+        low:    { dot: 'bg-rose-400',    text: 'text-rose-200',    border: 'border-rose-500/50',    bg: 'bg-rose-900/30',    label: 'Low confidence' },
+    }[confidence.level]) || { dot: 'bg-yellow-400', text: 'text-yellow-200', border: 'border-yellow-500/50', bg: 'bg-yellow-900/30', label: 'Medium confidence' };
 
     return (
         <div className="pt-0.5">

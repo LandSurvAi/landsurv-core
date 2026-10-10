@@ -21,6 +21,17 @@ import {
     type PointList,
     type DeedMetadata,
     type AnnotationDimension,
+    type AlignedAnnotationDimension,
+    type HorizontalAnnotationDimension,
+    type VerticalAnnotationDimension,
+    type RadiusAnnotationDimension,
+    type DiameterAnnotationDimension,
+    type ArcLengthAnnotationDimension,
+    type CurveDataAnnotationDimension,
+    type AngularAnnotationDimension,
+    type OrdinateAnnotationDimension,
+    type DimensionGrip,
+    type DimensionGripType,
     type BoundaryFile,
     type BoundaryFileCall,
     type TinSurface,
@@ -46,9 +57,23 @@ import { useDocumentScrollLock } from '../hooks/useDocumentScrollLock.ts';
 import { StandardsEditor } from './CadManager/StandardsEditor.tsx';
 import type { StandardDefinition } from '../contexts/types/CadManager.types';
 import { convertLinearUnits, getLinearUnitAbbreviation, type LinearUnit } from '../utils/linearUnits.ts';
-import { LayersIcon, RedrawIcon, ZoomExtentsIcon, ScaleIcon, AttributeScaleIcon, DownloadIcon, ZoomToPointIcon, XMarkIcon, EyeIcon, PencilSquareIcon, BreaklineIcon, InclusionLineIcon, ExclusionLineIcon, ScissorsIcon, UndoIcon, RedoIcon, ExtendIcon, PolylineIcon, ListBulletIcon, CircleIcon } from './icons.tsx';
+import { LayersIcon, RedrawIcon, ZoomExtentsIcon, ScaleIcon, AttributeScaleIcon, DownloadIcon, ZoomToPointIcon, XMarkIcon, EyeIcon, PencilSquareIcon, BreaklineIcon, InclusionLineIcon, ExclusionLineIcon, ScissorsIcon, UndoIcon, RedoIcon, ExtendIcon, PolylineIcon, ListBulletIcon, CircleIcon, CrosshairsIcon, TrashIcon } from './icons.tsx';
 import proj4 from 'proj4';
 import { createFloatingOriginContext } from '../utils/floatingOriginContext.ts';
+import { PointAgent } from '../services/PointAgent.ts';
+import { DimensionSettingsModal, type DimensionStyleSettings, DEFAULT_DIMENSION_SETTINGS } from './DimensionSettingsModal.tsx';
+import { DimensionSettingsPanel } from './DimensionSettingsPanel.tsx';
+import {
+    formatDMS,
+    formatBearingFromPoints,
+    calculateCurveData,
+    calculateLinearDimensionGeometry,
+    calculateRadialDimensionGeometry,
+    calculateDiameterDimensionGeometry,
+    calculateArcLengthDimensionGeometry,
+    calculateAngularDimensionGeometry,
+    hitTestDimension,
+} from '../utils/dimensionGeometry.ts';
 
 /**
  * Compute the unique circular arc that starts at `start`, leaves tangent to
@@ -122,6 +147,9 @@ export interface DrawingCanvasHandles {
   confirmDelete: () => void;
   getTransform: () => { scale: number; offsetX: number; offsetY: number };
   setTransform: (transform: { scale: number; offsetX: number; offsetY: number }) => void;
+  getViewCenterWorld?: () => { easting: number; northing: number };
+  isPointInView?: (easting: number, northing: number) => boolean;
+  isBboxInView?: (minE: number, maxE: number, minN: number, maxN: number) => boolean;
 }
 
 import { CanvasTerminal } from './CanvasTerminal';
@@ -252,6 +280,11 @@ interface DrawingCanvasProps {
     // Annotation dimensions
     dimensions: AnnotationDimension[];
     onAddDimension: (dim: AnnotationDimension) => void;
+    onUpdateDimension?: (dim: AnnotationDimension) => void;
+    onDeleteDimension?: (dimId: string) => void;
+    onClearDimensions?: () => void;
+    onAddPoint?: (point: SurveyPoint) => void;
+    nextAvailablePointNumber?: string;
     dimensionScale: number;
     setDimensionScale: React.Dispatch<React.SetStateAction<number>>;
     symbolScale: number;
@@ -673,7 +706,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         isLayerPanelOpen, setIsLayerPanelOpen, onLayerToggle, activeAccent, currentPosition, projectedPosition, onZoomToPoint,
         linesVisible, onSetLinesVisible, centerlinesVisible, onSetCenterlinesVisible, pointLists, onTogglePointListVisibility, deedMetadata, onToolStateChange, onShowSettings,
         isC3DConnected, isGridVisible, agentDrawMode, onCycleAgentDrawMode, agentAnnotMode, onCycleAgentAnnotMode, onAddBoundaryCall, onConvertSelectionToBoundary, onComputeCurrentClosure,
-        dimensions, onAddDimension, dimensionScale, setDimensionScale, symbolScale, setSymbolScale,
+        dimensions, onAddDimension, onUpdateDimension, onDeleteDimension, onClearDimensions, onAddPoint, nextAvailablePointNumber, dimensionScale, setDimensionScale, symbolScale, setSymbolScale,
         customAnnotations = [], annotationScale = 1, setAnnotationScale,
         parcelLabels, annotationCategories,
         tinSurfaces = [],
@@ -809,7 +842,35 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [isOtPopupOpen, setIsOtPopupOpen] = useState(false);
     const [isPickingOtOrigin, setIsPickingOtOrigin] = useState(false);
     const [isPickingOtLineAlign, setIsPickingOtLineAlign] = useState(false);
-    const [drawingMode, setDrawingMode] = useState<'none' | 'polylines' | 'breaklines' | 'inclusion' | 'exclusion' | 'circle' | 'boundary-line' | 'aligned-dim' | 'boundary-align' | 'boundary-corner-align'>('none');
+    const [drawingMode, setDrawingMode] = useState<
+        | 'none'
+        | 'polylines'
+        | 'breaklines'
+        | 'inclusion'
+        | 'exclusion'
+        | 'circle'
+        | 'boundary-line'
+        | 'aligned-dim'
+        | 'horiz-dim'
+        | 'vert-dim'
+        | 'radius-dim'
+        | 'diameter-dim'
+        | 'arc-length-dim'
+        | 'curve-data-dim'
+        | 'angular-dim'
+        | 'ordinate-dim'
+        | 'add-point'
+        | 'boundary-align'
+        | 'boundary-corner-align'
+    >('none');
+    // Add Point tool state
+    const [isAddPointFlyoutOpen, setIsAddPointFlyoutOpen] = useState(false);
+    const [addPointNumber, setAddPointNumber] = useState<string>(() => nextAvailablePointNumber || '1');
+    const [addPointNorthing, setAddPointNorthing] = useState('');
+    const [addPointEasting, setAddPointEasting] = useState('');
+    const [addPointElevation, setAddPointElevation] = useState('0.00');
+    const [addPointDescription, setAddPointDescription] = useState('CALC');
+
     // Circle drawing state (triggered by 'C' key or Drawing Tools)
     const [circleCenter, setCircleCenter] = useState<{ easting: number; northing: number } | null>(null);
     const [circleSizeParam, setCircleSizeParam] = useState<'radius' | 'diameter'>('radius');
@@ -833,11 +894,47 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [trimHoverPreview, setTrimHoverPreview] = useState<TrimPreviewData | null>(null);
     const [isExtendingLines, setIsExtendingLines] = useState(false);
     const [extendFromLine, setExtendFromLine] = useState<string | null>(null);
-    // Aligned dimension tool state
+    // Dimension tool state
     const [isDimFlyoutOpen, setIsDimFlyoutOpen] = useState(false);
-    const [dimPhase, setDimPhase] = useState<0 | 1 | 2>(0); // 0=pick p1, 1=pick p2, 2=pick offset
+    const [isDimSettingsOpen, setIsDimSettingsOpen] = useState(false);
+    const [dimStyleSettings, setDimStyleSettings] = useState<DimensionStyleSettings>(() => {
+        try {
+            const saved = localStorage.getItem('landsurv-dim-style-settings');
+            if (saved) return { ...DEFAULT_DIMENSION_SETTINGS, ...JSON.parse(saved) };
+        } catch { /* ignore */ }
+        return DEFAULT_DIMENSION_SETTINGS;
+    });
+    const [dimPhase, setDimPhase] = useState<0 | 1 | 2>(0); // 0=pick p1/curve, 1=pick p2/textPos, 2=pick offset/p3
     const [dimP1, setDimP1] = useState<{ easting: number; northing: number } | null>(null);
     const [dimP2, setDimP2] = useState<{ easting: number; northing: number } | null>(null);
+    const [dimP3, setDimP3] = useState<{ easting: number; northing: number } | null>(null);
+    const [dimSelectedCurve, setDimSelectedCurve] = useState<{
+        kind: 'arc' | 'circle';
+        center: { easting: number; northing: number };
+        radius: number;
+        arcLength: number;
+        p1: { easting: number; northing: number };
+        p2: { easting: number; northing: number };
+        isLeftCurve: boolean;
+        chordBearing?: string;
+        chordLength?: number;
+        deltaRad?: number;
+        tangentBearing?: string;
+    } | null>(null);
+    const [dimHoveredCurve, setDimHoveredCurve] = useState<{
+        kind: 'arc' | 'circle';
+        center: { easting: number; northing: number };
+        radius: number;
+        startAngle?: number;
+        centralAngle?: number;
+        isLeftCurve?: boolean;
+    } | null>(null);
+    const [selectedDimensionId, setSelectedDimensionId] = useState<string | null>(null);
+    const [dimContextMenu, setDimContextMenu] = useState<{ x: number; y: number; dimId: string } | null>(null);
+    const [isOverDim, setIsOverDim] = useState(false);
+    const [hoveredDimGrip, setHoveredDimGrip] = useState<DimensionGrip | null>(null);
+    const [activeDimGrip, setActiveDimGrip] = useState<DimensionGrip | null>(null);
+    const activeDimGripDragStartRef = useRef<{ clientX: number; clientY: number } | null>(null);
     const [dimPreviewMouse, setDimPreviewMouse] = useState<{ easting: number; northing: number } | null>(null);
     const [dimSnapPoint, setDimSnapPoint] = useState<{ easting: number; northing: number } | null>(null);
     const [activeOsnapPoint, setActiveOsnapPoint] = useState<OsnapResult | null>(null);
@@ -1280,6 +1377,124 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const isLinearDrawingMode = useCallback((mode: typeof drawingMode) => (
         mode === 'polylines' || mode === 'breaklines' || mode === 'inclusion' || mode === 'exclusion'
     ), []);
+
+    const isDimensionDrawingMode = useCallback((mode: typeof drawingMode) => (
+        mode === 'aligned-dim' ||
+        mode === 'horiz-dim' ||
+        mode === 'vert-dim' ||
+        mode === 'radius-dim' ||
+        mode === 'diameter-dim' ||
+        mode === 'arc-length-dim' ||
+        mode === 'curve-data-dim' ||
+        mode === 'angular-dim' ||
+        mode === 'ordinate-dim'
+    ), []);
+
+    const resetDimMode = useCallback(() => {
+        setDimPhase(0);
+        setDimP1(null);
+        setDimP2(null);
+        setDimP3(null);
+        setDimSelectedCurve(null);
+        setDimHoveredCurve(null);
+        setDimPreviewMouse(null);
+        setDimSnapPoint(null);
+        setActiveOsnapPoint(null);
+    }, []);
+
+    const isPointNumberTaken = useCallback((pn: string): boolean => {
+        if (!pn) return false;
+        const normalized = pn.trim().toUpperCase();
+        if (pointMap.has(pn) || pointMap.has(normalized)) return true;
+        if (points.some(p => String(p.pointNumber).trim().toUpperCase() === normalized)) return true;
+        if (pointLists?.some(l => l.points?.some(p => String(p.pointNumber).trim().toUpperCase() === normalized))) return true;
+        return false;
+    }, [pointMap, points, pointLists]);
+
+    // CACP Point Authority: queries PointAgent / CACP protocol for the next available point number,
+    // ensuring we never propose or assign a point number that already exists in any list or survey dataset.
+    const queryCacpNextPointNumber = useCallback((excludePns?: Set<string>): string => {
+        try {
+            const agent = PointAgent.getInstance();
+            agent.setLabelingSettings(settings.pointLabelingSettings);
+            const allKnown = new Map<string, SurveyPoint>();
+            points.forEach(p => { if (p?.pointNumber) allKnown.set(String(p.pointNumber), p); });
+            pointLists?.forEach(l => l.points?.forEach(p => { if (p?.pointNumber) allKnown.set(String(p.pointNumber), p); }));
+            agent.setAvailablePoints(Array.from(allKnown.values()));
+            const [next] = agent.getNextNumbers(1, AgentType.CIVIL_DRAFTER);
+            if (next && !allKnown.has(String(next)) && (!excludePns || !excludePns.has(String(next)))) {
+                return next;
+            }
+        } catch (e) {
+            console.warn('[DrawingCanvas] CACP queryNextPointNumber error:', e);
+        }
+        // Fallback if PointAgent unavailable: scan numbers until finding an untaken one
+        const taken = new Set<string>();
+        points.forEach(p => taken.add(String(p.pointNumber)));
+        pointLists?.forEach(l => l.points?.forEach(p => taken.add(String(p.pointNumber))));
+        if (excludePns) {
+            excludePns.forEach(p => taken.add(p));
+        }
+        let cur = 1;
+        while (taken.has(String(cur))) {
+            cur++;
+        }
+        return String(cur);
+    }, [points, pointLists, settings.pointLabelingSettings]);
+
+    // Keep addPointNumber in sync with CACP authority whenever points or nextAvailablePointNumber change
+    useEffect(() => {
+        setAddPointNumber(prev => {
+            if (!prev || isPointNumberTaken(prev)) {
+                return nextAvailablePointNumber && !isPointNumberTaken(nextAvailablePointNumber)
+                    ? nextAvailablePointNumber
+                    : queryCacpNextPointNumber();
+            }
+            return prev;
+        });
+    }, [nextAvailablePointNumber, isPointNumberTaken, queryCacpNextPointNumber]);
+
+    const commitManualAddPoint = useCallback(() => {
+        const n = parseFloat(addPointNorthing);
+        const e = parseFloat(addPointEasting);
+        if (isNaN(n) || isNaN(e)) {
+            notifyBoundaryError('Enter valid Northing and Easting coordinates.');
+            return;
+        }
+
+        let ptNum = addPointNumber.trim();
+        // CACP verification: check what is available and prevent duplicates
+        if (!ptNum || isPointNumberTaken(ptNum)) {
+            const cacpNext = queryCacpNextPointNumber();
+            if (ptNum && isPointNumberTaken(ptNum)) {
+                addNotification({
+                    kind: 'point-add',
+                    severity: 'warning',
+                    title: 'Point Exists',
+                    message: `Point ${ptNum} already exists. Using next available CACP point: ${cacpNext}`,
+                });
+            }
+            ptNum = cacpNext;
+        }
+
+        const newPoint: SurveyPoint = {
+            pointNumber: ptNum,
+            northing: Math.round(n * 1000) / 1000,
+            easting: Math.round(e * 1000) / 1000,
+            elevation: parseFloat(addPointElevation) || 0,
+            description: addPointDescription.trim(),
+        };
+        onAddPoint?.(newPoint);
+
+        const nextNum = queryCacpNextPointNumber(new Set([ptNum]));
+        setAddPointNumber(nextNum);
+        addNotification({
+            kind: 'point-add',
+            severity: 'success',
+            title: 'Point Added',
+            message: `Added Point ${ptNum} (N: ${newPoint.northing.toFixed(2)}, E: ${newPoint.easting.toFixed(2)})`,
+        });
+    }, [addPointNorthing, addPointEasting, addPointNumber, addPointElevation, addPointDescription, onAddPoint, notifyBoundaryError, addNotification, isPointNumberTaken, queryCacpNextPointNumber]);
 
     const buildLineEndpoint = useCallback((point: SurveyPoint) => {
         const committedPoint = !point.hidden ? pointMap.get(point.pointNumber) : null;
@@ -2283,6 +2498,144 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         return nearestLine;
     }, [lines, pointMap, transform, worldToScreen]);
 
+    const findDimensionNearClick = useCallback((clickX: number, clickY: number, thresholdPx: number = 18): AnnotationDimension | null => {
+        if (!dimensions || dimensions.length === 0) return null;
+        const worldCoords = screenToWorld(clickX, clickY);
+        const worldThreshold = thresholdPx / transform.scale;
+        for (let i = dimensions.length - 1; i >= 0; i--) {
+            const dim = dimensions[i];
+            if (hitTestDimension(dim, worldCoords, worldThreshold)) {
+                return dim;
+            }
+        }
+        return null;
+    }, [dimensions, screenToWorld, transform.scale]);
+
+    const getGripsForSelectedDimension = useCallback((dim: AnnotationDimension): DimensionGrip[] => {
+        const grips: DimensionGrip[] = [];
+        if (dim.type === 'aligned' || dim.type === 'horizontal' || dim.type === 'vertical') {
+            const g = calculateLinearDimensionGeometry(dim);
+            grips.push({ id: `${dim.id}-p1`, dimId: dim.id, type: 'p1', x: dim.p1.easting, y: dim.p1.northing, dim });
+            grips.push({ id: `${dim.id}-p2`, dimId: dim.id, type: 'p2', x: dim.p2.easting, y: dim.p2.northing, dim });
+            grips.push({ id: `${dim.id}-offset`, dimId: dim.id, type: 'offset', x: g.midpoint.easting, y: g.midpoint.northing, dim });
+        } else if (dim.type === 'radius') {
+            const g = calculateRadialDimensionGeometry(dim);
+            grips.push({ id: `${dim.id}-center`, dimId: dim.id, type: 'center', x: dim.center.easting, y: dim.center.northing, dim });
+            grips.push({ id: `${dim.id}-p1`, dimId: dim.id, type: 'p1', x: g.touchPoint.easting, y: g.touchPoint.northing, dim });
+            grips.push({ id: `${dim.id}-text`, dimId: dim.id, type: 'text', x: dim.textPosition.easting, y: dim.textPosition.northing, dim });
+        } else if (dim.type === 'diameter') {
+            const g = calculateDiameterDimensionGeometry(dim);
+            grips.push({ id: `${dim.id}-center`, dimId: dim.id, type: 'center', x: dim.center.easting, y: dim.center.northing, dim });
+            grips.push({ id: `${dim.id}-p1`, dimId: dim.id, type: 'p1', x: g.touch1.easting, y: g.touch1.northing, dim });
+            grips.push({ id: `${dim.id}-p2`, dimId: dim.id, type: 'p2', x: g.touch2.easting, y: g.touch2.northing, dim });
+            grips.push({ id: `${dim.id}-text`, dimId: dim.id, type: 'text', x: dim.textPosition.easting, y: dim.textPosition.northing, dim });
+        } else if (dim.type === 'arc-length') {
+            const g = calculateArcLengthDimensionGeometry(dim);
+            grips.push({ id: `${dim.id}-p1`, dimId: dim.id, type: 'p1', x: dim.p1.easting, y: dim.p1.northing, dim });
+            grips.push({ id: `${dim.id}-p2`, dimId: dim.id, type: 'p2', x: dim.p2.easting, y: dim.p2.northing, dim });
+            grips.push({ id: `${dim.id}-offset`, dimId: dim.id, type: 'offset', x: g.midpoint.easting, y: g.midpoint.northing, dim });
+        } else if (dim.type === 'curve-data') {
+            grips.push({ id: `${dim.id}-text`, dimId: dim.id, type: 'text', x: dim.textPosition.easting, y: dim.textPosition.northing, dim });
+            grips.push({ id: `${dim.id}-p1`, dimId: dim.id, type: 'p1', x: dim.p1.easting, y: dim.p1.northing, dim });
+            grips.push({ id: `${dim.id}-p2`, dimId: dim.id, type: 'p2', x: dim.p2.easting, y: dim.p2.northing, dim });
+        } else if (dim.type === 'angular') {
+            const g = calculateAngularDimensionGeometry(dim);
+            grips.push({ id: `${dim.id}-center`, dimId: dim.id, type: 'center', x: dim.vertex.easting, y: dim.vertex.northing, dim });
+            grips.push({ id: `${dim.id}-p1`, dimId: dim.id, type: 'p1', x: dim.p1.easting, y: dim.p1.northing, dim });
+            grips.push({ id: `${dim.id}-p2`, dimId: dim.id, type: 'p2', x: dim.p2.easting, y: dim.p2.northing, dim });
+            grips.push({ id: `${dim.id}-offset`, dimId: dim.id, type: 'offset', x: g.midpoint.easting, y: g.midpoint.northing, dim });
+        } else if (dim.type === 'ordinate') {
+            grips.push({ id: `${dim.id}-p1`, dimId: dim.id, type: 'p1', x: dim.point.easting, y: dim.point.northing, dim });
+            grips.push({ id: `${dim.id}-text`, dimId: dim.id, type: 'text', x: dim.leaderEnd.easting, y: dim.leaderEnd.northing, dim });
+        }
+        return grips;
+    }, []);
+
+    const findDimensionGripNearClick = useCallback((clickX: number, clickY: number, thresholdPx = 12): DimensionGrip | null => {
+        if (!selectedDimensionId) return null;
+        const selDim = dimensions.find(d => d.id === selectedDimensionId);
+        if (!selDim) return null;
+        const grips = getGripsForSelectedDimension(selDim);
+        let best: DimensionGrip | null = null;
+        let minDist = thresholdPx;
+        for (const grip of grips) {
+            const sc = worldToScreen(grip.x, grip.y);
+            const dist = Math.hypot(clickX - sc.x, clickY - sc.y);
+            if (dist <= minDist) {
+                minDist = dist;
+                best = grip;
+            }
+        }
+        return best;
+    }, [selectedDimensionId, dimensions, getGripsForSelectedDimension, worldToScreen]);
+
+    const updateDimensionFromGrip = useCallback((
+        dim: AnnotationDimension,
+        gripType: DimensionGripType,
+        targetW: { easting: number; northing: number }
+    ): AnnotationDimension => {
+        if (dim.type === 'aligned') {
+            if (gripType === 'p1') return { ...dim, p1: targetW };
+            if (gripType === 'p2') return { ...dim, p2: targetW };
+            if (gripType === 'offset') {
+                const dx = dim.p2.easting - dim.p1.easting;
+                const dy = dim.p2.northing - dim.p1.northing;
+                const len = Math.hypot(dx, dy);
+                if (len > 1e-6) {
+                    const px = -dy / len;
+                    const py = dx / len;
+                    const offset = (targetW.easting - dim.p1.easting) * px + (targetW.northing - dim.p1.northing) * py;
+                    return { ...dim, offsetDist: offset };
+                }
+            }
+        } else if (dim.type === 'horizontal') {
+            if (gripType === 'p1') return { ...dim, p1: targetW };
+            if (gripType === 'p2') return { ...dim, p2: targetW };
+            if (gripType === 'offset') return { ...dim, offsetDist: targetW.northing - dim.p1.northing };
+        } else if (dim.type === 'vertical') {
+            if (gripType === 'p1') return { ...dim, p1: targetW };
+            if (gripType === 'p2') return { ...dim, p2: targetW };
+            if (gripType === 'offset') return { ...dim, offsetDist: targetW.easting - dim.p1.easting };
+        } else if (dim.type === 'radius') {
+            if (gripType === 'center') return { ...dim, center: targetW };
+            if (gripType === 'text') return { ...dim, textPosition: targetW };
+            if (gripType === 'p1') {
+                const r = Math.hypot(targetW.easting - dim.center.easting, targetW.northing - dim.center.northing);
+                return { ...dim, radius: Math.max(0.1, r) };
+            }
+        } else if (dim.type === 'diameter') {
+            if (gripType === 'center') return { ...dim, center: targetW };
+            if (gripType === 'text') return { ...dim, textPosition: targetW };
+            if (gripType === 'p1' || gripType === 'p2') {
+                const r = Math.hypot(targetW.easting - dim.center.easting, targetW.northing - dim.center.northing);
+                return { ...dim, radius: Math.max(0.1, r) };
+            }
+        } else if (dim.type === 'arc-length') {
+            if (gripType === 'p1') return { ...dim, p1: targetW };
+            if (gripType === 'p2') return { ...dim, p2: targetW };
+            if (gripType === 'offset') {
+                const dist = Math.hypot(targetW.easting - dim.center.easting, targetW.northing - dim.center.northing);
+                return { ...dim, offsetDist: dist - dim.radius };
+            }
+        } else if (dim.type === 'curve-data') {
+            if (gripType === 'text') return { ...dim, textPosition: targetW };
+            if (gripType === 'p1') return { ...dim, p1: targetW };
+            if (gripType === 'p2') return { ...dim, p2: targetW };
+        } else if (dim.type === 'angular') {
+            if (gripType === 'center') return { ...dim, vertex: targetW };
+            if (gripType === 'p1') return { ...dim, p1: targetW };
+            if (gripType === 'p2') return { ...dim, p2: targetW };
+            if (gripType === 'offset') {
+                const r = Math.hypot(targetW.easting - dim.vertex.easting, targetW.northing - dim.vertex.northing);
+                return { ...dim, arcRadius: Math.max(0.1, r) };
+            }
+        } else if (dim.type === 'ordinate') {
+            if (gripType === 'p1') return { ...dim, point: targetW };
+            if (gripType === 'text') return { ...dim, leaderEnd: targetW };
+        }
+        return dim;
+    }, []);
+
     const resolveTtrEntityFromLine = useCallback((line: SurveyLine, clickWorld: { easting: number; northing: number }): TtrEntity | null => {
         const p1 = pointMap.get(line.from);
         const p2 = pointMap.get(line.to);
@@ -2435,6 +2788,69 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
         return null;
     }, [findLineNearClick, resolveTtrEntityFromLine, screenToWorld, worldToScreen, boundaryFiles, pointMap]);
+
+    const resolveCurveTargetFromClick = useCallback((clickX: number, clickY: number) => {
+        const ttr = findTtrEntityNearClick(clickX, clickY, 30);
+        if (ttr && (ttr.kind === 'arc' || ttr.kind === 'circle')) {
+            const radius = ttr.radius;
+            const center = { easting: ttr.center.x, northing: ttr.center.y };
+            if (ttr.kind === 'circle') {
+                const circ = 2 * Math.PI * radius;
+                return {
+                    kind: 'circle' as const,
+                    center,
+                    radius,
+                    arcLength: circ,
+                    p1: { easting: center.easting + radius, northing: center.northing },
+                    p2: { easting: center.easting - radius, northing: center.northing },
+                    isLeftCurve: false,
+                    deltaRad: 2 * Math.PI,
+                };
+            } else {
+                const centralAngle = ttr.centralAngle ?? (ttr.line.arcLength ? ttr.line.arcLength / radius : Math.PI / 2);
+                const p1 = ttr.line.fromPt ? { easting: ttr.line.fromPt.x, northing: ttr.line.fromPt.y } : { easting: center.easting + radius * Math.cos(ttr.startAngle), northing: center.northing + radius * Math.sin(ttr.startAngle) };
+                const p2 = ttr.line.toPt ? { easting: ttr.line.toPt.x, northing: ttr.line.toPt.y } : { easting: center.easting + radius * Math.cos(ttr.startAngle + centralAngle), northing: center.northing + radius * Math.sin(ttr.startAngle + centralAngle) };
+                const arcLength = ttr.line.arcLength ?? (radius * centralAngle);
+                return {
+                    kind: 'arc' as const,
+                    center,
+                    radius,
+                    arcLength,
+                    p1,
+                    p2,
+                    isLeftCurve: !!ttr.isLeftCurve,
+                    chordBearing: ttr.line.chordBearing ?? ttr.line.bearing,
+                    tangentBearing: ttr.line.tangentBearing,
+                    deltaRad: centralAngle,
+                };
+            }
+        }
+
+        const line = findLineNearClick(clickX, clickY, 30);
+        if (line && (line.isCircle || (line.isCurve && line.curveRadius))) {
+            const radius = line.curveRadius!;
+            const p1p = pointMap.get(line.from);
+            const p2p = pointMap.get(line.to);
+            const p1 = p1p ? { easting: p1p.easting, northing: p1p.northing } : (line.fromPt ? { easting: line.fromPt.x, northing: line.fromPt.y } : { easting: 0, northing: 0 });
+            const p2 = p2p ? { easting: p2p.easting, northing: p2p.northing } : (line.toPt ? { easting: line.toPt.x, northing: line.toPt.y } : p1);
+            const center = line.circleCenter ? { easting: line.circleCenter.x, northing: line.circleCenter.y } : p1;
+            const arcLength = line.arcLength ?? (line.isCircle ? 2 * Math.PI * radius : radius * Math.PI / 2);
+            const isLeft = line.curveDirection === 'left';
+            return {
+                kind: (line.isCircle ? 'circle' : 'arc') as 'circle' | 'arc',
+                center,
+                radius,
+                arcLength,
+                p1,
+                p2,
+                isLeftCurve: isLeft,
+                chordBearing: line.chordBearing ?? line.bearing,
+                tangentBearing: line.tangentBearing,
+                deltaRad: arcLength / radius,
+            };
+        }
+        return null;
+    }, [findTtrEntityNearClick, findLineNearClick, pointMap]);
 
     const solveTtrCircle = useCallback((ent1: TtrEntity, ent2: TtrEntity, radius: number): {
         center: { easting: number; northing: number };
@@ -3734,6 +4150,31 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setTransform: (newTransform: { scale: number; offsetX: number; offsetY: number }) => {
             setTransform(newTransform);
         },
+        getViewCenterWorld: () => {
+            const container = containerRef.current;
+            const w = container?.clientWidth || 800;
+            const h = container?.clientHeight || 600;
+            return screenToWorld(w / 2, h / 2);
+        },
+        isPointInView: (easting: number, northing: number) => {
+            const screen = worldToScreen(easting, northing);
+            const container = containerRef.current;
+            const w = container?.clientWidth || 800;
+            const h = container?.clientHeight || 600;
+            return screen.x >= 0 && screen.x <= w && screen.y >= 0 && screen.y <= h;
+        },
+        isBboxInView: (minE: number, maxE: number, minN: number, maxN: number) => {
+            const p1 = worldToScreen(minE, minN);
+            const p2 = worldToScreen(maxE, maxN);
+            const container = containerRef.current;
+            const w = container?.clientWidth || 800;
+            const h = container?.clientHeight || 600;
+            const sMinX = Math.min(p1.x, p2.x);
+            const sMaxX = Math.max(p1.x, p2.x);
+            const sMinY = Math.min(p1.y, p2.y);
+            const sMaxY = Math.max(p1.y, p2.y);
+            return sMaxX >= 0 && sMinX <= w && sMaxY >= 0 && sMinY <= h;
+        },
     }));
     
     useEffect(() => {
@@ -4322,10 +4763,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         floatingCtx.enable(fox, foy);
 
             const inverseScale = 1 / transform.scale;
-            const annotationScalingMode = settings.pointAttributeScaling;
+            // All text except point attributes defaults to world-scaled so you can zoom in on it like true CAD entities.
+            // Point attributes stay locked to a crisp, constant screen size separately so the system doesn't lag with large point sets.
             const lineAnnotationWorldTextHeight = (multiplier: number = 1) => {
-                if (annotationScalingMode === 'world') return 2.0 * lineLabelScale * multiplier;
-                return 10 * lineLabelScale * inverseScale * multiplier;
+                return 2.0 * lineLabelScale * multiplier;
             };
         // Minimum 1 CSS pixel — anything below produces sub-pixel alpha-blended
         // strokes that disappear at certain zooms, especially with transparent
@@ -4376,45 +4817,17 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const ry = viewOriginY + dx * viewSin + dy * viewCos;
             return [(transform.offsetX + transform.scale * rx) * dpr, (transform.offsetY - transform.scale * ry) * dpr];
         };
-        /** Queue a straight segment on the GPU; false means the caller must draw it with Canvas2D. */
+        /** Vector survey linework is authoritatively rendered on Canvas2D so linework is never hidden behind WebGPU basemaps or disabled in tool modes */
         const tryGpuSegment = (
-            x0: number, y0: number, x1: number, y1: number,
-            color: string, widthWorld: number, dashWorld: number[], phaseWorld: number,
-        ): boolean => {
-            if (!gpuLineBatch) return false;
-            const pattern = gpuLineBatch.patternId(dashWorld.map(v => v * gpuPxPerWorld));
-            if (pattern < 0) return false;
-            const [sx0, sy0] = projectToDevice(x0, y0);
-            const [sx1, sy1] = projectToDevice(x1, y1);
-            const rgba = parseCssColor(color);
-            return gpuLineBatch.push(sx0, sy0, sx1, sy1, rgba, widthWorld * gpuPxPerWorld, phaseWorld * gpuPxPerWorld, pattern, pattern === 0 && rgba[3] >= 0.99);
-        };
+            _x0: number, _y0: number, _x1: number, _y1: number,
+            _color: string, _widthWorld: number, _dashWorld: number[], _phaseWorld: number,
+        ): boolean => false;
+
         /** Queue an arc (or full circle) as a tessellated polyline on the GPU. */
         const tryGpuArc = (
-            cx: number, cy: number, radius: number, startAngle: number, endAngle: number,
-            color: string, widthWorld: number, dashWorld: number[], phaseWorld: number,
-        ): boolean => {
-            if (!gpuLineBatch) return false;
-            const pattern = gpuLineBatch.patternId(dashWorld.map(v => v * gpuPxPerWorld));
-            if (pattern < 0) return false;
-            const sweep = Math.abs(endAngle - startAngle);
-            const radiusPx = radius * gpuPxPerWorld;
-            const step = radiusPx > 0.3 ? 2 * Math.acos(Math.max(0, 1 - 0.15 / radiusPx)) : Math.PI / 4;
-            const segments = Math.min(2048, Math.max(8, Math.ceil(sweep / Math.max(step, 1e-4))));
-            const rgba = parseCssColor(color);
-            const widthPx = widthWorld * gpuPxPerWorld;
-            let phasePx = phaseWorld * gpuPxPerWorld;
-            let [px, py] = projectToDevice(cx + radius * Math.cos(startAngle), cy + radius * Math.sin(startAngle));
-            for (let i = 1; i <= segments; i++) {
-                const a = startAngle + ((endAngle - startAngle) * i) / segments;
-                const [qx, qy] = projectToDevice(cx + radius * Math.cos(a), cy + radius * Math.sin(a));
-                if (!gpuLineBatch.push(px, py, qx, qy, rgba, widthPx, phasePx, pattern, pattern === 0 && rgba[3] >= 0.99)) return false;
-                phasePx += Math.hypot(qx - px, qy - py);
-                px = qx;
-                py = qy;
-            }
-            return true;
-        };
+            _cx: number, _cy: number, _radius: number, _startAngle: number, _endAngle: number,
+            _color: string, _widthWorld: number, _dashWorld: number[], _phaseWorld: number,
+        ): boolean => false;
 
         // Draw Google/NAIP basemap underlay
         const drawWarpedImage = (image: CanvasImageSource, quad: WorldQuad, opacity: number) => {
@@ -6127,85 +6540,94 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
         }
 
-        // --- Draw annotation dimensions (aligned) in world-space ---
-        const drawAlignedDimension = (
-            p1: { easting: number; northing: number },
-            p2: { easting: number; northing: number },
-            offsetDist: number,
-            label: string,
-            color: string
+        // --- Draw annotation dimensions & previews in world-space ---
+        const drawArrow = (
+            tipX: number,
+            tipY: number,
+            dirX: number,
+            dirY: number,
+            color: string,
+            styleOverride?: string,
+            sizeOverride?: number
         ) => {
-            const dx = p2.easting - p1.easting;
-            const dy = p2.northing - p1.northing;
-            const len = Math.hypot(dx, dy);
-            if (len < 1e-9) return;
-
-            // Perpendicular unit vector (left-hand of P1→P2 direction)
-            const px = -dy / len;
-            const py = dx / len;
-
-            // Dimension line endpoints
-            const d1 = { x: p1.easting + offsetDist * px, y: p1.northing + offsetDist * py };
-            const d2 = { x: p2.easting + offsetDist * px, y: p2.northing + offsetDist * py };
-
-            // Extension/gap size in world units (screenspace constant)
-            const extLen = 4 * inverseScale;
-            const gapLen = 1.5 * inverseScale;
-            // Sign of offsetDist to know direction for extension beyond dim line
-            const sign = offsetDist >= 0 ? 1 : -1;
-
-            ctx.strokeStyle = color;
-            ctx.fillStyle = color;
-            ctx.lineWidth = inverseScale;
-            ctx.setLineDash([]);
-
-            // Witness line 1: from P1 (with gap) to slightly past D1
-            ctx.beginPath();
-            ctx.moveTo(p1.easting + px * gapLen * sign, p1.northing + py * gapLen * sign);
-            ctx.lineTo(d1.x + px * extLen * sign, d1.y + py * extLen * sign);
-            ctx.stroke();
-
-            // Witness line 2
-            ctx.beginPath();
-            ctx.moveTo(p2.easting + px * gapLen * sign, p2.northing + py * gapLen * sign);
-            ctx.lineTo(d2.x + px * extLen * sign, d2.y + py * extLen * sign);
-            ctx.stroke();
-
-            // Dimension line
-            ctx.beginPath();
-            ctx.moveTo(d1.x, d1.y);
-            ctx.lineTo(d2.x, d2.y);
-            ctx.stroke();
-
-            // Arrowheads (closed triangles, pointing along dim line direction)
-            const arrowSize = 8 * inverseScale;
+            const style = styleOverride || dimStyleSettings.arrowStyle || 'closed';
+            const rawSize = sizeOverride ?? dimStyleSettings.arrowSize ?? 8;
+            const arrowSize = rawSize * inverseScale * (dimensionScale);
+            if (style === 'tick') {
+                const tickSize = arrowSize * 0.9;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2 * inverseScale;
+                ctx.beginPath();
+                ctx.moveTo(tipX - (dirX + dirY) * tickSize * 0.5, tipY - (dirY - dirX) * tickSize * 0.5);
+                ctx.lineTo(tipX + (dirX + dirY) * tickSize * 0.5, tipY + (dirY - dirX) * tickSize * 0.5);
+                ctx.stroke();
+                return;
+            }
+            if (style === 'dot') {
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(tipX, tipY, arrowSize * 0.35, 0, 2 * Math.PI);
+                ctx.fill();
+                return;
+            }
+            if (style === 'open') {
+                const arrowWidth = arrowSize * 0.35;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1.5 * inverseScale;
+                ctx.beginPath();
+                ctx.moveTo(tipX - dirX * arrowSize + dirY * arrowWidth, tipY - dirY * arrowSize - dirX * arrowWidth);
+                ctx.lineTo(tipX, tipY);
+                ctx.lineTo(tipX - dirX * arrowSize - dirY * arrowWidth, tipY - dirY * arrowSize + dirX * arrowWidth);
+                ctx.stroke();
+                return;
+            }
+            // Closed filled arrow
             const arrowWidth = arrowSize * 0.3;
-            const ux = dx / len; // unit vector along dim line
-            const uy = dy / len;
-
-            // Arrow at D1 pointing toward D2
+            ctx.fillStyle = color;
             ctx.beginPath();
-            ctx.moveTo(d1.x, d1.y);
-            ctx.lineTo(d1.x + ux * arrowSize - uy * arrowWidth, d1.y + uy * arrowSize + ux * arrowWidth);
-            ctx.lineTo(d1.x + ux * arrowSize + uy * arrowWidth, d1.y + uy * arrowSize - ux * arrowWidth);
+            ctx.moveTo(tipX, tipY);
+            ctx.lineTo(tipX - dirX * arrowSize + dirY * arrowWidth, tipY - dirY * arrowSize - dirX * arrowWidth);
+            ctx.lineTo(tipX - dirX * arrowSize - dirY * arrowWidth, tipY - dirY * arrowSize + dirX * arrowWidth);
             ctx.closePath();
             ctx.fill();
+        };
 
-            // Arrow at D2 pointing toward D1
+        const drawCenterCross = (cx: number, cy: number, color: string) => {
+            const markSize = 4 * inverseScale;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = inverseScale;
             ctx.beginPath();
-            ctx.moveTo(d2.x, d2.y);
-            ctx.lineTo(d2.x - ux * arrowSize - uy * arrowWidth, d2.y - uy * arrowSize + ux * arrowWidth);
-            ctx.lineTo(d2.x - ux * arrowSize + uy * arrowWidth, d2.y - uy * arrowSize - ux * arrowWidth);
-            ctx.closePath();
-            ctx.fill();
+            ctx.moveTo(cx - markSize, cy);
+            ctx.lineTo(cx + markSize, cy);
+            ctx.moveTo(cx, cy - markSize);
+            ctx.lineTo(cx, cy + markSize);
+            ctx.stroke();
+        };
 
-            // Text at midpoint of dim line
-            const midX = (d1.x + d2.x) / 2;
-            const midY = (d1.y + d2.y) / 2;
-            let textAngle = Math.atan2(dy, dx);
+        const getDimWorldTextHeight = (baseHeight: number = 2.5, scale: number = 1, scalingModeOverride?: 'world' | 'screen') => {
+            const mode = scalingModeOverride || dimStyleSettings.scalingMode || 'world';
+            if (mode === 'screen') {
+                return baseHeight * inverseScale * dimensionScale * scale;
+            }
+            // World-relative: fixed size in survey world units, expands visually when zooming in
+            return baseHeight * dimensionScale * scale;
+        };
+
+        const renderDimText = (
+            label: string,
+            midX: number,
+            midY: number,
+            angle: number,
+            color: string,
+            scale: number = 1,
+            textHeightOverride?: number,
+            scalingModeOverride?: 'world' | 'screen'
+        ) => {
+            let textAngle = angle;
             if (Math.abs(textAngle) > Math.PI / 2) textAngle += Math.PI;
 
-            const worldTextHeight = 2.5 * inverseScale * dimensionScale;
+            const baseH = textHeightOverride ?? dimStyleSettings.textHeight ?? 2.5;
+            const worldTextHeight = getDimWorldTextHeight(baseH, scale, scalingModeOverride);
             ctx.save();
             ctx.translate(midX, midY);
             ctx.rotate(textAngle);
@@ -6214,38 +6636,447 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const textWidth = ctx.measureText(label).width;
             const padX = worldTextHeight * 0.25;
             const padY = worldTextHeight * 0.15;
-            ctx.clearRect(-textWidth / 2 - padX, -worldTextHeight / 2 - padY - worldTextHeight * 0.3, textWidth + padX * 2, worldTextHeight + padY * 2);
+            ctx.fillStyle = 'rgba(17, 24, 39, 0.88)';
+            ctx.fillRect(-textWidth / 2 - padX, -worldTextHeight / 2 - padY, textWidth + padX * 2, worldTextHeight + padY * 2);
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillStyle = color;
-            ctx.fillText(label, 0, -worldTextHeight * 0.3);
+            ctx.fillText(label, 0, 0);
+            ctx.restore();
+        };
+
+        // Linear dimension (aligned, horizontal, vertical)
+        const drawLinearDimension = (
+            dim: AlignedAnnotationDimension | HorizontalAnnotationDimension | VerticalAnnotationDimension,
+            color: string
+        ) => {
+            const geom = calculateLinearDimensionGeometry(dim);
+            const { d1, d2, midpoint, angle, length } = geom;
+            if (length < 1e-9) return;
+
+            const prec = dim.precision ?? dimStyleSettings.precision ?? 2;
+            const dimText = dim.textOverride ?? (length.toFixed(prec) + (dimStyleSettings.linearSuffix || ''));
+            const textH = dim.textHeight ?? dimStyleSettings.textHeight ?? 2.5;
+            const arrowSt = dim.arrowStyle || dimStyleSettings.arrowStyle || 'closed';
+            const arrowSz = dim.arrowSize ?? dimStyleSettings.arrowSize ?? 8.0;
+            const textPlace = dim.textPlacement || dimStyleSettings.textPlacement || 'centered';
+            const dimScale = dim.scale ?? 1.0;
+            const scMode = dim.scalingMode || dimStyleSettings.scalingMode || 'world';
+
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color;
+            ctx.lineWidth = inverseScale;
+            ctx.setLineDash([]);
+
+            // Witness lines
+            ctx.beginPath();
+            ctx.moveTo(geom.p1.easting, geom.p1.northing);
+            ctx.lineTo(d1.easting, d1.northing);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(geom.p2.easting, geom.p2.northing);
+            ctx.lineTo(d2.easting, d2.northing);
+            ctx.stroke();
+
+            // Dimension line
+            ctx.beginPath();
+            ctx.moveTo(d1.easting, d1.northing);
+            ctx.lineTo(d2.easting, d2.northing);
+            ctx.stroke();
+
+            // Arrowheads
+            const dx = d2.easting - d1.easting;
+            const dy = d2.northing - d1.northing;
+            const dlen = Math.hypot(dx, dy);
+            if (dlen > 1e-6) {
+                const ux = dx / dlen;
+                const uy = dy / dlen;
+                drawArrow(d1.easting, d1.northing, -ux, -uy, color, arrowSt, arrowSz);
+                drawArrow(d2.easting, d2.northing, ux, uy, color, arrowSt, arrowSz);
+            }
+
+            // Text
+            let textY = midpoint.northing;
+            let textX = midpoint.easting;
+            if (textPlace === 'above') {
+                const perpX = dlen > 1e-6 ? -dy / dlen : 0;
+                const perpY = dlen > 1e-6 ? dx / dlen : 0;
+                const worldTextH = getDimWorldTextHeight(textH, dimScale, scMode);
+                textX += perpX * (worldTextH * 0.9);
+                textY += perpY * (worldTextH * 0.9);
+            }
+            renderDimText(dimText, textX, textY, angle, color, dimScale, textH, scMode);
+        };
+
+        // Radial dimension
+        const drawRadialDimension = (dim: RadiusAnnotationDimension, color: string) => {
+            const geom = calculateRadialDimensionGeometry(dim);
+            const { center, touchPoint, textPosition, isInside } = geom;
+
+            const prec = dim.precision ?? dimStyleSettings.precision ?? 2;
+            const dimText = dim.textOverride ?? `R = ${dim.radius.toFixed(prec)}'`;
+            const textH = dim.textHeight ?? dimStyleSettings.textHeight ?? 2.5;
+            const arrowSt = dim.arrowStyle || dimStyleSettings.arrowStyle || 'closed';
+            const arrowSz = dim.arrowSize ?? dimStyleSettings.arrowSize ?? 8.0;
+            const dimScale = dim.scale ?? 1.0;
+            const scMode = dim.scalingMode || dimStyleSettings.scalingMode || 'world';
+
+            drawCenterCross(center.easting, center.northing, color);
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = inverseScale;
+            ctx.setLineDash([]);
+
+            // Leader from touchPoint to textPosition
+            ctx.beginPath();
+            ctx.moveTo(touchPoint.easting, touchPoint.northing);
+            ctx.lineTo(textPosition.easting, textPosition.northing);
+            ctx.stroke();
+
+            // Arrowhead at touchPoint
+            const ldx = textPosition.easting - touchPoint.easting;
+            const ldy = textPosition.northing - touchPoint.northing;
+            const llen = Math.hypot(ldx, ldy);
+            if (llen > 1e-6) {
+                const arrowDirX = isInside ? ldx / llen : -ldx / llen;
+                const arrowDirY = isInside ? ldy / llen : -ldy / llen;
+                drawArrow(touchPoint.easting, touchPoint.northing, arrowDirX, arrowDirY, color, arrowSt, arrowSz);
+            }
+
+            renderDimText(dimText, textPosition.easting, textPosition.northing, 0, color, dimScale, textH, scMode);
+        };
+
+        // Diameter dimension
+        const drawDiameterDimension = (dim: DiameterAnnotationDimension, color: string) => {
+            const geom = calculateDiameterDimensionGeometry(dim);
+            const { center, touch1, touch2, textPosition } = geom;
+
+            const prec = dim.precision ?? dimStyleSettings.precision ?? 2;
+            const dimText = dim.textOverride ?? `Ø = ${(dim.radius * 2).toFixed(prec)}'`;
+            const textH = dim.textHeight ?? dimStyleSettings.textHeight ?? 2.5;
+            const arrowSt = dim.arrowStyle || dimStyleSettings.arrowStyle || 'closed';
+            const arrowSz = dim.arrowSize ?? dimStyleSettings.arrowSize ?? 8.0;
+            const dimScale = dim.scale ?? 1.0;
+            const scMode = dim.scalingMode || dimStyleSettings.scalingMode || 'world';
+
+            drawCenterCross(center.easting, center.northing, color);
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = inverseScale;
+            ctx.setLineDash([]);
+
+            // Line through center connecting touch1 and touch2 and extending to text
+            ctx.beginPath();
+            ctx.moveTo(touch1.easting, touch1.northing);
+            ctx.lineTo(touch2.easting, touch2.northing);
+            ctx.lineTo(textPosition.easting, textPosition.northing);
+            ctx.stroke();
+
+            // Arrows at touch1 and touch2
+            const dx = touch2.easting - touch1.easting;
+            const dy = touch2.northing - touch1.northing;
+            const dlen = Math.hypot(dx, dy);
+            if (dlen > 1e-6) {
+                const ux = dx / dlen;
+                const uy = dy / dlen;
+                drawArrow(touch1.easting, touch1.northing, -ux, -uy, color, arrowSt, arrowSz);
+                drawArrow(touch2.easting, touch2.northing, ux, uy, color, arrowSt, arrowSz);
+            }
+
+            renderDimText(dimText, textPosition.easting, textPosition.northing, 0, color, dimScale, textH, scMode);
+        };
+
+        // Arc length dimension
+        const drawArcLengthDimension = (dim: ArcLengthAnnotationDimension, color: string) => {
+            const geom = calculateArcLengthDimensionGeometry(dim);
+            const { center, dimRadius, startAngle, endAngle, midpoint, w1Start, w1End, w2Start, w2End } = geom;
+
+            const prec = dim.precision ?? dimStyleSettings.precision ?? 2;
+            const dimText = dim.textOverride ?? `⌒ L = ${dim.arcLength.toFixed(prec)}'`;
+            const textH = dim.textHeight ?? dimStyleSettings.textHeight ?? 2.5;
+            const arrowSt = dim.arrowStyle || dimStyleSettings.arrowStyle || 'closed';
+            const arrowSz = dim.arrowSize ?? dimStyleSettings.arrowSize ?? 8.0;
+            const dimScale = dim.scale ?? 1.0;
+            const scMode = dim.scalingMode || dimStyleSettings.scalingMode || 'world';
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = inverseScale;
+            ctx.setLineDash([]);
+
+            // Radial witness lines
+            ctx.beginPath();
+            ctx.moveTo(w1Start.easting, w1Start.northing);
+            ctx.lineTo(w1End.easting, w1End.northing);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(w2Start.easting, w2Start.northing);
+            ctx.lineTo(w2End.easting, w2End.northing);
+            ctx.stroke();
+
+            // Concentric arc
+            ctx.beginPath();
+            ctx.arc(center.easting, center.northing, dimRadius, startAngle, endAngle, !dim.isLeftCurve);
+            ctx.stroke();
+
+            // Tangent arrowheads at w1End and w2End
+            const t1Angle = dim.isLeftCurve ? startAngle + Math.PI / 2 : startAngle - Math.PI / 2;
+            const t2Angle = dim.isLeftCurve ? endAngle - Math.PI / 2 : endAngle + Math.PI / 2;
+            drawArrow(w1End.easting, w1End.northing, Math.cos(t1Angle), Math.sin(t1Angle), color, arrowSt, arrowSz);
+            drawArrow(w2End.easting, w2End.northing, Math.cos(t2Angle), Math.sin(t2Angle), color, arrowSt, arrowSz);
+
+            renderDimText(dimText, midpoint.easting, midpoint.northing, geom.midAngle + Math.PI / 2, color, dimScale, textH, scMode);
+        };
+
+        // Curve data callout card
+        const drawCurveDataDimension = (dim: CurveDataAnnotationDimension, color: string, isSel: boolean) => {
+            const curveInfo = calculateCurveData({
+                radius: dim.radius,
+                arcLength: dim.arcLength,
+                deltaRad: dim.deltaRad,
+                p1: dim.p1,
+                p2: dim.p2,
+                chordBearing: dim.chordBearing,
+                chordLength: dim.chordLength,
+                tangentBearing: dim.tangentBearing,
+                curveDirection: dim.curveDirection,
+            });
+
+            const textH = dim.textHeight ?? dimStyleSettings.textHeight ?? 2.5;
+            const dimScale = dim.scale ?? 1.0;
+            const scMode = dim.scalingMode || dimStyleSettings.scalingMode || 'world';
+
+            const chordMidX = (dim.p1.easting + dim.p2.easting) / 2;
+            const chordMidY = (dim.p1.northing + dim.p2.northing) / 2;
+            const midAngle = Math.atan2(chordMidY - dim.center.northing, chordMidX - dim.center.easting);
+            const curveMidX = dim.center.easting + dim.radius * Math.cos(midAngle);
+            const curveMidY = dim.center.northing + dim.radius * Math.sin(midAngle);
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = inverseScale * (isSel ? 1.8 : 1);
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(curveMidX, curveMidY);
+            ctx.lineTo(dim.textPosition.easting, dim.textPosition.northing);
+            ctx.stroke();
+
+            const ldx = curveMidX - dim.textPosition.easting;
+            const ldy = curveMidY - dim.textPosition.northing;
+            const llen = Math.hypot(ldx, ldy);
+            if (llen > 1e-6) {
+                drawArrow(curveMidX, curveMidY, -ldx / llen, -ldy / llen, color);
+            }
+
+            const worldTextHeight = getDimWorldTextHeight(textH, dimScale, scMode);
+            const lineHeight = worldTextHeight * 1.35;
+            const pad = worldTextHeight * 0.6;
+
+            ctx.save();
+            ctx.translate(dim.textPosition.easting, dim.textPosition.northing);
+            ctx.scale(1, -1);
+
+            ctx.font = `bold ${worldTextHeight}px monospace`;
+            let maxW = ctx.measureText('CURVE DATA').width;
+            curveInfo.calloutLines.forEach(l => {
+                const w = ctx.measureText(l).width;
+                if (w > maxW) maxW = w;
+            });
+
+            const cardW = maxW + pad * 2;
+            const cardH = (curveInfo.calloutLines.length + 1) * lineHeight + pad * 2;
+            const cardX = 0;
+            const cardY = -cardH / 2;
+
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+            ctx.fillRect(cardX, cardY, cardW, cardH);
+            ctx.strokeStyle = isSel ? '#F59E0B' : color;
+            ctx.lineWidth = inverseScale * (isSel ? 2 : 1.2);
+            ctx.strokeRect(cardX, cardY, cardW, cardH);
+
+            ctx.fillStyle = '#38BDF8';
+            ctx.font = `bold ${worldTextHeight * 1.05}px sans-serif`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText('CURVE DATA', cardX + pad, cardY + pad);
+
+            ctx.strokeStyle = 'rgba(56, 189, 248, 0.35)';
+            ctx.lineWidth = inverseScale * 0.8;
+            ctx.beginPath();
+            ctx.moveTo(cardX + pad, cardY + pad + lineHeight * 0.95);
+            ctx.lineTo(cardX + cardW - pad, cardY + pad + lineHeight * 0.95);
+            ctx.stroke();
+
+            ctx.font = `600 ${worldTextHeight * 0.95}px monospace`;
+            ctx.fillStyle = '#F8FAFC';
+            curveInfo.calloutLines.forEach((row, i) => {
+                ctx.fillText(row, cardX + pad, cardY + pad + (i + 1.2) * lineHeight);
+            });
+
+            ctx.restore();
+        };
+
+        // Angular dimension
+        const drawAngularDimension = (dim: AngularAnnotationDimension, color: string) => {
+            const geom = calculateAngularDimensionGeometry(dim);
+            const { vertex, arcRadius, startAngle, endAngle, midpoint } = geom;
+
+            const dimText = dim.textOverride ?? geom.dimensionText;
+            const textH = dim.textHeight ?? dimStyleSettings.textHeight ?? 2.5;
+            const arrowSt = dim.arrowStyle || dimStyleSettings.arrowStyle || 'closed';
+            const arrowSz = dim.arrowSize ?? dimStyleSettings.arrowSize ?? 8.0;
+            const dimScale = dim.scale ?? 1.0;
+            const scMode = dim.scalingMode || dimStyleSettings.scalingMode || 'world';
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = inverseScale;
+            ctx.setLineDash([]);
+
+            ctx.beginPath();
+            ctx.arc(vertex.easting, vertex.northing, arcRadius, startAngle, endAngle);
+            ctx.stroke();
+
+            const a1Tan = startAngle + Math.PI / 2;
+            const a2Tan = endAngle - Math.PI / 2;
+            const p1Arc = { x: vertex.easting + arcRadius * Math.cos(startAngle), y: vertex.northing + arcRadius * Math.sin(startAngle) };
+            const p2Arc = { x: vertex.easting + arcRadius * Math.cos(endAngle), y: vertex.northing + arcRadius * Math.sin(endAngle) };
+            drawArrow(p1Arc.x, p1Arc.y, Math.cos(a1Tan), Math.sin(a1Tan), color, arrowSt, arrowSz);
+            drawArrow(p2Arc.x, p2Arc.y, Math.cos(a2Tan), Math.sin(a2Tan), color, arrowSt, arrowSz);
+
+            renderDimText(dimText, midpoint.easting, midpoint.northing, geom.midAngle + Math.PI / 2, color, dimScale, textH, scMode);
+        };
+
+        // Ordinate dimension
+        const drawOrdinateDimension = (dim: OrdinateAnnotationDimension, color: string) => {
+            const { point, leaderEnd } = dim;
+            const textH = dim.textHeight ?? dimStyleSettings.textHeight ?? 2.5;
+            const dimScale = dim.scale ?? 1.0;
+            const scMode = dim.scalingMode || dimStyleSettings.scalingMode || 'world';
+            const prec = dim.precision ?? dimStyleSettings.precision ?? 2;
+
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color;
+            ctx.lineWidth = inverseScale;
+            ctx.setLineDash([]);
+
+            ctx.beginPath();
+            ctx.arc(point.easting, point.northing, 3 * inverseScale, 0, 2 * Math.PI);
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.moveTo(point.easting, point.northing);
+            ctx.lineTo(leaderEnd.easting, leaderEnd.northing);
+            ctx.stroke();
+
+            const label = dim.textOverride ?? `N: ${point.northing.toFixed(prec)}\nE: ${point.easting.toFixed(prec)}`;
+            const lines = label.split('\n');
+            const worldTextHeight = getDimWorldTextHeight(textH, dimScale, scMode);
+
+            ctx.save();
+            ctx.translate(leaderEnd.easting, leaderEnd.northing);
+            ctx.scale(1, -1);
+            ctx.font = `600 ${worldTextHeight}px monospace`;
+            ctx.fillStyle = color;
+            lines.forEach((l, i) => {
+                ctx.fillText(l, 4 * inverseScale, i * worldTextHeight * 1.2);
+            });
             ctx.restore();
         };
 
         // Draw saved dimensions
         dimensions.forEach(dim => {
-            const dist = Math.hypot(dim.p2.easting - dim.p1.easting, dim.p2.northing - dim.p1.northing);
-            const label = dim.textOverride ?? dist.toFixed(2);
-            drawAlignedDimension(dim.p1, dim.p2, dim.offsetDist, label, '#00E5FF');
+            const isSel = selectedDimensionId === dim.id;
+            const color = isSel ? '#F59E0B' : (dim.color || dimStyleSettings.color || '#00E5FF');
+
+            switch (dim.type) {
+                case 'aligned':
+                case 'horizontal':
+                case 'vertical':
+                    drawLinearDimension(dim, color);
+                    break;
+                case 'radius':
+                    drawRadialDimension(dim, color);
+                    break;
+                case 'diameter':
+                    drawDiameterDimension(dim, color);
+                    break;
+                case 'arc-length':
+                    drawArcLengthDimension(dim, color);
+                    break;
+                case 'curve-data':
+                    drawCurveDataDimension(dim, color, isSel);
+                    break;
+                case 'angular':
+                    drawAngularDimension(dim, color);
+                    break;
+                case 'ordinate':
+                    drawOrdinateDimension(dim, color);
+                    break;
+            }
+
+            // Draw CAD selection grips when selected
+            if (isSel) {
+                const dimGrips = getGripsForSelectedDimension(dim);
+                const gripSize = 6 * inverseScale;
+                dimGrips.forEach(grip => {
+                    const isAct = activeDimGrip?.id === grip.id;
+                    const isHov = hoveredDimGrip?.id === grip.id;
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.rect(grip.x - gripSize / 2, grip.y - gripSize / 2, gripSize, gripSize);
+                    ctx.fillStyle = isAct ? '#EF4444' : isHov ? '#F59E0B' : '#0284C7';
+                    ctx.fill();
+                    ctx.strokeStyle = '#FFFFFF';
+                    ctx.lineWidth = 1.2 * inverseScale;
+                    ctx.stroke();
+                    ctx.restore();
+                });
+            }
         });
 
-        // Draw live preview for aligned-dim mode
-        if (drawingMode === 'aligned-dim') {
-            if (dimP1 && dimP2 && dimPreviewMouse) {
-                // Phase 2: show live preview with current mouse position as offset reference
-                const dx = dimP2.easting - dimP1.easting;
-                const dy = dimP2.northing - dimP1.northing;
-                const len = Math.hypot(dx, dy);
-                if (len > 1e-9) {
-                    const px = -dy / len;
-                    const py = dx / len;
-                    const offsetDist = (dimPreviewMouse.easting - dimP1.easting) * px + (dimPreviewMouse.northing - dimP1.northing) * py;
-                    const dist = len;
-                    drawAlignedDimension(dimP1, dimP2, offsetDist, dist.toFixed(2), 'rgba(0,229,255,0.55)');
+        // Highlight curve in phase 0 for curve tools
+        if (dimHoveredCurve) {
+            ctx.save();
+            ctx.strokeStyle = '#38BDF8';
+            ctx.lineWidth = 3 * inverseScale;
+            ctx.shadowColor = '#38BDF8';
+            ctx.shadowBlur = 8;
+            ctx.beginPath();
+            if (dimHoveredCurve.kind === 'circle') {
+                ctx.arc(dimHoveredCurve.center.easting, dimHoveredCurve.center.northing, dimHoveredCurve.radius, 0, 2 * Math.PI);
+            } else if (dimHoveredCurve.startAngle !== undefined && dimHoveredCurve.centralAngle !== undefined) {
+                const endAngle = dimHoveredCurve.isLeftCurve
+                    ? dimHoveredCurve.startAngle + dimHoveredCurve.centralAngle
+                    : dimHoveredCurve.startAngle - dimHoveredCurve.centralAngle;
+                ctx.arc(dimHoveredCurve.center.easting, dimHoveredCurve.center.northing, dimHoveredCurve.radius, dimHoveredCurve.startAngle, endAngle, !dimHoveredCurve.isLeftCurve);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // Live preview for dimension tools
+        if (isDimensionDrawingMode(drawingMode)) {
+            const previewColor = 'rgba(0, 229, 255, 0.6)';
+            if ((drawingMode === 'aligned-dim' || drawingMode === 'horiz-dim' || drawingMode === 'vert-dim') && dimP1 && dimP2 && dimPreviewMouse) {
+                let offsetDist = 0;
+                if (drawingMode === 'aligned-dim') {
+                    const dx = dimP2.easting - dimP1.easting;
+                    const dy = dimP2.northing - dimP1.northing;
+                    const len = Math.hypot(dx, dy);
+                    if (len > 1e-9) {
+                        const px = -dy / len;
+                        const py = dx / len;
+                        offsetDist = (dimPreviewMouse.easting - dimP1.easting) * px + (dimPreviewMouse.northing - dimP1.northing) * py;
+                    }
+                } else if (drawingMode === 'horiz-dim') {
+                    offsetDist = dimPreviewMouse.northing - dimP1.northing;
+                } else {
+                    offsetDist = dimPreviewMouse.easting - dimP1.easting;
                 }
-            } else if (dimP1 && !dimP2 && dimPreviewMouse) {
-                // Phase 1: show rubber-band from P1 to mouse
-                ctx.strokeStyle = 'rgba(0,229,255,0.55)';
+                const dimType = drawingMode === 'horiz-dim' ? 'horizontal' : drawingMode === 'vert-dim' ? 'vertical' : 'aligned';
+                drawLinearDimension({ id: 'preview', type: dimType, p1: dimP1, p2: dimP2, offsetDist }, previewColor);
+            } else if ((drawingMode === 'aligned-dim' || drawingMode === 'horiz-dim' || drawingMode === 'vert-dim') && dimP1 && !dimP2 && dimPreviewMouse) {
+                ctx.strokeStyle = previewColor;
                 ctx.lineWidth = inverseScale;
                 const dashSize = 5 * inverseScale;
                 ctx.setLineDash([dashSize, dashSize]);
@@ -6255,14 +7086,37 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 ctx.stroke();
                 ctx.setLineDash([]);
 
-                // Draw P1 marker
                 ctx.fillStyle = '#00E5FF';
                 ctx.beginPath();
                 ctx.arc(dimP1.easting, dimP1.northing, 3 * inverseScale, 0, 2 * Math.PI);
                 ctx.fill();
+            } else if (drawingMode === 'radius-dim' && dimSelectedCurve && dimPreviewMouse) {
+                drawRadialDimension({ id: 'preview', type: 'radius', center: dimSelectedCurve.center, radius: dimSelectedCurve.radius, textPosition: dimPreviewMouse }, previewColor);
+            } else if (drawingMode === 'diameter-dim' && dimSelectedCurve && dimPreviewMouse) {
+                drawDiameterDimension({ id: 'preview', type: 'diameter', center: dimSelectedCurve.center, radius: dimSelectedCurve.radius, textPosition: dimPreviewMouse }, previewColor);
+            } else if (drawingMode === 'arc-length-dim' && dimSelectedCurve && dimPreviewMouse) {
+                const distFromCenter = Math.hypot(dimPreviewMouse.easting - dimSelectedCurve.center.easting, dimPreviewMouse.northing - dimSelectedCurve.center.northing);
+                const offsetDist = distFromCenter - dimSelectedCurve.radius;
+                drawArcLengthDimension({ id: 'preview', type: 'arc-length', center: dimSelectedCurve.center, radius: dimSelectedCurve.radius, p1: dimSelectedCurve.p1, p2: dimSelectedCurve.p2, arcLength: dimSelectedCurve.arcLength, offsetDist, isLeftCurve: dimSelectedCurve.isLeftCurve }, previewColor);
+            } else if (drawingMode === 'curve-data-dim' && dimSelectedCurve && dimPreviewMouse) {
+                drawCurveDataDimension({ id: 'preview', type: 'curve-data', center: dimSelectedCurve.center, radius: dimSelectedCurve.radius, arcLength: dimSelectedCurve.arcLength, deltaRad: dimSelectedCurve.deltaRad, chordBearing: dimSelectedCurve.chordBearing, chordLength: dimSelectedCurve.chordLength, tangentBearing: dimSelectedCurve.tangentBearing, p1: dimSelectedCurve.p1, p2: dimSelectedCurve.p2, textPosition: dimPreviewMouse }, previewColor, false);
+            } else if (drawingMode === 'angular-dim' && dimP1 && dimP2 && dimPreviewMouse) {
+                const arcRadius = Math.hypot(dimPreviewMouse.easting - dimP1.easting, dimPreviewMouse.northing - dimP1.northing);
+                drawAngularDimension({ id: 'preview', type: 'angular', vertex: dimP1, p1: dimP2, p2: dimPreviewMouse, arcRadius: Math.max(0.1, arcRadius) }, previewColor);
+            } else if (drawingMode === 'angular-dim' && dimP1 && !dimP2 && dimPreviewMouse) {
+                ctx.strokeStyle = previewColor;
+                ctx.lineWidth = inverseScale;
+                ctx.setLineDash([4 * inverseScale, 4 * inverseScale]);
+                ctx.beginPath();
+                ctx.moveTo(dimP1.easting, dimP1.northing);
+                ctx.lineTo(dimPreviewMouse.easting, dimPreviewMouse.northing);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            } else if (drawingMode === 'ordinate-dim' && dimP1 && dimPreviewMouse) {
+                drawOrdinateDimension({ id: 'preview', type: 'ordinate', point: dimP1, leaderEnd: dimPreviewMouse }, previewColor);
             }
 
-            // Snap indicator: yellow diamond at snap target
+            // Snap indicator
             if (dimSnapPoint) {
                 const sr = 5 * inverseScale;
                 ctx.save();
@@ -6281,7 +7135,57 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
         }
 
-        if (activeOsnapPoint && (activeGrip || isPickingOtOrigin || drawingMode === 'circle' || drawingMode === 'aligned-dim' || drawingMode === 'boundary-line' || drawingMode === 'polylines' || drawingMode === 'breaklines' || drawingMode === 'inclusion' || drawingMode === 'exclusion')) {
+        // Live preview for Add Point tool
+        if (drawingMode === 'add-point' && dimPreviewMouse) {
+            const px = dimPreviewMouse.easting;
+            const py = dimPreviewMouse.northing;
+            const r1 = 3 * inverseScale;
+            const r2 = 7 * inverseScale;
+            const arm = 12 * inverseScale;
+
+            ctx.save();
+            ctx.strokeStyle = '#10B981'; // Emerald
+            ctx.fillStyle = 'rgba(16, 185, 129, 0.2)';
+            ctx.lineWidth = 1.5 * inverseScale;
+
+            // Concentric target circles
+            ctx.beginPath();
+            ctx.arc(px, py, r1, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(px, py, r2, 0, 2 * Math.PI);
+            ctx.stroke();
+
+            // Crosshairs
+            ctx.beginPath();
+            ctx.moveTo(px - arm, py);
+            ctx.lineTo(px - r2, py);
+            ctx.moveTo(px + r2, py);
+            ctx.lineTo(px + arm, py);
+            ctx.moveTo(px, py - arm);
+            ctx.lineTo(px, py - r2);
+            ctx.moveTo(px, py + r2);
+            ctx.lineTo(px, py + arm);
+            ctx.stroke();
+
+            // Text label floating near point
+            const ptLabelNum = isPointNumberTaken(addPointNumber) ? queryCacpNextPointNumber() : (addPointNumber || nextAvailablePointNumber || '1');
+            const labelText = `PT ${ptLabelNum}`;
+            const worldTextHeight = getDimWorldTextHeight(2.4);
+            ctx.translate(px + 10 * inverseScale, py + 10 * inverseScale);
+            ctx.scale(1, -1);
+            ctx.font = `bold ${worldTextHeight}px sans-serif`;
+            const tw = ctx.measureText(labelText).width;
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+            ctx.fillRect(-2 * inverseScale, -worldTextHeight, tw + 4 * inverseScale, worldTextHeight + 4 * inverseScale);
+            ctx.fillStyle = '#10B981';
+            ctx.fillText(labelText, 0, 0);
+            ctx.restore();
+        }
+
+        if (activeOsnapPoint && (activeGrip || isPickingOtOrigin || drawingMode === 'circle' || isDimensionDrawingMode(drawingMode) || drawingMode === 'add-point' || drawingMode === 'boundary-line' || drawingMode === 'polylines' || drawingMode === 'breaklines' || drawingMode === 'inclusion' || drawingMode === 'exclusion')) {
             const sr = 5 * inverseScale;
             ctx.save();
             ctx.strokeStyle = '#FFD700';
@@ -6403,7 +7307,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         });
                         pob = cnt > 0
                             ? { easting: sumE / cnt, northing: sumN / cnt }
-                            : { easting: 0, northing: 0 };
+                            : screenToWorld(logicalWidth / 2, logicalHeight / 2);
                     }
                     if (firstCall.from) synthMap.set(firstCall.from, pob);
                     bfPobOriginal = { easting: pob.easting, northing: pob.northing };
@@ -6873,7 +7777,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const clColor = clCat?.color ?? (isLightTheme ? 'rgba(50,50,50,0.9)' : 'rgba(200,200,200,0.9)');
             if (clStyle.visible) {
                 const contourBaseSize = 10 * attributeScale * contourLabelScale * clStyle.scale * 0.8;
-                const screenTextSize = resolveAnnotationTextSize(contourBaseSize, annotationScalingMode, transform.scale);
+                const screenTextSize = resolveAnnotationTextSize(contourBaseSize, 'world', transform.scale);
                 ctx.font = `${clStyle.fontItalic ? 'italic ' : ''}${clStyle.fontBold ? 'bold ' : ''}${screenTextSize}px ${clStyle.fontFamily}`;
                 ctx.fillStyle = clColor;
 
@@ -6909,7 +7813,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const rdColor = rdCat?.color ?? (isLightTheme ? 'rgba(30,80,160,0.92)' : 'rgba(100,180,255,0.92)');
             if (rdStyle.visible) {
                 const streetBaseSize = Math.max(8, 11 * attributeScale * rdStyle.scale);
-                const streetTextSize = resolveAnnotationTextSize(streetBaseSize, annotationScalingMode, transform.scale);
+                const streetTextSize = resolveAnnotationTextSize(streetBaseSize, 'world', transform.scale);
                 ctx.font = `${rdStyle.fontItalic ? 'italic ' : ''}${rdStyle.fontBold ? 'bold ' : ''}${streetTextSize}px ${rdStyle.fontFamily}`;
                 ctx.fillStyle = rdColor;
 
@@ -6954,7 +7858,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const poTextCase = poUsesCadCategory ? poCategoryStyle.textCase : parcelTextStyle.textCase;
             const poCatScale = poCategoryStyle.scale || 0.8;
             const parcelBaseFontSize = Math.max(7, 10 * attributeScale * annotationScale * poCatScale);
-            const poFontSize = resolveAnnotationTextSize(parcelBaseFontSize, annotationScalingMode, transform.scale);
+            const poFontSize = resolveAnnotationTextSize(parcelBaseFontSize, 'world', transform.scale);
             const poFontStr = `${poItalic ? 'italic ' : ''}${poBold ? 'bold ' : ''}${poFontSize}px ${poFamily}`;
             if (poVisible) {
                 ctx.font = poFontStr;
@@ -7176,7 +8080,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const ruleScaleMult = isExisting ? existingScaleMult : 1;
                 const combinedScale = (annotRule.scale || 1) * (annotationScale || 1) * ruleScaleMult;
                 const applyItalic = (isExisting && existingItalic) || annStyle.fontItalic;
-                const noteFontSize = resolveAnnotationTextSize(11 * combinedScale, annotationScalingMode, transform.scale);
+                const noteFontSize = resolveAnnotationTextSize(11 * combinedScale, 'world', transform.scale);
                 // Per-point override (Ctrl+drag / Shift+click mirror) takes
                 // precedence over the rule's default leaderOffset.
                 const effDx = p.annotationOffset ? p.annotationOffset.dx : annotRule.leaderOffset.dx;
@@ -7461,9 +8365,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const offsetX = line.labelOffset?.x || 0;
         const offsetY = line.labelOffset?.y || 0;
         
-        const worldTextHeight = settings.pointAttributeScaling === 'world'
-            ? 2.0 * lineLabelScale
-            : 10 * lineLabelScale * (1 / transform.scale);
+        const worldTextHeight = 2.0 * lineLabelScale;
         const text = `${line.bearing} / ${line.distance}`;
         
         const canvas = canvasRef.current;
@@ -7522,9 +8424,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const dText = call.arcLength ? `L=${call.arcLength.toFixed(2)}'` : call.distance;
         if (!bText && !dText) return false;
         const labelText = [bText, dText].filter(Boolean).join(' / ');
-        const worldTextHeight = settings.pointAttributeScaling === 'world'
-            ? 2.0 * lineLabelScale
-            : 10 * lineLabelScale * (1 / transform.scale);
+        const worldTextHeight = 2.0 * lineLabelScale;
         const canvas = canvasRef.current;
         if (!canvas) return false;
         const ctx = canvas.getContext('2d');
@@ -7592,9 +8492,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         
         if (textLines.length === 0) return false;
         
-        const worldTextHeight = settings.pointAttributeScaling === 'world'
-            ? 2.0 * lineLabelScale
-            : 10 * lineLabelScale * (1 / transform.scale);
+        const worldTextHeight = 2.0 * lineLabelScale;
         const lineHeight = worldTextHeight * 1.4;
         
         const canvas = canvasRef.current;
@@ -7672,9 +8570,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         
         if (textLines.length === 0) return false;
         
-        const worldTextHeight = settings.pointAttributeScaling === 'world'
-            ? 2.0 * lineLabelScale
-            : 10 * lineLabelScale * (1 / transform.scale);
+        const worldTextHeight = 2.0 * lineLabelScale;
         const lineHeight = worldTextHeight * 1.4;
         
         const canvas = canvasRef.current;
@@ -8037,6 +8933,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 setTypedSegmentLength('');
                 return;
             }
+            if (e.key === 'p' || e.key === 'P') {
+                e.preventDefault();
+                setTerminalIncoming({ text: 'Command: P (ADD POINT) — click canvas to drop point [Esc to finish]', tone: 'ok' });
+                if (drawingMode === 'add-point') {
+                    finishDrawing();
+                } else {
+                    finishDrawing();
+                    const cacpNext = queryCacpNextPointNumber();
+                    setAddPointNumber(cacpNext);
+                    setDrawingMode('add-point');
+                    setIsAddPointFlyoutOpen(true);
+                }
+                return;
+            }
         }
         // R — rotate movable boundary 180° during align-slide.
         if ((e.key === 'r' || e.key === 'R') && boundaryAlignSliding) {
@@ -8045,6 +8955,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 rotateAlign180();
                 return;
             }
+        }
+        if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'd' || e.key === 'D') && selectedDimensionId) {
+            if (isTextInput) return;
+            e.preventDefault();
+            onDeleteDimension?.(selectedDimensionId);
+            setSelectedDimensionId(null);
+            setTerminalIncoming({ text: 'Deleted dimension', tone: 'info' });
+            return;
         }
         if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'd' || e.key === 'D') && selectedLineIds.size > 0) {
             if (isTextInput) return;
@@ -8059,6 +8977,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             e.preventDefault();
             if (cornerAlignPicker) setCornerAlignPicker(null);
             else setCornerAlignPendingCorner(null);
+            return;
+        }
+        if (e.key === 'Escape' && activeDimGrip) {
+            if (isTextInput) return;
+            e.preventDefault();
+            setActiveDimGrip(null);
+            setHoveredDimGrip(null);
+            requestAnimationFrame(() => drawRef.current?.());
             return;
         }
         if (e.key === 'Escape' && activeGrip) {
@@ -8111,6 +9037,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTypedSegmentLength('');
             return;
         }
+        if (e.key === 'Escape' && selectedDimensionId) {
+            setSelectedDimensionId(null);
+            return;
+        }
         if (e.key === 'Escape' && isSelectionMode) {
             if (isTextInput) return;
             e.preventDefault();
@@ -8144,7 +9074,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTtrEntity2(null);
             setTtrHoverEntity(null);
         }
-    }, [selectedLineIds, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode]);
+    }, [selectedLineIds, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode]);
 
     const handleKeyUp = useCallback((e: KeyboardEvent) => {
         if (e.key === 'Control' || e.key === 'Meta') {
@@ -8270,6 +9200,45 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setIsOverLine(false);
         }
 
+        // Update hover state for dimension selection
+        if (drawingMode === 'none' && !isDeletingLines) {
+            const hoveredDim = findDimensionNearClick(mouseX, mouseY, 18) !== null;
+            if (hoveredDim !== isOverDim) setIsOverDim(hoveredDim);
+        } else if (isOverDim) {
+            setIsOverDim(false);
+        }
+
+        if (activeDimGrip) {
+            const mouseWorld = screenToWorld(mouseX, mouseY);
+            const activeModes = inlineOsnapOverride ? new Set<OsnapMode>([inlineOsnapOverride]) : (runningOsnaps.size > 0 ? runningOsnaps : new Set<OsnapMode>(['endpoint', 'midpoint', 'intersection', 'center', 'nearest']));
+            const snapped = resolveOsnapAtScreen(mouseX, mouseY, activeModes, 20, null);
+            setActiveOsnapPoint(snapped);
+            const targetW = snapped ? { easting: snapped.easting, northing: snapped.northing } : { easting: mouseWorld.easting, northing: mouseWorld.northing };
+            const updated = updateDimensionFromGrip(activeDimGrip.dim, activeDimGrip.type, targetW);
+            if (updated && props.onUpdateDimension) {
+                props.onUpdateDimension(updated);
+            }
+            if (drawRef.current) {
+                requestAnimationFrame(() => drawRef.current?.());
+            }
+            return;
+        }
+
+        if (selectedDimensionId && drawingMode === 'none' && !isDeletingLines) {
+            const hDimGrip = findDimensionGripNearClick(mouseX, mouseY, 12);
+            if (hDimGrip?.id !== hoveredDimGrip?.id) {
+                setHoveredDimGrip(hDimGrip);
+                if (drawRef.current) {
+                    requestAnimationFrame(() => drawRef.current?.());
+                }
+            }
+        } else if (hoveredDimGrip) {
+            setHoveredDimGrip(null);
+            if (drawRef.current) {
+                requestAnimationFrame(() => drawRef.current?.());
+            }
+        }
+
         if (activeGrip) {
             const mouseWorld = screenToWorld(mouseX, mouseY);
             const activeModes = inlineOsnapOverride ? new Set<OsnapMode>([inlineOsnapOverride]) : (runningOsnaps.size > 0 ? runningOsnaps : new Set<OsnapMode>(['endpoint', 'midpoint', 'intersection', 'center', 'nearest', 'perpendicular', 'tangent']));
@@ -8384,7 +9353,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     requestAnimationFrame(() => drawRef.current?.());
                 }
             }
-        } else if (drawingMode === 'aligned-dim') {
+        } else if (isDimensionDrawingMode(drawingMode)) {
             const mouseWorld = screenToWorld(mouseX, mouseY);
             const worldX = mouseWorld.easting;
             const worldY = mouseWorld.northing;
@@ -8395,6 +9364,35 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setDimSnapPoint(snapped ? { easting: snapped.easting, northing: snapped.northing } : null);
             setActiveOsnapPoint(snapped);
             setDimPreviewMouse(snapped ? { easting: snapped.easting, northing: snapped.northing } : { easting: worldX, northing: worldY });
+
+            if (['radius-dim', 'diameter-dim', 'arc-length-dim', 'curve-data-dim'].includes(drawingMode) && dimPhase === 0) {
+                const curveTarget = resolveCurveTargetFromClick(mouseX, mouseY);
+                setDimHoveredCurve(curveTarget ? {
+                    kind: curveTarget.kind,
+                    center: curveTarget.center,
+                    radius: curveTarget.radius,
+                    startAngle: curveTarget.p1 ? Math.atan2(curveTarget.p1.northing - curveTarget.center.northing, curveTarget.p1.easting - curveTarget.center.easting) : undefined,
+                    centralAngle: curveTarget.deltaRad,
+                    isLeftCurve: curveTarget.isLeftCurve,
+                } : null);
+            } else {
+                setDimHoveredCurve(null);
+            }
+        } else if (drawingMode === 'add-point') {
+            const mouseWorld = screenToWorld(mouseX, mouseY);
+            const worldX = mouseWorld.easting;
+            const worldY = mouseWorld.northing;
+            const activeModes = inlineOsnapOverride ? new Set<OsnapMode>([inlineOsnapOverride]) : runningOsnaps;
+            const snapped = resolveOsnapAtScreen(mouseX, mouseY, activeModes, 20, null);
+            setActiveOsnapPoint(snapped);
+            setDimPreviewMouse(snapped ? { easting: snapped.easting, northing: snapped.northing } : { easting: worldX, northing: worldY });
+            if (snapped) {
+                setAddPointNorthing(snapped.northing.toFixed(3));
+                setAddPointEasting(snapped.easting.toFixed(3));
+            } else {
+                setAddPointNorthing(worldY.toFixed(3));
+                setAddPointEasting(worldX.toFixed(3));
+            }
         } else if (drawingMode === 'boundary-line') {
             const activeModes = inlineOsnapOverride ? new Set<OsnapMode>([inlineOsnapOverride]) : runningOsnaps;
             const anchor = boundaryLineFrom ? { easting: boundaryLineFrom.easting, northing: boundaryLineFrom.northing } : null;
@@ -8415,17 +9413,32 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, activeOsnapPoint, dimPhase, dimP1, boundaryLineFrom,
         isOrthoEnabled, applyOrthoConstraint, screenToWorld, isPickingOtOrigin,
         circleSubMode, ttrStep, findTtrEntityNearClick, computeTrimAction, trimHoverPreview,
-        activeGrip, hoveredGrip, findGripNearClick, selectedLineIds, pointMap
+        activeGrip, hoveredGrip, findGripNearClick, selectedLineIds, pointMap,
+        isDimensionDrawingMode, resolveCurveTargetFromClick, findDimensionNearClick, isOverDim
     ]);
 
     const handleCanvasContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!e.shiftKey) return;
-        e.preventDefault();
         const container = containerRef.current;
         if (!container) return;
         const rect = container.getBoundingClientRect();
-        setInlineOsnapMenuPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-    }, []);
+        const clickX = e.clientX - rect.left;
+        const clickY = e.clientY - rect.top;
+
+        if (e.shiftKey) {
+            e.preventDefault();
+            setInlineOsnapMenuPos({ x: clickX, y: clickY });
+            return;
+        }
+
+        // Check if right-clicked on a dimension
+        const clickedDim = findDimensionNearClick(clickX, clickY, 18);
+        if (clickedDim) {
+            e.preventDefault();
+            setSelectedDimensionId(clickedDim.id);
+            setDimContextMenu({ x: clickX, y: clickY, dimId: clickedDim.id });
+            return;
+        }
+    }, [findDimensionNearClick]);
 
 
     const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -8722,6 +9735,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
         if (inlineOsnapMenuPos) {
             setInlineOsnapMenuPos(null);
+        }
+        if (dimContextMenu) {
+            setDimContextMenu(null);
         }
         const currentSnap = activeOsnapPoint;
         if (activeOsnapPoint !== null) {
@@ -9082,6 +10098,39 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
         }
 
+        // Dimension Grip selection and manipulation
+        if (selectedDimensionId && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
+            const canvas = canvasRef.current;
+            if (canvas) {
+                const rect = canvas.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const clickY = e.clientY - rect.top;
+                const clickedDimGrip = findDimensionGripNearClick(clickX, clickY, 12);
+                if (clickedDimGrip) {
+                    setActiveDimGrip(clickedDimGrip);
+                    activeDimGripDragStartRef.current = { clientX: e.clientX, clientY: e.clientY };
+                    return;
+                }
+            }
+        }
+
+        // Direct dimension selection in normal mode
+        if (!isSelectionMode && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
+            const canvas = canvasRef.current;
+            if (canvas) {
+                const rect = canvas.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const clickY = e.clientY - rect.top;
+                const clickedDim = findDimensionNearClick(clickX, clickY, 18);
+                if (clickedDim) {
+                    setSelectedDimensionId(prev => (prev === clickedDim.id ? null : clickedDim.id));
+                    return;
+                } else if (selectedDimensionId) {
+                    setSelectedDimensionId(null);
+                }
+            }
+        }
+
         // Grip selection and stretch manipulation
         if (selectedLineIds.size > 0 && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
             const canvas = canvasRef.current;
@@ -9112,6 +10161,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const rect = canvas.getBoundingClientRect();
             const clickX = e.clientX - rect.left;
             const clickY = e.clientY - rect.top;
+
+            const clickedDim = findDimensionNearClick(clickX, clickY, 18);
+            if (clickedDim && !isBoxSelectMode) {
+                setSelectedDimensionId(prev => (prev === clickedDim.id ? null : clickedDim.id));
+                setSelectedLineIds(new Set());
+                return;
+            }
+
             const clickedLine = findLineNearClick(clickX, clickY, 15);
             if (clickedLine && !isBoxSelectMode) {
                 // If line belongs to a polyline group, select/deselect all segments of the polyline together
@@ -9152,6 +10209,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const clickX = e.clientX - rect.left;
             const clickY = e.clientY - rect.top;
             
+            const clickedDim = findDimensionNearClick(clickX, clickY, 18);
+            if (clickedDim) {
+                onDeleteDimension?.(clickedDim.id);
+                if (selectedDimensionId === clickedDim.id) setSelectedDimensionId(null);
+                addNotification({
+                    kind: 'dimension',
+                    severity: 'info',
+                    title: 'Dimension Deleted',
+                });
+                return;
+            }
+
             const clickedLine = findLineNearClick(clickX, clickY, 15);
             if (clickedLine?.id) {
                 // If member of a polyline, delete all constituent segments together
@@ -9652,7 +10721,61 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
 
-        if (drawingMode === 'aligned-dim') {
+        if (drawingMode === 'add-point') {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const worldCoords = screenToWorld(clickX, clickY);
+            const worldEasting = worldCoords.easting;
+            const worldNorthing = worldCoords.northing;
+            const snapThreshold = 20;
+            const activeModes = inlineOsnapOverride ? new Set<OsnapMode>([inlineOsnapOverride]) : runningOsnaps;
+            const snapped = resolveOsnapAtScreen(clickX, clickY, activeModes, snapThreshold, null);
+            if (inlineOsnapOverride) setInlineOsnapOverride(null);
+
+            const ptNorthing = snapped ? snapped.northing : worldNorthing;
+            const ptEasting = snapped ? snapped.easting : worldEasting;
+
+            let ptNum = addPointNumber.trim();
+            // CACP verification: check what is available and prevent duplicates
+            if (!ptNum || isPointNumberTaken(ptNum)) {
+                const cacpNext = queryCacpNextPointNumber();
+                if (ptNum && isPointNumberTaken(ptNum)) {
+                    addNotification({
+                        kind: 'point-add',
+                        severity: 'warning',
+                        title: 'Point Exists',
+                        message: `Point ${ptNum} already exists. Using next available CACP point: ${cacpNext}`,
+                    });
+                }
+                ptNum = cacpNext;
+            }
+
+            const newPt: SurveyPoint = {
+                pointNumber: ptNum,
+                northing: Math.round(ptNorthing * 1000) / 1000,
+                easting: Math.round(ptEasting * 1000) / 1000,
+                elevation: parseFloat(addPointElevation) || 0,
+                description: addPointDescription.trim(),
+            };
+            onAddPoint?.(newPt);
+
+            const nextNum = queryCacpNextPointNumber(new Set([ptNum]));
+            setAddPointNumber(nextNum);
+            setAddPointNorthing(newPt.northing.toFixed(3));
+            setAddPointEasting(newPt.easting.toFixed(3));
+            addNotification({
+                kind: 'point-add',
+                severity: 'success',
+                title: 'Point Added',
+                message: `Added Point ${ptNum} (N: ${newPt.northing.toFixed(2)}, E: ${newPt.easting.toFixed(2)})`,
+            });
+            return;
+        }
+
+        if (isDimensionDrawingMode(drawingMode)) {
             const canvas = canvasRef.current;
             if (!canvas) return;
             const rect = canvas.getBoundingClientRect();
@@ -9668,33 +10791,223 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             if (inlineOsnapOverride) setInlineOsnapOverride(null);
             const worldPt = snapped ? { easting: snapped.easting, northing: snapped.northing } : { easting: worldEasting, northing: worldNorthing };
 
-            if (dimPhase === 0) {
-                setDimP1(worldPt);
-                setDimPhase(1);
-            } else if (dimPhase === 1) {
-                setDimP2(worldPt);
-                setDimPhase(2);
-            } else if (dimPhase === 2 && dimP1 && dimP2) {
-                const dxLine = dimP2.easting - dimP1.easting;
-                const dyLine = dimP2.northing - dimP1.northing;
-                const lineLen = Math.hypot(dxLine, dyLine);
-                if (lineLen > 1e-9) {
-                    const pxPerp = -dyLine / lineLen;
-                    const pyPerp = dxLine / lineLen;
-                    const offsetDist = (worldPt.easting - dimP1.easting) * pxPerp + (worldPt.northing - dimP1.northing) * pyPerp;
-                    const newDim: AnnotationDimension = {
+            if (drawingMode === 'aligned-dim') {
+                if (dimPhase === 0) {
+                    setDimP1(worldPt);
+                    setDimPhase(1);
+                } else if (dimPhase === 1) {
+                    setDimP2(worldPt);
+                    setDimPhase(2);
+                } else if (dimPhase === 2 && dimP1 && dimP2) {
+                    const dxLine = dimP2.easting - dimP1.easting;
+                    const dyLine = dimP2.northing - dimP1.northing;
+                    const lineLen = Math.hypot(dxLine, dyLine);
+                    if (lineLen > 1e-9) {
+                        const pxPerp = -dyLine / lineLen;
+                        const pyPerp = dxLine / lineLen;
+                        const offsetDist = (worldPt.easting - dimP1.easting) * pxPerp + (worldPt.northing - dimP1.northing) * pyPerp;
+                        const newDim: AlignedAnnotationDimension = {
+                            id: `dim-${Date.now()}`,
+                            type: 'aligned',
+                            p1: dimP1,
+                            p2: dimP2,
+                            offsetDist,
+                        };
+                        onAddDimension(newDim);
+                    }
+                    resetDimMode();
+                }
+                return;
+            }
+
+            if (drawingMode === 'horiz-dim') {
+                if (dimPhase === 0) {
+                    setDimP1(worldPt);
+                    setDimPhase(1);
+                } else if (dimPhase === 1) {
+                    setDimP2(worldPt);
+                    setDimPhase(2);
+                } else if (dimPhase === 2 && dimP1 && dimP2) {
+                    const offsetDist = worldPt.northing - dimP1.northing;
+                    const newDim: HorizontalAnnotationDimension = {
                         id: `dim-${Date.now()}`,
-                        type: 'aligned',
+                        type: 'horizontal',
                         p1: dimP1,
                         p2: dimP2,
                         offsetDist,
                     };
                     onAddDimension(newDim);
+                    resetDimMode();
                 }
-                // Chain: reset to phase 0 for the next dimension
-                setDimPhase(0);
-                setDimP1(null);
-                setDimP2(null);
+                return;
+            }
+
+            if (drawingMode === 'vert-dim') {
+                if (dimPhase === 0) {
+                    setDimP1(worldPt);
+                    setDimPhase(1);
+                } else if (dimPhase === 1) {
+                    setDimP2(worldPt);
+                    setDimPhase(2);
+                } else if (dimPhase === 2 && dimP1 && dimP2) {
+                    const offsetDist = worldPt.easting - dimP1.easting;
+                    const newDim: VerticalAnnotationDimension = {
+                        id: `dim-${Date.now()}`,
+                        type: 'vertical',
+                        p1: dimP1,
+                        p2: dimP2,
+                        offsetDist,
+                    };
+                    onAddDimension(newDim);
+                    resetDimMode();
+                }
+                return;
+            }
+
+            if (drawingMode === 'radius-dim') {
+                if (dimPhase === 0) {
+                    const curveTarget = resolveCurveTargetFromClick(clickX, clickY);
+                    if (curveTarget) {
+                        setDimSelectedCurve(curveTarget);
+                        setDimPhase(1);
+                    } else {
+                        notifyBoundaryError('Click on an arc or circle to dimension radius.');
+                    }
+                } else if (dimPhase === 1 && dimSelectedCurve) {
+                    const newDim: RadiusAnnotationDimension = {
+                        id: `dim-${Date.now()}`,
+                        type: 'radius',
+                        center: dimSelectedCurve.center,
+                        radius: dimSelectedCurve.radius,
+                        textPosition: worldPt,
+                    };
+                    onAddDimension(newDim);
+                    resetDimMode();
+                }
+                return;
+            }
+
+            if (drawingMode === 'diameter-dim') {
+                if (dimPhase === 0) {
+                    const curveTarget = resolveCurveTargetFromClick(clickX, clickY);
+                    if (curveTarget) {
+                        setDimSelectedCurve(curveTarget);
+                        setDimPhase(1);
+                    } else {
+                        notifyBoundaryError('Click on an arc or circle to dimension diameter.');
+                    }
+                } else if (dimPhase === 1 && dimSelectedCurve) {
+                    const newDim: DiameterAnnotationDimension = {
+                        id: `dim-${Date.now()}`,
+                        type: 'diameter',
+                        center: dimSelectedCurve.center,
+                        radius: dimSelectedCurve.radius,
+                        textPosition: worldPt,
+                    };
+                    onAddDimension(newDim);
+                    resetDimMode();
+                }
+                return;
+            }
+
+            if (drawingMode === 'arc-length-dim') {
+                if (dimPhase === 0) {
+                    const curveTarget = resolveCurveTargetFromClick(clickX, clickY);
+                    if (curveTarget) {
+                        setDimSelectedCurve(curveTarget);
+                        setDimPhase(1);
+                    } else {
+                        notifyBoundaryError('Click on an arc to dimension arc length.');
+                    }
+                } else if (dimPhase === 1 && dimSelectedCurve) {
+                    const distFromCenter = Math.hypot(worldPt.easting - dimSelectedCurve.center.easting, worldPt.northing - dimSelectedCurve.center.northing);
+                    const offsetDist = distFromCenter - dimSelectedCurve.radius;
+                    const newDim: ArcLengthAnnotationDimension = {
+                        id: `dim-${Date.now()}`,
+                        type: 'arc-length',
+                        center: dimSelectedCurve.center,
+                        radius: dimSelectedCurve.radius,
+                        p1: dimSelectedCurve.p1,
+                        p2: dimSelectedCurve.p2,
+                        arcLength: dimSelectedCurve.arcLength,
+                        offsetDist,
+                        isLeftCurve: dimSelectedCurve.isLeftCurve,
+                    };
+                    onAddDimension(newDim);
+                    resetDimMode();
+                }
+                return;
+            }
+
+            if (drawingMode === 'curve-data-dim') {
+                if (dimPhase === 0) {
+                    const curveTarget = resolveCurveTargetFromClick(clickX, clickY);
+                    if (curveTarget) {
+                        setDimSelectedCurve(curveTarget);
+                        setDimPhase(1);
+                    } else {
+                        notifyBoundaryError('Click on an arc or curve to place Curve Data.');
+                    }
+                } else if (dimPhase === 1 && dimSelectedCurve) {
+                    const newDim: CurveDataAnnotationDimension = {
+                        id: `dim-${Date.now()}`,
+                        type: 'curve-data',
+                        center: dimSelectedCurve.center,
+                        radius: dimSelectedCurve.radius,
+                        arcLength: dimSelectedCurve.arcLength,
+                        deltaRad: dimSelectedCurve.deltaRad,
+                        chordBearing: dimSelectedCurve.chordBearing,
+                        chordLength: dimSelectedCurve.chordLength,
+                        tangentBearing: dimSelectedCurve.tangentBearing,
+                        curveDirection: dimSelectedCurve.isLeftCurve ? 'left' : 'right',
+                        p1: dimSelectedCurve.p1,
+                        p2: dimSelectedCurve.p2,
+                        textPosition: worldPt,
+                    };
+                    onAddDimension(newDim);
+                    resetDimMode();
+                }
+                return;
+            }
+
+            if (drawingMode === 'angular-dim') {
+                if (dimPhase === 0) {
+                    setDimP1(worldPt);
+                    setDimPhase(1);
+                } else if (dimPhase === 1) {
+                    setDimP2(worldPt);
+                    setDimPhase(2);
+                } else if (dimPhase === 2 && dimP1 && dimP2) {
+                    const arcRadius = Math.hypot(worldPt.easting - dimP1.easting, worldPt.northing - dimP1.northing);
+                    const newDim: AngularAnnotationDimension = {
+                        id: `dim-${Date.now()}`,
+                        type: 'angular',
+                        vertex: dimP1,
+                        p1: dimP2,
+                        p2: worldPt,
+                        arcRadius: Math.max(0.1, arcRadius),
+                    };
+                    onAddDimension(newDim);
+                    resetDimMode();
+                }
+                return;
+            }
+
+            if (drawingMode === 'ordinate-dim') {
+                if (dimPhase === 0) {
+                    setDimP1(worldPt);
+                    setDimPhase(1);
+                } else if (dimPhase === 1 && dimP1) {
+                    const newDim: OrdinateAnnotationDimension = {
+                        id: `dim-${Date.now()}`,
+                        type: 'ordinate',
+                        point: dimP1,
+                        leaderEnd: worldPt,
+                    };
+                    onAddDimension(newDim);
+                    resetDimMode();
+                }
+                return;
             }
             return;
         }
@@ -9752,7 +11065,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         document.body.classList.add('panning');
         setIsPanning(true);
         lastMousePos.current = { x: e.clientX, y: e.clientY };
-    }, [drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits]);
+    }, [drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
         if (shiftBoxSelect) {
@@ -10169,6 +11482,31 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     }
                 }
 
+                // Box-select dimensions
+                if (dimensions && dimensions.length > 0) {
+                    for (const dim of dimensions) {
+                        let refPt: { easting: number; northing: number } | null = null;
+                        if (dim.type === 'aligned' || dim.type === 'horizontal' || dim.type === 'vertical') {
+                            refPt = { easting: (dim.p1.easting + dim.p2.easting) / 2, northing: (dim.p1.northing + dim.p2.northing) / 2 };
+                        } else if (dim.type === 'radius' || dim.type === 'diameter' || dim.type === 'curve-data') {
+                            refPt = dim.textPosition;
+                        } else if (dim.type === 'arc-length') {
+                            refPt = dim.center;
+                        } else if (dim.type === 'angular') {
+                            refPt = dim.vertex;
+                        } else if (dim.type === 'ordinate') {
+                            refPt = dim.point;
+                        }
+                        if (refPt) {
+                            const sc = worldToScreen(refPt.easting, refPt.northing);
+                            if (inRect(sc.x, sc.y)) {
+                                setSelectedDimensionId(dim.id);
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 setSelectedLineIds(selected);
                 setIsSelectionMode(true);
             } else {
@@ -10178,6 +11516,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
 
             setShiftBoxSelect(null);
+            return;
+        }
+
+        if (activeDimGrip) {
+            setActiveDimGrip(null);
+            activeDimGripDragStartRef.current = null;
             return;
         }
 
@@ -10481,12 +11825,17 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setBoundaryClosureError('');
     };
 
-    const resetDimMode = () => {
-        setDimPhase(0);
-        setDimP1(null);
-        setDimP2(null);
-        setDimPreviewMouse(null);
-    };
+    const startDimensionMode = useCallback((mode: typeof drawingMode) => {
+        if (drawingMode === mode) {
+            setDrawingMode('none');
+            resetDimMode();
+        } else {
+            finishDrawing();
+            setDrawingMode(mode);
+            resetDimMode();
+        }
+        setIsDimFlyoutOpen(false);
+    }, [drawingMode, resetDimMode]);
 
     const handleBoundaryCallConfirm = () => {
         if (!boundaryLineFrom) {
@@ -10680,16 +12029,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     shiftHoverAnchorRef.current = null;
                 }
             }}
-            style={{ cursor: isPanning ? 'grabbing' : (isPickingOtOrigin ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (hoveredShrinkwrapPn ? 'pointer' : (isSelectionMode ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))), overflow: 'visible', isolation: 'isolate' }}
+            style={{ cursor: isPanning ? 'grabbing' : (isPickingOtOrigin ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : (isSelectionMode ? (isOverLine ? 'pointer' : 'crosshair') : 'default'))))))), overflow: 'visible', isolation: 'isolate' }}
         >
             <canvas
                 ref={gpuCanvasRef}
                 aria-hidden="true"
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: -1, pointerEvents: 'none' }}
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 0, pointerEvents: 'none' }}
             />
             <canvas
                 ref={canvasRef}
-                className="w-full h-full gesture-capture"
+                className="w-full h-full gesture-capture relative z-10"
                 onMouseDown={handleMouseDown}
                 onDoubleClick={handleDoubleClick}
                 onMouseMove={handleMouseMove}
@@ -10763,6 +12112,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     });
                 };
 
+                const p0 = worldToScreen(curOriginX, curOriginY);
+                const localTheta = curMode === 'drafting' ? curAngle : 0;
+                const p1 = worldToScreen(curOriginX + Math.cos(localTheta), curOriginY + Math.sin(localTheta));
+                const screenAngleDeg = Math.round(Math.atan2(p1.y - p0.y, p1.x - p0.x) * (180 / Math.PI) * 100) / 100;
+
                 return (
                     <div className="absolute bottom-20 left-3 z-30 select-none">
                         <div 
@@ -10770,15 +12124,19 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             className="p-2 rounded-xl bg-gray-900/90 hover:bg-gray-900 border border-cyan-500/40 hover:border-cyan-400 text-cyan-200 shadow-xl cursor-pointer flex items-center justify-center backdrop-blur-sm transition-all group hover:scale-105"
                             title="Orientation Tuple (OT / UCS): Click to adjust orientation and pivot origin"
                         >
-                            <svg className="w-6 h-6 transition-transform duration-300" style={{ transform: `rotate(${curAngleDeg}deg)` }} viewBox="0 0 28 28" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                                {/* Origin box */}
-                                <rect x="4" y="20" width="4" height="4" fill="white" fillOpacity="0.8" stroke="none" />
-                                {/* X-axis Arrow */}
-                                <line x1="6" y1="22" x2="24" y2="22" stroke="#34D399" />
-                                <polyline points="20,18 24,22 20,26" stroke="#34D399" fill="none" />
-                                {/* Y-axis Arrow */}
-                                <line x1="6" y1="22" x2="6" y2="4" stroke="#F87171" />
-                                <polyline points="2,8 6,4 10,8" stroke="#F87171" fill="none" />
+                            <svg className="w-6 h-6" viewBox="0 0 28 28" fill="none" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                <g transform={`rotate(${screenAngleDeg} 6 22)`}>
+                                    {/* Origin box */}
+                                    <rect x="3" y="19" width="6" height="6" fill="white" fillOpacity="0.9" stroke="none" />
+                                    {/* X-axis Arrow */}
+                                    <line x1="6" y1="22" x2="25" y2="22" stroke="#34D399" />
+                                    <polyline points="20,18 25,22 20,26" stroke="#34D399" fill="none" />
+                                    <text x="21" y="16" fontSize="6.5" fontWeight="bold" fill="#34D399" stroke="none" fontFamily="sans-serif">X</text>
+                                    {/* Y-axis Arrow */}
+                                    <line x1="6" y1="22" x2="6" y2="3" stroke="#F87171" />
+                                    <polyline points="2,8 6,3 10,8" stroke="#F87171" fill="none" />
+                                    <text x="10" y="8" fontSize="6.5" fontWeight="bold" fill="#F87171" stroke="none" fontFamily="sans-serif">Y</text>
+                                </g>
                             </svg>
                         </div>
 
@@ -11329,11 +12687,26 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             </div>
                         );
                     }
-                } else if (drawingMode === 'aligned-dim') {
-                    badgeText = 'DIMENSION';
+                } else if (isDimensionDrawingMode(drawingMode)) {
+                    badgeText = drawingMode.replace('-dim', '').toUpperCase();
                     badgeColor = 'bg-cyan-900/80 text-cyan-200 border-cyan-500/50';
-                    primaryInput = <span className="font-medium text-white">{dimPhase === 0 ? 'Specify 1st point' : dimPhase === 1 ? 'Specify 2nd point' : 'Specify dimension offset'}</span>;
+                    let promptStr = '';
+                    if (drawingMode === 'radius-dim' || drawingMode === 'diameter-dim' || drawingMode === 'arc-length-dim' || drawingMode === 'curve-data-dim') {
+                        promptStr = dimPhase === 0 ? 'Click curve or circle' : 'Click label location';
+                    } else if (drawingMode === 'angular-dim') {
+                        promptStr = dimPhase === 0 ? 'Pick vertex' : dimPhase === 1 ? 'Pick ray 1' : 'Pick ray 2';
+                    } else if (drawingMode === 'ordinate-dim') {
+                        promptStr = dimPhase === 0 ? 'Pick feature point' : 'Pick leader location';
+                    } else {
+                        promptStr = dimPhase === 0 ? 'Specify 1st point' : dimPhase === 1 ? 'Specify 2nd point' : 'Specify offset';
+                    }
+                    primaryInput = <span className="font-medium text-white">{promptStr}</span>;
                     secondaryText = activeOsnapPoint ? <span className="text-amber-300 font-mono">◈ {activeOsnapPoint.mode}</span> : null;
+                } else if (drawingMode === 'add-point') {
+                    badgeText = 'ADD POINT';
+                    badgeColor = 'bg-emerald-900/80 text-emerald-200 border-emerald-500/50';
+                    primaryInput = <span className="font-medium text-white">Click canvas to drop PT {addPointNumber || nextAvailablePointNumber || '1'}</span>;
+                    secondaryText = activeOsnapPoint ? <span className="text-amber-300 font-mono">◈ {activeOsnapPoint.mode} (snapping)</span> : null;
                 } else if (drawingMode === 'boundary-line') {
                     badgeText = 'BOUNDARY';
                     badgeColor = 'bg-amber-900/80 text-amber-200 border-amber-500/50';
@@ -11711,6 +13084,133 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 );
             })()}
 
+            {/* Dimension Right-Click Context Menu */}
+            {dimContextMenu && (
+                <div
+                    className="fixed z-50 bg-gray-900 border border-amber-500/50 rounded-xl shadow-2xl p-1.5 text-xs text-gray-200 min-w-[170px] animate-fade-in"
+                    style={{ left: dimContextMenu.x, top: dimContextMenu.y }}
+                >
+                    <button
+                        onClick={() => {
+                            onDeleteDimension?.(dimContextMenu.dimId);
+                            if (selectedDimensionId === dimContextMenu.dimId) setSelectedDimensionId(null);
+                            setDimContextMenu(null);
+                            addNotification({
+                                kind: 'dimension',
+                                severity: 'info',
+                                title: 'Dimension Deleted',
+                            });
+                        }}
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-red-950/80 hover:text-red-300 flex items-center gap-2 text-red-400 font-medium transition-colors"
+                    >
+                        <TrashIcon className="w-3.5 h-3.5" />
+                        Delete Dimension
+                    </button>
+                    <button
+                        onClick={() => {
+                            setIsDimSettingsOpen(true);
+                            setDimContextMenu(null);
+                        }}
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-gray-800 flex items-center gap-2 text-gray-300 transition-colors"
+                    >
+                        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-cyan-400" fill="none" stroke="currentColor" strokeWidth="1.8">
+                            <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" />
+                            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" />
+                        </svg>
+                        Dimension Style
+                    </button>
+                    <button
+                        onClick={() => {
+                            setSelectedDimensionId(null);
+                            setDimContextMenu(null);
+                        }}
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+                    >
+                        Deselect
+                    </button>
+                </div>
+            )}
+
+            {/* Dimension Selection Info & Delete Action Card */}
+            {selectedDimensionId && !isDimSettingsOpen && (() => {
+                const selDim = dimensions.find(d => d.id === selectedDimensionId);
+                if (!selDim) return null;
+                const typeLabel = selDim.type.toUpperCase().replace('-', ' ') + ' DIMENSION';
+                let valueSummary = '';
+                if (selDim.type === 'aligned' || selDim.type === 'horizontal' || selDim.type === 'vertical') {
+                    const geom = calculateLinearDimensionGeometry(selDim);
+                    valueSummary = `Measured: ${geom.dimensionText}`;
+                } else if (selDim.type === 'radius') {
+                    valueSummary = `Radius: R = ${selDim.radius.toFixed(2)}'`;
+                } else if (selDim.type === 'diameter') {
+                    valueSummary = `Diameter: Ø = ${(selDim.radius * 2).toFixed(2)}'`;
+                } else if (selDim.type === 'arc-length') {
+                    valueSummary = `Arc Length: L = ${selDim.arcLength.toFixed(2)}'`;
+                } else if (selDim.type === 'curve-data') {
+                    valueSummary = `Curve Data (R=${selDim.radius.toFixed(2)}', L=${selDim.arcLength.toFixed(2)}')`;
+                } else if (selDim.type === 'angular') {
+                    const geom = calculateAngularDimensionGeometry(selDim);
+                    valueSummary = `Angle: ${geom.dimensionText}`;
+                } else if (selDim.type === 'ordinate') {
+                    valueSummary = `N: ${selDim.point.northing.toFixed(2)}, E: ${selDim.point.easting.toFixed(2)}`;
+                }
+
+                return (
+                    <div className="fixed z-40 bottom-16 left-1/2 -translate-x-1/2 bg-gray-900/96 backdrop-blur-md border border-amber-500/60 rounded-xl shadow-2xl text-xs text-gray-200 flex flex-col gap-2 p-3 min-w-[340px] animate-fade-in-up">
+                        <div className="flex items-center justify-between border-b border-gray-800 pb-1.5">
+                            <span className="font-bold text-amber-400 flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                                {typeLabel}
+                            </span>
+                            <button
+                                onClick={() => setSelectedDimensionId(null)}
+                                className="p-0.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white"
+                                title="Deselect"
+                            >
+                                <XMarkIcon className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
+                        <div className="flex items-center justify-between text-xs font-mono text-gray-300">
+                            <span className="font-semibold text-white">{valueSummary}</span>
+                            <span className="text-[10px] text-gray-500 font-sans">Del / D to delete</span>
+                        </div>
+                        <div className="flex items-center gap-2 pt-1">
+                            <button
+                                type="button"
+                                onClick={() => setIsDimSettingsOpen(true)}
+                                className="py-1.5 px-3 bg-cyan-950/70 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/40 font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+                                title="Edit this dimension's style live in scene"
+                            >
+                                Style HUD
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    onDeleteDimension?.(selDim.id);
+                                    setSelectedDimensionId(null);
+                                    addNotification({
+                                        kind: 'dimension',
+                                        severity: 'info',
+                                        title: 'Dimension Deleted',
+                                    });
+                                }}
+                                className="flex-1 py-1.5 px-3 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors shadow-md"
+                            >
+                                <TrashIcon className="w-3.5 h-3.5" />
+                                Delete (D)
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setSelectedDimensionId(null)}
+                                className="py-1.5 px-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors border border-gray-700"
+                            >
+                                Deselect
+                            </button>
+                        </div>
+                    </div>
+                );
+            })()}
+
             {/* Boundary-Line Draw Dialog */}
             {drawingMode === 'boundary-line' && (
                 <div className="absolute top-1/2 right-4 -translate-y-1/2 z-30 w-64 bg-gray-900/96 backdrop-blur-md border border-amber-500/50 rounded-xl shadow-2xl p-3 text-xs">
@@ -11944,9 +13444,28 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                         <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{dimensionScale.toFixed(1)}x</span>
                                     </div>
                                     <label htmlFor="symbolScale_above" className="block text-sm font-medium text-gray-400 mb-1">Symbol Scale (global)</label>
-                                    <div className="flex items-center gap-4">
+                                    <div className="flex items-center gap-4 mb-4">
                                         <input type="range" id="symbolScale_above" min="0.25" max="5" step="0.05" value={symbolScale} onChange={(e) => setSymbolScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
                                         <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{symbolScale.toFixed(2)}x</span>
+                                    </div>
+                                    <label className="block text-sm font-medium text-gray-400 mb-1">Point Attribute Text</label>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setSettings(prev => ({ ...prev, pointAttributeScaling: 'screen' }))}
+                                            className={`flex-1 py-1 px-2 rounded text-xs font-semibold border transition-colors ${settings.pointAttributeScaling === 'screen' ? 'bg-cyan-600 border-cyan-400 text-white' : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'}`}
+                                            title="Constant screen pixel size (locked - avoids lag with thousands of points)"
+                                        >
+                                            Locked (Fast)
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setSettings(prev => ({ ...prev, pointAttributeScaling: 'world' }))}
+                                            className={`flex-1 py-1 px-2 rounded text-xs font-semibold border transition-colors ${settings.pointAttributeScaling === 'world' ? 'bg-cyan-600 border-cyan-400 text-white' : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'}`}
+                                            title="Scale with zoom in world units"
+                                        >
+                                            Zoom with Map
+                                        </button>
                                     </div>
                                     {setAnnotationScale && (
                                         <>
@@ -12170,36 +13689,395 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 </div>
                             )}
 
-                            {/* Dimension flyout */}
-                            {isDimFlyoutOpen && (
-                                <div className={`absolute ${flyoutPlacementClass} p-2 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up w-52 z-30`}>
-                                    <div className="space-y-2">
-                                        <p className="text-xs font-semibold text-gray-400 uppercase px-1">Dimensions</p>
-                                        <button onClick={() => {
-                                            if (drawingMode === 'aligned-dim') {
-                                                setDrawingMode('none');
-                                                resetDimMode();
-                                            } else {
-                                                setDrawingMode('aligned-dim');
-                                                setIsTrimmingLines(false);
-                                                setIsExtendingLines(false);
-                                                setIsDeletingLines(false);
-                                                setTrimPoint(null);
-                                                setExtendFromLine(null);
-                                                resetDimMode();
-                                            }
-                                            setIsDimFlyoutOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'aligned-dim' ? 'bg-cyan-600 text-white' : 'hover:bg-gray-700'}`} title="Aligned Dimension (3-click: P1, P2, offset)">
-                                            <svg viewBox="0 0 24 24" className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                                <line x1="4" y1="18" x2="20" y2="18"/>
-                                                <line x1="4" y1="14" x2="4" y2="22"/>
-                                                <line x1="20" y1="14" x2="20" y2="22"/>
-                                                <line x1="4" y1="7" x2="20" y2="7" strokeDasharray="3 2"/>
-                                                <path d="M7 18 L7 7M17 18 L17 7" strokeOpacity="0.4"/>
-                                            </svg>
-                                            Aligned Dimension
+                            {/* Add Point Flyout */}
+                            {isAddPointFlyoutOpen && (
+                                <div className={`absolute ${flyoutPlacementClass} p-3 bg-gray-900/95 backdrop-blur-md rounded-xl border border-gray-700/60 shadow-2xl w-72 animate-fade-in-up z-30 space-y-2.5`}>
+                                    <div className="flex items-center justify-between border-b border-gray-800 pb-1.5">
+                                        <div className="flex items-center gap-1.5">
+                                            <CrosshairsIcon className="w-4 h-4 text-emerald-400" />
+                                            <span className="text-xs font-bold text-emerald-400 uppercase tracking-wide">
+                                                Add Survey Point
+                                            </span>
+                                            <span className="text-[9px] font-mono text-emerald-300 bg-emerald-950/80 px-1 py-0.2 rounded border border-emerald-700/60" title="Managed by PointAgent CACP Authority">
+                                                CACP
+                                            </span>
+                                        </div>
+                                        <button
+                                            onClick={() => setIsAddPointFlyoutOpen(false)}
+                                            className="text-gray-400 hover:text-white"
+                                            title="Close"
+                                        >
+                                            <XMarkIcon className="w-4 h-4" />
                                         </button>
                                     </div>
+
+                                    {/* Pick on Canvas button */}
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (drawingMode === 'add-point') {
+                                                finishDrawing();
+                                            } else {
+                                                finishDrawing();
+                                                if (isPointNumberTaken(addPointNumber)) {
+                                                    setAddPointNumber(queryCacpNextPointNumber());
+                                                }
+                                                setDrawingMode('add-point');
+                                            }
+                                        }}
+                                        className={`w-full py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
+                                            drawingMode === 'add-point'
+                                                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/50 ring-2 ring-emerald-400'
+                                                : 'bg-emerald-700/70 hover:bg-emerald-600 text-white'
+                                        }`}
+                                    >
+                                        <CrosshairsIcon className="w-3.5 h-3.5" />
+                                        {drawingMode === 'add-point' ? 'Snapping Active (Click Canvas)' : 'Pick on Canvas (Osnap Active)'}
+                                    </button>
+
+                                    {/* Point Number & Elev */}
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <div className="flex items-center justify-between mb-0.5">
+                                                <label className="text-[10px] font-medium text-gray-400">Point #</label>
+                                                {isPointNumberTaken(addPointNumber) ? (
+                                                    <span className="text-[9px] text-amber-400 font-semibold" title="Point already exists in survey database">Exists!</span>
+                                                ) : (
+                                                    <span className="text-[9px] text-emerald-400 font-mono" title="Verified available by PointAgent">CACP OK</span>
+                                                )}
+                                            </div>
+                                            <input
+                                                type="text"
+                                                value={addPointNumber}
+                                                onChange={e => setAddPointNumber(e.target.value)}
+                                                placeholder={nextAvailablePointNumber || "1"}
+                                                className={`w-full px-2 py-1 text-xs bg-gray-800 border rounded text-white font-mono focus:outline-none ${
+                                                    isPointNumberTaken(addPointNumber)
+                                                        ? 'border-amber-500 focus:border-amber-400'
+                                                        : 'border-gray-700 focus:border-emerald-500'
+                                                }`}
+                                            />
+                                            {isPointNumberTaken(addPointNumber) && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setAddPointNumber(queryCacpNextPointNumber())}
+                                                    className="mt-0.5 text-[9px] text-cyan-300 hover:text-cyan-200 underline block"
+                                                    title="Query PointAgent for next available number"
+                                                >
+                                                    Use CACP Next ({queryCacpNextPointNumber()})
+                                                </button>
+                                            )}
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] font-medium text-gray-400 mb-0.5">Elev (Z)</label>
+                                            <input
+                                                type="text"
+                                                value={addPointElevation}
+                                                onChange={e => setAddPointElevation(e.target.value)}
+                                                placeholder="0.00"
+                                                className="w-full px-2 py-1 text-xs bg-gray-800 border border-gray-700 rounded text-white font-mono focus:outline-none focus:border-emerald-500"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Northing & Easting */}
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label className="block text-[10px] font-medium text-gray-400 mb-0.5">Northing (Y)</label>
+                                            <input
+                                                type="text"
+                                                value={addPointNorthing}
+                                                onChange={e => setAddPointNorthing(e.target.value)}
+                                                placeholder="5000.00"
+                                                className="w-full px-2 py-1 text-xs bg-gray-800 border border-gray-700 rounded text-white font-mono focus:outline-none focus:border-emerald-500"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] font-medium text-gray-400 mb-0.5">Easting (X)</label>
+                                            <input
+                                                type="text"
+                                                value={addPointEasting}
+                                                onChange={e => setAddPointEasting(e.target.value)}
+                                                placeholder="5000.00"
+                                                className="w-full px-2 py-1 text-xs bg-gray-800 border border-gray-700 rounded text-white font-mono focus:outline-none focus:border-emerald-500"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Description + Chips */}
+                                    <div>
+                                        <label className="block text-[10px] font-medium text-gray-400 mb-0.5">Description</label>
+                                        <input
+                                            type="text"
+                                            value={addPointDescription}
+                                            onChange={e => setAddPointDescription(e.target.value)}
+                                            placeholder="e.g. CALC, MON, FND_IP"
+                                            className="w-full px-2 py-1 text-xs bg-gray-800 border border-gray-700 rounded text-white focus:outline-none focus:border-emerald-500 mb-1"
+                                        />
+                                        <div className="flex flex-wrap gap-1">
+                                            {['CALC', 'PROP', 'MON', 'FND_IP', 'EP', 'BLDG'].map(chip => (
+                                                <button
+                                                    key={chip}
+                                                    type="button"
+                                                    onClick={() => setAddPointDescription(chip)}
+                                                    className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
+                                                        addPointDescription === chip
+                                                            ? 'bg-emerald-900/60 border-emerald-500 text-emerald-200'
+                                                            : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-white'
+                                                    }`}
+                                                >
+                                                    {chip}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Direct Add Point button */}
+                                    <button
+                                        type="button"
+                                        onClick={commitManualAddPoint}
+                                        disabled={!addPointNorthing.trim() || !addPointEasting.trim()}
+                                        className="w-full py-1.5 px-3 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white flex items-center justify-center gap-1.5 transition-colors"
+                                    >
+                                        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                            <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/>
+                                        </svg>
+                                        Add Point to Project
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* Dimension flyout */}
+                            {isDimFlyoutOpen && (
+                                <div className={`absolute ${flyoutPlacementClass} p-3 bg-gray-900/95 backdrop-blur-md rounded-xl border border-gray-700/60 shadow-2xl w-64 max-h-[85vh] overflow-y-auto space-y-3 animate-fade-in-up z-30`}>
+                                    <div className="flex items-center justify-between border-b border-gray-800 pb-1.5">
+                                        <span className="text-xs font-bold text-cyan-400 uppercase tracking-wide flex items-center gap-1.5">
+                                            <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                                <line x1="3" y1="19" x2="21" y2="19"/>
+                                                <line x1="3" y1="14" x2="3" y2="24" strokeWidth="1.8"/><line x1="21" y1="14" x2="21" y2="24" strokeWidth="1.8"/>
+                                                <line x1="3" y1="8" x2="21" y2="8" strokeDasharray="3,2"/>
+                                            </svg>
+                                            Dimensions ({dimensions.length})
+                                        </span>
+                                        <button
+                                            onClick={() => setIsDimFlyoutOpen(false)}
+                                            className="text-gray-400 hover:text-white"
+                                            title="Close"
+                                        >
+                                            <XMarkIcon className="w-4 h-4" />
+                                        </button>
+                                    </div>
+
+                                    {/* Dimension Style Settings CTA */}
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setIsDimSettingsOpen(true);
+                                            setIsDimFlyoutOpen(false);
+                                        }}
+                                        className="w-full py-1.5 px-2.5 rounded-lg text-xs font-semibold bg-cyan-950/70 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-500/40 flex items-center justify-center gap-2 transition-all shadow-sm"
+                                        title="Open dimension style settings"
+                                    >
+                                        <svg viewBox="0 0 24 24" className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                            <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" />
+                                            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+                                        </svg>
+                                        Dimension Style Settings
+                                    </button>
+
+                                    {/* Linear Dimensions Section */}
+                                    <div className="space-y-1">
+                                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-1">Linear Dimensions</p>
+                                        <button
+                                            onClick={() => startDimensionMode('aligned-dim')}
+                                            className={`w-full p-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${drawingMode === 'aligned-dim' ? 'bg-cyan-600 text-white font-semibold' : 'hover:bg-gray-800 text-gray-200'}`}
+                                            title="Aligned Dimension: Pick Point 1, Point 2, and offset distance"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                                    <line x1="4" y1="18" x2="20" y2="18"/>
+                                                    <line x1="4" y1="14" x2="4" y2="22"/>
+                                                    <line x1="20" y1="14" x2="20" y2="22"/>
+                                                    <line x1="4" y1="7" x2="20" y2="7" strokeDasharray="3 2"/>
+                                                </svg>
+                                                <span>Aligned</span>
+                                            </div>
+                                            <span className="text-[10px] opacity-70">3-click</span>
+                                        </button>
+
+                                        <button
+                                            onClick={() => startDimensionMode('horiz-dim')}
+                                            className={`w-full p-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${drawingMode === 'horiz-dim' ? 'bg-cyan-600 text-white font-semibold' : 'hover:bg-gray-800 text-gray-200'}`}
+                                            title="Horizontal Dimension: Measures ΔX (Easting) between points"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                                    <line x1="4" y1="12" x2="20" y2="12"/>
+                                                    <line x1="4" y1="7" x2="4" y2="17"/>
+                                                    <line x1="20" y1="7" x2="20" y2="17"/>
+                                                    <polygon points="4,12 8,10 8,14" fill="currentColor"/>
+                                                    <polygon points="20,12 16,10 16,14" fill="currentColor"/>
+                                                </svg>
+                                                <span>Horizontal (ΔX)</span>
+                                            </div>
+                                            <span className="text-[10px] opacity-70">3-click</span>
+                                        </button>
+
+                                        <button
+                                            onClick={() => startDimensionMode('vert-dim')}
+                                            className={`w-full p-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${drawingMode === 'vert-dim' ? 'bg-cyan-600 text-white font-semibold' : 'hover:bg-gray-800 text-gray-200'}`}
+                                            title="Vertical Dimension: Measures ΔY (Northing) between points"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                                    <line x1="12" y1="4" x2="12" y2="20"/>
+                                                    <line x1="7" y1="4" x2="17" y2="4"/>
+                                                    <line x1="7" y1="20" x2="17" y2="20"/>
+                                                    <polygon points="12,4 10,8 14,8" fill="currentColor"/>
+                                                    <polygon points="12,20 10,16 14,16" fill="currentColor"/>
+                                                </svg>
+                                                <span>Vertical (ΔY)</span>
+                                            </div>
+                                            <span className="text-[10px] opacity-70">3-click</span>
+                                        </button>
+                                    </div>
+
+                                    {/* Curves & Circles Section */}
+                                    <div className="space-y-1 border-t border-gray-800 pt-2">
+                                        <p className="text-[10px] font-bold text-sky-400 uppercase tracking-wider px-1">Curve &amp; Arc Dimensions</p>
+                                        <button
+                                            onClick={() => startDimensionMode('radius-dim')}
+                                            className={`w-full p-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${drawingMode === 'radius-dim' ? 'bg-cyan-600 text-white font-semibold' : 'hover:bg-gray-800 text-gray-200'}`}
+                                            title="Radius Dimension: Click any arc or circle, then drag leader position"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                                    <path d="M4 19a15 15 0 0 1 15-15" strokeDasharray="2 2"/>
+                                                    <line x1="4" y1="19" x2="15" y2="8"/>
+                                                    <polygon points="15,8 11.5,8.5 14.5,11.5" fill="currentColor"/>
+                                                    <circle cx="4" cy="19" r="1.5" fill="currentColor"/>
+                                                </svg>
+                                                <span>Radius (R)</span>
+                                            </div>
+                                            <span className="text-[10px] opacity-70">R=...</span>
+                                        </button>
+
+                                        <button
+                                            onClick={() => startDimensionMode('diameter-dim')}
+                                            className={`w-full p-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${drawingMode === 'diameter-dim' ? 'bg-cyan-600 text-white font-semibold' : 'hover:bg-gray-800 text-gray-200'}`}
+                                            title="Diameter Dimension: Click circle or arc to place diameter line"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                                    <circle cx="12" cy="12" r="8"/>
+                                                    <line x1="5" y1="19" x2="19" y2="5"/>
+                                                </svg>
+                                                <span>Diameter (Ø)</span>
+                                            </div>
+                                            <span className="text-[10px] opacity-70">Ø=...</span>
+                                        </button>
+
+                                        <button
+                                            onClick={() => startDimensionMode('arc-length-dim')}
+                                            className={`w-full p-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${drawingMode === 'arc-length-dim' ? 'bg-cyan-600 text-white font-semibold' : 'hover:bg-gray-800 text-gray-200'}`}
+                                            title="Arc Length Dimension: Concentric arc with radial witness lines"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                                    <path d="M4 18 A 12 12 0 0 1 20 18"/>
+                                                    <path d="M6 13 A 8 8 0 0 1 18 13" strokeDasharray="2 2"/>
+                                                    <line x1="4" y1="18" x2="6" y2="13"/>
+                                                    <line x1="20" y1="18" x2="18" y2="13"/>
+                                                </svg>
+                                                <span>Arc Length (⌒ L)</span>
+                                            </div>
+                                            <span className="text-[10px] opacity-70">⌒ L=...</span>
+                                        </button>
+
+                                        <button
+                                            onClick={() => startDimensionMode('curve-data-dim')}
+                                            className={`w-full p-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${drawingMode === 'curve-data-dim' ? 'bg-cyan-600 text-white font-semibold' : 'hover:bg-gray-800 text-gray-200'}`}
+                                            title="Survey Curve Data Callout: Full R, L, Δ, Chord, Bearing table"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                                    <rect x="7" y="4" width="14" height="16" rx="2"/>
+                                                    <line x1="10" y1="8" x2="18" y2="8"/>
+                                                    <line x1="10" y1="12" x2="18" y2="12"/>
+                                                    <line x1="10" y1="16" x2="16" y2="16"/>
+                                                    <path d="M2 18 Q 4 11 7 11"/>
+                                                </svg>
+                                                <span>Curve Data Callout</span>
+                                            </div>
+                                            <span className="text-[10px] opacity-70">Table</span>
+                                        </button>
+                                    </div>
+
+                                    {/* Angles & Coordinates */}
+                                    <div className="space-y-1 border-t border-gray-800 pt-2">
+                                        <p className="text-[10px] font-bold text-violet-400 uppercase tracking-wider px-1">Angles &amp; Coords</p>
+                                        <button
+                                            onClick={() => startDimensionMode('angular-dim')}
+                                            className={`w-full p-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${drawingMode === 'angular-dim' ? 'bg-cyan-600 text-white font-semibold' : 'hover:bg-gray-800 text-gray-200'}`}
+                                            title="Angular Dimension: Pick vertex, 1st ray, and 2nd ray"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-violet-400" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                                    <line x1="4" y1="20" x2="20" y2="20"/>
+                                                    <line x1="4" y1="20" x2="16" y2="6"/>
+                                                    <path d="M11 20 A 7 7 0 0 0 9.5 14"/>
+                                                </svg>
+                                                <span>Angular</span>
+                                            </div>
+                                            <span className="text-[10px] opacity-70">D°M'S"</span>
+                                        </button>
+
+                                        <button
+                                            onClick={() => startDimensionMode('ordinate-dim')}
+                                            className={`w-full p-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${drawingMode === 'ordinate-dim' ? 'bg-cyan-600 text-white font-semibold' : 'hover:bg-gray-800 text-gray-200'}`}
+                                            title="Ordinate Leader: Pick coordinate point, then leader position"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <svg viewBox="0 0 24 24" className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                                    <circle cx="5" cy="19" r="2" fill="currentColor"/>
+                                                    <path d="M5 19 L12 10 L19 10"/>
+                                                </svg>
+                                                <span>Coordinate Leader</span>
+                                            </div>
+                                            <span className="text-[10px] opacity-70">N/E</span>
+                                        </button>
+                                    </div>
+
+                                    {/* Dimension Management */}
+                                    {dimensions.length > 0 && (
+                                        <div className="border-t border-gray-800 pt-2 space-y-1">
+                                            {selectedDimensionId && (
+                                                <button
+                                                    onClick={() => {
+                                                        if (selectedDimensionId) {
+                                                            onDeleteDimension?.(selectedDimensionId);
+                                                            setSelectedDimensionId(null);
+                                                        }
+                                                    }}
+                                                    className="w-full p-1.5 rounded-lg text-xs flex items-center justify-center gap-1.5 bg-amber-900/60 hover:bg-amber-800 text-amber-200 transition-colors"
+                                                >
+                                                    <TrashIcon className="w-3.5 h-3.5" />
+                                                    Delete Selected Dim
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={() => {
+                                                    onClearDimensions?.();
+                                                    setSelectedDimensionId(null);
+                                                    setIsDimFlyoutOpen(false);
+                                                }}
+                                                className="w-full p-1.5 rounded-lg text-xs flex items-center justify-center gap-1.5 bg-red-950/60 hover:bg-red-900 text-red-300 transition-colors"
+                                            >
+                                                <TrashIcon className="w-3.5 h-3.5" />
+                                                Clear All Dimensions ({dimensions.length})
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                             
@@ -12253,6 +14131,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsZoomToPointOpen(false);
                                             setIsLayerPanelOpen(false);
                                             setIsDrawingToolsMenuOpen(false);
+                                            setIsAddPointFlyoutOpen(false);
+                                            setIsDimFlyoutOpen(false);
                                         }
                                     }}
                                     className={`p-2.5 rounded-lg transition-colors ${isZoomExtentsOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
@@ -12270,6 +14150,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsZoomToPointOpen(false);
                                             setIsLayerPanelOpen(false);
                                             setIsDrawingToolsMenuOpen(false);
+                                            setIsAddPointFlyoutOpen(false);
+                                            setIsDimFlyoutOpen(false);
                                         }
                                     }}
                                     className={`p-2.5 rounded-lg transition-colors ${isAttributeFlyoutOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
@@ -12287,6 +14169,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsAttributeFlyoutOpen(false);
                                             setIsZoomToPointOpen(false);
                                             setIsDrawingToolsMenuOpen(false);
+                                            setIsAddPointFlyoutOpen(false);
+                                            setIsDimFlyoutOpen(false);
                                         }
                                     }}
                                     className={`p-2.5 rounded-lg transition-colors ${isLayerPanelOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
@@ -12315,6 +14199,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setIsZoomToPointOpen(false);
                                                 setIsLayerPanelOpen(false);
                                                 setIsDrawingToolsMenuOpen(false);
+                                                setIsAddPointFlyoutOpen(false);
                                                 setIsDimFlyoutOpen(false);
                                                 setDrawingMode('none');
                                                 setIsTrimmingLines(false);
@@ -12324,6 +14209,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setExtendFromLine(null);
                                             } else {
                                                 setSelectedLineIds(new Set());
+                                                setSelectedDimensionId(null);
                                             }
                                             return next;
                                         });
@@ -12336,6 +14222,35 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     </svg>
                                 </button>
 
+                                {/* Add Point button */}
+                                <button
+                                    data-no-drag
+                                    onClick={() => {
+                                        setIsAddPointFlyoutOpen(p => {
+                                            const willOpen = !p;
+                                            if (willOpen) {
+                                                const cacpNum = queryCacpNextPointNumber();
+                                                setAddPointNumber(cacpNum);
+                                                setIsZoomExtentsOpen(false);
+                                                setIsAttributeFlyoutOpen(false);
+                                                setIsZoomToPointOpen(false);
+                                                setIsLayerPanelOpen(false);
+                                                setIsDrawingToolsMenuOpen(false);
+                                                setIsDimFlyoutOpen(false);
+                                            }
+                                            return willOpen;
+                                        });
+                                    }}
+                                    className={`p-2.5 rounded-lg transition-colors ${isAddPointFlyoutOpen || drawingMode === 'add-point' ? 'bg-emerald-600 text-white' : 'hover:bg-gray-800 text-emerald-400'}`}
+                                    title="Add Point (P) — Pick on canvas or enter coordinates"
+                                >
+                                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
+                                        <circle cx="12" cy="9" r="2.5" />
+                                        <path d="M19 5v4m-2-2h4" strokeWidth="2" strokeLinecap="round" />
+                                    </svg>
+                                </button>
+
                                 <button
                                     data-no-drag
                                     onClick={() => {
@@ -12345,6 +14260,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsAttributeFlyoutOpen(false);
                                             setIsZoomToPointOpen(false);
                                             setIsLayerPanelOpen(false);
+                                            setIsAddPointFlyoutOpen(false);
+                                            setIsDimFlyoutOpen(false);
                                         } else {
                                             setSelectedLineIds(new Set());
                                         }
@@ -12365,9 +14282,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsZoomToPointOpen(false);
                                             setIsLayerPanelOpen(false);
                                             setIsDrawingToolsMenuOpen(false);
+                                            setIsAddPointFlyoutOpen(false);
                                         }
                                     }}
-                                    className={`p-2.5 rounded-lg transition-colors ${isDimFlyoutOpen || drawingMode === 'aligned-dim' ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
+                                    className={`p-2.5 rounded-lg transition-colors ${isDimFlyoutOpen || isDimensionDrawingMode(drawingMode) ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
                                     title="Dimension Tools"
                                 >
                                     <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -12465,6 +14383,32 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 />
             )}
 
+            {/* Subtle Live-Scene Dimension Settings HUD (Light Overlay) */}
+            {isDimSettingsOpen && (
+                <DimensionSettingsPanel
+                    globalSettings={dimStyleSettings}
+                    onUpdateGlobalSettings={(updated: DimensionStyleSettings) => {
+                        setDimStyleSettings(updated);
+                        if (updated.scale !== dimensionScale) {
+                            setDimensionScale(updated.scale);
+                        }
+                        try {
+                            localStorage.setItem('landsurv-dim-style-settings', JSON.stringify(updated));
+                        } catch { /* ignore */ }
+                    }}
+                    selectedDimension={selectedDimensionId ? (dimensions.find(d => d.id === selectedDimensionId) || null) : null}
+                    onUpdateSelectedDimension={(updated: AnnotationDimension) => {
+                        props.onUpdateDimension?.(updated);
+                    }}
+                    onDeleteSelectedDimension={(id: string) => {
+                        props.onDeleteDimension?.(id);
+                        setSelectedDimensionId(null);
+                    }}
+                    onDeselectDimension={() => setSelectedDimensionId(null)}
+                    onClose={() => setIsDimSettingsOpen(false)}
+                />
+            )}
+
             {/* Interactive CAD Command Terminal */}
             <CanvasTerminal
                 activePrompt={
@@ -12480,6 +14424,26 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             : !circleCenter
                             ? 'CIRCLE: Pick center point or type T for TTR [Esc to cancel]'
                             : `CIRCLE: ${circleSizeParam.toUpperCase()} = ${typedCircleValue || (cursorWorldPosRef.current ? (Math.hypot(cursorWorldPosRef.current.x - circleCenter.easting, cursorWorldPosRef.current.y - circleCenter.northing) * (circleSizeParam === 'diameter' ? 2 : 1)).toFixed(2) : '_')} [D to switch, Enter]`
+                        : drawingMode === 'add-point'
+                        ? `ADD POINT: Click canvas to drop PT ${addPointNumber || nextAvailablePointNumber || '1'} [Osnap active] or enter coords in flyout [Esc to finish]`
+                        : drawingMode === 'aligned-dim'
+                        ? dimPhase === 0 ? 'DIM ALIGNED: Specify 1st point [Esc to cancel]' : dimPhase === 1 ? 'DIM ALIGNED: Specify 2nd point [Esc to cancel]' : 'DIM ALIGNED: Specify dimension line offset [Esc to cancel]'
+                        : drawingMode === 'horiz-dim'
+                        ? dimPhase === 0 ? 'DIM HORIZONTAL: Specify 1st point [Esc to cancel]' : dimPhase === 1 ? 'DIM HORIZONTAL: Specify 2nd point [Esc to cancel]' : 'DIM HORIZONTAL: Specify dimension line offset [Esc to cancel]'
+                        : drawingMode === 'vert-dim'
+                        ? dimPhase === 0 ? 'DIM VERTICAL: Specify 1st point [Esc to cancel]' : dimPhase === 1 ? 'DIM VERTICAL: Specify 2nd point [Esc to cancel]' : 'DIM VERTICAL: Specify dimension line offset [Esc to cancel]'
+                        : drawingMode === 'radius-dim'
+                        ? dimPhase === 0 ? 'DIM RADIUS: Click arc or circle to dimension [Esc to cancel]' : 'DIM RADIUS: Specify leader text position [Esc to cancel]'
+                        : drawingMode === 'diameter-dim'
+                        ? dimPhase === 0 ? 'DIM DIAMETER: Click arc or circle to dimension [Esc to cancel]' : 'DIM DIAMETER: Specify leader text position [Esc to cancel]'
+                        : drawingMode === 'arc-length-dim'
+                        ? dimPhase === 0 ? 'DIM ARC LENGTH: Click arc segment to dimension [Esc to cancel]' : 'DIM ARC LENGTH: Specify concentric offset [Esc to cancel]'
+                        : drawingMode === 'curve-data-dim'
+                        ? dimPhase === 0 ? 'CURVE DATA: Click arc or curve to place table [Esc to cancel]' : 'CURVE DATA: Specify callout box position [Esc to cancel]'
+                        : drawingMode === 'angular-dim'
+                        ? dimPhase === 0 ? 'DIM ANGULAR: Specify angle vertex [Esc to cancel]' : dimPhase === 1 ? 'DIM ANGULAR: Specify 1st ray point [Esc to cancel]' : 'DIM ANGULAR: Specify 2nd ray point [Esc to cancel]'
+                        : drawingMode === 'ordinate-dim'
+                        ? dimPhase === 0 ? 'DIM ORDINATE: Specify point location [Esc to cancel]' : 'DIM ORDINATE: Specify leader text position [Esc to cancel]'
                         : isTrimmingLines
                         ? 'TRIM: Click line segment to cut at intersection [Esc to exit]'
                         : isExtendingLines
@@ -12487,12 +14451,19 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         : isDeletingLines
                         ? 'DELETE: Click line to remove [Esc to exit]'
                         : isSelectionMode
-                        ? `SELECTION: ${selectedLineIds.size} lines selected [S to exit, B for box select, D to delete]`
+                        ? `SELECTION: ${selectedLineIds.size} lines, ${selectedDimensionId ? '1 dim' : '0 dims'} selected [S to exit, B for box select, D to delete]`
                         : drawingMode === 'boundary-align'
                         ? 'ALIGN: Click matching lines between deeds to align'
                         : undefined
                 }
                 commandContext={{
+                    onAddPoint: () => {
+                        finishDrawing();
+                        const nextPn = queryCacpNextPointNumber();
+                        setAddPointNumber(nextPn);
+                        setDrawingMode('add-point');
+                        setIsAddPointFlyoutOpen(true);
+                    },
                     onStartLine: () => {
                         setDrawingMode('polylines');
                         setIsTrimmingLines(false);

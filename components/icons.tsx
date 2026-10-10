@@ -302,6 +302,31 @@ export const LayersIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     </svg>
 );
 
+// Sheet View Icon - 24x36 aspect ratio landscape architectural paper with a folded corner
+export const SheetViewIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        {/* Exact 24x36 aspect ratio landscape sheet (19.5w x 13h = 1.5 ratio, 36:24) with dog-ear folded corner at top-right */}
+        <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M 2.25 7 C 2.25 6.2 2.9 5.5 3.75 5.5 H 16.5 L 21.75 10.75 V 17 C 21.75 17.8 21.1 18.5 20.25 18.5 H 3.75 C 2.9 18.5 2.25 17.8 2.25 17 Z"
+        />
+        {/* Folded paper dog-ear flap */}
+        <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M 16.5 5.5 V 10.75 H 21.75"
+            fill="currentColor"
+            fillOpacity="0.2"
+        />
+        {/* Inner drawing viewport box and vertical titleblock strip lines */}
+        <rect x="4.5" y="7.5" width="9.5" height="9" rx="0.5" stroke="currentColor" strokeWidth="1" opacity="0.6" />
+        <line x1="16.5" y1="13" x2="19.75" y2="13" stroke="currentColor" strokeWidth="0.8" opacity="0.7" />
+        <line x1="16.5" y1="15" x2="19.75" y2="15" stroke="currentColor" strokeWidth="0.8" opacity="0.7" />
+        <line x1="16.5" y1="17" x2="19.75" y2="17" stroke="currentColor" strokeWidth="0.8" opacity="0.7" />
+    </svg>
+);
+
 // CAD Manager Icon - Gear with "M" behind it
 export const CadManagerIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">

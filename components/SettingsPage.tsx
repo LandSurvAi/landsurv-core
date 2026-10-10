@@ -379,18 +379,18 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         </select>
                     </div>
                     <div>
-                        <label htmlFor="pointAttributeScaling" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Annotation Text Scaling</label>
+                        <label htmlFor="pointAttributeScaling" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Point Attribute Scaling</label>
                         <select 
                             id="pointAttributeScaling" 
                             value={settings.pointAttributeScaling} 
                             onChange={e => handleSettingChange('pointAttributeScaling', e.target.value)} 
                             className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
                         >
-                            <option value="screen">Fixed Size (Screen-Relative)</option>
+                            <option value="screen">Locked Screen Size (Recommended for speed)</option>
                             <option value="world">Scale with Zoom (World-Relative)</option>
                         </select>
                         <p className="text-xs text-gray-500 mt-1 light-theme:text-gray-600">
-                            Applies project-wide to annotation text. Fixed size keeps labels the same size regardless of zoom. Scale with zoom makes labels larger or smaller as you zoom in and out.
+                            Controls whether survey point attributes (Point Number, Elevation, Description) stay locked to a constant screen size or scale with zoom. Keeping point attributes locked prevents performance lag with large point sets.
                         </p>
                     </div>
                     <div>

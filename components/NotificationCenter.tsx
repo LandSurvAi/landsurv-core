@@ -17,6 +17,7 @@ interface NotificationCenterProps {
 
 const severityStyles: Record<NotificationSeverity, { dot: string; ring: string; text: string }> = {
     info:    { dot: 'bg-sky-400',     ring: 'ring-sky-500/30',     text: 'text-sky-200' },
+    success: { dot: 'bg-emerald-400', ring: 'ring-emerald-500/30', text: 'text-emerald-200' },
     warning: { dot: 'bg-amber-400',   ring: 'ring-amber-500/40',   text: 'text-amber-200' },
     error:   { dot: 'bg-rose-400',    ring: 'ring-rose-500/40',    text: 'text-rose-200' },
 };
@@ -66,10 +67,12 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ notifications, 
         ? 'error'
         : notifications.some(n => n.severity === 'warning')
             ? 'warning'
-            : 'info';
+            : notifications.some(n => n.severity === 'success')
+                ? 'success'
+                : 'info';
 
     const bellColor = hasAny
-        ? (topSeverity === 'error' ? 'text-rose-400' : topSeverity === 'warning' ? 'text-amber-400' : 'text-sky-400')
+        ? (topSeverity === 'error' ? 'text-rose-400' : topSeverity === 'warning' ? 'text-amber-400' : topSeverity === 'success' ? 'text-emerald-400' : 'text-sky-400')
         : 'text-gray-500';
 
     return (
@@ -124,7 +127,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ notifications, 
                     ) : (
                         <ul className="divide-y divide-gray-800">
                             {notifications.map(n => {
-                                const sev = severityStyles[n.severity];
+                                const sev = (n?.severity && severityStyles[n.severity]) || severityStyles.info;
                                 const clickable = !!n.onActivate;
                                 const time = n.createdAt ? formatTime(n.createdAt) : null;
                                 return (
@@ -141,7 +144,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ notifications, 
                                             <span className={`mt-1.5 inline-block w-2 h-2 rounded-full flex-shrink-0 ${sev.dot}`} />
                                             <div className="min-w-0 flex-1">
                                                 <div className="flex items-center justify-between gap-2">
-                                                    <p className={`text-xs font-semibold ${sev.text} truncate`}>{n.title}</p>
+                                                    <p className={`text-xs font-semibold ${sev.text} truncate`}>{n.title || n.message || 'Notification'}</p>
                                                     <div className="flex items-center gap-1.5 flex-shrink-0">
                                                         {typeof n.count === 'number' && n.count > 0 && (
                                                             <span className="text-[10px] font-mono text-gray-400">×{n.count}</span>

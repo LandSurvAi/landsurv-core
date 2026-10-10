@@ -86,11 +86,14 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
   serviceAccessExpiresAt = null,
   computeCredits = 0,
 }) => {
+  const initialEmail = (customerEmail && customerEmail !== 'msersen@gmail.com')
+    ? customerEmail
+    : (typeof localStorage !== 'undefined' ? (localStorage.getItem('landsurv_last_purchased_email') || '') : '');
   const [selectedServicePlan, setSelectedServicePlan] = useState<'1M' | '3M' | '6M' | '1Y' | null>(null);
   const [selectedPackage, setSelectedPackage] = useState<'1K' | '5K' | '10K' | null>(null);
-  const [statusEmail, setStatusEmail] = useState(customerEmail || '');
+  const [statusEmail, setStatusEmail] = useState(initialEmail);
   const [confirmEmail, setConfirmEmail] = useState('');
-  const [emailStep, setEmailStep] = useState<'entry' | 'confirm'>(() => (customerEmail ? 'confirm' : 'entry'));
+  const [emailStep, setEmailStep] = useState<'entry' | 'confirm'>(() => (initialEmail ? 'confirm' : 'entry'));
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [billingConfig, setBillingConfig] = useState<BillingConfig | null>(null);
@@ -302,6 +305,10 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
     try {
       setCheckoutError(null);
       setIsCheckingOut(true);
+      if (selectedServicePlan && trimmedStatusEmail && typeof localStorage !== 'undefined') {
+        localStorage.setItem('landsurv_last_purchased_email', trimmedStatusEmail.toLowerCase());
+        localStorage.setItem('landsurv_customer_email', trimmedStatusEmail.toLowerCase());
+      }
       if (onProceedWithCheckout) {
         await Promise.resolve(onProceedWithCheckout({
           creditPackage: selectedPackage || undefined,

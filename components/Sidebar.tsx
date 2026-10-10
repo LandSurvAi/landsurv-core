@@ -26,6 +26,7 @@ import {
     HomeIcon,
     SoilsIcon,
     SlopeIcon,
+    SheetViewIcon,
 } from './icons.tsx';
 import { getRetiredAgents } from '../utils/retiredAgents.ts';
 import { getGlobalSettings, subscribeGlobalSettings } from '../utils/globalSettings.ts';
@@ -414,7 +415,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                         <NavButton label="CAD Standards" icon={CadManagerIcon} onClick={() => showView('cadstandards')} isActive={activeVisualPanel === 'cadstandards' || activeVisualPanel === 'cadmanager'} isDesktop={props.isDesktop} />
                         <NavButton label="Drafting Style Library" icon={CadManagerIcon} onClick={() => showView('draftstylelib')} isActive={activeVisualPanel === 'draftstylelib'} isDesktop={props.isDesktop} />
                         <NavButton label="Linetype Manager" icon={CadManagerIcon} onClick={() => showView('linetypemanager')} isActive={activeVisualPanel === 'linetypemanager'} isDesktop={props.isDesktop} />
-                        <NavButton label="Sheet View" icon={CadManagerIcon} onClick={() => showView('sheetview')} isActive={activeVisualPanel === 'sheetview'} isDesktop={props.isDesktop} />
+                        <NavButton label="Sheet View" icon={SheetViewIcon} onClick={() => showView('sheetview')} isActive={activeVisualPanel === 'sheetview'} isDesktop={props.isDesktop} />
                         <NavButton label="AR View" icon={ARIcon} onClick={() => showView('ar')} isActive={activeVisualPanel === 'ar'} isDesktop={props.isDesktop} />
                         <NavButton label="File Manager" icon={FolderIcon} onClick={() => showView('filemanager')} isActive={activeVisualPanel === 'filemanager'} isDesktop={props.isDesktop} />
                         <NavButton label="Symbol Manager" icon={PencilSquareIcon} onClick={() => showView('symbolmanager')} isActive={activeVisualPanel === 'symbolmanager'} isDesktop={props.isDesktop} />

@@ -43,7 +43,7 @@ interface AppStateContextType {
 
   // App Notifications
   notifications: AppNotification[];
-  addNotification: (notification: Omit<AppNotification, 'id'> & { id?: string }) => string;
+  addNotification: (notification: (Omit<AppNotification, 'id'> & { id?: string }) | string, severity?: NotificationSeverity) => string;
   dismissNotification: (id: string) => void;
   clearNotifications: () => void;
 
@@ -122,7 +122,7 @@ export const AppStateProvider: React.FC<AppStateProviderProps> = ({ children, av
       nextNumber: 1,
     },
     uncertaintySensitivity: 'medium',
-    pointAttributeScaling: 'screen', // Default to screen-relative scaling
+    pointAttributeScaling: 'screen', // Point attributes default to locked screen-relative size so scaling thousands of points doesn't slow the system
     showPointSymbols: false,
     debugPreflightEstimate: false,
     debugGimbalHud: false,
@@ -184,7 +184,25 @@ export const AppStateProvider: React.FC<AppStateProviderProps> = ({ children, av
     setNotifications(prev => prev.filter(notification => notification.dedupeKey !== key));
   }, []);
 
-  const addNotification = useCallback((notification: Omit<AppNotification, 'id'> & { id?: string }) => {
+  const addNotification = useCallback((
+    notificationOrMessage: (Omit<AppNotification, 'id'> & { id?: string }) | string,
+    legacySeverity?: NotificationSeverity
+  ) => {
+    let notification: Omit<AppNotification, 'id'> & { id?: string };
+    if (typeof notificationOrMessage === 'string') {
+      notification = {
+        kind: 'general',
+        severity: legacySeverity ?? 'info',
+        title: notificationOrMessage,
+      };
+    } else {
+      notification = {
+        ...notificationOrMessage,
+        severity: (notificationOrMessage.severity as NotificationSeverity) ?? legacySeverity ?? 'info',
+        title: notificationOrMessage.title || notificationOrMessage.message || 'Notification',
+      };
+    }
+
     const dedupeKey = notification.dedupeKey;
     const createdAt = notification.createdAt ?? new Date().toISOString();
 

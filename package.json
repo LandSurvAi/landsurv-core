@@ -1,7 +1,7 @@
 {
   "name": "landsurv-core",
   "private": false,
-  "version": "26.10.04.04",
+  "version": "26.10.10.01",
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {

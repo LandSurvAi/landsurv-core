@@ -2444,14 +2444,14 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
             )}
             <button
               onClick={onShowApiKeySettings}
-              className="flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-amber-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-amber-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className={`flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 ${hasApiKey ? 'hover:text-emerald-400 hover:shadow-emerald-500/5' : 'hover:text-red-400 hover:shadow-red-500/5'} shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm`}
               type="button"
             >
               <div className="relative flex-shrink-0">
-                <KeyIcon className="w-4 h-4 text-amber-400" />
+                <KeyIcon className={`w-4 h-4 transition-colors ${hasApiKey ? 'text-emerald-400' : 'text-red-400'}`} />
                 <span className="absolute -top-1 -right-1 flex h-2 w-2">
-                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${hasApiKey ? 'bg-green-400' : 'bg-red-400'}`}></span>
-                  <span className={`relative inline-flex rounded-full h-2 w-2 ${hasApiKey ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${hasApiKey ? 'bg-emerald-400' : 'bg-red-400'}`}></span>
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${hasApiKey ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
                 </span>
               </div>
               Key

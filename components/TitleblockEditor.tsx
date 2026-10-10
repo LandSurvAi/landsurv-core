@@ -48,6 +48,7 @@ export interface TitleblockTextElement extends BaseElement {
   color: string;
   /** Optional width in inches; if set, text wraps and align is honored. */
   width?: number;
+  rotation?: number;
 }
 
 export interface TitleblockRectElement extends BaseElement {
@@ -121,7 +122,7 @@ export const substitutePlaceholders = (text: string, ctx: TitleblockContext): st
 };
 
 // ---------------------------------------------------------------------------
-// Default layout — a classic civil titleblock
+// Default layout — a classic civil titleblock (corner box)
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_TITLEBLOCK_LAYOUT: TitleblockLayout = {
@@ -148,6 +149,101 @@ export const DEFAULT_TITLEBLOCK_LAYOUT: TitleblockLayout = {
 };
 
 // ---------------------------------------------------------------------------
+// Industry Standard Vertical Titleblock (24x36 / 11x17+ rolled plan sets)
+// Runs along the entirety of the right edge of the sheet.
+// ---------------------------------------------------------------------------
+
+export const createDefaultVerticalTitleblockLayout = (heightIn = 23.0): TitleblockLayout => {
+  const W = 2.75;
+  const H = Math.max(9.0, heightIn);
+  const els: TitleblockElement[] = [];
+
+  // Top header: Firm / Surveying Company
+  els.push({ id: 'firm-logo-text', type: 'text', x: 0.15, y: 0.20, text: '[FIRM NAME]', fontSize: 13, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#111' });
+  els.push({ id: 'firm-sub-1', type: 'text', x: 0.15, y: 0.45, text: 'PROFESSIONAL LAND SURVEYING', fontSize: 6.5, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#374151' });
+  els.push({ id: 'firm-sub-2', type: 'text', x: 0.15, y: 0.65, text: 'CONSULTING ENGINEERS & PLS', fontSize: 6.0, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#6b7280' });
+  els.push({ id: 'div-1', type: 'line', x: 0, y: 0.90, x2: W, y2: 0.90, stroke: '#111', strokeWidth: 1.5 });
+
+  // Professional Seal / Stamp Box (Standard 2.35" square)
+  els.push({ id: 'seal-box', type: 'rect', x: 0.20, y: 1.05, w: 2.35, h: 2.35, fill: '#fbfbfb', stroke: '#111', strokeWidth: 1 });
+  els.push({ id: 'seal-lbl-1', type: 'text', x: 1.37, y: 1.70, text: 'LICENSED PROFESSIONAL', fontSize: 7.5, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'center', color: '#9ca3af' });
+  els.push({ id: 'seal-lbl-2', type: 'text', x: 1.37, y: 1.95, text: 'LAND SURVEYOR SEAL', fontSize: 7.5, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'center', color: '#9ca3af' });
+  els.push({ id: 'seal-lbl-3', type: 'text', x: 1.37, y: 2.20, text: 'STATE REGISTRATION', fontSize: 6.5, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'center', color: '#9ca3af' });
+  els.push({ id: 'seal-lbl-4', type: 'text', x: 1.37, y: 2.95, text: 'DIGITAL STAMP AREA', fontSize: 6.0, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'center', color: '#cbd5e1' });
+  els.push({ id: 'div-2', type: 'line', x: 0, y: 3.65, x2: W, y2: 3.65, stroke: '#111', strokeWidth: 1.5 });
+
+  // Pinned Bottom Sections Calculation
+  const projectY = Math.max(5.0, H - 6.80);
+  const midTopY = 3.65;
+  const midBottomY = projectY;
+  const midCenterY = (midTopY + midBottomY) / 2;
+
+  // ── BETWEEN PINK LINES: All text turned 90 deg CCW (3.65 to projectY) ──
+  // Reads upward from bottom to top along the vertical strip
+  const textBaselineY = midBottomY - 0.40;
+
+  // Left column (General Survey Notes)
+  els.push({ id: 'notes-title', type: 'text', x: 0.30, y: textBaselineY, text: 'GENERAL SURVEY NOTES', fontSize: 7.5, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#111', rotation: -90 });
+  els.push({ id: 'notes-1', type: 'text', x: 0.52, y: textBaselineY, text: '1. BOUNDARY SURVEY CONDUCTED IN ACCORDANCE WITH APPLICABLE STATE MINIMUM TECHNICAL STANDARDS.', fontSize: 5.5, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#4b5563', rotation: -90 });
+  els.push({ id: 'notes-2', type: 'text', x: 0.72, y: textBaselineY, text: '2. COORDINATES AND BEARINGS REFERENCED TO STATE PLANE GRID SYSTEM (US SURVEY FEET).', fontSize: 5.5, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#4b5563', rotation: -90 });
+  els.push({ id: 'notes-3', type: 'text', x: 0.92, y: textBaselineY, text: '3. ELEVATIONS REFER TO NORTH AMERICAN VERTICAL DATUM OF 1988 (NAVD88) BENCHMARKS.', fontSize: 5.5, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#4b5563', rotation: -90 });
+  els.push({ id: 'notes-4', type: 'text', x: 1.12, y: textBaselineY, text: '4. UNDERGROUND UTILITIES HAVE NOT BEEN LOCATED. CALL 811 BEFORE DIGGING.', fontSize: 5.5, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#4b5563', rotation: -90 });
+  els.push({ id: 'notes-5', type: 'text', x: 1.32, y: textBaselineY, text: '5. THIS DRAWING IS AN OFFICIAL CAD WORK PRODUCT FOR RECORDATION AND PERMITTING.', fontSize: 5.5, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#4b5563', rotation: -90 });
+
+  // Vertical divider between Notes and Revisions
+  els.push({ id: 'div-mid-vert', type: 'line', x: 1.48, y: midTopY, x2: 1.48, y2: midBottomY, stroke: '#d1d5db', strokeWidth: 0.8 });
+
+  // Right column (Revisions / Addenda Schedule)
+  els.push({ id: 'rev-title', type: 'text', x: 1.68, y: textBaselineY, text: 'REVISIONS / ADDENDA SCHEDULE', fontSize: 7.5, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#111', rotation: -90 });
+  els.push({ id: 'rev-hdr', type: 'text', x: 1.90, y: textBaselineY, text: 'NO.   DESCRIPTION                         DATE          BY    APP', fontSize: 5.8, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#4b5563', rotation: -90 });
+  els.push({ id: 'rev-row-1', type: 'text', x: 2.10, y: textBaselineY, text: ' 1     INITIAL BOUNDARY DRAFT      10/01/26    PLS    OK', fontSize: 5.5, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#6b7280', rotation: -90 });
+  els.push({ id: 'rev-row-2', type: 'text', x: 2.28, y: textBaselineY, text: ' 2     CLIENT REVIEW REVISIONS     10/04/26    PLS    OK', fontSize: 5.5, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#6b7280', rotation: -90 });
+  els.push({ id: 'rev-row-3', type: 'text', x: 2.46, y: textBaselineY, text: ' 3     FINAL SUBMISSION SET           10/10/26    PLS    OK', fontSize: 5.5, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#6b7280', rotation: -90 });
+
+  // ── NON-ROTATED BOTTOM SECTION: Clean & No Overruns ──────────────────────
+  // Project Info Block
+  els.push({ id: 'div-proj', type: 'line', x: 0, y: projectY, x2: W, y2: projectY, stroke: '#111', strokeWidth: 1.5 });
+  els.push({ id: 'proj-lbl', type: 'text', x: 0.15, y: projectY + 0.15, text: 'PROJECT:', fontSize: 6.5, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#4b5563' });
+  els.push({ id: 'project', type: 'text', x: 0.15, y: projectY + 0.38, text: '{PROJECT_NAME}', fontSize: 10.5, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#111', width: 2.45 });
+  els.push({ id: 'div-proj-sub', type: 'line', x: 0, y: projectY + 0.65, x2: W, y2: projectY + 0.65, stroke: '#e5e7eb', strokeWidth: 0.8 });
+  els.push({ id: 'loc-lbl', type: 'text', x: 0.15, y: projectY + 0.80, text: 'LOCATION / CLIENT:', fontSize: 6.5, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#4b5563' });
+  els.push({ id: 'notes', type: 'text', x: 0.15, y: projectY + 1.00, text: '{NOTES}', fontSize: 7, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#374151', width: 2.45 });
+
+  // Metadata block (Date, Drawn By, Scale, Sheet Size)
+  const metaY = projectY + 1.35;
+  els.push({ id: 'div-meta', type: 'line', x: 0, y: metaY, x2: W, y2: metaY, stroke: '#111', strokeWidth: 1.2 });
+  els.push({ id: 'div-meta-mid', type: 'line', x: 1.37, y: metaY, x2: 1.37, y2: metaY + 1.30, stroke: '#111', strokeWidth: 0.5 });
+  els.push({ id: 'div-meta-row1', type: 'line', x: 0, y: metaY + 0.60, x2: W, y2: metaY + 0.60, stroke: '#e5e7eb', strokeWidth: 0.5 });
+
+  els.push({ id: 'drawn-lbl', type: 'text', x: 0.15, y: metaY + 0.15, text: 'DRAWN BY:', fontSize: 6.0, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#6b7280' });
+  els.push({ id: 'drawn', type: 'text', x: 0.15, y: metaY + 0.35, text: '{DRAWN_BY}', fontSize: 8.5, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#111' });
+  els.push({ id: 'date-lbl', type: 'text', x: 1.50, y: metaY + 0.15, text: 'DATE:', fontSize: 6.0, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#6b7280' });
+  els.push({ id: 'date', type: 'text', x: 1.50, y: metaY + 0.35, text: '{DATE}', fontSize: 8.5, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#111' });
+
+  els.push({ id: 'scale-lbl', type: 'text', x: 0.15, y: metaY + 0.75, text: 'SCALE:', fontSize: 6.0, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#6b7280' });
+  els.push({ id: 'scale', type: 'text', x: 0.15, y: metaY + 0.95, text: '{SCALE}', fontSize: 8.0, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#111' });
+  els.push({ id: 'size-lbl', type: 'text', x: 1.50, y: metaY + 0.75, text: 'SHEET SIZE:', fontSize: 6.0, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'left', color: '#6b7280' });
+  els.push({ id: 'sheet-size', type: 'text', x: 1.50, y: metaY + 0.95, text: '{SHEET_SIZE}', fontSize: 8.0, fontFamily: 'sans-serif', fontWeight: 'normal', align: 'left', color: '#111' });
+
+  // Giant Sheet Number Box at the bottom (prominently visible when rolled up!)
+  const sheetNumY = H - 2.10;
+  els.push({ id: 'div-sheet-box', type: 'line', x: 0, y: sheetNumY, x2: W, y2: sheetNumY, stroke: '#111', strokeWidth: 2.0 });
+  els.push({ id: 'sheet-bg', type: 'rect', x: 0.05, y: sheetNumY + 0.05, w: W - 0.10, h: 2.00, fill: '#f8fafc', stroke: '#111', strokeWidth: 1.2 });
+  els.push({ id: 'sheet-lbl', type: 'text', x: W / 2, y: sheetNumY + 0.25, text: 'SHEET NUMBER', fontSize: 6.5, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'center', color: '#64748b' });
+  els.push({ id: 'sheet-num', type: 'text', x: W / 2, y: sheetNumY + 0.95, text: '{SHEET_NUMBER}', fontSize: 20, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'center', color: '#0f172a' });
+  els.push({ id: 'page-of', type: 'text', x: W / 2, y: sheetNumY + 1.45, text: 'SHEET {PAGE_OF}', fontSize: 8.0, fontFamily: 'sans-serif', fontWeight: 'bold', align: 'center', color: '#475569' });
+
+  return {
+    widthIn: W,
+    heightIn: H,
+    background: '#ffffff',
+    borderColor: '#111111',
+    borderWidth: 2,
+    elements: els,
+  };
+};
+
+// ---------------------------------------------------------------------------
 // Inline renderer — used by both the editor canvas and the live sheet preview
 // ---------------------------------------------------------------------------
 
@@ -159,9 +255,10 @@ interface TitleblockRendererProps {
   /** Optional selection ring for editor mode. */
   selectedId?: string | null;
   onElementMouseDown?: (id: string, e: React.MouseEvent) => void;
+  onElementDoubleClick?: (el: TitleblockElement, e: React.MouseEvent) => void;
 }
 
-export const TitleblockRenderer: React.FC<TitleblockRendererProps> = ({ layout, ctx, ppi, selectedId, onElementMouseDown }) => {
+export const TitleblockRenderer: React.FC<TitleblockRendererProps> = ({ layout, ctx, ppi, selectedId, onElementMouseDown, onElementDoubleClick }) => {
   const W = layout.widthIn * ppi;
   const H = layout.heightIn * ppi;
   return (
@@ -177,6 +274,11 @@ export const TitleblockRenderer: React.FC<TitleblockRendererProps> = ({ layout, 
             width={getElWidthPx(el, ppi) + 4} height={getElHeightPx(el, ppi) + 4}
             fill="none" stroke="#f59e0b" strokeDasharray="3 3" pointerEvents="none" /> : null;
         const handler = onElementMouseDown ? (e: React.MouseEvent) => onElementMouseDown(el.id, e) : undefined;
+        const dblHandler = onElementDoubleClick ? (e: React.MouseEvent) => {
+          e.stopPropagation();
+          onElementDoubleClick(el, e);
+        } : undefined;
+        const cursorStyle = onElementDoubleClick ? 'pointer' : (handler ? 'move' : 'default');
         if (el.type === 'text') {
           const baseY = (el.y * ppi) + el.fontSize * 1.0; // baseline approx 1× font
           const x = el.align === 'right' && el.width != null
@@ -184,11 +286,14 @@ export const TitleblockRenderer: React.FC<TitleblockRendererProps> = ({ layout, 
             : el.align === 'center' && el.width != null
               ? (el.x + el.width / 2) * ppi
               : el.x * ppi;
+          const rot = el.rotation || 0;
+          const transform = rot !== 0 ? `rotate(${rot} ${x} ${baseY})` : undefined;
           return (
-            <g key={el.id} onMouseDown={handler} style={{ cursor: handler ? 'move' : 'default' }}>
+            <g key={el.id} onMouseDown={handler} onDoubleClick={dblHandler} style={{ cursor: cursorStyle }}>
               <text
                 x={x}
                 y={baseY}
+                transform={transform}
                 fontSize={el.fontSize}
                 fontFamily={el.fontFamily}
                 fontWeight={el.fontWeight}
@@ -203,7 +308,7 @@ export const TitleblockRenderer: React.FC<TitleblockRendererProps> = ({ layout, 
         }
         if (el.type === 'rect') {
           return (
-            <g key={el.id} onMouseDown={handler} style={{ cursor: handler ? 'move' : 'default' }}>
+            <g key={el.id} onMouseDown={handler} onDoubleClick={dblHandler} style={{ cursor: cursorStyle }}>
               <rect x={el.x * ppi} y={el.y * ppi}
                 width={el.w * ppi} height={el.h * ppi}
                 fill={el.fill === 'none' ? 'transparent' : el.fill}
@@ -216,7 +321,7 @@ export const TitleblockRenderer: React.FC<TitleblockRendererProps> = ({ layout, 
         }
         if (el.type === 'line') {
           return (
-            <g key={el.id} onMouseDown={handler} style={{ cursor: handler ? 'move' : 'default' }}>
+            <g key={el.id} onMouseDown={handler} onDoubleClick={dblHandler} style={{ cursor: cursorStyle }}>
               <line x1={el.x * ppi} y1={el.y * ppi} x2={el.x2 * ppi} y2={el.y2 * ppi}
                 stroke={el.stroke} strokeWidth={el.strokeWidth} />
               {sel}
@@ -227,7 +332,7 @@ export const TitleblockRenderer: React.FC<TitleblockRendererProps> = ({ layout, 
         if (el.dxfPath && el.dxfViewBox) {
           const [vbx, vby, vbw, vbh] = el.dxfViewBox.split(/\s+/).map(parseFloat);
           return (
-            <g key={el.id} onMouseDown={handler} style={{ cursor: handler ? 'move' : 'default' }}>
+            <g key={el.id} onMouseDown={handler} onDoubleClick={dblHandler} style={{ cursor: cursorStyle }}>
               <svg x={el.x * ppi} y={el.y * ppi} width={el.w * ppi} height={el.h * ppi}
                 viewBox={`${vbx} ${vby} ${vbw} ${vbh}`}
                 preserveAspectRatio={el.fit === 'stretch' ? 'none' : 'xMidYMid meet'}
@@ -240,7 +345,7 @@ export const TitleblockRenderer: React.FC<TitleblockRendererProps> = ({ layout, 
         }
         if (el.dataUrl) {
           return (
-            <g key={el.id} onMouseDown={handler} style={{ cursor: handler ? 'move' : 'default' }}>
+            <g key={el.id} onMouseDown={handler} onDoubleClick={dblHandler} style={{ cursor: cursorStyle }}>
               <image href={el.dataUrl}
                 x={el.x * ppi} y={el.y * ppi}
                 width={el.w * ppi} height={el.h * ppi}
@@ -284,7 +389,8 @@ export const titleblockToSvgMarkup = (layout: TitleblockLayout, ctx: TitleblockC
               : el.align === 'center' && el.width != null ? (el.x + el.width / 2) * ppi
               : el.x * ppi;
       const anchor = el.align === 'center' ? 'middle' : el.align === 'right' ? 'end' : 'start';
-      parts.push(`<text x="${x.toFixed(2)}" y="${baseY.toFixed(2)}" font-size="${el.fontSize}" font-family="${el.fontFamily}" font-weight="${el.fontWeight}" fill="${el.color}" text-anchor="${anchor}">${esc(substitutePlaceholders(el.text, ctx))}</text>`);
+      const rot = el.rotation ? ` transform="rotate(${el.rotation} ${x.toFixed(2)} ${baseY.toFixed(2)})"` : '';
+      parts.push(`<text x="${x.toFixed(2)}" y="${baseY.toFixed(2)}"${rot} font-size="${el.fontSize}" font-family="${el.fontFamily}" font-weight="${el.fontWeight}" fill="${el.color}" text-anchor="${anchor}">${esc(substitutePlaceholders(el.text, ctx))}</text>`);
     } else if (el.type === 'rect') {
       parts.push(`<rect x="${(el.x*ppi).toFixed(2)}" y="${(el.y*ppi).toFixed(2)}" width="${(el.w*ppi).toFixed(2)}" height="${(el.h*ppi).toFixed(2)}" fill="${el.fill === 'none' ? 'none' : el.fill}" stroke="${el.stroke}" stroke-width="${el.strokeWidth}" />`);
     } else if (el.type === 'line') {

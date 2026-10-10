@@ -1233,8 +1233,42 @@ export interface SteepSlopeRunResult {
   triangles: SteepSlopeTriangleSummary[];
 }
 
-export interface AnnotationDimension {
+export type AnnotationDimensionType =
+    | 'aligned'
+    | 'horizontal'
+    | 'vertical'
+    | 'radius'
+    | 'diameter'
+    | 'arc-length'
+    | 'curve-data'
+    | 'angular'
+    | 'ordinate';
+
+export interface BaseAnnotationDimension {
     id: string;
+    textOverride?: string;
+    color?: string;
+    arrowStyle?: 'closed' | 'open' | 'tick' | 'dot';
+    textPlacement?: 'above' | 'centered';
+    precision?: number;
+    scale?: number;
+    textHeight?: number;
+    arrowSize?: number;
+    scalingMode?: 'world' | 'screen';
+}
+
+export type DimensionGripType = 'p1' | 'p2' | 'offset' | 'text' | 'center' | 'vertex';
+
+export interface DimensionGrip {
+    id: string;
+    dimId: string;
+    type: DimensionGripType;
+    x: number;
+    y: number;
+    dim: AnnotationDimension;
+}
+
+export interface AlignedAnnotationDimension extends BaseAnnotationDimension {
     type: 'aligned';
     /** First pick point, in world (easting/northing) coordinates */
     p1: { easting: number; northing: number };
@@ -1242,9 +1276,90 @@ export interface AnnotationDimension {
     p2: { easting: number; northing: number };
     /** Perpendicular offset from the P1-P2 line (positive = left of P1→P2 direction) in world units */
     offsetDist: number;
-    /** Optional custom text; if omitted the computed distance is shown */
-    textOverride?: string;
 }
+
+export interface HorizontalAnnotationDimension extends BaseAnnotationDimension {
+    type: 'horizontal';
+    p1: { easting: number; northing: number };
+    p2: { easting: number; northing: number };
+    /** Y (northing) offset from p1 in world units */
+    offsetDist: number;
+}
+
+export interface VerticalAnnotationDimension extends BaseAnnotationDimension {
+    type: 'vertical';
+    p1: { easting: number; northing: number };
+    p2: { easting: number; northing: number };
+    /** X (easting) offset from p1 in world units */
+    offsetDist: number;
+}
+
+export interface RadiusAnnotationDimension extends BaseAnnotationDimension {
+    type: 'radius';
+    center: { easting: number; northing: number };
+    radius: number;
+    pickPoint?: { easting: number; northing: number };
+    textPosition: { easting: number; northing: number };
+}
+
+export interface DiameterAnnotationDimension extends BaseAnnotationDimension {
+    type: 'diameter';
+    center: { easting: number; northing: number };
+    radius: number;
+    pickPoint?: { easting: number; northing: number };
+    textPosition: { easting: number; northing: number };
+}
+
+export interface ArcLengthAnnotationDimension extends BaseAnnotationDimension {
+    type: 'arc-length';
+    center: { easting: number; northing: number };
+    radius: number;
+    p1: { easting: number; northing: number };
+    p2: { easting: number; northing: number };
+    arcLength: number;
+    offsetDist: number;
+    isLeftCurve?: boolean;
+}
+
+export interface CurveDataAnnotationDimension extends BaseAnnotationDimension {
+    type: 'curve-data';
+    center: { easting: number; northing: number };
+    radius: number;
+    arcLength: number;
+    deltaRad?: number;
+    chordBearing?: string;
+    chordLength?: number;
+    tangentBearing?: string;
+    curveDirection?: 'left' | 'right';
+    p1: { easting: number; northing: number };
+    p2: { easting: number; northing: number };
+    textPosition: { easting: number; northing: number };
+}
+
+export interface AngularAnnotationDimension extends BaseAnnotationDimension {
+    type: 'angular';
+    vertex: { easting: number; northing: number };
+    p1: { easting: number; northing: number };
+    p2: { easting: number; northing: number };
+    arcRadius: number;
+}
+
+export interface OrdinateAnnotationDimension extends BaseAnnotationDimension {
+    type: 'ordinate';
+    point: { easting: number; northing: number };
+    leaderEnd: { easting: number; northing: number };
+}
+
+export type AnnotationDimension =
+    | AlignedAnnotationDimension
+    | HorizontalAnnotationDimension
+    | VerticalAnnotationDimension
+    | RadiusAnnotationDimension
+    | DiameterAnnotationDimension
+    | ArcLengthAnnotationDimension
+    | CurveDataAnnotationDimension
+    | AngularAnnotationDimension
+    | OrdinateAnnotationDimension;
 
 export interface ClosureReport {
   id: string;
@@ -1531,7 +1646,7 @@ export const useHighlights = (): HighlightContextType => {
 // derived list in App.tsx without touching the NotificationCenter component.
 // ----------------------------------------------------------------------------
 export type NotificationKind = 'pdf-uncertainties' | (string & {});
-export type NotificationSeverity = 'info' | 'warning' | 'error';
+export type NotificationSeverity = 'info' | 'warning' | 'error' | 'success';
 
 export interface AppNotification {
     id: string;

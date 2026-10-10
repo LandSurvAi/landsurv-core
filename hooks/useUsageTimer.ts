@@ -55,6 +55,12 @@ export const useUsageTimer = (
   const [isInitialized, setIsInitialized] = useState(false);
 
   const updateCycle = useCallback(() => {
+    const disableTimer = Boolean(
+      localStorage.getItem(SERVICE_TIMER_OVERRIDE_STORAGE) === 'true' ||
+      localStorage.getItem(SERVICE_KEY_STORAGE)?.startsWith('lsa_') ||
+      localStorage.getItem(API_KEY_STORAGE)?.startsWith('lsa_')
+    );
+
     let startTimestamp = Number(localStorage.getItem(USAGE_START_STORAGE));
     if (!Number.isFinite(startTimestamp) || startTimestamp <= 0 || startTimestamp > Date.now()) {
       startTimestamp = Date.now();
@@ -63,12 +69,12 @@ export const useUsageTimer = (
 
     const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startTimestamp) / 1000));
     const positionInCycle = elapsedSeconds % totalCycleSeconds;
-    const locked = positionInCycle >= safeCycleDuration;
+    const locked = disableTimer ? false : positionInCycle >= safeCycleDuration;
 
     setElapsedTime(elapsedSeconds);
     setCycleLocked(locked);
-    setRemainingTime(locked ? 0 : safeCycleDuration - positionInCycle);
-    setTimeUntilAvailable(locked ? totalCycleSeconds - positionInCycle : 0);
+    setRemainingTime(disableTimer ? safeCycleDuration : (locked ? 0 : safeCycleDuration - positionInCycle));
+    setTimeUntilAvailable(disableTimer ? 0 : (locked ? totalCycleSeconds - positionInCycle : 0));
   }, [safeCycleDuration, totalCycleSeconds]);
 
   const applyCachedServiceAccess = useCallback(() => {
@@ -81,8 +87,9 @@ export const useUsageTimer = (
     const active = disableFreeCycleTimer || isUnexpired || hasLsaKey;
     setServiceAccessExpiresAt(expiresAt);
     setHasServiceAccess(active);
-    if (hasLsaKey) {
+    if (hasLsaKey || active) {
       setHasLandSurvKey(true);
+      setHasApiKey(true);
     }
   }, []);
 
@@ -100,6 +107,7 @@ export const useUsageTimer = (
         if (serviceKey.startsWith('lsa_')) {
           setHasLandSurvKey(true);
           setHasServiceAccess(true);
+          setHasApiKey(true);
           return 'active';
         }
         setHasLandSurvKey(false);
@@ -135,11 +143,13 @@ export const useUsageTimer = (
       setServiceAccessExpiresAt(expiresAt || null);
       setHasServiceAccess(isActive);
       setHasLandSurvKey(true);
+      setHasApiKey(true);
       return isActive ? 'active' : 'expired';
     } catch {
       if (serviceKey.startsWith('lsa_')) {
         setHasLandSurvKey(true);
         setHasServiceAccess(true);
+        setHasApiKey(true);
         return 'active';
       }
       setHasLandSurvKey(false);
@@ -152,14 +162,15 @@ export const useUsageTimer = (
       const storedApiKey = localStorage.getItem(API_KEY_STORAGE);
       const storedSuperUser = localStorage.getItem(SUPERUSER_STORAGE);
       const storedCredits = Number(localStorage.getItem(CREDITS_STORAGE) || 0);
+      const storedServiceKey = localStorage.getItem(SERVICE_KEY_STORAGE) || (storedApiKey?.startsWith('lsa_') ? storedApiKey : null);
+      const hasLsa = Boolean(storedServiceKey?.startsWith('lsa_') || storedApiKey?.startsWith('lsa_'));
       setComputeCredits(Number.isFinite(storedCredits) ? storedCredits : 0);
       setIsSuperUser(storedSuperUser === 'true');
-      setHasApiKey(storedSuperUser === 'true' || Boolean(storedApiKey?.trim()) || hasAnyProviderKey());
+      setHasApiKey(storedSuperUser === 'true' || Boolean(storedApiKey?.trim()) || Boolean(storedServiceKey?.trim()) || hasLsa || hasAnyProviderKey());
       applyCachedServiceAccess();
       updateCycle();
       setIsInitialized(true);
 
-      const storedServiceKey = localStorage.getItem(SERVICE_KEY_STORAGE) || (storedApiKey?.startsWith('lsa_') ? storedApiKey : null);
       setHasLandSurvKey(Boolean(storedServiceKey || storedApiKey?.startsWith('lsa_')));
       if (storedServiceKey) void verifyServiceKey(storedServiceKey);
     };
@@ -251,6 +262,17 @@ export const useUsageTimer = (
     localStorage.setItem(CREDITS_STORAGE, newTotal.toString());
   }, [computeCredits]);
 
+  const isTimerDisabled = Boolean(
+    isSuperUser ||
+    hasServiceAccess ||
+    hasLandSurvKey ||
+    (typeof localStorage !== 'undefined' && (
+      localStorage.getItem(SERVICE_TIMER_OVERRIDE_STORAGE) === 'true' ||
+      Boolean(localStorage.getItem(SERVICE_KEY_STORAGE)?.startsWith('lsa_')) ||
+      Boolean(localStorage.getItem(API_KEY_STORAGE)?.startsWith('lsa_'))
+    ))
+  );
+
   return {
     hasApiKey,
     hasLandSurvKey,
@@ -259,10 +281,10 @@ export const useUsageTimer = (
     isSuperUser,
     computeCredits,
     elapsedTime,
-    remainingTime,
-    timeUntilAvailable,
+    remainingTime: isTimerDisabled ? safeCycleDuration : remainingTime,
+    timeUntilAvailable: isTimerDisabled ? 0 : timeUntilAvailable,
     isInitialized,
-    isLocked: !isSuperUser && !hasServiceAccess && cycleLocked,
+    isLocked: isTimerDisabled ? false : cycleLocked,
     unlockWithApiKey,
     unlockWithServiceKey,
     resetTimer,

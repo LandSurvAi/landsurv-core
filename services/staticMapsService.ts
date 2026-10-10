@@ -176,6 +176,10 @@ function buildParams(req: StaticMapRequest, key?: string): URLSearchParams {
 const NAIP_CACHE_MAX = 60;
 const naipCache = new Map<string, StaticMapResult>();
 
+export function clearStaticMapsCache(): void {
+  naipCache.clear();
+}
+
 function naipCacheGet(key: string): StaticMapResult | undefined {
   const hit = naipCache.get(key);
   if (hit) {

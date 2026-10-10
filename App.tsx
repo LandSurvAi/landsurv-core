@@ -55,7 +55,8 @@ import {
   type VisionAerialImage,
 } from './utils/civilDrafterVision.ts';
 import { type ZoningContext, type AutoDraftImage } from './utils/autoDraftOrchestrator.ts';
-import { getStaticMap } from './services/staticMapsService.ts';
+import { getStaticMap, clearStaticMapsCache } from './services/staticMapsService.ts';
+import { clearMapCache } from './utils/mapTileCache.ts';
 import { buildSymbolMatchers, resolveSymbol } from './utils/symbolResolver.ts';
 import { parseSymbolCommand, type SymbolVisibilityCommand } from './utils/symbolCommandParser.ts';
 import { SURVEY_SYMBOL_LIBRARY } from './data/surveySymbolLibrary.ts';
@@ -299,7 +300,7 @@ import {
 import { DEFAULT_SETTINGS, COMPATIBLE_VERSIONS, isVersionCompatible } from './utils/sessionDefaults.ts';
 import { mergeSettingsWithDefaults, migrateMessage } from './utils/sessionMigration.ts';
 // FIX: Added ProfileIcon to the imports for the new Profile Agent.
-import { HomeIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon } from './components/icons.tsx';
+import { HomeIcon, SheetViewIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon } from './components/icons.tsx';
 import { suggestedQuestionsText } from './assets/suggested_questions.ts';
 import { userSuggestedQuestionsText } from './assets/user_suggested_questions.ts';
 import { deedSuggestedQuestionsText } from './assets/deed_suggested_questions.ts';
@@ -1895,10 +1896,10 @@ const AppContent = () => {
     AgentType.TITLE_SEARCH,
     AgentType.STANDARDS_COMPLIANCE,
     AgentType.POINT_EDITOR,
-    AgentType.CAD_MANAGER,
+    ...(!cadStandardsLoaded ? [AgentType.CAD_MANAGER] : []),
   ].includes(activeAgent);
 
-  const showUploadScreen = (agentNeedsInitialScreen && !isCurrentAgentInitialized) || isAddingData;
+  const showUploadScreen = activeVisualPanel !== 'sheetview' && (((agentNeedsInitialScreen && !isCurrentAgentInitialized) || isAddingData));
 
   // REFACTORING: Use custom hook for FAB drag and position logic (Phase 2)
   const { handleFabPointerDown, fabDragState } = useFabDrag(
@@ -2468,7 +2469,7 @@ const AppContent = () => {
           keyId: null,
           keyName: 'User-provided Google API Key',
           ownerUserId: appUserId || null,
-          ownerEmail: appUserEmail || signature?.email || null,
+          ownerEmail: (appUserEmail && appUserEmail !== 'msersen@gmail.com' ? appUserEmail : (signature?.email && signature?.email !== 'msersen@gmail.com' ? signature.email : null)),
           keyPurpose: 'api',
           tier: 'user-key',
           status: 'active',
@@ -2509,9 +2510,16 @@ const AppContent = () => {
         const verifyData = verifyResponse.ok ? await verifyResponse.json() : null;
         const user = verifyData?.user || {};
         const keyId = typeof user.keyId === 'string' ? user.keyId : (typeof user.id === 'string' ? user.id : null);
-        const ownerEmail = typeof user.ownerEmail === 'string'
-          ? user.ownerEmail
-          : (typeof user.customerEmail === 'string' ? user.customerEmail : (appUserEmail || getSignatureRecord()?.email || null));
+        const lastPurchasedEmail = typeof localStorage !== 'undefined'
+          ? (localStorage.getItem('landsurv_last_purchased_email') || localStorage.getItem('landsurv_customer_email'))
+          : null;
+        const ownerEmail = (typeof user.ownerEmail === 'string' && user.ownerEmail.trim())
+          ? user.ownerEmail.trim()
+          : ((typeof user.customerEmail === 'string' && user.customerEmail.trim())
+            ? user.customerEmail.trim()
+            : ((typeof user.email === 'string' && user.email.trim())
+              ? user.email.trim()
+              : (lastPurchasedEmail || (appUserEmail && appUserEmail !== 'msersen@gmail.com' ? appUserEmail : null))));
 
         if (!cancelled) {
           setCurrentKeyDetails({
@@ -2534,13 +2542,16 @@ const AppContent = () => {
         }
       } catch {
         if (!cancelled) {
+          const lastPurchasedEmail = typeof localStorage !== 'undefined'
+            ? (localStorage.getItem('landsurv_last_purchased_email') || localStorage.getItem('landsurv_customer_email'))
+            : null;
           setCurrentKeyDetails({
             source: 'service',
             keyType: 'LandSurv Enabling Key',
             keyId: null,
             keyName: 'LandSurv Enabling Key',
             ownerUserId: appUserId || null,
-            ownerEmail: appUserEmail || getSignatureRecord()?.email || null,
+            ownerEmail: lastPurchasedEmail || (appUserEmail && appUserEmail !== 'msersen@gmail.com' ? appUserEmail : null),
             keyPurpose: 'service',
             tier: 'pro',
             status: 'active',
@@ -2724,6 +2735,11 @@ const AppContent = () => {
     const trimmed = serviceKey.trim();
     if (!trimmed) return false;
     applyKeyToSettings(trimmed);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('landsurv_service_key', trimmed);
+      localStorage.setItem('landsurv_user_api_key', trimmed);
+      localStorage.setItem('landsurv_service_disable_free_cycle_timer', 'true');
+    }
     const result = await unlockWithServiceKey(trimmed);
     if (result !== 'invalid') {
       setShowApiKeyModal(false);
@@ -3044,6 +3060,9 @@ const AppContent = () => {
       }
       
       setActiveVisualPanel(viewToShow);
+      if (isInitialScreen) {
+        setIsInitialScreen(false);
+      }
       
       if (viewToShow === 'gpsstakeout') {
         setActiveAgent(AgentType.GPS_STAKEOUT);
@@ -3053,12 +3072,20 @@ const AppContent = () => {
         setActiveAgent(AgentType.PROFILE_AGENT);
       } else if (viewToShow === 'cadmanager' || viewToShow === 'cadstandards') {
         setActiveAgent(AgentType.CAD_MANAGER);
+        if (cadStandardsLoaded) {
+          setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
+        }
       } else if (viewToShow === 'sheetview') {
-        // Sheet View is logically part of the CAD Manager agent surface.
-        setActiveAgent(AgentType.CAD_MANAGER);
+        // Sheet View loads immediately without requiring a Cad Manager session start.
+        if (cadStandardsLoaded) {
+          setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
+        }
       } else if (viewToShow === 'draftstylelib') {
         // Drafting Style Library is a CAD Manager sub-tool.
         setActiveAgent(AgentType.CAD_MANAGER);
+        if (cadStandardsLoaded) {
+          setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
+        }
       } else if (viewToShow === 'compliance') {
         setActiveAgent(AgentType.STANDARDS_COMPLIANCE);
       } else if (viewToShow === 'texteditor') {
@@ -3067,7 +3094,7 @@ const AppContent = () => {
 
       if (isPdfViewerFullscreen) setIsPdfViewerFullscreen(false);
       if(!isDesktop) setIsMobileMenuOpen(false);
-  }, [isDesktop, isPdfViewerFullscreen, activeAgent, isSessionActive, isInitialScreen, activeVisualPanel, pushNavigation]);
+  }, [isDesktop, isPdfViewerFullscreen, activeAgent, isSessionActive, isInitialScreen, activeVisualPanel, pushNavigation, cadStandardsLoaded, setInitializedAgents]);
   
   // REFACTORING NOTE: handleFabPointerDown moved to useFabDrag hook (Phase 2)
   // OLD: const handleFabPointerDown = useCallback((e: React.MouseEvent | React.TouchEvent) => { ... }, []);
@@ -3087,6 +3114,12 @@ const AppContent = () => {
   // FUTURE GEMINI: This `handleReset` function is critical for starting a new session.
   // When adding new state to the app, ensure it is reset to its default value here.
   const handleReset = useCallback(() => {
+    void clearMapCache();
+    clearStaticMapsCache();
+    try {
+      localStorage.removeItem('landsurv.sheetset.v1.project name');
+      localStorage.removeItem('landsurv.sheetset.v1.__default__');
+    } catch { /* ignore */ }
     setShowWelcome(true);
     setIsInitialScreen(true);
     setInitializedAgents(new Set());
@@ -10796,39 +10829,88 @@ const AppContent = () => {
                     };
                 }
 
-                const newFiles: BoundaryFile[] = tractCallGroups.map((group, idx) => ({
-                  id: `bf-${Date.now()}-${idx}`,
-                  name: tractCallGroups.length > 1 ? `${baseName} - Tract ${idx + 1}` : baseName,
-                  createdAt: new Date().toISOString(),
-                  calls: group,
-                  hidden: false,  // v26.05.22.2 � show amber preview immediately
-                                  // so the user can see what the parser produced
-                                  // without first having to find the eye toggle.
-                  // If this batch was produced by a per-tract Compute Preview
-                  // request from the DeedSummaryPanel, tag every resulting BF
-                  // with the originating tractId so the panel can mark that
-                  // pending-summary row as ? computed.
-                  sourceTractId: pendingTractIdRef.current ?? undefined,
-                  // If the user typed a POB into the pending-tract row, anchor
-                  // the amber preview there. Without this the boundary starts
-                  // at (0,0) and the user has to manually re-locate it.
-                  pobOverride: pendingTractPobRef.current ?? undefined,
-                  deedConfidence: resolvedConfidence,
-                }));
+                // Determine whether user explicitly specified a POB point.
+                // If yes and it's on-screen, anchor there and do not pan or zoom.
+                // If yes and it's off-screen, anchor there and zoom to it.
+                // If no point specified, plot the silhouette front-and-center right where the user is currently zoomed/panned to!
+                const userSpecifiedPob = pendingTractPobRef.current;
+                const viewCenter = canvas2dRef.current?.getViewCenterWorld?.() ?? { easting: 0, northing: 0 };
+                let needZoomToOffscreen = false;
+
+                const newFiles: BoundaryFile[] = tractCallGroups.map((group, idx) => {
+                  const firstCall = group[0];
+                  const existingPt = (firstCall && firstCall.from) ? pointMap.get(firstCall.from) : undefined;
+                  const specifiedPt = userSpecifiedPob ?? (existingPt ? { easting: existingPt.easting, northing: existingPt.northing } : null);
+
+                  let finalPob: { easting: number; northing: number };
+
+                  if (specifiedPt) {
+                    finalPob = specifiedPt;
+                    const inView = canvas2dRef.current?.isPointInView?.(specifiedPt.easting, specifiedPt.northing);
+                    if (!inView) {
+                      needZoomToOffscreen = true;
+                    }
+                  } else {
+                    // No point specified: calculate relative traverse center so the silhouette
+                    // lands front and center right where the user is currently zoomed/panned to!
+                    let relMinE = 0, relMaxE = 0, relMinN = 0, relMaxN = 0;
+                    let cursor = { easting: 0, northing: 0 };
+                    for (const call of group) {
+                      let endPt: { easting: number; northing: number } | null = null;
+                      if (call.isCurve && typeof call.curveRadius === 'number' && isFinite(call.curveRadius)
+                          && typeof call.arcLength === 'number' && isFinite(call.arcLength) && call.arcLength !== 0) {
+                        const centralAngle = call.arcLength / call.curveRadius;
+                        const left = (call as any).curveDirection === 'left';
+                        const signedDelta = left ? -centralAngle : centralAngle;
+                        const chordStr = call.chordBearing || call.bearing;
+                        const chordRad = chordStr ? parseBearingToRadians(chordStr) : null;
+                        const tRad = chordRad !== null
+                          ? chordRad - signedDelta / 2
+                          : (call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : null);
+                        if (tRad !== null) endPt = directCurve(cursor, tRad, call.curveRadius, signedDelta);
+                      } else {
+                        const bStr = call.bearing || call.chordBearing;
+                        const bRad = bStr ? parseBearingToRadians(bStr) : null;
+                        const dist = call.distance ? parseDistance(call.distance) : null;
+                        if (bRad !== null && typeof dist === 'number' && isFinite(dist)) {
+                          endPt = direct(cursor, bRad, dist);
+                        }
+                      }
+                      if (endPt && isFinite(endPt.easting) && isFinite(endPt.northing)) {
+                        relMinE = Math.min(relMinE, endPt.easting);
+                        relMaxE = Math.max(relMaxE, endPt.easting);
+                        relMinN = Math.min(relMinN, endPt.northing);
+                        relMaxN = Math.max(relMaxN, endPt.northing);
+                        cursor = endPt;
+                      }
+                    }
+                    const relCenterE = (relMinE + relMaxE) / 2;
+                    const relCenterN = (relMinN + relMaxN) / 2;
+                    finalPob = {
+                      easting: viewCenter.easting - relCenterE,
+                      northing: viewCenter.northing - relCenterN,
+                    };
+                  }
+
+                  return {
+                    id: `bf-${Date.now()}-${idx}`,
+                    name: tractCallGroups.length > 1 ? `${baseName} - Tract ${idx + 1}` : baseName,
+                    createdAt: new Date().toISOString(),
+                    calls: group,
+                    hidden: false,
+                    sourceTractId: pendingTractIdRef.current ?? undefined,
+                    pobOverride: finalPob,
+                    deedConfidence: resolvedConfidence,
+                  };
+                });
 
                 console.log('[DEED_PARSE_BF] About to setBoundaryFiles. newFiles:', newFiles.length,
                   'tractCallGroups sizes:', tractCallGroups.map(g => g.length));
                 setBoundaryFiles(prev => [...prev, ...newFiles]);
                 setDeedSummaryFileIds(newFiles.map(f => f.id));
-                // Make the freshly-computed tract active in the editor so the
-                // user doesn't have to manually switch to it after each Compute.
                 if (newFiles.length > 0) {
                   setActiveBoundaryFileId(newFiles[0].id);
                 }
-                // Clear the per-tract "in flight" marker now that the parse
-                // has landed BoundaryFiles in state. The DeedSummaryPanel
-                // uses `computingTractIds` to disable buttons + show a
-                // spinner; `pendingTractIdRef` is single-shot per request.
                 if (pendingTractIdRef.current) {
                   const justComputed = pendingTractIdRef.current;
                   setComputingTractIds(prev => {
@@ -10839,78 +10921,68 @@ const AppContent = () => {
                   pendingTractIdRef.current = null;
                   pendingTractPobRef.current = null;
                 } else {
-                  // "Compute All" path � clear everything that was pending.
                   setComputingTractIds(new Set());
                   pendingTractPobRef.current = null;
                 }
-                // v26.05.25.3 � switch the visual panel to the canvas so the
-                // DrawingCanvas component actually mounts and renders the amber
-                // preview. Without this the canvas isn't in the DOM and the
-                // boundaryFiles prop has nowhere to be drawn.
                 showView('canvas');
                 setIsBoundaryEditorVisible(true);
                 setIsBoundaryEditorButtonPulsing(false);
                 if (newFiles.length === 1) {
                   logActionToFieldbook(`Created boundary file "${newFiles[0].name}" with ${newFiles[0].calls.length} calls.`);
                 } else {
-                  logActionToFieldbook(`Detected ${newFiles.length} tracts in deed � created separate boundary files: ${newFiles.map(f => f.name).join(', ')}.`);
+                  logActionToFieldbook(`Detected ${newFiles.length} tracts in deed — created separate boundary files: ${newFiles.map(f => f.name).join(', ')}.`);
                 }
-                // v26.05.22.3 � Auto-zoom canvas to amber overlay bbox so the
-                // user actually sees the preview. Otherwise the synthesized
-                // geometry starts at {0,0} which is usually off-screen.
-                setTimeout(() => {
-                  try {
-                    let minE = Infinity, maxE = -Infinity, minN = Infinity, maxN = -Infinity;
-                    for (const file of newFiles) {
-                      if (file.calls.length === 0) continue;
-                      const firstCall = file.calls[0];
-                      const pobFromMap = pointMap.get(firstCall.from);
-                      const anchor: { easting: number; northing: number } = pobFromMap
-                        ? { easting: pobFromMap.easting, northing: pobFromMap.northing }
-                        : { easting: 0, northing: 0 };
-                      let cursor = anchor;
-                      const consume = (pt: { easting: number; northing: number }) => {
-                        if (pt.easting < minE) minE = pt.easting;
-                        if (pt.easting > maxE) maxE = pt.easting;
-                        if (pt.northing < minN) minN = pt.northing;
-                        if (pt.northing > maxN) maxN = pt.northing;
-                      };
-                      consume(anchor);
-                      for (const call of file.calls) {
-                        let endPt: { easting: number; northing: number } | null = null;
-                        if (call.isCurve && typeof call.curveRadius === 'number' && isFinite(call.curveRadius)
-                            && typeof call.arcLength === 'number' && isFinite(call.arcLength) && call.arcLength !== 0) {
-                          const centralAngle = call.arcLength / call.curveRadius;
-                          const left = (call as any).curveDirection === 'left';
-                          const signedDelta = left ? -centralAngle : centralAngle;
-                          const chordStr = call.chordBearing || call.bearing;
-                          const chordRad = chordStr ? parseBearingToRadians(chordStr) : null;
-                          const tRad = chordRad !== null
-                            ? chordRad - signedDelta / 2
-                            : (call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : null);
-                          if (tRad !== null) endPt = directCurve(cursor, tRad, call.curveRadius, signedDelta);
-                        } else {
-                          const bStr = call.bearing || call.chordBearing;
-                          const bRad = bStr ? parseBearingToRadians(bStr) : null;
-                          const dist = call.distance ? parseDistance(call.distance) : null;
-                          if (bRad !== null && typeof dist === 'number' && isFinite(dist)) {
-                            endPt = direct(cursor, bRad, dist);
+                if (needZoomToOffscreen) {
+                  setTimeout(() => {
+                    try {
+                      let minE = Infinity, maxE = -Infinity, minN = Infinity, maxN = -Infinity;
+                      for (const file of newFiles) {
+                        if (file.calls.length === 0) continue;
+                        const anchor = file.pobOverride ?? { easting: 0, northing: 0 };
+                        let cursor = anchor;
+                        const consume = (pt: { easting: number; northing: number }) => {
+                          if (pt.easting < minE) minE = pt.easting;
+                          if (pt.easting > maxE) maxE = pt.easting;
+                          if (pt.northing < minN) minN = pt.northing;
+                          if (pt.northing > maxN) maxN = pt.northing;
+                        };
+                        consume(anchor);
+                        for (const call of file.calls) {
+                          let endPt: { easting: number; northing: number } | null = null;
+                          if (call.isCurve && typeof call.curveRadius === 'number' && isFinite(call.curveRadius)
+                              && typeof call.arcLength === 'number' && isFinite(call.arcLength) && call.arcLength !== 0) {
+                            const centralAngle = call.arcLength / call.curveRadius;
+                            const left = (call as any).curveDirection === 'left';
+                            const signedDelta = left ? -centralAngle : centralAngle;
+                            const chordStr = call.chordBearing || call.bearing;
+                            const chordRad = chordStr ? parseBearingToRadians(chordStr) : null;
+                            const tRad = chordRad !== null
+                              ? chordRad - signedDelta / 2
+                              : (call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : null);
+                            if (tRad !== null) endPt = directCurve(cursor, tRad, call.curveRadius, signedDelta);
+                          } else {
+                            const bStr = call.bearing || call.chordBearing;
+                            const bRad = bStr ? parseBearingToRadians(bStr) : null;
+                            const dist = call.distance ? parseDistance(call.distance) : null;
+                            if (bRad !== null && typeof dist === 'number' && isFinite(dist)) {
+                              endPt = direct(cursor, bRad, dist);
+                            }
+                          }
+                          if (endPt && isFinite(endPt.easting) && isFinite(endPt.northing)) {
+                            consume(endPt);
+                            cursor = endPt;
                           }
                         }
-                        if (endPt && isFinite(endPt.easting) && isFinite(endPt.northing)) {
-                          consume(endPt);
-                          cursor = endPt;
-                        }
                       }
+                      if (isFinite(minE) && isFinite(maxE) && isFinite(minN) && isFinite(maxN)
+                          && (maxE > minE || maxN > minN)) {
+                        canvas2dRef.current?.zoomToBbox(minE, maxE, minN, maxN, 0.25);
+                      }
+                    } catch (err) {
+                      console.warn('[DEED_PARSE] auto-zoom to off-screen point failed:', err);
                     }
-                    if (isFinite(minE) && isFinite(maxE) && isFinite(minN) && isFinite(maxN)
-                        && (maxE > minE || maxN > minN)) {
-                      canvas2dRef.current?.zoomToBbox(minE, maxE, minN, maxN, 0.25);
-                    }
-                  } catch (err) {
-                    console.warn('[DEED_PARSE] auto-zoom to amber bbox failed:', err);
-                  }
-                }, 120);
+                  }, 120);
+                }
               }
             }
           }
@@ -11874,7 +11946,7 @@ const AppContent = () => {
   }, [gpsStakeoutChat, handleSendMessage, settings.projection, logActionToFieldbook, settings.coordinatePrecision, pointLists]);
 
 
-  const handleCadManagerSessionStart = useCallback(() => {
+  const handleCadManagerSessionStart = useCallback((targetView?: VisualPanel) => {
     try {
         startSession();
         logActionToFieldbook('Started a new CAD Manager session.');
@@ -11894,12 +11966,16 @@ const AppContent = () => {
           console.warn('[CAD Manager] Failed to initialize chat:', chatErr);
         }
         setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
-        showView('cadstandards');
+        if (targetView) {
+          showView(targetView);
+        } else if (activeVisualPanel !== 'sheetview' && activeVisualPanel !== 'draftstylelib' && activeVisualPanel !== 'linetypemanager') {
+          showView('cadstandards');
+        }
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Failed to initialize CAD Manager.';
         setError(`Initialization Error: ${errorMessage}`);
     }
-  }, [showView, startSession, logActionToFieldbook, startChatWithOverride, setCadManagerChat, setCadManagerChatHistory]);
+  }, [showView, startSession, logActionToFieldbook, startChatWithOverride, setCadManagerChat, setCadManagerChatHistory, activeVisualPanel]);
 
   // FUTURE GEMINI: This function is the primary mechanism for switching between agents.
   // The logic to manage `activeAgent`, `isInitialScreen`, and `isAddingData` is crucial. Do not change it.
@@ -12826,6 +12902,15 @@ const AppContent = () => {
   }, [settings.pointLabelingSettings, pointLists, pushHistory, setPointLists, setLines, logActionToFieldbook]);
   const handleAddDimension = useCallback((dim: AnnotationDimension) => {
     setDimensions(prev => [...prev, dim]);
+  }, []);
+  const handleUpdateDimension = useCallback((updatedDim: AnnotationDimension) => {
+    setDimensions(prev => prev.map(d => d.id === updatedDim.id ? updatedDim : d));
+  }, []);
+  const handleDeleteDimension = useCallback((dimId: string) => {
+    setDimensions(prev => prev.filter(d => d.id !== dimId));
+  }, []);
+  const handleClearDimensions = useCallback(() => {
+    setDimensions([]);
   }, []);
 
   // Computes closure for boundary calls drawn in the DrawingCanvas boundary-line mode.
@@ -13826,15 +13911,30 @@ const AppContent = () => {
 
   const handleAddPoint = useCallback((newPoint: SurveyPoint) => {
       try {
-        const newLists = addPointToList(newPoint, pointLists);
-        logActionToFieldbook(`Manually added point: ${newPoint.pointNumber} (N: ${newPoint.northing}, E: ${newPoint.easting})`);
+        let pointToStore = newPoint;
+        const allExisting = pointLists.flatMap(l => l.points);
+        if (allExisting.some(p => String(p.pointNumber).trim().toUpperCase() === String(pointToStore.pointNumber).trim().toUpperCase())) {
+            const agent = PointAgent.getInstance();
+            agent.setLabelingSettings(settings.pointLabelingSettings);
+            agent.setAvailablePoints(allExisting);
+            const [nextPn] = agent.getNextNumbers(1, AgentType.POINT_EDITOR);
+            pointToStore = { ...newPoint, pointNumber: nextPn };
+            addNotification({
+              kind: 'general',
+              severity: 'warning',
+              title: 'Point Renumbered (CACP)',
+              message: `Point ${newPoint.pointNumber} already exists. Saved as Point ${nextPn} via CACP PointAgent authority.`,
+            });
+        }
+        const newLists = addPointToList(pointToStore, pointLists);
+        logActionToFieldbook(`Manually added point: ${pointToStore.pointNumber} (N: ${pointToStore.northing}, E: ${pointToStore.easting})`);
         setPointLists(newLists);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to add point';
         setError(message);
         setTimeout(() => setError(null), 3000);
       }
-  }, [pointLists, logActionToFieldbook]);
+  }, [pointLists, settings.pointLabelingSettings, addNotification, logActionToFieldbook]);
   
   const handleUpdatePoint = useCallback((updatedPoint: SurveyPoint) => {
       setPointLists(prev => updatePointInLists(updatedPoint, prev));
@@ -14252,8 +14352,20 @@ const AppContent = () => {
         return;
     }
     try {
-        // FIX: Added contourLabels to the generateDxf call to include them in the export. This resolves an argument mismatch implied by the error.
-        const dxfContent = generateDxf(points, visibleLines, contourLabels, visibleCenterlines, options, settings, customSymbols);
+        const dxfContent = generateDxf(
+            points,
+            visibleLines,
+            contourLabels,
+            visibleCenterlines,
+            options,
+            settings,
+            customSymbols,
+            parcelLabels,
+            parcelLabelFormatter,
+            parcelCadTextStyles,
+            annotationCategories,
+            dimensions
+        );
         const blob = new Blob([dxfContent], { type: 'application/dxf;charset=utf-8' });
         triggerDownload(blob, options.fileName);
     } catch (err) {
@@ -14261,7 +14373,7 @@ const AppContent = () => {
         setError(`DXF Export Error: ${errorMessage}`);
     }
     setIsDxfExportModalOpen(false);
-  }, [points, visibleLines, visibleCenterlines, settings, customSymbols, contourLabels]);
+  }, [points, visibleLines, visibleCenterlines, settings, customSymbols, contourLabels, parcelLabels, parcelLabelFormatter, parcelCadTextStyles, annotationCategories, dimensions]);
 
 
    const handleExportPoints = useCallback((format: 'csv' | 'txt_comma' | 'txt_space') => {
@@ -15702,7 +15814,7 @@ const AppContent = () => {
                         onShowC3DConnect={() => isC3DConnected ? setShowC3DDebugDialog(true) : setShowC3DConnectPanel(true)}
                         onShowReleaseStages={showReleaseStages}
                         isC3DConnected={isC3DConnected}
-                        hasApiKey={hasApiKey}
+                        hasApiKey={Boolean(hasApiKey || hasLandSurvKey || hasServiceAccess || hasLsaiEnablingKey)}
                         geolocationError={geolocationError}
                         currentPosition={currentPosition}
                         version={APP_VERSION}
@@ -15824,6 +15936,17 @@ const AppContent = () => {
                                 <button onClick={() => showView('canvas')} className="p-2 rounded-full hover:bg-gray-700 transition-colors animate-pulse" title="Return to Canvas"><MonitorIcon className="w-6 h-6 text-cyan-400"/></button>
                             )}
                             <button onClick={handleGoBackToInitialScreen} className="p-2 rounded-full hover:bg-gray-700 text-gray-300 transition-colors" title="Go to Home Screen"><HomeIcon className="w-6 h-6"/></button>
+                            <button 
+                                onClick={() => showView(activeVisualPanel === 'sheetview' ? 'canvas' : 'sheetview')} 
+                                className={`p-2 rounded-full transition-all ${
+                                    activeVisualPanel === 'sheetview' 
+                                        ? 'bg-amber-600/30 text-amber-300 hover:bg-amber-600/50 ring-1 ring-amber-500/70 shadow-[0_0_12px_rgba(245,158,11,0.3)]' 
+                                        : 'hover:bg-gray-700 text-gray-300 hover:text-amber-400'
+                                }`} 
+                                title={activeVisualPanel === 'sheetview' ? "Return to Canvas Workspace" : "Open Sheet View (24x36 Paperspace Plot Layout)"}
+                            >
+                                <SheetViewIcon className="w-6 h-6 text-amber-400"/>
+                            </button>
                             
                             
                             
@@ -16036,6 +16159,11 @@ const AppContent = () => {
                                         onComputeCurrentClosure={handleComputeCurrentClosure}
                                         dimensions={dimensions}
                                         onAddDimension={handleAddDimension}
+                                        onUpdateDimension={handleUpdateDimension}
+                                        onDeleteDimension={handleDeleteDimension}
+                                        onClearDimensions={handleClearDimensions}
+                                        onAddPoint={handleAddPoint}
+                                        nextAvailablePointNumber={nextAvailablePointNumber}
                                         dimensionScale={dimensionScale}
                                         setDimensionScale={setDimensionScale}
                                         symbolScale={symbolScale}
@@ -17680,7 +17808,7 @@ const AppContent = () => {
             remainingTime={remainingTime}
             timeUntilAvailable={timeUntilAvailable}
             currentKeyDetails={currentKeyDetails}
-            customerEmail={appUserEmail}
+            customerEmail={appUserEmail && appUserEmail !== 'msersen@gmail.com' ? appUserEmail : (typeof localStorage !== 'undefined' ? (localStorage.getItem('landsurv_last_purchased_email') || undefined) : undefined)}
             isPremium={apiKeyModalTrigger === 'rinex' || apiKeyModalTrigger === 'lsvz'}
             onGoHome={() => {
               // Close modal and reset to initial screen
@@ -17708,7 +17836,7 @@ const AppContent = () => {
               setShowApiKeyModal(true);
             }}
             onSubmitApiKey={handleApiKeySubmit}
-            customerEmail={appUserEmail}
+            customerEmail={appUserEmail && appUserEmail !== 'msersen@gmail.com' ? appUserEmail : (typeof localStorage !== 'undefined' ? (localStorage.getItem('landsurv_last_purchased_email') || undefined) : undefined)}
             hasServiceAccess={hasServiceAccess}
             serviceAccessExpiresAt={serviceAccessExpiresAt}
             computeCredits={computeCredits}
@@ -17761,6 +17889,9 @@ const AppContent = () => {
               const customerEmail = selection.customerEmail?.trim().toLowerCase();
               if (selection.servicePlan && !customerEmail) {
                 throw new Error('Enter a valid email address for service access');
+              }
+              if (customerEmail && typeof localStorage !== 'undefined') {
+                localStorage.setItem('landsurv_last_purchased_email', customerEmail);
               }
 
               let userId = localStorage.getItem('landsurv_user_id');
