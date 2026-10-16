@@ -12,6 +12,7 @@
 import { AgentType } from '../types';
 import { HISTORY_SKILLS } from './historySkillSchemas';
 import { COGO_EXTENDED_SKILLS } from './cogoSkillSchemas';
+import { GEO_AI_SKILLS } from './geoSkillSchemas';
 
 /** A loose JSON-Schema-ish descriptor. Kept narrow on purpose. */
 export interface SkillFieldSchema {
@@ -296,7 +297,7 @@ agentRegistry.register({
   agent: AgentType.CIVIL_DRAFTER,
   displayName: 'Civil Drafter',
   cacpEnabled: true,
-  version: '1.0.0',
+  version: '1.1.0',
   skills: [
     {
       id: 'civil_drafter_extract_points',
@@ -311,6 +312,7 @@ agentRegistry.register({
         linework: { type: 'array', items: { type: 'object' } },
       },
     },
+    ...GEO_AI_SKILLS,
   ],
 });
 

@@ -47,6 +47,10 @@ const technologies = [
   // Geospatial & Projections
   { name: 'proj4.js (proj4)', description: 'Performs coordinate system transformations and map projections, converting between UTM, State Plane, and lat/lon', license: 'MIT License', url: 'https://proj4js.org/' },
   { name: 'EPSG Projection Data', description: 'Database of coordinate system definitions enabling support for thousands of projection standards worldwide', license: 'IOGP Terms of Use', url: 'https://epsg.io/' },
+  { name: 'Segment-Geospatial (SamGeo)', description: 'Geospatial AI segmentation library powered by Meta SAM for automated and prompt-based extraction of driveways, building footprints, and water bodies from drone orthomosaics into CAD vector layers', license: 'MIT License', url: 'https://github.com/opengeos/segment-geospatial' },
+  { name: 'SAM-Road', description: 'Deep learning framework for road network graph and centerline extraction from aerial and satellite imagery (CVPRW 2024), converting raster corridors into CAD-ready road alignments', license: 'MIT License', url: 'https://github.com/htcr/sam_road' },
+  { name: 'Meta Segment Anything (SAM)', description: 'Foundational vision transformer model for zero-shot promptable image and remote sensing segmentation', license: 'Apache License 2.0', url: 'https://github.com/facebookresearch/segment-anything' },
+  { name: 'PyTorch & Torchvision', description: 'Scientific computing and deep learning framework powering local workstation and serverless GPU tensor inference', license: 'BSD-3-Clause License', url: 'https://pytorch.org/' },
   
   // Authentication & Security
   { name: 'jsonwebtoken (JWT)', description: 'Creates and verifies JSON Web Tokens for stateless authentication and secure API access', license: 'MIT License', url: 'https://github.com/auth0/node-jsonwebtoken' },

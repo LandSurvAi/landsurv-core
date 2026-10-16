@@ -191,6 +191,9 @@ export interface ChatMessage {
   action?: ChatMessageAction;
   /** Model id that produced this message (e.g. 'claude-fable-5'). Set on model responses. */
   model?: string;
+  /** Interactive clarifying question options or quick reply choices presented by the model */
+  questionOptions?: string[];
+  sources?: any[];
 }
 
 export type PointSymbol = 'circle' | 'square' | 'triangle' | 'cross' | 'x';
@@ -876,6 +879,18 @@ export interface Settings {
        * whether the HUD overlay is visible.
        */
       debugGimbalHud?: boolean;
+      /**
+       * Geospatial AI execution mode for SamGeo & SAM-Road:
+       * 'local' (desktop daemon on localhost, $0 cloud cost) or
+       * 'cloud' (Google Cloud Run on-demand scale-to-zero).
+       * Default: 'local' when available, otherwise 'cloud'.
+       */
+      geoAiMode?: 'local' | 'cloud';
+      /**
+       * Local desktop Geospatial AI daemon endpoint.
+       * Default: 'http://127.0.0.1:8765'.
+       */
+      localGeoAiEndpoint?: string;
 }
 
 export interface SessionSaveOptions {

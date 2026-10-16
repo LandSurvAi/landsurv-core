@@ -128,6 +128,8 @@ export const AppStateProvider: React.FC<AppStateProviderProps> = ({ children, av
     debugGimbalHud: false,
     showCacpNotifications: false,
     showCacpHandlerNotifications: false,
+    geoAiMode: (typeof window !== 'undefined' && localStorage.getItem('landsurv_geo_ai_mode') as ('local' | 'cloud')) || 'local',
+    localGeoAiEndpoint: (typeof window !== 'undefined' && localStorage.getItem('landsurv_local_geo_ai_endpoint')) || 'http://127.0.0.1:8765',
     notion: {
       enabled: false,
     },

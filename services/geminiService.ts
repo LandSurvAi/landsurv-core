@@ -24,7 +24,7 @@ import { isOssBuild } from "../utils/ossMode.ts";
  * (e.g. Gemini 3.x preview models that the public v1beta endpoint does not serve).
  */
 export const isVertexOnlyModel = (model: string): boolean => (
-  /^gemini-3(\.|-)/.test(model)
+  /^gemini-[34](\.|-)/.test(model)
 );
 export const isClaudeModel = (model: string): boolean => model.startsWith('claude-');
 
@@ -36,7 +36,7 @@ export const isGrokModel = (model: string): boolean => /^grok-/i.test(model);
 
 export const AUTO_FAST_MODEL = 'gemini-3.5-flash-lite';
 export const DIRECT_FALLBACK_MODEL = 'gemini-2.5-flash';
-export const AUTO_HIGH_THINKING_MODELS = ['gemini-3.7-flash', 'gemini-3.8-flash', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5'] as const;
+export const AUTO_HIGH_THINKING_MODELS = ['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4-argon', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5'] as const;
 export type AutoHighThinkingModel = typeof AUTO_HIGH_THINKING_MODELS[number];
 export const STANDARDS_COMPLIANCE_MODEL = 'gemini-3.7-flash';
 
@@ -292,6 +292,17 @@ const responseFormattingInstruction = `
     }
     \`\`\`
 
+    I. **CLARIFYING QUESTIONS (\`question\`, \`options\`):** When user intent is ambiguous, multiple matching features are visible (e.g., multiple driveways), or guidance is needed before proceeding:
+    - Include a \`question\` key (string) explaining your observation.
+    - Include an \`options\` key (array of 2–4 concise strings) representing actionable 1-click answers.
+    Example:
+    \`\`\`json
+    {
+      "question": "I see two driveways connected to this property: a main asphalt drive to the garage and a gravel lane to the rear shed. Which one would you like me to draw?",
+      "options": ["Draw main driveway to garage", "Draw rear gravel driveway", "Draw both driveways"]
+    }
+    \`\`\`
+
 7.  **If the response is simple text and does NOT involve JSON, just provide the text response in the RESULT section.**
 8.  **Strictly adhere to the JSON schema when providing JSON responses.** Do not add extra keys or deviate from the specified structure.
 
@@ -401,6 +412,8 @@ The app will reply with matching facts on the next turn.${kbBlock}
 5. If no peer owns the skill you need and no fact exists, say so plainly and explain what the user must provide.
 6. **BUILDING / STRUCTURE DRAWING — ALWAYS DELEGATE.** If the user says ANYTHING like "draw the buildings", "draw structures", "draw building footprints", "plot buildings", "autodraw the buildings", "show building outlines", or if you are devising an autodraw plan that includes structures, you MUST emit \`{ "askPeer": { "skillId": "structures_draw_footprints", "payload": {}, "reason": "User wants building footprints drawn" } }\`. The **Structures Agent** is the SOLE owner of all building/footprint drawing. Do NOT attempt to generate building linework yourself.
 7. **SHRINKWRAP / CONVEX-HULL — ALWAYS DELEGATE TO COGO.** If the user says ANYTHING like "shrinkwrap", "wrap the site", "wrap the points", "outline the project", "draw a hull / boundary hull / convex hull", emit \`{ "askPeer": { "skillId": "cogo_shrinkwrap", "payload": {}, "reason": "User requested a shrinkwrap." } }\` (or include \`payload.pointNumbers\` for a subset). The **COGO Agent** is the SOLE owner of shrinkwrap drawing — the host application draws the inclusion-typed polyline automatically when COGO's response arrives. **After the COGO Agent has returned a shrinkwrap result (you will see it in RECENTLY OBTAINED INFORMATION), DO NOT emit any \`"lines": [...]\` array echoing those segments, DO NOT redraw the hull yourself, and DO NOT paste the raw line-segment JSON into chat.** Simply acknowledge that the shrinkwrap was drawn (vertex count, layer) and stop. Any \`lines\` whose layer is \`L-SURV-SHRINKWRAP\` or whose \`polylineId\` is \`convex-hull\`/starts with \`shrinkwrap_\` will be discarded by the app.
+8. **DRIVEWAYS & SITE FEATURE VECTORIZATION (SamGeo) — DELEGATE.** If the user asks to "draw the driveways", "draw driveways", "trace driveways", "extract parking", "trace driveway for this property", or extract aerial/orthophoto site features, emit \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "User requested driveway feature extraction from aerial imagery" } }\`. The host application and Geospatial AI engine extract the vector polygons and place them directly onto the canvas. After the result returns, confirm the outcome in one natural sentence (e.g. "Drawn driveways on layer L-DRIVEWAY.") and do NOT emit duplicate linework.
+9. **ROAD CENTERLINES & TOPOLOGICAL NETWORKS (SAM-Road) — DELEGATE.** If the user asks to "extract road centerlines", "draw road centerlines from aerial", "trace the road network", or "find road centerline", emit \`{ "askPeer": { "skillId": "geo_extract_roads", "payload": { "targetLayer": "C-ROAD-CNTR" }, "reason": "User requested road centerline extraction via SAM-Road" } }\`. Confirm the outcome to the user once completed.
 `;
     } catch (e) {
         // Never let registry errors break agent prompt construction.
@@ -705,6 +718,78 @@ You understand that surveyors often collect points in a pattern that doesn't ref
    - All 8 points belong to one driveway-edge polyline (\`polylineId: "driveway-edge-1"\`).
    - The BRK shot is tagged as a grade break but the line runs through it uninterrupted.
    - The PC → POC → PT trio becomes a curved segment on the same polyline (\`isCurve: true\`, \`bulgePoint\` = the POC point number).
+
+6. **IDENTIFYING & TRACING FEATURES FROM BACKGROUND IMAGERY (ROADS & DRIVEWAYS):**
+   When the user asks to "draw the driveway", "trace the road", "draw the driveway and road", or similar requests, and you are provided with a drawn property boundary (highlighted in amber #F59E0B on the visual survey frames) and background aerial imagery:
+
+   **A. SCENE ANALYSIS & FEATURE RECOGNITION (DRIVEWAYS ARE COMPLEX SURFACES):**
+   - **Driveways are rarely just two parallel lines!** A real driveway is an asymmetric paved surface that typically consists of:
+     1. **The entrance flare**: Widens / curves out at the road frontage to allow vehicle turning radii.
+     2. **The approach lane / neck**: Extends inward from the road toward the buildings.
+     3. **The parking apron / turnaround court / garage court**: A wide, irregular paved area in front of the house and garage doors where cars park and turn around.
+   - Look carefully at the actual photographic surface in the vision frames and aerial:
+     - Identify where the asphalt/concrete meets the road frontage.
+     - Trace the approach corridor inward.
+     - Trace the full perimeter of the parking apron / court in front of the house and garage!
+   - DO NOT guess arbitrary coordinates or draw a narrow straight horizontal runway that ignores the house and parking apron.
+
+   **B. HOW TO EMIT TRACED GEOMETRY (\`featureTrace\`):**
+   - **RECOMMENDED — Trace the Full Pavement Boundary (\`polygon\`) and Centerline (\`centerline\`):**
+     Emit a \`featureTrace\` object with normalized coordinates \`[y, x]\` (0 to 1000 from the top-left of Frame 1 Overview).
+     - Provide \`polygon\`: An array of \`[y, x]\` points tracing the closed outer perimeter of the paved area (road flare → approach edges → parking apron perimeter around garage and house → back to road).
+     - Provide \`centerline\`: An array of \`[y, x]\` points tracing the centerline path of travel from the street to the garage doors.
+     The host application will automatically transform these coordinates into exact project coordinates, create survey points with elevations and descriptions, and draft the CAD polylines on \`"L-DRIVEWAY"\` (pavement perimeter) and \`"L-DRIVEWAY-CL"\` (centerline)!
+     \`\`\`json
+     {
+       "featureTrace": {
+         "type": "driveway",
+         "widthFt": 14,
+         "polygon": [
+           [615, 220], // north entrance flare at road
+           [605, 275], // north edge of approach lane
+           [565, 340], // northwest corner of parking court
+           [580, 485], // northeast corner of court in front of house
+           [655, 455], // southeast corner near garage
+           [675, 350], // southwest corner of parking court
+           [645, 280], // south edge of approach lane
+           [635, 205]  // south entrance flare at road
+         ],
+         "centerline": [
+           [625, 212], // road entrance
+           [625, 280], // approach corridor
+           [620, 395]  // garage / court terminus
+         ]
+       }
+     }
+     \`\`\`
+   - If the driveway is a simple uniform corridor without a complex apron, you may omit \`polygon\` and provide only \`centerline\` with \`widthFt\`; the host will automatically expand it to parallel edges.
+
+   **C. SMART SELECTION VS. ASKING CLARIFYING QUESTIONS:**
+   - **Background Aerial Imagery is Active**: When background aerial imagery is present in the vision frames and/or attached as an aerial reference, you CAN see the property, house, pavement, trees, and road. NEVER claim the imagery is not visible or ask the user to turn it on when imagery has been provided! Look at the photographic features inside and adjacent to the amber boundary.
+   - **Single Clear Feature**: If there is a primary visible driveway serving the subject parcel/boundary (e.g. connecting from the bordering road across the boundary to the house, garage, or parking apron), DO NOT hesitate or ask rhetorical questions — trace and draw it immediately!
+   - **Multiple Features or Genuine Ambiguity**: ONLY ask a clarifying question if there are MULTIPLE distinct driveways visible (e.g. a circular front drive vs. a rear service driveway to a detached garage, driveways connecting to different frontages, or a neighboring driveway close to the boundary), or if user intent is genuinely ambiguous:
+     - **DO NOT GUESS! ASK A CLARIFYING QUESTION WITH OPTIONS.**
+     - In your RESULT JSON, provide a clear \`question\` and an array of 2–4 concise, clickable \`options\` that the user can choose from with 1 click.
+     - Example:
+     \`\`\`json
+     {
+       "question": "I see two driveways connected to this property: a main asphalt driveway on the east side leading to the attached garage, and a secondary gravel lane on the west side leading to the rear shed. Which one would you like me to draw?",
+       "options": [
+         "Draw main driveway to garage",
+         "Draw west gravel driveway",
+         "Draw both driveways"
+       ]
+     }
+     \`\`\`
+   - When the user answers (e.g. "Draw main driveway to garage" or "Draw both"), proceed to draft the chosen driveway(s) with both centerline (\`L-DRIVEWAY-CL\`) and parallel edges (\`L-DRIVEWAY\`).
+
+   **D. CACP GEOSPATIAL AI DELEGATION (SamGeo & SAM-Road):**
+   When the user asks to "draw the driveways", "draw the driveways for this property", "trace the parking", or "extract road centerlines", you can also delegate directly to the CACP Geospatial AI engine using \`askPeer\`:
+   - For driveways & site features:
+     \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "Extract driveway from aerial imagery via SamGeo" } }\`
+   - For road centerlines:
+     \`{ "askPeer": { "skillId": "geo_extract_roads", "payload": { "targetLayer": "C-ROAD-CNTR" }, "reason": "Extract road centerline from aerial imagery via SAM-Road" } }\`
+   The host application executes the request against the active engine (Local Desktop Worker or Cloud Run) and adds the vector linework directly onto the canvas. After the result arrives, confirm the outcome naturally.
 
 **EXAMPLE - ROAD WITH EP POINTS:**
 If you have EP points: 1001, 1002, 1003 on the north edge and 1010, 1011, 1012 on the south edge:
@@ -2002,12 +2087,14 @@ export const startGeminiChat = (agentType: AgentType, fileContext: string | Sess
         // IMPORTANT: Gemini 3 rejects the legacy `thinkingBudget` field — it expects
         // `thinkingLevel` (MINIMAL/LOW/MEDIUM/HIGH) under thinkingConfig. Sending the
         // 2.x shape silently produces empty responses, which breaks the JSON handoff
-        // for the Civil Plan Expert. So we only apply this Gemini-3-safe default for
+        // for the Civil Plan Expert. So we only apply this Gemini-3/4-safe default for
         // Gemini Vertex models; non-Gemini publishers get an empty config by default.
+        const isArgonModel = modelForAgent === 'gemini-4-argon';
         let vertexGenerationConfig: Record<string, unknown> = isGeminiVertexModel
           ? {
-              thinkingConfig: { thinkingLevel: 'MEDIUM' },
+              thinkingConfig: { thinkingLevel: isArgonModel ? 'HIGH' : 'MEDIUM' },
               mediaResolution: 'MEDIA_RESOLUTION_MEDIUM',
+              ...(isArgonModel ? { maxOutputTokens: 64000 } : {}),
             }
           : {};
 
@@ -2024,16 +2111,15 @@ export const startGeminiChat = (agentType: AgentType, fileContext: string | Sess
         // linework payload. The model's remaining job — correctly GROUPING
         // points into the right bank/edge/bench — is a spatial-classification
         // task that benefits from moderate reasoning. So we pin thinking to
-        // MEDIUM (not HIGH, which over-narrates and can still truncate; not
-        // LOW, which under-classifies) and keep the max output ceiling. The
-        // Gemini 3 panel's global thinking slider is respected for other agents.
+        // MEDIUM (or HIGH for Gemini 4 Argon) and keep the max output ceiling.
+        // The Gemini 3/4 panel's global thinking slider is respected for other agents.
         if (agentType === AgentType.CIVIL_DRAFTER && isGeminiVertexModel) {
             vertexGenerationConfig = {
                 ...vertexGenerationConfig,
-                thinkingConfig: { thinkingLevel: 'MEDIUM' },
+                thinkingConfig: { thinkingLevel: isArgonModel ? 'HIGH' : 'MEDIUM' },
                 maxOutputTokens: Math.max(
                     (vertexGenerationConfig.maxOutputTokens as number | undefined) ?? 0,
-                    64000, // Gemini 3 hard cap
+                    64000, // Gemini 3/4 hard cap
                 ),
             };
         }

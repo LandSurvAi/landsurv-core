@@ -2,6 +2,18 @@
 
 const releases = [
     {
+        version: "26.10.16.01",
+        date: "October 16, 2026",
+        highlights: [
+            "🛰️ Deep-Learning Geospatial AI Engine (SamGeo & SAM-Road): Integrated Meta's Segment Anything Model (SAM) foundation vision transformer via Segment-Geospatial (`opengeos/segment-geospatial`) and topological road network extraction via SAM-Road (`htcr/sam_road`, CVPRW 2024). Automatically transforms aerial orthophotos and satellite imagery into CAD vector polylines for driveways, parking lots, building footprints, and road corridors.",
+            "🛣️ Natural-Language Feature Vectorization in Civil Drafter: Surveyors can now ask the Civil Drafter agent natural-language feature requests such as 'Draw the driveways for this property', 'Trace the driveway and parking apron edges', or 'Extract the road centerline from the aerial imagery'. The agent delegates the intent via CACP (`geo_extract_features`, `geo_extract_roads`), converts the detected vector boundaries into project survey coordinates, and renders closed polylines directly onto dedicated CAD layers (`L-DRIVEWAY`, `C-ROAD-CNTR`) with Fieldbook audit logging.",
+            "⚡ Cost-Engineered Dual-Mode Architecture ($0 Cloud Cost & Scale-to-Zero): Built a cost-protective dual-mode architecture that prevents cloud bill spikes. Surveyors and open-source `landsurv-core` users can run on-premise inference with a Local Desktop Worker (`http://127.0.0.1:8765`) utilizing their local workstation GPU (NVIDIA CUDA / Apple Silicon) at $0.00 cloud cost. For web users, an on-demand Google Cloud Run container (`geo-ai-service`) scales to zero (`min-instances: 0`) when idle, ensuring $0.00 idle hosting cost and fraction-of-a-cent pay-per-use active compute.",
+            "🧠 Universal CACP Skill Catalog Registration: Registered `geo_extract_features` and `geo_extract_roads` as first-class action skills in the global `AgentRegistry` under `CIVIL_DRAFTER`. Any agent across the LandSurv.ai suite—including Drone Agent, Boundary Agent, Voice Agent, or the Civil 3D Plugin—can invoke aerial feature vectorization programmatically via `askPeer`.",
+            "⚙️ Geospatial AI Engine Settings & Live Connection Probing: Added a new 'Geospatial AI Engine (SamGeo & SAM-Road)' panel in Settings allowing instant toggling between Local Desktop Worker and Cloud Run modes, with persistent browser storage and a live probe button (`/readyz`) to test and report local daemon health.",
+            "🌐 Public Transparency & Open Source Licensing Alignment: Reconciled `technologies.landsurv.ai` (`components/TechnologiesPageContent.tsx`) and the DevOps legal audit (`components/LicensesTab.tsx`) with upstream attributions for Segment-Geospatial (MIT), SAM-Road (MIT), Meta SAM (Apache-2.0), and PyTorch (BSD-3-Clause). Published system architecture specifications and local worker runbooks in `GEOSPATIAL_AI_ARCHITECTURE.md`.",
+        ],
+    },
+    {
         version: "26.10.10.01",
         date: "October 10, 2026",
         highlights: [

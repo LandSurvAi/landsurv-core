@@ -16,6 +16,7 @@ const getSelectorModelLabel = (modelName: string): string => (
     : modelName === 'claude-fable-5' ? 'Claude Fable 5'
     : modelName === 'gemini-3.7-flash' ? 'Gemini 3.7 Flash'
     : modelName === 'gemini-3.8-flash' ? 'Gemini 3.8 Flash'
+    : modelName === 'gemini-4-argon' ? 'Gemini 4 Argon'
     : modelName === 'gemini-3.5-flash-lite' ? 'Gemini 3.5 Flash Lite'
     : modelName === 'gpt-5.6-terra' ? 'GPT-5.6 Terra (your OpenAI key)'
     : modelName === 'gpt-5.4-mini' ? 'GPT-5.4 Mini (your OpenAI key)'
@@ -63,8 +64,55 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
         xai: settings.xaiApiKey || '',
         anthropic: settings.anthropicApiKey || '',
     });
+    const [isProbingGeoAi, setIsProbingGeoAi] = useState(false);
+    const [geoAiProbeResult, setGeoAiProbeResult] = useState<{ status: 'ok' | 'error'; message: string } | null>(null);
     const googleMapsSectionRef = useRef<HTMLDivElement | null>(null);
     const { reportError, notify } = useErrorReporter();
+
+    const handleProbeGeoAi = async () => {
+        setIsProbingGeoAi(true);
+        setGeoAiProbeResult(null);
+        const endpoint = (settings.localGeoAiEndpoint || 'http://127.0.0.1:8765').trim().replace(/\/+$/, '');
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 4000);
+            const res = await fetch(`${endpoint}/readyz`, { signal: controller.signal });
+            clearTimeout(timeoutId);
+            if (res.ok) {
+                const data = await res.json().catch(() => ({}));
+                setGeoAiProbeResult({
+                    status: 'ok',
+                    message: `Connected: Local worker online at ${endpoint} (${data.engine || 'SamGeo & SAM-Road ready'}).`,
+                });
+            } else {
+                setGeoAiProbeResult({
+                    status: 'error',
+                    message: `Endpoint responded with HTTP ${res.status}. Check worker logs.`,
+                });
+            }
+        } catch (err: any) {
+            setGeoAiProbeResult({
+                status: 'error',
+                message: `Could not reach ${endpoint}. Start local daemon (python -m cli_anything.samgeo) or switch to Cloud mode.`,
+            });
+        } finally {
+            setIsProbingGeoAi(false);
+        }
+    };
+
+    const handleGeoAiModeChange = (mode: 'local' | 'cloud') => {
+        onSettingsChange(prev => ({ ...prev, geoAiMode: mode }));
+        if (typeof window !== 'undefined') {
+            try { localStorage.setItem('landsurv_geo_ai_mode', mode); } catch {}
+        }
+    };
+
+    const handleLocalGeoAiEndpointChange = (val: string) => {
+        onSettingsChange(prev => ({ ...prev, localGeoAiEndpoint: val }));
+        if (typeof window !== 'undefined') {
+            try { localStorage.setItem('landsurv_local_geo_ai_endpoint', val); } catch {}
+        }
+    };
 
     useEffect(() => {
         setInputApiKey(settings.userApiKey || '');
@@ -220,6 +268,8 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         <p className="text-xs text-gray-500 mt-1">
                             {activeModel === AUTO_SELECTOR_OPTION && `Auto mode uses Gemini 3.5 Flash Lite for quick tasks and ${getSelectorModelLabel(autoHighThinkingModel || 'gemini-3.7-flash')} for high-thinking agents.`}
                             {activeModel === 'gemini-3.7-flash' && 'Gemini 3.7 Flash via Vertex AI backend'}
+                            {activeModel === 'gemini-3.8-flash' && 'Gemini 3.8 Flash via Vertex AI backend'}
+                            {activeModel === 'gemini-4-argon' && 'Gemini 4 Argon (High Thinking) via Vertex AI backend'}
                             {activeModel.startsWith('claude-') && (settings.anthropicApiKey?.trim() ? 'Anthropic Claude via your own Anthropic key (browser-direct)' : 'Anthropic Claude via Vertex AI backend')}
                             {/^(gpt-|o\d|chatgpt-)/i.test(activeModel) && 'OpenAI via your own OpenAI key (browser-direct)'}
                             {/^grok-/i.test(activeModel) && 'xAI Grok via your own xAI key (browser-direct)'}
@@ -236,7 +286,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             onChange={e => onAutoHighThinkingModelChange?.(e.target.value)}
                             className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
                         >
-                            {(autoHighThinkingOptions || ['gemini-3.7-flash', 'gemini-3.8-flash', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']).map(model => (
+                            {(autoHighThinkingOptions || ['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4-argon', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']).map(model => (
                                 <option key={model} value={model}>{getSelectorModelLabel(model)}</option>
                             ))}
                         </select>
@@ -601,6 +651,110 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             />
                             <p className="text-xs text-gray-500 mt-1">
                                 Paste a Styled Maps JSON array (e.g. from <a href="https://mapstyle.withgoogle.com/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">mapstyle.withgoogle.com</a>). Ignored for satellite/hybrid.
+                            </p>
+                        </div>
+                    )}
+                </div>
+            </div>
+            {/* Geospatial AI Engine (SamGeo & SAM-Road) Section */}
+            <div>
+                <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-lg font-semibold text-gray-100 light-theme:text-gray-800">Geospatial AI Engine (SamGeo &amp; SAM-Road)</h3>
+                    <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        Dual-Mode
+                    </span>
+                </div>
+                <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-4 light-theme:bg-gray-100 light-theme:border-gray-300">
+                    <p className="text-xs text-gray-400 light-theme:text-gray-600">
+                        Powers automated site vectorization (e.g. asking Civil Drafter <span className="font-mono text-cyan-300">&ldquo;Draw the driveways&rdquo;</span>, tracing parking, or extracting road centerlines) using Segment-Geospatial and SAM-Road.
+                    </p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <label
+                            className={`flex flex-col p-3 rounded-lg border cursor-pointer transition-colors ${
+                                (settings.geoAiMode ?? 'local') === 'local'
+                                    ? 'bg-emerald-950/30 border-emerald-500/50 text-emerald-200'
+                                    : 'bg-gray-800/60 border-gray-700 text-gray-300 hover:border-gray-500'
+                            }`}
+                        >
+                            <div className="flex items-center gap-2 mb-1">
+                                <input
+                                    type="radio"
+                                    name="geoAiMode"
+                                    value="local"
+                                    checked={(settings.geoAiMode ?? 'local') === 'local'}
+                                    onChange={() => handleGeoAiModeChange('local')}
+                                    className="h-4 w-4 text-emerald-500 focus:ring-emerald-500"
+                                />
+                                <span className="font-semibold text-sm">Local / Desktop Worker</span>
+                            </div>
+                            <span className="text-xs text-gray-400 pl-6">
+                                Runs on your workstation GPU (NVIDIA CUDA / Apple Silicon) at <strong>$0 cloud cost</strong>. Ideal for local privacy &amp; large drone flights.
+                            </span>
+                        </label>
+
+                        <label
+                            className={`flex flex-col p-3 rounded-lg border cursor-pointer transition-colors ${
+                                settings.geoAiMode === 'cloud'
+                                    ? 'bg-cyan-950/30 border-cyan-500/50 text-cyan-200'
+                                    : 'bg-gray-800/60 border-gray-700 text-gray-300 hover:border-gray-500'
+                            }`}
+                        >
+                            <div className="flex items-center gap-2 mb-1">
+                                <input
+                                    type="radio"
+                                    name="geoAiMode"
+                                    value="cloud"
+                                    checked={settings.geoAiMode === 'cloud'}
+                                    onChange={() => handleGeoAiModeChange('cloud')}
+                                    className="h-4 w-4 text-cyan-500 focus:ring-cyan-500"
+                                />
+                                <span className="font-semibold text-sm">Cloud Run (Scale-to-Zero)</span>
+                            </div>
+                            <span className="text-xs text-gray-400 pl-6">
+                                On-demand hosted inference container. Scales to 0 when idle (<strong>$0.00 idle cost</strong>, ~cents per active job).
+                            </span>
+                        </label>
+                    </div>
+
+                    {(settings.geoAiMode ?? 'local') === 'local' && (
+                        <div className="pt-2 border-t border-gray-600/60 space-y-2">
+                            <label htmlFor="localGeoAiEndpoint" className="block text-xs font-medium text-gray-400 light-theme:text-gray-500">
+                                Local Daemon Endpoint URL
+                            </label>
+                            <div className="flex items-center gap-2">
+                                <input
+                                    type="text"
+                                    id="localGeoAiEndpoint"
+                                    value={settings.localGeoAiEndpoint ?? 'http://127.0.0.1:8765'}
+                                    onChange={e => handleLocalGeoAiEndpointChange(e.target.value)}
+                                    placeholder="http://127.0.0.1:8765"
+                                    className={`flex-1 bg-gray-800 border border-gray-600 rounded-md p-2 text-sm text-gray-200 font-mono focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={handleProbeGeoAi}
+                                    disabled={isProbingGeoAi}
+                                    className="px-3 py-2 text-xs font-semibold rounded-md border border-emerald-500/40 bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 transition-colors disabled:opacity-50"
+                                >
+                                    {isProbingGeoAi ? 'Testing...' : 'Test Connection'}
+                                </button>
+                            </div>
+
+                            {geoAiProbeResult && (
+                                <div
+                                    className={`p-2.5 rounded-md text-xs border ${
+                                        geoAiProbeResult.status === 'ok'
+                                            ? 'border-emerald-500/40 bg-emerald-950/40 text-emerald-200'
+                                            : 'border-amber-500/40 bg-amber-950/40 text-amber-200'
+                                    }`}
+                                >
+                                    {geoAiProbeResult.message}
+                                </div>
+                            )}
+
+                            <p className="text-[11px] text-gray-500">
+                                Quick start: Run <code className="px-1 py-0.5 rounded bg-gray-800 text-gray-300 font-mono">python -m cli_anything.samgeo</code> on your desktop to serve on port 8765.
                             </p>
                         </div>
                     )}

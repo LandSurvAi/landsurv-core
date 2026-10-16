@@ -29,6 +29,7 @@ interface ChatInterfaceProps {
 const MODEL_LABELS: Record<string, string> = {
     'gemini-3.7-flash': 'Gemini 3.7 Flash',
     'gemini-3.8-flash': 'Gemini 3.8 Flash',
+    'gemini-4-argon': 'Gemini 4 Argon',
     'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
     'claude-sonnet-5': 'Claude Sonnet 5',
     'claude-opus-5': 'Claude Opus 5',
@@ -265,6 +266,28 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 return formatChatHtml(raw);
               })() }}
               />
+
+              {/* Interactive clarifying question options */}
+              {msg.questionOptions && msg.questionOptions.length > 0 && (
+                <div className="mt-3 pt-2.5 border-t border-gray-700/60 light-theme:border-gray-300/60">
+                  <div className="text-[11px] font-semibold text-gray-400 mb-2 flex items-center gap-1.5 light-theme:text-gray-600">
+                    <LightbulbIcon className="w-3.5 h-3.5 text-yellow-400" />
+                    <span>Select an option:</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {msg.questionOptions.map((opt, optIdx) => (
+                      <button
+                        key={optIdx}
+                        onClick={() => onSendMessage(opt)}
+                        disabled={isLoading}
+                        className="text-xs px-3 py-1.5 rounded-md font-medium text-left transition-all bg-fuchsia-950/40 text-fuchsia-200 border border-fuchsia-500/40 hover:bg-fuchsia-900/60 hover:border-fuchsia-400 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed light-theme:bg-fuchsia-50 light-theme:text-fuchsia-800 light-theme:border-fuchsia-300 light-theme:hover:bg-fuchsia-100 shadow-sm"
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               
               {/* View Sources button for intelligent search results */}
               {msg.sources && msg.sources.length > 0 && (

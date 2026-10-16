@@ -150,6 +150,7 @@ export interface DrawingCanvasHandles {
   getViewCenterWorld?: () => { easting: number; northing: number };
   isPointInView?: (easting: number, northing: number) => boolean;
   isBboxInView?: (minE: number, maxE: number, minN: number, maxN: number) => boolean;
+  getMapOverlayTiles?: () => Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: WorldQuad; opacity?: number }>;
 }
 
 import { CanvasTerminal } from './CanvasTerminal';
@@ -4174,6 +4175,25 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const sMinY = Math.min(p1.y, p2.y);
             const sMaxY = Math.max(p1.y, p2.y);
             return sMaxX >= 0 && sMinX <= w && sMaxY >= 0 && sMinY <= h;
+        },
+        getMapOverlayTiles: () => {
+            const tiles: Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: WorldQuad; opacity?: number }> = [];
+            if (googleOverlayImage) {
+                const sourceTiles = googleOverlayImage.tiles && googleOverlayImage.tiles.length > 0
+                    ? googleOverlayImage.tiles
+                    : [{ image: googleOverlayImage.image, bbox: googleOverlayImage.bbox, quad: undefined }];
+                for (const t of sourceTiles) {
+                    tiles.push({ image: t.image, bbox: t.bbox, quad: t.quad, opacity: googleOverlayImage.opacity });
+                }
+            } else if (overlayTilesRef.current.length > 0) {
+                for (const t of overlayTilesRef.current) {
+                    tiles.push({ image: t.image, bbox: t.bbox, quad: t.quad, opacity: 0.95 });
+                }
+            }
+            for (const w of wmsImages) {
+                tiles.push({ image: w.image, bbox: w.bbox, quad: w.quad, opacity: w.opacity });
+            }
+            return tiles;
         },
     }));
     
@@ -9482,15 +9502,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const fromUn = cache.synthMap.get(call.from);
         const toUn   = cache.synthMap.get(call.to);
         if (!fromUn || !toUn) return null;
-        const rotRad = (cache.rotDeg * Math.PI) / 180;
+        const rotDeg = bf.rotationDeg ?? cache.rotDeg ?? 0;
+        const txE = bf.translationE ?? cache.txE ?? 0;
+        const txN = bf.translationN ?? cache.txN ?? 0;
+        const rotRad = (rotDeg * Math.PI) / 180;
         const cosR = Math.cos(rotRad);
         const sinR = Math.sin(rotRad);
         const applyTx = (p: { easting: number; northing: number }) => {
             const dx = p.easting - cache.pob.easting;
             const dy = p.northing - cache.pob.northing;
             return {
-                x: dx * cosR - dy * sinR + cache.pob.easting + cache.txE,
-                y: dx * sinR + dy * cosR + cache.pob.northing + cache.txN,
+                x: dx * cosR - dy * sinR + cache.pob.easting + txE,
+                y: dx * sinR + dy * cosR + cache.pob.northing + txN,
             };
         };
         return { from: applyTx(fromUn), to: applyTx(toUn) };
@@ -9600,7 +9623,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const getBoundaryCornersWorld = useCallback((bfId: string, overrideTx?: { txE: number; txN: number; rotDeg: number }): { x: number; y: number }[] => {
         const cache = bfGeometryCacheRef.current.get(bfId);
         if (!cache) return [];
-        const tx = overrideTx ?? { txE: cache.txE, txN: cache.txN, rotDeg: cache.rotDeg };
+        const bf = boundaryFiles?.find(b => b.id === bfId);
+        const tx = overrideTx ?? {
+            txE: bf?.translationE ?? cache.txE ?? 0,
+            txN: bf?.translationN ?? cache.txN ?? 0,
+            rotDeg: bf?.rotationDeg ?? cache.rotDeg ?? 0,
+        };
         const rotRad = (tx.rotDeg * Math.PI) / 180;
         const cosR = Math.cos(rotRad);
         const sinR = Math.sin(rotRad);
@@ -9614,7 +9642,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             });
         });
         return out;
-    }, []);
+    }, [boundaryFiles]);
 
     // =====================================================================
     // Corner-align tool helpers
@@ -9622,11 +9650,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
     /** Enumerate the deed's vertices with their point-number labels, in BOTH the
      *  un-baked COGO frame (the fit's source space) and current world space (for
-     *  hit-testing / drawing markers). */
+     *  hit-testing / drawing markers). Incorporates the bf's current translation & rotation
+     *  so corner highlights stay locked to the silhouette when transforms update. */
     const getBoundaryCornerEntries = useCallback((bfId: string): { pn: string; srcE: number; srcN: number; x: number; y: number }[] => {
-        const cache = bfGeometryCacheRef.current.get(bfId);
+        let cache = bfGeometryCacheRef.current.get(bfId);
+        if (!cache && drawRef.current) {
+            drawRef.current();
+            cache = bfGeometryCacheRef.current.get(bfId);
+        }
         if (!cache) return [];
-        const rotRad = (cache.rotDeg * Math.PI) / 180;
+        const bf = boundaryFiles?.find(b => b.id === bfId);
+        const rotDeg = bf?.rotationDeg ?? cache.rotDeg ?? 0;
+        const txE = bf?.translationE ?? cache.txE ?? 0;
+        const txN = bf?.translationN ?? cache.txN ?? 0;
+        const rotRad = (rotDeg * Math.PI) / 180;
         const cosR = Math.cos(rotRad);
         const sinR = Math.sin(rotRad);
         const out: { pn: string; srcE: number; srcN: number; x: number; y: number }[] = [];
@@ -9637,12 +9674,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 pn,
                 srcE: p.easting,
                 srcN: p.northing,
-                x: dx * cosR - dy * sinR + cache.pob.easting + cache.txE,
-                y: dx * sinR + dy * cosR + cache.pob.northing + cache.txN,
+                x: dx * cosR - dy * sinR + cache.pob.easting + txE,
+                y: dx * sinR + dy * cosR + cache.pob.northing + txN,
             });
         });
         return out;
-    }, []);
+    }, [boundaryFiles]);
 
     /** Nearest deed corner to a world coordinate, within `tol` world units. */
     const hitTestBoundaryCorner = useCallback((bfId: string, worldX: number, worldY: number, tol: number) => {
@@ -9655,16 +9692,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         return best;
     }, [getBoundaryCornerEntries]);
 
-    // The bf geometry cache is rebuilt inside the canvas draw effect, so mirror it
-    // into state (after that effect has run) for the DOM corner markers to render.
-    const [cornerAlignCorners, setCornerAlignCorners] = useState<{ pn: string; srcE: number; srcN: number; x: number; y: number }[]>([]);
-    useEffect(() => {
-        if (drawingMode !== 'boundary-corner-align' || !cornerAlignBfId) {
-            setCornerAlignCorners(prev => (prev.length === 0 ? prev : []));
-            return;
-        }
-        setCornerAlignCorners(getBoundaryCornerEntries(cornerAlignBfId));
-    }, [drawingMode, cornerAlignBfId, boundaryFiles, pointMap, getBoundaryCornerEntries]);
+    // Deed corner vertices with current transform applied, used for SVG markers.
+    // Derived directly from the boundary geometry and current transform so it updates
+    // immediately whenever a corner pair is aligned, without waiting for rAF draw frames.
+    const cornerAlignCorners = useMemo(() => {
+        if (drawingMode !== 'boundary-corner-align' || !cornerAlignBfId) return [];
+        return getBoundaryCornerEntries(cornerAlignBfId);
+    }, [drawingMode, cornerAlignBfId, getBoundaryCornerEntries]);
 
     /**
      * Rigid-body (2D Helmert without scale) fit of the deed's un-baked vertices onto
@@ -9677,7 +9711,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
      *    bearings and distances are never stretched).
      */
     const solveCornerAlign = useCallback((bfId: string, pairs: CornerAlignPair[], fallbackRotDeg: number) => {
-        const cache = bfGeometryCacheRef.current.get(bfId);
+        let cache = bfGeometryCacheRef.current.get(bfId);
+        if (!cache && drawRef.current) {
+            drawRef.current();
+            cache = bfGeometryCacheRef.current.get(bfId);
+        }
         if (!cache) return null;
         return solveRigidCornerAlign(cache.pob, pairs, fallbackRotDeg);
     }, []);
@@ -9688,6 +9726,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const base = cornerAlignBaseTxRef.current;
         const fit = solveCornerAlign(bfId, pairs, base?.rotationDeg ?? 0);
         if (!fit) return;
+        // Synchronously update the cache entry so immediate non-React lookups see the new values
+        const cache = bfGeometryCacheRef.current.get(bfId);
+        if (cache) {
+            cache.txE = fit.translationE;
+            cache.txN = fit.translationN;
+            cache.rotDeg = fit.rotationDeg;
+        }
         props.onUpdateBoundaryTransform(bfId, {
             translationE: fit.translationE,
             translationN: fit.translationN,
@@ -9699,6 +9744,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     /** Tear down corner-align state. `restore` puts the boundary back where it started. */
     const resetCornerAlign = useCallback((restore: boolean) => {
         if (restore && cornerAlignBfId && cornerAlignBaseTxRef.current && props.onUpdateBoundaryTransform) {
+            const cache = bfGeometryCacheRef.current.get(cornerAlignBfId);
+            if (cache) {
+                cache.txE = cornerAlignBaseTxRef.current.translationE;
+                cache.txN = cornerAlignBaseTxRef.current.translationN;
+                cache.rotDeg = cornerAlignBaseTxRef.current.rotationDeg;
+            }
             props.onUpdateBoundaryTransform(cornerAlignBfId, cornerAlignBaseTxRef.current);
         }
         cornerAlignBaseTxRef.current = null;
@@ -12810,12 +12861,23 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             {/* Committed corner → found-point tie lines */}
                             {cornerAlignPairs.map(p => {
                                 const t = toScreen(p.targetE, p.targetN);
+                                const pairedCorner = corners.find(c => c.pn === p.pn);
+                                const cs = pairedCorner ? toScreen(pairedCorner.x, pairedCorner.y) : null;
                                 return (
                                     <g key={`ca-pair-${p.pn}-${p.targetPn}`}>
                                         <circle cx={t.x} cy={t.y} r={7} fill="none" stroke="#34d399" strokeWidth={2} />
                                         <text x={t.x + 10} y={t.y + 4} fill="#34d399" fontSize={11} fontFamily="monospace">
                                             {p.pn}→{p.targetPn}
                                         </text>
+                                        {cs && (Math.abs(cs.x - t.x) > 1 || Math.abs(cs.y - t.y) > 1) && (
+                                            <line
+                                                x1={cs.x} y1={cs.y}
+                                                x2={t.x} y2={t.y}
+                                                stroke="#34d399"
+                                                strokeWidth={1.5}
+                                                strokeDasharray="4 2"
+                                            />
+                                        )}
                                     </g>
                                 );
                             })}
@@ -12882,6 +12944,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             if (next.length > 0) {
                                                 applyCornerAlign(cornerAlignBfId, next);
                                             } else if (cornerAlignBaseTxRef.current) {
+                                                const cache = bfGeometryCacheRef.current.get(cornerAlignBfId);
+                                                if (cache) {
+                                                    cache.txE = cornerAlignBaseTxRef.current.translationE;
+                                                    cache.txN = cornerAlignBaseTxRef.current.translationN;
+                                                    cache.rotDeg = cornerAlignBaseTxRef.current.rotationDeg;
+                                                }
                                                 props.onUpdateBoundaryTransform?.(cornerAlignBfId, cornerAlignBaseTxRef.current);
                                                 setCornerAlignFit(null);
                                             }

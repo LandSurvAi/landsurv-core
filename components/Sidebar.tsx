@@ -70,6 +70,7 @@ const getSelectorModelLabel = (modelName: string): string => (
     : modelName === 'claude-fable-5' ? 'Claude Fable 5'
     : modelName === 'gemini-3.7-flash' ? 'Gemini 3.7 Flash'
     : modelName === 'gemini-3.8-flash' ? 'Gemini 3.8 Flash'
+    : modelName === 'gemini-4-argon' ? 'Gemini 4 Argon'
     : modelName === 'gemini-3.5-flash-lite' ? 'Gemini 3.5 Flash Lite'
     : modelName
 );

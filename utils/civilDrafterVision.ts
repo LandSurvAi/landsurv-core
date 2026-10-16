@@ -19,11 +19,28 @@
  *   Frame N+1–M – DETAIL  Tight zoom on the 2 busiest clusters
  */
 
-import type { SurveyPoint, SurveyLine } from '../types';
+import type { SurveyPoint, SurveyLine, BoundaryFile } from '../types';
+import { parseBearingToRadians, parseDistance, direct, directCurve } from './cogo';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
 // ─────────────────────────────────────────────────────────────────────────────
+
+export interface BoundaryVertex {
+  easting: number;
+  northing: number;
+  label?: string;
+}
+
+export interface BoundarySegment {
+  fromPt: { easting: number; northing: number };
+  toPt: { easting: number; northing: number };
+  isCurve?: boolean;
+  curveRadius?: number;
+  arcLength?: number;
+  curveDirection?: 'left' | 'right';
+  label?: string;
+}
 
 export interface VisionFrame {
   /** Base64-encoded PNG (no data URI prefix) */
@@ -52,6 +69,14 @@ export interface VisionSurvey {
   totalLines: number;
   surveyExtentFt: { width: number; height: number };
   capturedAt: number;
+  hasBackgroundImagery?: boolean;
+}
+
+export interface MapOverlayTile {
+  image: CanvasImageSource;
+  bbox: [number, number, number, number];
+  quad?: [number, number][];
+  opacity?: number;
 }
 
 export interface VisionCaptureOptions {
@@ -61,6 +86,15 @@ export interface VisionCaptureOptions {
   maxDetailFrames?: number;
   canvasWidth?: number;
   canvasHeight?: number;
+  /** Optional boundary files to render onto the vision frames and use for extent calculation */
+  boundaryFiles?: BoundaryFile[];
+  /** Optional background image / aerial photo to composite onto the canvas frames */
+  backgroundImage?: {
+    image: CanvasImageSource;
+    bounds?: { minE: number; maxE: number; minN: number; maxN: number };
+  } | null;
+  /** Optional map overlay tiles directly from the canvas (e.g. NAIP or Google basemap) */
+  mapTiles?: MapOverlayTile[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -124,22 +158,160 @@ interface Extent {
   spanE: number; spanN: number;
 }
 
-function computeExtent(pts: SurveyPoint[]): Extent | null {
-  if (!pts.length) return null;
+/**
+ * Extract 2D boundary line segments and vertex positions from BoundaryFile items.
+ */
+export function extractBoundaryGeometry(
+  boundaryFiles: BoundaryFile[] = [],
+  pointMap: Map<string, { easting: number; northing: number }> = new Map(),
+): { vertices: BoundaryVertex[]; segments: BoundarySegment[] } {
+  const vertices: BoundaryVertex[] = [];
+  const segments: BoundarySegment[] = [];
+
+  for (const bf of boundaryFiles) {
+    if (bf.hidden || !bf.calls || bf.calls.length === 0) continue;
+    const synthMap = new Map<string, { easting: number; northing: number }>();
+    const lookupPt = (pn: string | undefined): { easting: number; northing: number } | undefined => {
+      if (!pn) return undefined;
+      const pm = pointMap.get(pn);
+      if (pm) return { easting: pm.easting, northing: pm.northing };
+      return synthMap.get(pn);
+    };
+
+    const firstCall = bf.calls[0];
+    const pobFromMap = firstCall.from ? pointMap.get(firstCall.from) : undefined;
+    const pob: { easting: number; northing: number } = pobFromMap
+      ? { easting: pobFromMap.easting, northing: pobFromMap.northing }
+      : bf.pobOverride
+      ? { easting: bf.pobOverride.easting, northing: bf.pobOverride.northing }
+      : { easting: 0, northing: 0 };
+
+    if (firstCall.from) synthMap.set(firstCall.from, pob);
+    let cursor = pob;
+    const rawSegments: BoundarySegment[] = [];
+
+    for (const call of bf.calls) {
+      const fromHere = lookupPt(call.from) ?? cursor;
+      if (!fromHere) continue;
+      let endPt: { easting: number; northing: number } | null = null;
+      if (call.isCurve && typeof call.curveRadius === 'number' && Number.isFinite(call.curveRadius)
+          && typeof call.arcLength === 'number' && Number.isFinite(call.arcLength) && call.arcLength !== 0) {
+        const centralAngle = call.arcLength / call.curveRadius;
+        const chordStr = call.chordBearing || call.bearing;
+        const chordRad = chordStr ? parseBearingToRadians(chordStr) : null;
+        if (chordRad !== null) {
+          endPt = directCurve(fromHere, chordRad - centralAngle / 2, call.curveRadius, centralAngle);
+        }
+      } else {
+        const bStr = call.bearing || call.chordBearing;
+        const bRad = bStr ? parseBearingToRadians(bStr) : null;
+        const dist = call.distance
+          ? parseDistance(call.distance)
+          : (typeof (call as any).distanceFt === 'number' ? (call as any).distanceFt : null);
+        if (bRad !== null && typeof dist === 'number' && Number.isFinite(dist)) {
+          endPt = direct(fromHere, bRad, dist);
+        }
+      }
+      if (endPt) {
+        if (call.to && !lookupPt(call.to)) synthMap.set(call.to, endPt);
+        rawSegments.push({
+          fromPt: fromHere,
+          toPt: endPt,
+          isCurve: call.isCurve,
+          curveRadius: call.curveRadius,
+          arcLength: call.arcLength,
+          curveDirection: call.curveDirection,
+          label: `${call.bearing || ''} ${call.distance || ''}`.trim(),
+        });
+        cursor = endPt;
+      }
+    }
+
+    const bfFirstPt = lookupPt(bf.calls[0].from);
+    const bfTxE = bf.translationE ?? 0;
+    const bfTxN = bf.translationN ?? 0;
+    const bfRotRad = ((bf.rotationDeg ?? 0) * Math.PI) / 180;
+    const hasTransform = (bfTxE !== 0 || bfTxN !== 0 || bfRotRad !== 0) && !!bfFirstPt;
+
+    const transformPoint = (pt: { easting: number; northing: number }) => {
+      let e = pt.easting, n = pt.northing;
+      if (hasTransform && bfFirstPt) {
+        const dx = e - bfFirstPt.easting;
+        const dy = n - bfFirstPt.northing;
+        e = bfFirstPt.easting + (dx * Math.cos(bfRotRad) - dy * Math.sin(bfRotRad)) + bfTxE;
+        n = bfFirstPt.northing + (dx * Math.sin(bfRotRad) + dy * Math.cos(bfRotRad)) + bfTxN;
+      }
+      return { easting: e, northing: n };
+    };
+
+    for (const [key, pt] of synthMap.entries()) {
+      const transformed = transformPoint(pt);
+      vertices.push({ ...transformed, label: key });
+    }
+
+    for (const seg of rawSegments) {
+      segments.push({
+        ...seg,
+        fromPt: transformPoint(seg.fromPt),
+        toPt: transformPoint(seg.toPt),
+      });
+    }
+  }
+
+  return { vertices, segments };
+}
+
+function computeExtent(
+  pts: SurveyPoint[],
+  lines: SurveyLine[] = [],
+  boundaryVertices: BoundaryVertex[] = [],
+): Extent | null {
   let minE = Infinity, maxE = -Infinity, minN = Infinity, maxN = -Infinity;
+  let count = 0;
+
   for (const p of pts) {
-    if (p.easting  < minE) minE = p.easting;
-    if (p.easting  > maxE) maxE = p.easting;
+    if (!Number.isFinite(p.easting) || !Number.isFinite(p.northing)) continue;
+    if (p.easting < minE) minE = p.easting;
+    if (p.easting > maxE) maxE = p.easting;
     if (p.northing < minN) minN = p.northing;
     if (p.northing > maxN) maxN = p.northing;
+    count++;
   }
+
+  for (const l of lines) {
+    if (l.fromPt && Number.isFinite(l.fromPt.x) && Number.isFinite(l.fromPt.y)) {
+      if (l.fromPt.x < minE) minE = l.fromPt.x;
+      if (l.fromPt.x > maxE) maxE = l.fromPt.x;
+      if (l.fromPt.y < minN) minN = l.fromPt.y;
+      if (l.fromPt.y > maxN) maxN = l.fromPt.y;
+      count++;
+    }
+    if (l.toPt && Number.isFinite(l.toPt.x) && Number.isFinite(l.toPt.y)) {
+      if (l.toPt.x < minE) minE = l.toPt.x;
+      if (l.toPt.x > maxE) maxE = l.toPt.x;
+      if (l.toPt.y < minN) minN = l.toPt.y;
+      if (l.toPt.y > maxN) maxN = l.toPt.y;
+      count++;
+    }
+  }
+
+  for (const v of boundaryVertices) {
+    if (!Number.isFinite(v.easting) || !Number.isFinite(v.northing)) continue;
+    if (v.easting < minE) minE = v.easting;
+    if (v.easting > maxE) maxE = v.easting;
+    if (v.northing < minN) minN = v.northing;
+    if (v.northing > maxN) maxN = v.northing;
+    count++;
+  }
+
+  if (count === 0 || !Number.isFinite(minE) || !Number.isFinite(maxE)) return null;
   const spanE = Math.max(maxE - minE, 1);
   const spanN = Math.max(maxN - minN, 1);
   return { minE, maxE, minN, maxN, cE: (minE + maxE) / 2, cN: (minN + maxN) / 2, spanE, spanN };
 }
 
 /** Survey-to-screen coordinate transform for a given viewport */
-function makeTransform(
+export function makeTransform(
   minE: number, maxE: number,
   minN: number, maxN: number,
   W: number, H: number,
@@ -161,7 +333,240 @@ function makeTransform(
         H - offY - (n - minN) * scale, // north = up → flip Y
       ];
     },
+    toWorld(screenX: number, screenY: number): [number, number] {
+      return [
+        minE + (screenX - offX) / scale,
+        minN + (H - offY - screenY) / scale,
+      ];
+    },
   };
+}
+
+export function convertNormPosToWorld(
+  normPos: [number, number] | { y: number; x: number },
+  bounds: { minE: number; maxE: number; minN: number; maxN: number },
+  canvasWidth: number = DEFAULT_W,
+  canvasHeight: number = DEFAULT_H,
+  margin: number = MARGIN,
+): { easting: number; northing: number } {
+  const y = Array.isArray(normPos) ? normPos[0] : normPos.y;
+  const x = Array.isArray(normPos) ? normPos[1] : normPos.x;
+  const { toWorld } = makeTransform(bounds.minE, bounds.maxE, bounds.minN, bounds.maxN, canvasWidth, canvasHeight, margin);
+  const screenX = (x / 1000) * canvasWidth;
+  const screenY = (y / 1000) * canvasHeight;
+  const [easting, northing] = toWorld(screenX, screenY);
+  return { easting, northing };
+}
+
+export interface FeatureTraceInput {
+  type?: 'driveway' | 'road' | 'street' | 'sidewalk' | 'walk' | string;
+  layer?: string;
+  widthFt?: number | number[];
+  centerline?: Array<[number, number] | { y: number; x: number }>;
+  polygon?: Array<[number, number] | { y: number; x: number }>;
+  outline?: Array<[number, number] | { y: number; x: number }>;
+  perimeter?: Array<[number, number] | { y: number; x: number }>;
+  apron?: Array<[number, number] | { y: number; x: number }>;
+  parking?: Array<[number, number] | { y: number; x: number }>;
+  edges?: Array<{
+    polylineId?: string;
+    layer?: string;
+    isClosed?: boolean;
+    points: Array<[number, number] | { y: number; x: number }>;
+  }>;
+}
+
+export function expandFeatureTrace(
+  trace: FeatureTraceInput,
+  bounds: { minE: number; maxE: number; minN: number; maxN: number },
+  startPointNumber: number = 100,
+  canvasWidth: number = DEFAULT_W,
+  canvasHeight: number = DEFAULT_H,
+  margin: number = MARGIN,
+): { points: SurveyPoint[]; lines: SurveyLine[] } {
+  const generatedPoints: SurveyPoint[] = [];
+  const generatedLines: SurveyLine[] = [];
+  let pn = startPointNumber;
+
+  const featureType = (trace.type || 'driveway').toLowerCase();
+  const isDriveway = featureType.includes('drive');
+  const clLayer = isDriveway ? 'L-DRIVEWAY-CL' : 'L-CENTERLINE';
+  const edgeLayer = trace.layer || (isDriveway ? 'L-DRIVEWAY' : 'L-ROAD');
+
+  const addChainLines = (pts: SurveyPoint[], layer: string, polylineId: string, isClosed = false) => {
+    if (pts.length < 2) return;
+    for (let i = 0; i < pts.length - 1; i++) {
+      generatedLines.push({
+        from: pts[i].pointNumber,
+        to: pts[i + 1].pointNumber,
+        layer,
+        polylineId,
+      });
+    }
+    if (isClosed && pts.length > 2) {
+      generatedLines.push({
+        from: pts[pts.length - 1].pointNumber,
+        to: pts[0].pointNumber,
+        layer,
+        polylineId,
+      });
+    }
+  };
+
+  // 1. Complex Driveway Pavement Perimeter (Polygon)
+  const rawPolygon = trace.polygon || trace.outline || trace.perimeter;
+  const hasPolygon = Array.isArray(rawPolygon) && rawPolygon.length >= 3;
+
+  if (hasPolygon) {
+    const polyWorld = rawPolygon.map(pt => convertNormPosToWorld(pt, bounds, canvasWidth, canvasHeight, margin));
+    const polyPoints: SurveyPoint[] = [];
+
+    for (let i = 0; i < polyWorld.length; i++) {
+      const cur = polyWorld[i];
+      const desc = i === 0 || i === polyWorld.length - 1 ? 'DW ENTRANCE' : 'DW EDGE';
+      const pt: SurveyPoint = {
+        pointNumber: String(pn++),
+        easting: cur.easting,
+        northing: cur.northing,
+        elevation: 0,
+        description: desc,
+        layer: edgeLayer,
+      };
+      polyPoints.push(pt);
+      generatedPoints.push(pt);
+    }
+
+    addChainLines(polyPoints, edgeLayer, `${featureType}-perimeter`, true);
+  }
+
+  // 2. Separate Parking Apron / Turnaround Court
+  const rawApron = trace.apron || trace.parking;
+  if (Array.isArray(rawApron) && rawApron.length >= 3) {
+    const apronWorld = rawApron.map(pt => convertNormPosToWorld(pt, bounds, canvasWidth, canvasHeight, margin));
+    const apronPoints: SurveyPoint[] = [];
+
+    for (let i = 0; i < apronWorld.length; i++) {
+      const cur = apronWorld[i];
+      const pt: SurveyPoint = {
+        pointNumber: String(pn++),
+        easting: cur.easting,
+        northing: cur.northing,
+        elevation: 0,
+        description: 'DW APRON',
+        layer: edgeLayer,
+      };
+      apronPoints.push(pt);
+      generatedPoints.push(pt);
+    }
+
+    addChainLines(apronPoints, edgeLayer, `${featureType}-apron`, true);
+  }
+
+  // 3. Centerline Alignment
+  if (Array.isArray(trace.centerline) && trace.centerline.length >= 2) {
+    const clWorld = trace.centerline.map(pt => convertNormPosToWorld(pt, bounds, canvasWidth, canvasHeight, margin));
+    const clPoints: SurveyPoint[] = [];
+
+    for (let i = 0; i < clWorld.length; i++) {
+      const cur = clWorld[i];
+      const desc = i === 0 ? 'DW CL ENTRANCE' : i === clWorld.length - 1 ? 'DW CL APRON' : 'DW CL';
+      const pt: SurveyPoint = {
+        pointNumber: String(pn++),
+        easting: cur.easting,
+        northing: cur.northing,
+        elevation: 0,
+        description: desc,
+        layer: clLayer,
+      };
+      clPoints.push(pt);
+      generatedPoints.push(pt);
+    }
+
+    addChainLines(clPoints, clLayer, `${featureType}-cl`, false);
+
+    // If NO boundary polygon was supplied, generate parallel edges from centerline
+    if (!hasPolygon) {
+      const defaultWidth = typeof trace.widthFt === 'number' && trace.widthFt > 0 ? trace.widthFt : 14;
+      const leftPoints: SurveyPoint[] = [];
+      const rightPoints: SurveyPoint[] = [];
+
+      for (let i = 0; i < clWorld.length; i++) {
+        const cur = clWorld[i];
+        const halfWidth = Array.isArray(trace.widthFt) && typeof trace.widthFt[i] === 'number'
+          ? trace.widthFt[i] / 2
+          : defaultWidth / 2;
+
+        let dx = 0;
+        let dy = 0;
+        if (i === 0) {
+          dx = clWorld[1].easting - cur.easting;
+          dy = clWorld[1].northing - cur.northing;
+        } else if (i === clWorld.length - 1) {
+          dx = cur.easting - clWorld[i - 1].easting;
+          dy = cur.northing - clWorld[i - 1].northing;
+        } else {
+          dx = clWorld[i + 1].easting - clWorld[i - 1].easting;
+          dy = clWorld[i + 1].northing - clWorld[i - 1].northing;
+        }
+
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len;
+        const ny = dx / len;
+
+        const lPt: SurveyPoint = {
+          pointNumber: String(pn++),
+          easting: cur.easting + nx * halfWidth,
+          northing: cur.northing + ny * halfWidth,
+          elevation: 0,
+          description: i === 0 ? 'DW NORTH ENTRANCE' : 'DW NORTH EDGE',
+          layer: edgeLayer,
+        };
+
+        const rPt: SurveyPoint = {
+          pointNumber: String(pn++),
+          easting: cur.easting - nx * halfWidth,
+          northing: cur.northing - ny * halfWidth,
+          elevation: 0,
+          description: i === 0 ? 'DW SOUTH ENTRANCE' : 'DW SOUTH EDGE',
+          layer: edgeLayer,
+        };
+
+        leftPoints.push(lPt);
+        rightPoints.push(rPt);
+        generatedPoints.push(lPt, rPt);
+      }
+
+      addChainLines(leftPoints, edgeLayer, `${featureType}-edge-left`, false);
+      addChainLines(rightPoints, edgeLayer, `${featureType}-edge-right`, false);
+    }
+  }
+
+  // 4. Custom Edge Chains
+  if (Array.isArray(trace.edges) && trace.edges.length > 0) {
+    for (let eIdx = 0; eIdx < trace.edges.length; eIdx++) {
+      const edge = trace.edges[eIdx];
+      if (!Array.isArray(edge.points) || edge.points.length < 2) continue;
+      const ptsWorld = edge.points.map(pt => convertNormPosToWorld(pt, bounds, canvasWidth, canvasHeight, margin));
+      const edgePts: SurveyPoint[] = [];
+
+      for (let i = 0; i < ptsWorld.length; i++) {
+        const pt: SurveyPoint = {
+          pointNumber: String(pn++),
+          easting: ptsWorld[i].easting,
+          northing: ptsWorld[i].northing,
+          elevation: 0,
+          description: 'DW EDGE',
+          layer: edge.layer || edgeLayer,
+        };
+        edgePts.push(pt);
+        generatedPoints.push(pt);
+      }
+
+      addChainLines(edgePts, edge.layer || edgeLayer, edge.polylineId || `${featureType}-edge-${eIdx + 1}`, !!edge.isClosed);
+    }
+  }
+
+  return { points: generatedPoints, lines: generatedLines };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -171,6 +576,13 @@ function makeTransform(
 interface RenderOpts {
   frameLabel?: string;
   fadedPtNums?: Set<string>; // point numbers to dim (outside focus)
+  boundarySegments?: BoundarySegment[];
+  boundaryVertices?: BoundaryVertex[];
+  backgroundImage?: {
+    image: CanvasImageSource;
+    bounds?: { minE: number; maxE: number; minN: number; maxN: number };
+  } | null;
+  mapTiles?: MapOverlayTile[];
 }
 
 function renderToCanvas(
@@ -190,14 +602,72 @@ function renderToCanvas(
   ctx.fillStyle = '#0d1117';
   ctx.fillRect(0, 0, W, H);
 
+  const hasMapImagery = (opts.mapTiles && opts.mapTiles.length > 0) || !!opts.backgroundImage?.image;
+
+  // ── Background Map Imagery Overlay (NAIP / satellite tiles) ─────────────────
+  if (opts.mapTiles && opts.mapTiles.length > 0) {
+    for (const tile of opts.mapTiles) {
+      if (!tile.image) continue;
+      const opacity = tile.opacity ?? 0.95;
+      const src = tile.image as HTMLImageElement;
+      const iw = src.naturalWidth || (src as any).width || 256;
+      const ih = src.naturalHeight || (src as any).height || 256;
+      if (!iw || !ih) continue;
+
+      if (tile.quad && tile.quad.length >= 4) {
+        const [tlX, tlY] = toScreen(tile.quad[0][0], tile.quad[0][1]);
+        const [trX, trY] = toScreen(tile.quad[1][0], tile.quad[1][1]);
+        const [blX, blY] = toScreen(tile.quad[3][0], tile.quad[3][1]);
+        ctx.save();
+        ctx.globalAlpha = opacity;
+        ctx.translate(tlX, tlY);
+        ctx.transform((trX - tlX) / iw, (trY - tlY) / iw, (blX - tlX) / ih, (blY - tlY) / ih, 0, 0);
+        try {
+          ctx.drawImage(tile.image, 0, 0, iw, ih);
+        } catch (e) {
+          console.warn('[civilDrafterVision] draw quad tile failed:', e);
+        }
+        ctx.restore();
+      } else if (tile.bbox) {
+        const [tMinE, tMinN, tMaxE, tMaxN] = tile.bbox;
+        const [x0, yTop] = toScreen(tMinE, tMaxN);
+        const [x1, yBottom] = toScreen(tMaxE, tMinN);
+        const w = x1 - x0;
+        const h = yBottom - yTop;
+        if (w > 0 && h > 0) {
+          ctx.save();
+          ctx.globalAlpha = opacity;
+          try {
+            ctx.drawImage(tile.image, x0, yTop, w, h);
+          } catch (e) {
+            console.warn('[civilDrafterVision] draw bbox tile failed:', e);
+          }
+          ctx.restore();
+        }
+      }
+    }
+  } else if (opts.backgroundImage?.image) {
+    const bgBounds = opts.backgroundImage.bounds || { minE, maxE, minN, maxN };
+    const [x0, yTop] = toScreen(bgBounds.minE, bgBounds.maxN);
+    const [x1, yBottom] = toScreen(bgBounds.maxE, bgBounds.minN);
+    ctx.save();
+    ctx.globalAlpha = 0.90;
+    try {
+      ctx.drawImage(opts.backgroundImage.image, x0, yTop, x1 - x0, yBottom - yTop);
+    } catch (e) {
+      console.warn('[civilDrafterVision] Failed to draw background image:', e);
+    }
+    ctx.restore();
+  }
+
   // ── Coordinate grid ──────────────────────────────────────────────────────────
   {
     const rawStep = Math.max(maxE - minE, maxN - minN) / 8;
     const magnitude = Math.pow(10, Math.floor(Math.log10(Math.max(rawStep, 1))));
     const gridStep  = Math.ceil(rawStep / magnitude) * magnitude;
-    ctx.strokeStyle = '#1a2233';
+    ctx.strokeStyle = hasMapImagery ? 'rgba(255, 255, 255, 0.15)' : '#1a2233';
     ctx.lineWidth   = 0.5;
-    ctx.setLineDash([]);
+    ctx.setLineDash(hasMapImagery ? [4, 4] : []);
     ctx.beginPath();
     for (let e = Math.floor(minE / gridStep) * gridStep; e <= maxE + gridStep; e += gridStep) {
       const [x0] = toScreen(e, minN);
@@ -212,6 +682,63 @@ function renderToCanvas(
       ctx.lineTo(x1, y1);
     }
     ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Coordinate grid labels (Easting along bottom, Northing along left)
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'center';
+    for (let e = Math.floor(minE / gridStep) * gridStep; e <= maxE + gridStep; e += gridStep) {
+      const [x0] = toScreen(e, minN);
+      if (x0 >= MARGIN - 10 && x0 <= W - MARGIN + 10) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(x0 - 24, H - MARGIN + 2, 48, 12);
+        ctx.fillStyle = '#E5E7EB';
+        ctx.fillText(`E ${Math.round(e)}`, x0, H - MARGIN + 11);
+      }
+    }
+    ctx.textAlign = 'right';
+    for (let n = Math.floor(minN / gridStep) * gridStep; n <= maxN + gridStep; n += gridStep) {
+      const [, y0] = toScreen(minE, n);
+      if (y0 >= MARGIN - 10 && y0 <= H - MARGIN + 10) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(MARGIN - 48, y0 - 6, 46, 12);
+        ctx.fillStyle = '#E5E7EB';
+        ctx.fillText(`N ${Math.round(n)}`, MARGIN - 4, y0 + 3);
+      }
+    }
+  }
+
+  // ── Boundary Overlay (Amber #F59E0B) ────────────────────────────────────────
+  if (opts.boundarySegments && opts.boundarySegments.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = '#F59E0B';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+    ctx.shadowBlur = 4;
+    for (const seg of opts.boundarySegments) {
+      const [x1, y1] = toScreen(seg.fromPt.easting, seg.fromPt.northing);
+      const [x2, y2] = toScreen(seg.toPt.easting, seg.toPt.northing);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    if (opts.boundaryVertices) {
+      ctx.fillStyle = '#FBBF24';
+      for (const v of opts.boundaryVertices) {
+        const [vx, vy] = toScreen(v.easting, v.northing);
+        ctx.beginPath();
+        ctx.arc(vx, vy, 4, 0, Math.PI * 2);
+        ctx.fill();
+        if (v.label && scale > 0.12) {
+          ctx.fillStyle = '#FEF08A';
+          ctx.font = 'bold 9px monospace';
+          ctx.fillText(v.label, vx + 5, vy - 2);
+          ctx.fillStyle = '#FBBF24';
+        }
+      }
+    }
+    ctx.restore();
   }
 
   // ── Build point lookup ───────────────────────────────────────────────────────
@@ -469,17 +996,34 @@ export async function captureVisionSurvey(
   canvas.width  = canvasWidth;
   canvas.height = canvasHeight;
 
-  const ext = computeExtent(points);
-  if (!ext || points.length < 2) {
+  const boundaryGeom = extractBoundaryGeometry(opts.boundaryFiles);
+  const ext = computeExtent(points, lines, boundaryGeom.vertices);
+
+  if (!ext || (points.length < 2 && boundaryGeom.vertices.length < 2 && lines.length === 0)) {
     return {
       frames: [],
-      spatialNarrative: 'Insufficient point data for visual survey — fewer than 2 points loaded.',
+      spatialNarrative: 'Insufficient spatial data for visual survey — no points or boundary lines loaded.',
       totalPoints: points.length,
       totalLines: lines.length,
       surveyExtentFt: { width: 0, height: 0 },
       capturedAt: Date.now(),
     };
   }
+
+  // If survey points are sparse/empty, synthesize reference points from boundary vertices
+  // so the grid partitioning and quadrant clustering zoom in on key sections of the property.
+  const effectivePoints: SurveyPoint[] = points.length >= 2
+    ? points
+    : [
+        ...points,
+        ...boundaryGeom.vertices.map((v, i) => ({
+          pointNumber: v.label || `BND-${i + 1}`,
+          northing: v.northing,
+          easting: v.easting,
+          elevation: 0,
+          description: 'PROPERTY BOUNDARY',
+        })),
+      ];
 
   // Helper: render a viewport → VisionFrame
   const capture = (
@@ -489,7 +1033,14 @@ export async function captureVisionSurvey(
     zoomLevel: number,
     fadedPtNums?: Set<string>,
   ): VisionFrame => {
-    renderToCanvas(canvas, points, lines, minE, maxE, minN, maxN, { frameLabel: label, fadedPtNums });
+    renderToCanvas(canvas, points, lines, minE, maxE, minN, maxN, {
+      frameLabel: label,
+      fadedPtNums,
+      boundarySegments: boundaryGeom.segments,
+      boundaryVertices: boundaryGeom.vertices,
+      backgroundImage: opts.backgroundImage,
+      mapTiles: opts.mapTiles,
+    });
     const dataUrl = canvas.toDataURL('image/png');
     const base64  = dataUrl.split(',')[1];
     const visible = points.filter(p =>
@@ -514,15 +1065,16 @@ export async function captureVisionSurvey(
   // ── Frame 1: Overview (full extent + 15% padding) ──────────────────────────
   const padE = ext.spanE * 0.15;
   const padN = ext.spanN * 0.15;
+  const overviewCountLabel = points.length > 0 ? `${points.length} pts` : `${boundaryGeom.segments.length} boundary lines`;
   frames.push(capture(
     ext.minE - padE, ext.maxE + padE,
     ext.minN - padN, ext.maxN + padN,
-    `FRAME 1/? | OVERVIEW  ${points.length} pts  ${ext.spanE.toFixed(0)}ft × ${ext.spanN.toFixed(0)}ft`,
+    `FRAME 1/? | OVERVIEW  ${overviewCountLabel}  ${ext.spanE.toFixed(0)}ft × ${ext.spanN.toFixed(0)}ft`,
     1.0,
   ));
 
   // ── Frames 2–N: Top density clusters (zone zoom) ───────────────────────────
-  const clusters  = computeGridCells(points, ext, 4, 3);
+  const clusters  = computeGridCells(effectivePoints, ext, 4, 3);
   const topCells  = clusters.slice(0, maxClusterFrames);
 
   for (let i = 0; i < topCells.length; i++) {
@@ -537,7 +1089,7 @@ export async function captureVisionSurvey(
     frames.push(capture(
       cell.minE - pad, cell.maxE + pad,
       cell.minN - pad, cell.maxN + pad,
-      `FRAME ${i + 2}/? | ZONE ${dir}  ${cell.points.length} pts`,
+      `FRAME ${i + 2}/? | ZONE ${dir}  ${cell.points.length} features`,
       zoom, faded,
     ));
   }
@@ -545,7 +1097,7 @@ export async function captureVisionSurvey(
   // ── Frames N+1…M: Detail zoom on densest clusters ─────────────────────────
   for (let i = 0; i < Math.min(maxDetailFrames, topCells.length); i++) {
     const cell      = topCells[i];
-    const cellExt   = computeExtent(cell.points)!;
+    const cellExt   = computeExtent(cell.points, [], boundaryGeom.vertices)!;
     const pad       = Math.max(cellExt.spanE, cellExt.spanN) * 0.30;
     const dir       = cardinalOf(cell, ext);
     const ov        = ext.spanE * ext.spanN;
@@ -554,7 +1106,7 @@ export async function captureVisionSurvey(
     frames.push(capture(
       cellExt.minE - pad, cellExt.maxE + pad,
       cellExt.minN - pad, cellExt.maxN + pad,
-      `FRAME ${frames.length + 1}/? | DETAIL ${dir}  ${cell.points.length} pts`,
+      `FRAME ${frames.length + 1}/? | DETAIL ${dir}  ${cell.points.length} features`,
       zoom,
     ));
   }
@@ -566,20 +1118,23 @@ export async function captureVisionSurvey(
   }
 
   // ── Spatial narrative ──────────────────────────────────────────────────────
-  const descSummary   = topDescriptions(points, 12);
+  const descSummary   = points.length > 0 ? topDescriptions(points, 12) : ['BOUNDARY CORNERS'];
   const layerNames    = [...new Set(lines.map(l => l.layer ?? '').filter(Boolean))].slice(0, 8);
   const clusterSummary = topCells.map(c => `${cardinalOf(c, ext)}(${c.points.length})`).join(', ');
+  const hasImagery    = Boolean((opts.mapTiles && opts.mapTiles.length > 0) || opts.backgroundImage?.image);
 
   const spatialNarrative = [
     `Visual survey complete — ${total} frames captured.`,
     `Survey spans ${ext.spanE.toFixed(0)} ft East–West × ${ext.spanN.toFixed(0)} ft North–South.`,
     `Total: ${points.length} survey points, ${lines.length} existing line segments.`,
-    `Point type distribution (most frequent): ${descSummary.join(', ')}.`,
+    boundaryGeom.segments.length > 0 ? `Property boundary: ${boundaryGeom.segments.length} calls enclosing site (highlighted in amber #F59E0B).` : '',
+    hasImagery ? `Background aerial imagery (NAIP/satellite): ACTIVE and rendered directly into every vision frame image above.` : '',
+    `Point type distribution: ${descSummary.join(', ')}.`,
     `Existing linework layers: ${layerNames.length ? layerNames.join(', ') : 'none yet'}.`,
-    `Spatial density (quadrant → point count): ${clusterSummary}.`,
-    `Use the above visual evidence — spatial relationships, clusters, corridors, and alignments —`,
+    `Spatial density (quadrant → feature count): ${clusterSummary}.`,
+    `Use the above visual evidence — spatial relationships, boundary enclosure, background imagery, clusters, corridors, and alignments —`,
     `as the primary context for drafting decisions. Prioritise patterns visible in the images.`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
   return {
     frames,
@@ -588,6 +1143,7 @@ export async function captureVisionSurvey(
     totalLines: lines.length,
     surveyExtentFt: { width: ext.spanE, height: ext.spanN },
     capturedAt: Date.now(),
+    hasBackgroundImagery: hasImagery,
   };
 }
 
@@ -646,17 +1202,22 @@ export function buildVisionParts(
     parts.push({ text: `\n─── ${frame.label} ───\n${frame.description}` });
     parts.push({ inlineData: { mimeType: 'image/png', data: frame.base64 } });
   }
-  // ── Georeferenced aerial reference (NAIP / satellite) ─────────────────────
+  // ── Georeferenced aerial / background reference (NAIP / satellite) ────────
   if (aerialImages.length > 0) {
     parts.push({
       text:
-        `\n─── AERIAL IMAGERY REFERENCE (${aerialImages.length} image${aerialImages.length > 1 ? 's' : ''}) ───\n` +
-        `The following low-resolution aerial photo(s) cover the same survey extent\n` +
-        `as the frames above (north up). Use them for ROUGH feature identification\n` +
-        `only: confirm where roads, buildings, driveways, parking, fences, tree\n` +
-        `lines and drainage actually are, and sanity-check the orientation and\n` +
-        `general shape of what you draw. The survey points remain the geometric\n` +
-        `authority — do not trace precise geometry off this imagery.`,
+        `\n─── AERIAL / BACKGROUND IMAGERY REFERENCE (${aerialImages.length} image${aerialImages.length > 1 ? 's' : ''}) ───\n` +
+        `The georeferenced aerial/background imagery covers the survey extent (north up).\n` +
+        `Property boundary lines are highlighted in AMBER (#F59E0B).\n` +
+        `\nFEATURE IDENTIFICATION & TRACING RULES:\n` +
+        `• When survey shots exist, use them to anchor precise linework.\n` +
+        `• When the user asks to identify or draw features visible on the background imagery (such as\n` +
+        `  driveways, entrance roads, sidewalks, parking, building footprints, or tree lines) that lack\n` +
+        `  point shots, you ARE AUTHORIZED to visually trace them from the imagery.\n` +
+        `• For DRIVEWAYS: identify the road frontage, trace the connection from the street to the building/parking,\n` +
+        `  and generate BOTH the centerline (L-DRIVEWAY-CL) and parallel edges (L-DRIVEWAY).\n` +
+        `• If multiple driveways exist or the visual evidence is ambiguous, ASK clarifying questions\n` +
+        `  with selectable options in the question/options JSON format before or alongside drafting.`,
     });
     for (const img of aerialImages) {
       if (img.label) parts.push({ text: `\n${img.label}` });
@@ -687,5 +1248,5 @@ export function buildVisionParts(
  * that would benefit from a visual survey before the model responds.
  */
 export function isDrawIntent(query: string): boolean {
-  return /\b(draw|draft|create|generate|make|produce|build|trace|connect|plot|linework|polyline|road|edge|building|corridor|boundary|topo|contour|all points|feature|map|surveyed|survey|everything)\b/i.test(query);
+  return /\b(draw|draft|create|generate|make|produce|build|trace|connect|plot|linework|polyline|road|edge|driveway|drive|street|pavement|building|corridor|boundary|topo|contour|all points|feature|map|surveyed|survey|everything)\b/i.test(query);
 }

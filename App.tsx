@@ -51,6 +51,10 @@ import {
   captureVisionSurvey,
   buildVisionParts,
   isDrawIntent,
+  extractBoundaryGeometry,
+  expandFeatureTrace,
+  convertNormPosToWorld,
+  type FeatureTraceInput,
   type VisionSurvey,
   type VisionAerialImage,
 } from './utils/civilDrafterVision.ts';
@@ -233,6 +237,7 @@ import { PointAgent } from './services/PointAgent.ts';
 import { connectGatewayRelay, disconnectGatewayRelay } from './services/gatewayRelayClient.ts';
 import { agentRegistry } from './services/AgentRegistry.ts';
 import { useCogoExtendedSkills } from './services/cogoSkillHandlers.ts';
+import { useGeoSkills } from './services/geoSkillHandlers.ts';
 import { knowledgeBase, extractDeedMetadataFacts, extractRowFactsFromLines, extractZoningFacts } from './services/KnowledgeBase.ts';
 import './services/LsvzOrchestrator.ts';
 import { CacpBadge } from './components/CacpBadge.tsx';
@@ -496,6 +501,7 @@ const REMOVED_MODEL_IDS = new Set(['glm-5.2-fp8', 'nvidia-nemotron-v3-ultra', ..
 const autoHighThinkingOptions = [
   DEFAULT_AUTO_HIGH_THINKING_MODEL,
   'gemini-3.8-flash',
+  'gemini-4-argon',
   'claude-sonnet-5',
   'claude-opus-5',
   FABLE_5_MODEL_ID,
@@ -516,6 +522,8 @@ const getModelDisplayLabel = (modelName: string): string => (
   : modelName === 'claude-opus-5' ? 'Claude Opus 5'
   : modelName === FABLE_5_MODEL_ID ? 'Claude Fable 5'
   : modelName === CURRENT_GEMINI_MODEL ? 'Gemini 3.7 Flash'
+  : modelName === 'gemini-3.8-flash' ? 'Gemini 3.8 Flash'
+  : modelName === 'gemini-4-argon' ? 'Gemini 4 Argon'
   : modelName === AUTO_FAST_GEMINI_MODEL ? 'Gemini 3.5 Flash Lite'
   : modelName === OPENAI_FLAGSHIP_MODEL ? 'GPT-5.6 Terra (your OpenAI key)'
   : modelName === OPENAI_FAST_MODEL ? 'GPT-5.4 Mini (your OpenAI key)'
@@ -526,6 +534,8 @@ const getModelDisplayLabel = (modelName: string): string => (
 const availableModels = [
   AUTO_MODEL_OPTION,
   CURRENT_GEMINI_MODEL,
+  'gemini-3.8-flash',
+  'gemini-4-argon',
   'claude-sonnet-5',
   'claude-opus-5',
   FABLE_5_MODEL_ID,
@@ -554,6 +564,10 @@ interface DrawingCanvasHandles {
   confirmDelete: () => void;
   getTransform: () => { scale: number; offsetX: number; offsetY: number };
   setTransform: (transform: { scale: number; offsetX: number; offsetY: number }) => void;
+  getViewCenterWorld?: () => { easting: number; northing: number };
+  isPointInView?: (easting: number, northing: number) => boolean;
+  isBboxInView?: (minE: number, maxE: number, minN: number, maxN: number) => boolean;
+  getMapOverlayTiles?: () => Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: any; opacity?: number }>;
 }
 interface CutSheetPanelHandles {
   downloadDocx: () => void;
@@ -1492,6 +1506,7 @@ const AppContent = () => {
   // Cached VisionSurvey from the most recent gimbal scan.  Reused across
   // messages until the point set changes significantly (>5% delta).
   const [civilDrafterVisionSurvey, setCivilDrafterVisionSurvey] = useState<VisionSurvey | null>(null);
+  const civilDrafterVisionSurveyRef = useRef<VisionSurvey | null>(null);
   const [isVisionScanning, setIsVisionScanning] = useState(false);
   // Gimbal Vision HUD: defaults to closed/shaded. Auto-opens when a new
   // file is loaded (App.tsx ~2247) or when a Civil Drafter scan begins
@@ -2095,7 +2110,7 @@ const AppContent = () => {
       openClaudeModelSettings(currentModelName as ClaudeModel);
       return;
     }
-    if (currentModelName.startsWith('gemini-3')) {
+    if (currentModelName.startsWith('gemini-3') || currentModelName.startsWith('gemini-4')) {
       setShowGemini3Panel(true);
       return;
     }
@@ -2165,8 +2180,8 @@ const AppContent = () => {
   // The experimental Gemini 3 controls apply when a Gemini 3.x model is active
   // (directly or via Auto high-thinking). Reachable only from context-aware
   // model settings � not surfaced as a chat-header button on any agent.
-  const canConfigureGemini3 = currentModelName.startsWith('gemini-3')
-    || (isAutoRoutingForActive && autoHighThinkingModel.startsWith('gemini-3'));
+  const canConfigureGemini3 = currentModelName.startsWith('gemini-3') || currentModelName.startsWith('gemini-4')
+    || (isAutoRoutingForActive && (autoHighThinkingModel.startsWith('gemini-3') || autoHighThinkingModel.startsWith('gemini-4')));
 
   // Never auto-open model controls. Close Gemini controls when they no longer
   // apply; users can open them explicitly from the chat header.
@@ -2235,7 +2250,7 @@ const AppContent = () => {
       let changed = false;
       const next: Partial<Record<AgentType, string>> = { ...prev };
       for (const [agentKey, model] of Object.entries(prev) as Array<[AgentType, string]>) {
-        if (REMOVED_MODEL_IDS.has(model) || (model.startsWith('gemini-') && model !== CURRENT_GEMINI_MODEL)) {
+        if (REMOVED_MODEL_IDS.has(model) || (model.startsWith('gemini-') && !availableModels.includes(model))) {
           delete next[agentKey];
           changed = true;
         }
@@ -6768,6 +6783,9 @@ const AppContent = () => {
     return () => { unsubInverse(); unsubShrinkwrap(); };
   }, [logActionToFieldbook]);
 
+  // CACP — Geospatial AI skills (SamGeo feature extraction & SAM-Road road centerlines).
+  useGeoSkills({ settings, setLines, pointListsRef, logActionToFieldbook });
+
   // CACP � Extended COGO skill suite (forward, intersections, curves, traverse,
   // area, transforms, geodetic, subdivide, offset, self-test). All handlers
   // live in services/cogoSkillHandlers.ts; schemas in services/cogoSkillSchemas.ts.
@@ -8958,24 +8976,34 @@ const AppContent = () => {
     // are survey points loaded, we render the scene at multiple zoom levels and
     // inject the resulting PNG frames as Gemini Vision inlineData Parts.  This
     // gives the model spatial context it would otherwise never have.
-    if (agent === AgentType.CIVIL_DRAFTER && points.length > 0 && isDrawIntent(query) && (getCivilDrafterContextConfig()?.attachVisionImagery ?? true)) {
-        // Decide whether to re-scan: first time, or point set changed >5 %
+    const hasDrafterContext = points.length > 0 || (boundaryFiles && boundaryFiles.length > 0) || lines.length > 0;
+    if (agent === AgentType.CIVIL_DRAFTER && hasDrafterContext && isDrawIntent(query) && (getCivilDrafterContextConfig()?.attachVisionImagery ?? true)) {
+        // Decide whether to re-scan: first time, or point/feature set changed >5 %
         const prevCount  = lastVisionPointCountRef.current;
+        const currentFeatureCount = points.length + (boundaryFiles?.length ?? 0) * 10 + lines.length;
         const needScan   = !civilDrafterVisionSurvey
-            || Math.abs(points.length - prevCount) / Math.max(prevCount, 1) > 0.05;
+            || Math.abs(currentFeatureCount - prevCount) / Math.max(prevCount, 1) > 0.05;
 
-        let activeSurvey = civilDrafterVisionSurvey;
+        // Retrieve any active basemap overlay tiles directly from the drawing canvas (e.g. NAIP/Google/WMS)
+        const activeCanvasTiles = canvas2dRef.current?.getMapOverlayTiles?.() ?? [];
+
+        let activeSurvey = civilDrafterVisionSurveyRef.current || civilDrafterVisionSurvey;
 
         if (needScan) {
             setIsVisionScanning(true);
             setShowVisionHUD(true);
             try {
-                activeSurvey = await captureVisionSurvey(points, visibleLines);
+                activeSurvey = await captureVisionSurvey(points, visibleLines, {
+                    boundaryFiles,
+                    mapTiles: activeCanvasTiles.length > 0 ? activeCanvasTiles : undefined,
+                });
                 setCivilDrafterVisionSurvey(activeSurvey);
-                lastVisionPointCountRef.current = points.length;
+                civilDrafterVisionSurveyRef.current = activeSurvey;
+                lastVisionPointCountRef.current = currentFeatureCount;
             } catch (visionErr) {
                 console.warn('[CivilDrafterVision] scan failed:', visionErr);
                 activeSurvey = null;
+                civilDrafterVisionSurveyRef.current = null;
             } finally {
                 setIsVisionScanning(false);
             }
@@ -8995,9 +9023,33 @@ const AppContent = () => {
                     if (p.northing < minN) minN = p.northing;
                     if (p.northing > maxN) maxN = p.northing;
                 }
+                for (const l of lines) {
+                    if (l.fromPt && Number.isFinite(l.fromPt.x) && Number.isFinite(l.fromPt.y)) {
+                        if (l.fromPt.x < minE) minE = l.fromPt.x;
+                        if (l.fromPt.x > maxE) maxE = l.fromPt.x;
+                        if (l.fromPt.y < minN) minN = l.fromPt.y;
+                        if (l.fromPt.y > maxN) maxN = l.fromPt.y;
+                    }
+                    if (l.toPt && Number.isFinite(l.toPt.x) && Number.isFinite(l.toPt.y)) {
+                        if (l.toPt.x < minE) minE = l.toPt.x;
+                        if (l.toPt.x > maxE) maxE = l.toPt.x;
+                        if (l.toPt.y < minN) minN = l.toPt.y;
+                        if (l.toPt.y > maxN) maxN = l.toPt.y;
+                    }
+                }
+                if (boundaryFiles && boundaryFiles.length > 0) {
+                    const bGeom = extractBoundaryGeometry(boundaryFiles);
+                    for (const v of bGeom.vertices) {
+                        if (!Number.isFinite(v.easting) || !Number.isFinite(v.northing)) continue;
+                        if (v.easting < minE) minE = v.easting;
+                        if (v.easting > maxE) maxE = v.easting;
+                        if (v.northing < minN) minN = v.northing;
+                        if (v.northing > maxN) maxN = v.northing;
+                    }
+                }
                 if (Number.isFinite(minE) && maxE > minE && maxN > minN) {
-                    const padX = Math.max((maxE - minE) * 0.1, 25);
-                    const padY = Math.max((maxN - minN) * 0.1, 25);
+                    const padX = Math.max((maxE - minE) * 0.15, 30);
+                    const padY = Math.max((maxN - minN) * 0.15, 30);
                     const w = (maxE - minE) + padX * 2;
                     const h = (maxN - minN) + padY * 2;
                     // LOW-RES on purpose: the gimbal aerial is only for rough
@@ -9005,23 +9057,53 @@ const AppContent = () => {
                     // small tile keeps image tokens cheap. AutoDraft attaches its
                     // own high-res imagery when precise rectification is needed.
                     const pxScale = 640 / Math.max(w, h);
-                    const naip = await getStaticMap({
-                        lat: 0, lng: 0,
-                        maptype: 'naip',
-                        projectedBbox: [minE - padX, minN - padY, maxE + padX, maxN + padY],
-                        sr: projEpsg,
-                        width: Math.max(128, Math.round(w * pxScale)),
-                        height: Math.max(128, Math.round(h * pxScale)),
-                    }, { geminiKey: settings.userApiKey, mapsKey: settings.googleMaps?.apiKey });
-                    visionAerialRef.current = [{
-                        mimeType: naip.mimeType,
-                        data: naip.base64,
-                        label: 'NAIP aerial � full survey extent, north up, same coordinate frame as the survey. Low resolution: use it only for rough feature identification (road corridors, building locations, tree lines), not precise geometry.',
-                    }];
+                    let naip: any = null;
+                    try {
+                        naip = await getStaticMap({
+                            lat: 0, lng: 0,
+                            maptype: 'naip',
+                            projectedBbox: [minE - padX, minN - padY, maxE + padX, maxN + padY],
+                            sr: projEpsg,
+                            width: Math.max(128, Math.round(w * pxScale)),
+                            height: Math.max(128, Math.round(h * pxScale)),
+                        }, { geminiKey: settings.userApiKey, mapsKey: settings.googleMaps?.apiKey });
+                    } catch (directErr) {
+                        try {
+                            const c0 = proj4(`EPSG:${projEpsg}`, 'EPSG:3857', [minE - padX, minN - padY]) as [number, number];
+                            const c1 = proj4(`EPSG:${projEpsg}`, 'EPSG:3857', [maxE + padX, maxN + padY]) as [number, number];
+                            naip = await getStaticMap({
+                                lat: 0, lng: 0,
+                                maptype: 'naip',
+                                projectedBbox: [Math.min(c0[0], c1[0]), Math.min(c0[1], c1[1]), Math.max(c0[0], c1[0]), Math.max(c0[1], c1[1])],
+                                sr: 3857,
+                                width: Math.max(128, Math.round(w * pxScale)),
+                                height: Math.max(128, Math.round(h * pxScale)),
+                            }, { geminiKey: settings.userApiKey, mapsKey: settings.googleMaps?.apiKey });
+                        } catch {
+                            throw directErr;
+                        }
+                    }
+                    if (naip?.base64) {
+                        visionAerialRef.current = [{
+                            mimeType: naip.mimeType,
+                            data: naip.base64,
+                            label: 'NAIP aerial — full survey extent, north up, same coordinate frame as the survey. Low resolution: use it only for rough feature identification (road corridors, building locations, tree lines), not precise geometry.',
+                        }];
+                    }
                 }
             } catch (aerialErr) {
                 console.warn('[CivilDrafterVision] aerial reference fetch failed:', aerialErr);
             }
+        }
+
+        // If visionAerialRef is still null/empty but activeSurvey captured background imagery,
+        // use the overview frame (frame 0) so the dedicated aerial image part is populated.
+        if ((!visionAerialRef.current || visionAerialRef.current.length === 0) && activeSurvey?.frames?.[0]?.base64 && (activeCanvasTiles.length > 0 || activeSurvey.hasBackgroundImagery)) {
+            visionAerialRef.current = [{
+                mimeType: 'image/png',
+                data: activeSurvey.frames[0].base64,
+                label: 'Active background aerial imagery (NAIP/satellite) — full survey extent with visible driveway, road, buildings, and amber boundary.',
+            }];
         }
 
         if (activeSurvey && activeSurvey.frames.length > 0) {
@@ -9725,6 +9807,39 @@ const AppContent = () => {
           let uncertaintyFound = false;
           let closureReportFound = false;
 
+          // CLARIFYING QUESTIONS & OPTIONS (for Civil Drafter or any agent asking questions)
+          const rawOptions = parsedJson.options || parsedJson.suggestedQuestions || parsedJson.clarifyingQuestions;
+          const optionsList: string[] = Array.isArray(rawOptions)
+            ? rawOptions.filter((o: any) => typeof o === 'string' && o.trim().length > 0)
+            : [];
+
+          if (parsedJson.question || optionsList.length > 0) {
+            console.log('[CLARIFYING QUESTIONS] Found question/options:', {
+              question: parsedJson.question,
+              options: optionsList,
+            });
+            if (optionsList.length > 0) {
+              setSuggestedQuestions(optionsList);
+            }
+            setHistory(prev => {
+              const newHistory = [...prev];
+              const lastMsg = newHistory[newHistory.length - 1];
+              if (lastMsg && lastMsg.role === MessageRole.MODEL) {
+                const questionText = typeof parsedJson.question === 'string' ? parsedJson.question : '';
+                newHistory[newHistory.length - 1] = {
+                  ...lastMsg,
+                  text: questionText ? questionText : lastMsg.text,
+                  result: questionText ? questionText : lastMsg.result,
+                  questionOptions: optionsList.length > 0 ? optionsList : undefined,
+                };
+              }
+              return newHistory;
+            });
+            if (parsedJson.question) {
+              logActionToFieldbook(`${agent}: Asked clarifying question with ${optionsList.length} option(s).`);
+            }
+          }
+
           // EXTRACT DEED METADATA (for DEED_READER agent)
           if (agent === AgentType.DEED_READER && parsedJson.deedMetadata && deedFile) {
               console.log('[DEED METADATA] Extracted from AI response:', parsedJson.deedMetadata);
@@ -10158,6 +10273,61 @@ const AppContent = () => {
           // (setPointLists is async so pointListsRef won't have them yet)
           let currentBatchPoints: SurveyPoint[] = [];
 
+          // FEATURE TRACING FROM BACKGROUND AERIAL IMAGERY
+          const rawTrace = parsedJson.featureTrace
+            || parsedJson.featureTraces
+            || (parsedJson.pavementOutline ? { type: 'driveway', polygon: parsedJson.pavementOutline } : null)
+            || (parsedJson.drivewayPolygon ? { type: 'driveway', polygon: parsedJson.drivewayPolygon } : null)
+            || (parsedJson.drivewayOutline ? { type: 'driveway', polygon: parsedJson.drivewayOutline } : null)
+            || (parsedJson.driveway && typeof parsedJson.driveway === 'object' ? parsedJson.driveway : null);
+
+          if (rawTrace) {
+            const traces: FeatureTraceInput[] = Array.isArray(rawTrace)
+              ? rawTrace
+              : [rawTrace];
+            let frameBounds = civilDrafterVisionSurveyRef.current?.frames?.[0]?.bounds
+              || civilDrafterVisionSurvey?.frames?.[0]?.bounds;
+            let frameWidth = civilDrafterVisionSurveyRef.current?.frames?.[0]?.width
+              || civilDrafterVisionSurvey?.frames?.[0]?.width
+              || 800;
+            let frameHeight = civilDrafterVisionSurveyRef.current?.frames?.[0]?.height
+              || civilDrafterVisionSurvey?.frames?.[0]?.height
+              || 600;
+
+            if (!frameBounds) {
+              const boundaryGeom = extractBoundaryGeometry(boundaryFiles);
+              const ext = computeExtent(points, lines, boundaryGeom.vertices);
+              if (ext) {
+                const padE = ext.spanE * 0.15;
+                const padN = ext.spanN * 0.15;
+                frameBounds = {
+                  minE: ext.minE - padE,
+                  maxE: ext.maxE + padE,
+                  minN: ext.minN - padN,
+                  maxN: ext.maxN + padN,
+                };
+              }
+            }
+
+            if (frameBounds) {
+              const existingPns = (pointListsRef.current || pointLists).flatMap(l => l.points).map(p => parseInt(p.pointNumber, 10)).filter(n => !isNaN(n));
+              let nextNum = existingPns.length > 0 ? Math.max(...existingPns) + 1 : 100;
+              const allTracePoints: SurveyPoint[] = [];
+              const allTraceLines: SurveyLine[] = [];
+              for (const tr of traces) {
+                const res = expandFeatureTrace(tr, frameBounds, nextNum, frameWidth, frameHeight);
+                allTracePoints.push(...res.points);
+                allTraceLines.push(...res.lines);
+                nextNum += res.points.length;
+              }
+              if (allTracePoints.length > 0) {
+                parsedJson.points = Array.isArray(parsedJson.points) ? [...parsedJson.points, ...allTracePoints] : allTracePoints;
+                parsedJson.lines = Array.isArray(parsedJson.lines) ? [...parsedJson.lines, ...allTraceLines] : allTraceLines;
+                logActionToFieldbook(`Feature trace: generated ${allTracePoints.length} points and ${allTraceLines.length} lines from visual survey.`);
+              }
+            }
+          }
+
             if (parsedJson.points && Array.isArray(parsedJson.points) && parsedJson.points.length > 0) {
               visualDataFound = true;
               logActionToFieldbook(`Processing ${parsedJson.points.length} points from query: "${query}"`);
@@ -10171,9 +10341,38 @@ const AppContent = () => {
                   .map((p: any): SurveyPoint | null => {
                       if (!p) return null;
 
-                      const northing = parseFloat(p.northing);
-                      const easting = parseFloat(p.easting);
+                      let northing = parseFloat(p.northing);
+                      let easting = parseFloat(p.easting);
                       const elevation = parseFloat(p.elevation);
+
+                      // If direct northing/easting were not provided, check for normalized image coordinates
+                      if ((isNaN(northing) || isNaN(easting)) && (Array.isArray(p.imageCoord) || Array.isArray(p.normPos) || Array.isArray(p.point))) {
+                          const norm = p.imageCoord || p.normPos || p.point;
+                          let frameBounds = civilDrafterVisionSurveyRef.current?.frames?.[0]?.bounds
+                            || civilDrafterVisionSurvey?.frames?.[0]?.bounds;
+                          let frameWidth = civilDrafterVisionSurveyRef.current?.frames?.[0]?.width
+                            || civilDrafterVisionSurvey?.frames?.[0]?.width
+                            || 800;
+                          let frameHeight = civilDrafterVisionSurveyRef.current?.frames?.[0]?.height
+                            || civilDrafterVisionSurvey?.frames?.[0]?.height
+                            || 600;
+
+                          if (!frameBounds) {
+                            const boundaryGeom = extractBoundaryGeometry(boundaryFiles);
+                            const ext = computeExtent(points, lines, boundaryGeom.vertices);
+                            if (ext) {
+                              const padE = ext.spanE * 0.15;
+                              const padN = ext.spanN * 0.15;
+                              frameBounds = { minE: ext.minE - padE, maxE: ext.maxE + padE, minN: ext.minN - padN, maxN: ext.maxN + padN };
+                            }
+                          }
+
+                          if (frameBounds && norm.length >= 2) {
+                              const converted = convertNormPosToWorld(norm, frameBounds, frameWidth, frameHeight);
+                              easting = converted.easting;
+                              northing = converted.northing;
+                          }
+                      }
 
                       if (isNaN(northing) || isNaN(easting)) {
                           return null; // Invalid coordinates
