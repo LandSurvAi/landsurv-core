@@ -163,7 +163,7 @@ export function directCurve(startPoint: Point, tangentBearing: number, radius: n
 export function formatBearing(radians: number): string {
     if (isNaN(radians)) return "Invalid Bearing";
 
-    let rad = (radians + 2 * Math.PI) % (2 * Math.PI);
+    let rad = ((radians % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
 
     const degrees = rad * (180 / Math.PI);
     
@@ -198,6 +198,25 @@ export function formatBearing(radians: number): string {
     }
 
     return `${quad1} ${deg}°${String(min).padStart(2, '0')}'${String(sec).padStart(2, '0')}" ${quad2}`;
+}
+
+/**
+ * Rotates a DMS bearing string by a Cartesian rotation angle in radians.
+ * In a Cartesian (East=X, North=Y) frame, a positive angle rotates counter-clockwise.
+ * Since survey bearings are measured clockwise from North (Azimuth: 0=N, 90°=E),
+ * rotating geometry counter-clockwise shifts compass bearings by -rotRad.
+ *
+ * @param bearingStr The bearing string (e.g. "N 45°00'00\" E").
+ * @param rotRad The counter-clockwise rotation in radians.
+ * @returns The rotated bearing formatted as DMS, or original string if parsing fails or rotRad is 0.
+ */
+export function rotateBearing(bearingStr: string | undefined, rotRad: number): string | undefined {
+    if (!bearingStr || rotRad === 0 || isNaN(rotRad)) return bearingStr;
+    const r = parseBearingToRadians(bearingStr);
+    if (r === null) return bearingStr;
+    const TWO_PI = 2 * Math.PI;
+    const normalized = (((r - rotRad) % TWO_PI) + TWO_PI) % TWO_PI;
+    return formatBearing(normalized);
 }
 
 /**

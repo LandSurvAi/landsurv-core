@@ -23,6 +23,7 @@ import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import type { SurveyPoint, SurveyLine, ProfilePoint, ProfileInfo } from '../types.ts';
 import jsPDF from 'jspdf';
 import { parseDxfForSymbol } from '../utils/dxfParser.ts';
+import { parseBearingToRadians } from '../utils/cogo.ts';
 import proj4 from 'proj4';
 import { useAppState, useErrorReporter } from '../contexts/AppStateContext';
 import { useCanvasState } from '../contexts/CanvasStateContext';
@@ -38,6 +39,7 @@ import {
     type TitleblockLayout,
     type TitleblockContext,
     type TitleblockImageElement,
+    type TitleblockElement,
 } from './TitleblockEditor.tsx';
 
 // ---------------------------------------------------------------------------
@@ -104,6 +106,7 @@ export interface EntityCluster {
     pointCount: number;
     lineCount: number;
     totalCount: number;
+    count: number;
 }
 
 export function detectClusters(points: SurveyPoint[], lines: SurveyLine[]): EntityCluster[] {
@@ -145,11 +148,30 @@ export function detectClusters(points: SurveyPoint[], lines: SurveyLine[]): Enti
                 p2x = p2.easting; p2y = p2.northing;
             }
         }
-        if (p1x !== undefined && p1y !== undefined && p2x !== undefined && p2y !== undefined) {
-            const minE = Math.min(p1x, p2x);
-            const maxE = Math.max(p1x, p2x);
-            const minN = Math.min(p1y, p2y);
-            const maxN = Math.max(p1y, p2y);
+        if (l.circleCenter && l.curveRadius && l.curveRadius > 0) {
+            const minE = l.circleCenter.x - l.curveRadius;
+            const maxE = l.circleCenter.x + l.curveRadius;
+            const minN = l.circleCenter.y - l.curveRadius;
+            const maxN = l.circleCenter.y + l.curveRadius;
+            nodes.push({
+                type: 'line',
+                line: l,
+                minE, maxE,
+                minN, maxN,
+                cx: l.circleCenter.x,
+                cy: l.circleCenter.y,
+            });
+        } else if (p1x !== undefined && p1y !== undefined && p2x !== undefined && p2y !== undefined) {
+            let minE = Math.min(p1x, p2x);
+            let maxE = Math.max(p1x, p2x);
+            let minN = Math.min(p1y, p2y);
+            let maxN = Math.max(p1y, p2y);
+            if (l.isCircle && l.curveRadius && l.curveRadius > 0) {
+                minE = p1x - l.curveRadius;
+                maxE = p1x + l.curveRadius;
+                minN = p1y - l.curveRadius;
+                maxN = p1y + l.curveRadius;
+            }
             nodes.push({
                 type: 'line',
                 line: l,
@@ -247,6 +269,7 @@ export function detectClusters(points: SurveyPoint[], lines: SurveyLine[]): Enti
             pointCount,
             lineCount,
             totalCount,
+            count: pointCount,
         });
     }
 
@@ -302,6 +325,274 @@ const pickPointColor = (p: SurveyPoint, cadLayerColors: Record<string, string>):
     if (p.layer && cadLayerColors[p.layer]) return cadLayerColors[p.layer];
     return '#b91c1c';
 };
+
+export function getSvgDashArray(l: SurveyLine): string | undefined {
+    if (l.type === 'exclusion' || l.type === 'shrinkwrap-preview') return '5 4';
+    if (!l.lineType || l.lineType === 'CONTINUOUS') return undefined;
+    const lt = l.lineType.toUpperCase();
+    if (lt.includes('DASH')) return '6 3';
+    if (lt.includes('HIDDEN')) return '3 3';
+    if (lt.includes('CENTER')) return '10 3 2 3';
+    if (lt.includes('PHANTOM')) return '10 3 2 3 2 3';
+    if (lt.includes('DOT')) return '1.5 3';
+    return undefined;
+}
+
+export interface ResolvedCircle {
+    kind: 'circle';
+    cx: number;
+    cy: number;
+    r: number;
+}
+
+export interface ResolvedArc {
+    kind: 'arc';
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    r: number;
+    pathD: string;
+    annot?: {
+        text: string;
+        x: number;
+        y: number;
+        angleDeg: number;
+    };
+}
+
+export interface ResolvedStraightLine {
+    kind: 'line';
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    annot?: {
+        text: string;
+        x: number;
+        y: number;
+        angleDeg: number;
+    };
+}
+
+export type ResolvedRenderEntity = ResolvedCircle | ResolvedArc | ResolvedStraightLine;
+
+export function resolveSheetRenderEntity(
+    l: SurveyLine,
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number,
+    worldToPx: (e: number, n: number) => [number, number],
+    worldFtPerInch: number,
+    renderPpi: number
+): ResolvedRenderEntity | null {
+    const chordLen = Math.hypot(bx - ax, by - ay);
+    const sameEndPoints = chordLen < 1e-4 || Boolean(l.from && l.to && l.from === l.to);
+
+    // 1. Circle Entity Detection
+    const isCircle = Boolean(
+        l.isCircle ||
+        (l.circleCenter && l.curveRadius && (!l.arcLength || Math.abs(l.arcLength - 2 * Math.PI * l.curveRadius) < 1e-2)) ||
+        (l.isCurve && l.curveRadius && sameEndPoints && !l.tangentBearing && !l.chordBearing)
+    );
+
+    if (isCircle && l.curveRadius && l.curveRadius > 0) {
+        const center = l.circleCenter || { x: ax, y: ay };
+        const [cxPx, cyPx] = worldToPx(center.x, center.y);
+        const rPx = (l.curveRadius / worldFtPerInch) * renderPpi;
+        if (rPx > 0.05) {
+            return { kind: 'circle', cx: cxPx, cy: cyPx, r: rPx };
+        }
+    }
+
+    // 2. Straight Line (not a curve)
+    if (!l.isCurve || !l.curveRadius || l.curveRadius <= 0) {
+        if (sameEndPoints) return null;
+        const [x1, y1] = worldToPx(ax, ay);
+        const [x2, y2] = worldToPx(bx, by);
+
+        let annot: ResolvedStraightLine['annot'];
+        if (l.bearing && l.distance) {
+            const midX = (x1 + x2) / 2;
+            const midY = (y1 + y2) / 2;
+            let angleDeg = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+            if (angleDeg > 90) angleDeg -= 180;
+            else if (angleDeg < -90) angleDeg += 180;
+            const labelRot = l.labelRotation || 0;
+            const offX = (l.labelOffset?.x || 0) / worldFtPerInch * renderPpi;
+            const offY = -((l.labelOffset?.y || 0)) / worldFtPerInch * renderPpi;
+            annot = {
+                text: `${l.bearing} / ${l.distance}`,
+                x: midX + offX,
+                y: midY + offY,
+                angleDeg: angleDeg + labelRot,
+            };
+        }
+        return { kind: 'line', x1, y1, x2, y2, annot };
+    }
+
+    // 3. Curve / Arc Entity
+    const R = l.curveRadius;
+    if (sameEndPoints) {
+        const center = l.circleCenter || { x: ax, y: ay };
+        const [cxPx, cyPx] = worldToPx(center.x, center.y);
+        const rPx = (R / worldFtPerInch) * renderPpi;
+        return { kind: 'circle', cx: cxPx, cy: cyPx, r: rPx };
+    }
+
+    if (chordLen > 2 * R * 1.001) {
+        const [x1, y1] = worldToPx(ax, ay);
+        const [x2, y2] = worldToPx(bx, by);
+        return { kind: 'line', x1, y1, x2, y2 };
+    }
+
+    // Determine central angle (delta) in radians
+    let delta: number;
+    if (l.arcLength && l.arcLength > 0) {
+        delta = l.arcLength / R;
+    } else {
+        delta = 2 * Math.asin(Math.min(1, chordLen / (2 * R)));
+    }
+
+    // Determine curve direction (left / right)
+    let isLeftCurve = l.curveDirection === 'left';
+    if (l.curveDirection !== 'left' && l.curveDirection !== 'right') {
+        let chordRadArc: number | null = null;
+        if (chordLen > 1e-4) {
+            chordRadArc = ((Math.atan2(bx - ax, by - ay) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+        }
+        if (chordRadArc === null) {
+            const chordStrArc = l.chordBearing || l.bearing;
+            chordRadArc = chordStrArc ? parseBearingToRadians(chordStrArc) : null;
+        }
+        const tempTangent = l.tangentBearing ? parseBearingToRadians(l.tangentBearing) : null;
+        if (tempTangent !== null && chordRadArc !== null) {
+            const halfDelta = delta / 2;
+            const norm = (a: number) => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+            const expectedRightChord = norm(tempTangent + halfDelta);
+            const expectedLeftChord = norm(tempTangent - halfDelta);
+            const dirNorm = norm(chordRadArc);
+            const diffRight = Math.min(Math.abs(dirNorm - expectedRightChord), 2 * Math.PI - Math.abs(dirNorm - expectedRightChord));
+            const diffLeft = Math.min(Math.abs(dirNorm - expectedLeftChord), 2 * Math.PI - Math.abs(dirNorm - expectedLeftChord));
+            if (diffLeft < diffRight) isLeftCurve = true;
+        }
+    }
+
+    // Determine curve center (centerX, centerY) in world coordinates
+    let centerX: number;
+    let centerY: number;
+
+    if (l.circleCenter) {
+        centerX = l.circleCenter.x;
+        centerY = l.circleCenter.y;
+    } else {
+        const signedDeltaArc = isLeftCurve ? -delta : delta;
+        let chordRadArc: number | null = null;
+        if (chordLen > 1e-4) {
+            chordRadArc = ((Math.atan2(bx - ax, by - ay) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+        }
+        if (chordRadArc === null) {
+            const chordStr = l.chordBearing || l.bearing;
+            chordRadArc = chordStr ? parseBearingToRadians(chordStr) : null;
+        }
+        const tangentAngle: number | null = chordRadArc !== null
+            ? chordRadArc - signedDeltaArc / 2
+            : (l.tangentBearing ? parseBearingToRadians(l.tangentBearing) : null);
+
+        if (tangentAngle !== null) {
+            const canvasTangentAngle = Math.PI / 2 - tangentAngle;
+            const centerOffsetAngle = isLeftCurve
+                ? canvasTangentAngle + Math.PI / 2
+                : canvasTangentAngle - Math.PI / 2;
+            centerX = ax + R * Math.cos(centerOffsetAngle);
+            centerY = ay + R * Math.sin(centerOffsetAngle);
+        } else {
+            const midX = (ax + bx) / 2;
+            const midY = (ay + by) / 2;
+            const clampedChord = Math.min(chordLen, 2 * R);
+            const h = Math.sqrt(Math.max(0, R * R - (clampedChord / 2) * (clampedChord / 2)));
+            const dE = (bx - ax) / chordLen;
+            const dN = (by - ay) / chordLen;
+            if (isLeftCurve) {
+                centerX = midX - h * dN;
+                centerY = midY + h * dE;
+            } else {
+                centerX = midX + h * dN;
+                centerY = midY - h * dE;
+            }
+        }
+    }
+
+    // Calculate midpoint on arc in world space
+    const a0 = Math.atan2(ay - centerY, ax - centerX);
+    const signedSweep = isLeftCurve ? delta : -delta;
+    const midAngle = a0 + signedSweep / 2;
+    const midE = centerX + R * Math.cos(midAngle);
+    const midN = centerY + R * Math.sin(midAngle);
+
+    // Transform points to pixels
+    const [x1, y1] = worldToPx(ax, ay);
+    const [x2, y2] = worldToPx(bx, by);
+    const [xMid, yMid] = worldToPx(midE, midN);
+    const rPx = (R / worldFtPerInch) * renderPpi;
+
+    if (rPx < 0.1) {
+        return { kind: 'line', x1, y1, x2, y2 };
+    }
+
+    const sweepFlag: 0 | 1 = isLeftCurve ? 0 : 1;
+    // Two-segment arc through (xMid, yMid) guarantees 100% stable, continuous curvature
+    // for any angle without large-arc flipping issues
+    const pathD = `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${rPx.toFixed(2)} ${rPx.toFixed(2)} 0 0 ${sweepFlag} ${xMid.toFixed(2)} ${yMid.toFixed(2)} A ${rPx.toFixed(2)} ${rPx.toFixed(2)} 0 0 ${sweepFlag} ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+
+    // Optional curve annotation for boundary calls
+    let annot: ResolvedArc['annot'];
+    const isBoundaryCurve = !!(l.bearing || l.distance || l.type === 'parcel' || l.type === 'inclusion' || l.type === 'exclusion');
+    if (isBoundaryCurve && (l.bearing || l.distance || (l.curveRadius && l.arcLength))) {
+        const [cxPx, cyPx] = worldToPx(centerX, centerY);
+        const vDx = xMid - cxPx;
+        const vDy = yMid - cyPx;
+        const vLen = Math.hypot(vDx, vDy);
+        let tangentAngleDeg = Math.atan2(vDx, -vDy) * 180 / Math.PI;
+        if (tangentAngleDeg > 90) tangentAngleDeg -= 180;
+        else if (tangentAngleDeg < -90) tangentAngleDeg += 180;
+
+        const labelRot = l.labelRotation || 0;
+        const offX = (l.labelOffset?.x || 0) / worldFtPerInch * renderPpi;
+        const offY = -((l.labelOffset?.y || 0)) / worldFtPerInch * renderPpi;
+        const radialOffset = vLen > 1e-4 ? 5 : 0;
+        const normX = vLen > 1e-4 ? (vDx / vLen) * radialOffset : 0;
+        const normY = vLen > 1e-4 ? (vDy / vLen) * radialOffset : 0;
+
+        let text: string;
+        if (l.bearing && l.distance) {
+            text = `${l.bearing} / ${l.distance}`;
+        } else if (l.chordBearing && l.chordDistance) {
+            text = `${l.chordBearing} / ${l.chordDistance}`;
+        } else {
+            text = `R=${R.toFixed(1)}' L=${(l.arcLength ?? (R * delta)).toFixed(1)}'`;
+        }
+
+        annot = {
+            text,
+            x: xMid + normX + offX,
+            y: yMid + normY + offY,
+            angleDeg: tangentAngleDeg + labelRot,
+        };
+    }
+
+    return {
+        kind: 'arc',
+        x1,
+        y1,
+        x2,
+        y2,
+        r: rPx,
+        pathD,
+        annot,
+    };
+}
 
 // ---------------------------------------------------------------------------
 // Sheet set data model
@@ -1005,6 +1296,15 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
         for (const l of lines) {
             if (l.fromPt) consider(l.fromPt.x, l.fromPt.y);
             if (l.toPt)   consider(l.toPt.x,   l.toPt.y);
+            if (l.circleCenter && l.curveRadius && l.curveRadius > 0) {
+                consider(l.circleCenter.x - l.curveRadius, l.circleCenter.y - l.curveRadius);
+                consider(l.circleCenter.x + l.curveRadius, l.circleCenter.y + l.curveRadius);
+            } else if (l.isCircle && l.curveRadius && l.curveRadius > 0) {
+                const cx = l.fromPt ? l.fromPt.x : (l.toPt ? l.toPt.x : 0);
+                const cy = l.fromPt ? l.fromPt.y : (l.toPt ? l.toPt.y : 0);
+                consider(cx - l.curveRadius, cy - l.curveRadius);
+                consider(cx + l.curveRadius, cy + l.curveRadius);
+            }
         }
         if (!isFinite(minE)) return null;
         return { minE, maxE, minN, maxN };
@@ -1456,41 +1756,92 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
                 bx = l.toPt.x;   by = l.toPt.y;
             } else {
                 const a = ptIx.get(l.from); const b = ptIx.get(l.to);
-                if (!a || !b) continue;
-                ax = a.easting; ay = a.northing;
-                bx = b.easting; by = b.northing;
+                if (a) { ax = a.easting; ay = a.northing; }
+                if (b) { bx = b.easting; by = b.northing; }
             }
-            const [x1, y1] = worldToPx(ax, ay);
-            const [x2, y2] = worldToPx(bx, by);
-            lineEls.push(<line key={l.id ?? `ln-${i}`} x1={x1} y1={y1} x2={x2} y2={y2}
-                stroke={pickLineColor(l, layerColors)} strokeWidth={pickLineWidth(l, 1)} />);
+            if (ax === undefined && l.circleCenter) {
+                ax = l.circleCenter.x; ay = l.circleCenter.y;
+            }
+            if (bx === undefined && l.circleCenter) {
+                bx = l.circleCenter.x; by = l.circleCenter.y;
+            }
+            if (ax === undefined || ay === undefined) continue;
+            if (bx === undefined || by === undefined) {
+                bx = ax; by = ay;
+            }
 
-            // Bearing & distance annotation (matches DrawingCanvas behavior).
-            // Curves are skipped — they carry their own arc annotation.
-            if (l.bearing && l.distance && !l.isCurve) {
-                const midX = (x1 + x2) / 2;
-                const midY = (y1 + y2) / 2;
-                let angleDeg = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
-                if (angleDeg > 90) angleDeg -= 180;
-                else if (angleDeg < -90) angleDeg += 180;
-                const labelRot = l.labelRotation || 0;
-                const offX = l.labelOffset?.x || 0;
-                // labelOffset.y is in world (N) units; SVG y increases downward.
-                const offY = -(l.labelOffset?.y || 0) / worldFtPerInch * renderPpi;
-                const offXpx = offX / worldFtPerInch * renderPpi;
-                // Target ~2ft tall in world units, but clamp for legibility.
-                const fontPx = Math.max(4, Math.min(12, (2 / worldFtPerInch) * renderPpi));
-                const text = `${l.bearing} / ${l.distance}`;
+            const resolved = resolveSheetRenderEntity(l, ax, ay, bx, by, worldToPx, worldFtPerInch, renderPpi);
+            if (!resolved) continue;
+
+            const stroke = pickLineColor(l, layerColors);
+            const sw = pickLineWidth(l, 1);
+            const dash = getSvgDashArray(l);
+
+            if (resolved.kind === 'circle') {
                 lineEls.push(
-                    <text key={`bd-${l.id ?? i}`}
-                        transform={`translate(${midX + offXpx} ${midY + offY}) rotate(${(angleDeg + labelRot).toFixed(2)})`}
-                        textAnchor="middle" dominantBaseline="middle"
-                        fontSize={fontPx} fontStyle="italic" fontWeight={600}
-                        fontFamily="Arial, sans-serif" fill="#374151"
-                        stroke="#fff" strokeWidth={fontPx * 0.18} paintOrder="stroke fill">
-                        {text}
-                    </text>
+                    <circle
+                        key={l.id ?? `circ-${i}`}
+                        cx={resolved.cx}
+                        cy={resolved.cy}
+                        r={resolved.r}
+                        stroke={stroke}
+                        strokeWidth={sw}
+                        strokeDasharray={dash}
+                        fill="none"
+                    />
                 );
+            } else if (resolved.kind === 'arc') {
+                lineEls.push(
+                    <path
+                        key={l.id ?? `arc-${i}`}
+                        d={resolved.pathD}
+                        stroke={stroke}
+                        strokeWidth={sw}
+                        strokeDasharray={dash}
+                        fill="none"
+                    />
+                );
+                if (resolved.annot) {
+                    const fontPx = Math.max(4, Math.min(12, (2 / worldFtPerInch) * renderPpi));
+                    lineEls.push(
+                        <text
+                            key={`ca-${l.id ?? i}`}
+                            transform={`translate(${resolved.annot.x.toFixed(2)} ${resolved.annot.y.toFixed(2)}) rotate(${resolved.annot.angleDeg.toFixed(2)})`}
+                            textAnchor="middle" dominantBaseline="middle"
+                            fontSize={fontPx} fontStyle="italic" fontWeight={600}
+                            fontFamily="Arial, sans-serif" fill="#374151"
+                            stroke="#fff" strokeWidth={fontPx * 0.18} paintOrder="stroke fill">
+                            {resolved.annot.text}
+                        </text>
+                    );
+                }
+            } else {
+                lineEls.push(
+                    <line
+                        key={l.id ?? `ln-${i}`}
+                        x1={resolved.x1}
+                        y1={resolved.y1}
+                        x2={resolved.x2}
+                        y2={resolved.y2}
+                        stroke={stroke}
+                        strokeWidth={sw}
+                        strokeDasharray={dash}
+                    />
+                );
+                if (resolved.annot) {
+                    const fontPx = Math.max(4, Math.min(12, (2 / worldFtPerInch) * renderPpi));
+                    lineEls.push(
+                        <text
+                            key={`bd-${l.id ?? i}`}
+                            transform={`translate(${resolved.annot.x.toFixed(2)} ${resolved.annot.y.toFixed(2)}) rotate(${resolved.annot.angleDeg.toFixed(2)})`}
+                            textAnchor="middle" dominantBaseline="middle"
+                            fontSize={fontPx} fontStyle="italic" fontWeight={600}
+                            fontFamily="Arial, sans-serif" fill="#374151"
+                            stroke="#fff" strokeWidth={fontPx * 0.18} paintOrder="stroke fill">
+                            {resolved.annot.text}
+                        </text>
+                    );
+                }
             }
         }
 
@@ -1552,7 +1903,8 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
             for (const p of points) ptIx.set(p.pointNumber, p);
             const hidden = new Set(vp.hiddenLayers);
             const parts: string[] = [];
-            for (const l of lines) {
+            for (let i = 0; i < lines.length; i++) {
+                const l = lines[i];
                 if (hidden.has(lineLayerKey(l))) continue;
                 let ax: number | undefined, ay: number | undefined;
                 let bx: number | undefined, by: number | undefined;
@@ -1561,31 +1913,48 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
                     bx = l.toPt.x;   by = l.toPt.y;
                 } else {
                     const a = ptIx.get(l.from); const b = ptIx.get(l.to);
-                    if (!a || !b) continue;
-                    ax = a.easting; ay = a.northing;
-                    bx = b.easting; by = b.northing;
+                    if (a) { ax = a.easting; ay = a.northing; }
+                    if (b) { bx = b.easting; by = b.northing; }
                 }
-                const [x1, y1] = worldToPx(ax, ay);
-                const [x2, y2] = worldToPx(bx, by);
+                if (ax === undefined && l.circleCenter) {
+                    ax = l.circleCenter.x; ay = l.circleCenter.y;
+                }
+                if (bx === undefined && l.circleCenter) {
+                    bx = l.circleCenter.x; by = l.circleCenter.y;
+                }
+                if (ax === undefined || ay === undefined) continue;
+                if (bx === undefined || by === undefined) {
+                    bx = ax; by = ay;
+                }
+
+                const resolved = resolveSheetRenderEntity(l, ax, ay, bx, by, worldToPx, worldFtPerInch, pdfPpi);
+                if (!resolved) continue;
+
                 const stroke = pickLineColor(l, layerColors);
                 const sw = pickLineWidth(l, 2);
-                parts.push(`<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="${stroke}" stroke-width="${sw}" />`);
+                const dash = getSvgDashArray(l);
+                const dashAttr = dash ? ` stroke-dasharray="${dash}"` : '';
 
-                // Bearing & distance annotation (PDF export).
-                if (l.bearing && l.distance && !l.isCurve) {
-                    const midX = (x1 + x2) / 2;
-                    const midY = (y1 + y2) / 2;
-                    let angleDeg = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
-                    if (angleDeg > 90) angleDeg -= 180;
-                    else if (angleDeg < -90) angleDeg += 180;
-                    const labelRot = l.labelRotation || 0;
-                    const offXpx = (l.labelOffset?.x || 0) / worldFtPerInch * pdfPpi;
-                    const offYpx = -((l.labelOffset?.y || 0)) / worldFtPerInch * pdfPpi;
-                    const fontPx = Math.max(5, Math.min(12, 2 / worldFtPerInch * pdfPpi));
-                    const txt = escapeXml(`${l.bearing} / ${l.distance}`);
-                    parts.push(
-                        `<text transform="translate(${(midX + offXpx).toFixed(2)} ${(midY + offYpx).toFixed(2)}) rotate(${(angleDeg + labelRot).toFixed(2)})" text-anchor="middle" dominant-baseline="middle" font-size="${fontPx.toFixed(2)}" font-style="italic" font-weight="600" font-family="Arial, sans-serif" fill="#374151" stroke="#fff" stroke-width="${(fontPx * 0.18).toFixed(2)}" paint-order="stroke fill">${txt}</text>`
-                    );
+                if (resolved.kind === 'circle') {
+                    parts.push(`<circle cx="${resolved.cx.toFixed(2)}" cy="${resolved.cy.toFixed(2)}" r="${resolved.r.toFixed(2)}" stroke="${stroke}" stroke-width="${sw}" fill="none"${dashAttr} />`);
+                } else if (resolved.kind === 'arc') {
+                    parts.push(`<path d="${resolved.pathD}" stroke="${stroke}" stroke-width="${sw}" fill="none"${dashAttr} />`);
+                    if (resolved.annot) {
+                        const fontPx = Math.max(5, Math.min(12, (2 / worldFtPerInch) * pdfPpi));
+                        const txt = escapeXml(resolved.annot.text);
+                        parts.push(
+                            `<text transform="translate(${resolved.annot.x.toFixed(2)} ${resolved.annot.y.toFixed(2)}) rotate(${resolved.annot.angleDeg.toFixed(2)})" text-anchor="middle" dominant-baseline="middle" font-size="${fontPx.toFixed(2)}" font-style="italic" font-weight="600" font-family="Arial, sans-serif" fill="#374151" stroke="#fff" stroke-width="${(fontPx * 0.18).toFixed(2)}" paint-order="stroke fill">${txt}</text>`
+                        );
+                    }
+                } else {
+                    parts.push(`<line x1="${resolved.x1.toFixed(2)}" y1="${resolved.y1.toFixed(2)}" x2="${resolved.x2.toFixed(2)}" y2="${resolved.y2.toFixed(2)}" stroke="${stroke}" stroke-width="${sw}"${dashAttr} />`);
+                    if (resolved.annot) {
+                        const fontPx = Math.max(5, Math.min(12, (2 / worldFtPerInch) * pdfPpi));
+                        const txt = escapeXml(resolved.annot.text);
+                        parts.push(
+                            `<text transform="translate(${resolved.annot.x.toFixed(2)} ${resolved.annot.y.toFixed(2)}) rotate(${resolved.annot.angleDeg.toFixed(2)})" text-anchor="middle" dominant-baseline="middle" font-size="${fontPx.toFixed(2)}" font-style="italic" font-weight="600" font-family="Arial, sans-serif" fill="#374151" stroke="#fff" stroke-width="${(fontPx * 0.18).toFixed(2)}" paint-order="stroke fill">${txt}</text>`
+                        );
+                    }
                 }
             }
             if (!vp.hidePoints) {

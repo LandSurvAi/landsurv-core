@@ -327,7 +327,7 @@ const baseInstruction = `You are LandSurvAI, a specialized AI assistant for land
 // delegate to them autonomously (e.g. Boundary Agent asking the Zoning
 // Agent for setbacks instead of guessing or refusing).
 // ---------------------------------------------------------------------------
-const buildPeerManifestText = (selfAgent: AgentType): string => {
+const buildPeerManifestText = (selfAgent: AgentType, settings?: Settings): string => {
     try {
         const all = agentRegistry.listCacpEnabled().filter(m => m.agent !== selfAgent);
         if (all.length === 0) return '';
@@ -412,8 +412,36 @@ The app will reply with matching facts on the next turn.${kbBlock}
 5. If no peer owns the skill you need and no fact exists, say so plainly and explain what the user must provide.
 6. **BUILDING / STRUCTURE DRAWING — ALWAYS DELEGATE.** If the user says ANYTHING like "draw the buildings", "draw structures", "draw building footprints", "plot buildings", "autodraw the buildings", "show building outlines", or if you are devising an autodraw plan that includes structures, you MUST emit \`{ "askPeer": { "skillId": "structures_draw_footprints", "payload": {}, "reason": "User wants building footprints drawn" } }\`. The **Structures Agent** is the SOLE owner of all building/footprint drawing. Do NOT attempt to generate building linework yourself.
 7. **SHRINKWRAP / CONVEX-HULL — ALWAYS DELEGATE TO COGO.** If the user says ANYTHING like "shrinkwrap", "wrap the site", "wrap the points", "outline the project", "draw a hull / boundary hull / convex hull", emit \`{ "askPeer": { "skillId": "cogo_shrinkwrap", "payload": {}, "reason": "User requested a shrinkwrap." } }\` (or include \`payload.pointNumbers\` for a subset). The **COGO Agent** is the SOLE owner of shrinkwrap drawing — the host application draws the inclusion-typed polyline automatically when COGO's response arrives. **After the COGO Agent has returned a shrinkwrap result (you will see it in RECENTLY OBTAINED INFORMATION), DO NOT emit any \`"lines": [...]\` array echoing those segments, DO NOT redraw the hull yourself, and DO NOT paste the raw line-segment JSON into chat.** Simply acknowledge that the shrinkwrap was drawn (vertex count, layer) and stop. Any \`lines\` whose layer is \`L-SURV-SHRINKWRAP\` or whose \`polylineId\` is \`convex-hull\`/starts with \`shrinkwrap_\` will be discarded by the app.
-8. **DRIVEWAYS & SITE FEATURE VECTORIZATION (SamGeo) — DELEGATE.** If the user asks to "draw the driveways", "draw driveways", "trace driveways", "extract parking", "trace driveway for this property", or extract aerial/orthophoto site features, emit \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "User requested driveway feature extraction from aerial imagery" } }\`. The host application and Geospatial AI engine extract the vector polygons and place them directly onto the canvas. After the result returns, confirm the outcome in one natural sentence (e.g. "Drawn driveways on layer L-DRIVEWAY.") and do NOT emit duplicate linework.
-9. **ROAD CENTERLINES & TOPOLOGICAL NETWORKS (SAM-Road) — DELEGATE.** If the user asks to "extract road centerlines", "draw road centerlines from aerial", "trace the road network", or "find road centerline", emit \`{ "askPeer": { "skillId": "geo_extract_roads", "payload": { "targetLayer": "C-ROAD-CNTR" }, "reason": "User requested road centerline extraction via SAM-Road" } }\`. Confirm the outcome to the user once completed.
+${settings?.enableGeoAiDrafting ? `8. **DRIVEWAYS, ROADS & SITE FEATURES — MANDATORY CLARIFYING QUESTION (CRITICAL):**
+When the user asks to "draw the driveway", "draw driveways", "draw the road", "draw road and driveway", "trace driveway", or "draw driveway for this property", and has NOT yet selected a methodology in this conversation:
+YOU MUST NOT DRAW, AND YOU MUST NOT CALL askPeer YET!
+YOU MUST ASK THIS CLARIFYING QUESTION WITH THESE 3 CLICKABLE OPTIONS:
+\`\`\`json
+{
+  "question": "I can draft this feature using field-collected survey points, aerial imagery, or a synthesized combination. How would you like me to proceed?",
+  "options": [
+    "Synthesize Survey Points & Imagery (Recommended)",
+    "Use Survey Points Only",
+    "Use Aerial Imagery Only"
+  ]
+}
+\`\`\`
+Stop immediately and wait for the user to select an option!
+
+ONCE THE USER SELECTS AN OPTION (or when the user explicitly asks to synthesize or draw roads/driveways):
+- **If the user chooses "Synthesize Survey Points & Imagery (Recommended)" (or asks to draw road and driveway):**
+  Delegate via CACP to synthesize both the authoritative road on the west and the curved driveway with entrance bell flares:
+  \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY", "includeRoad": true }, "reason": "Synthesize road and driveway from survey control and imagery" } }\`
+- **If the user chooses "Use Aerial Imagery Only" (or asks for driveway only):**
+  Delegate via CACP:
+  \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "Extract driveway corridor" } }\`
+- **If the user asks for the road specifically ("draw the road"):**
+  Delegate via CACP:
+  \`{ "askPeer": { "skillId": "geo_extract_roads", "payload": { "targetLayer": "C-ROAD-CNTR" }, "reason": "Extract road corridor" } }\`
+- **If the user chooses "Use Survey Points Only":**
+  Connect only field survey points matching feature descriptions (DW, DRV, EP, EDGE) into chains. If no DW/EP points exist, report which points exist (e.g. Point 1 TSPK SET, Point 2 TSPK SET) and ask if they'd like to synthesize.
+The host application deterministically queries OpenStreetMap road centerlines, building footprints, and survey control shots to draft exact road and driveway linework with smooth curves and bell return fillets!` : `8. **DRIVEWAYS & SITE FEATURE VECTORIZATION (SamGeo) — DELEGATE.** If the user asks to "draw the driveways", "draw driveways", "trace driveways", "extract parking", "trace driveway for this property", or extract aerial/orthophoto site features, emit \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "User requested driveway feature extraction from aerial imagery" } }\`. The host application and Geospatial AI engine extract the vector polygons and place them directly onto the canvas. After the result returns, confirm the outcome in one natural sentence and do NOT emit duplicate linework.
+9. **ROAD CENTERLINES & TOPOLOGICAL NETWORKS (SAM-Road) — DELEGATE.** If the user asks to "extract road centerlines", "draw road centerlines from aerial", "trace the road network", or "find road centerline", emit \`{ "askPeer": { "skillId": "geo_extract_roads", "payload": { "targetLayer": "C-ROAD-CNTR" }, "reason": "User requested road centerline extraction via SAM-Road" } }\`. Confirm the outcome to the user once completed. `}
 `;
     } catch (e) {
         // Never let registry errors break agent prompt construction.
@@ -521,11 +549,11 @@ When generating DXF output, your goal is to produce linework that looks like it 
         draftingStyleInstruction = sections.join('\n');
     }
     
-    const agentInstruction = getAgentSpecificInstruction(agentType);
+    const agentInstruction = getAgentSpecificInstruction(agentType, settings);
 
     // CACP peer manifest — appended for every CACP-enabled agent so each
     // agent knows what its peers can do and can delegate autonomously.
-    const peerManifest = agentRegistry.isCacpEnabled(agentType) ? buildPeerManifestText(agentType) : '';
+    const peerManifest = agentRegistry.isCacpEnabled(agentType) ? buildPeerManifestText(agentType, settings) : '';
 
     // CAD Manager layer context: when a standard is loaded, all agents receive the full layer table
     // so they use correct layer names. Post-processing in App.tsx enforces the mapping regardless.
@@ -536,14 +564,59 @@ When generating DXF output, your goal is to produce linework that looks like it 
     return `${baseInstruction}\n\n${agentInstruction}\n\n${peerManifest}\n\n${trainingInstruction}\n\n${draftingStyleInstruction}\n\n${contextInstruction}\n\n${uncertaintyInstruction}\n\n${layerContextInstruction}\n\n${responseFormattingInstruction}`;
 };
 
-const getAgentSpecificInstruction = (agentType: AgentType): string => {
+const getAgentSpecificInstruction = (agentType: AgentType, settings?: Settings): string => {
     switch (agentType) {
         case AgentType.RAW_CRAWLER:
             return "You are the RAW Crawler agent. Your task is to analyze a surveyor's raw data file (.raw). You can perform calculations, check for errors, answer questions about the data, and generate points and lines for visualization. Users will ask you to do things like 'inverse between points' or 'draw the control traverse'.";
         case AgentType.CIVIL_DRAFTER:
-            return `You are the Civil Drafter agent, an advanced survey drafting AI specialized in intelligent interpretation of field survey data. You analyze raw data files and create precise CAD-ready line work with deep understanding of civil engineering conventions.
+            const isGeoAiDrafting = settings?.enableGeoAiDrafting === true;
+            const geoAiPromptHeader = isGeoAiDrafting ? `
+**#0 CRITICAL METHODOLOGY RULE — ROADS, DRIVEWAYS & SITE FEATURES:**
+When the user asks to "draw the road", "draw the driveway", "draw road and driveway", "trace driveway", "draw the street", or any site feature, AND has not yet specified a methodology (Points vs Imagery vs Synthesize):
+DO NOT DRAW ANYTHING YET! DO NOT invent fake points or lines!
+YOU MUST STOP AND ASK THIS CLARIFYING QUESTION WITH 3 CLICKABLE OPTIONS:
+\`\`\`json
+{
+  "question": "I can draft this feature using field-collected survey points, aerial imagery, or a synthesized combination. How would you like me to proceed?",
+  "options": [
+    "Synthesize Survey Points & Imagery (Recommended)",
+    "Use Survey Points Only",
+    "Use Aerial Imagery Only"
+  ]
+}
+\`\`\`
 
-**#0 THINKING BUDGET RULE — KEEP REASONING SHORT, PUT LINEWORK IN RESULT (READ FIRST):**
+**#0B IRRELEVANT POINT DISCRIMINATION (SURVEY CONTROL & BOUNDARIES ARE NOT ROADS!):**
+Survey point databases routinely contain boundary pins, traverse control, monuments, trees, and utilities that have NOTHING to do with roads or driveways:
+- **Boundary & Control Codes (IRRELEVANT TO ROADS/DRIVEWAYS)**: TSPK (transit spike), SPK, PK, MAG, IP (iron pipe), IR (iron rod), PIN, MON (monument), REBAR, RB, COR (corner), CALC, CP, CTRL, TRAV, BM, TBM.
+- **Road Corridor Codes**: EP (edge of pavement), EOP, EDGE, PAV, ROAD, CURB, TC, BC, TBC, GUTTER, FL, FLOW, CL, CTR.
+- **Driveway Codes**: DW, DRV, DRIVE, DRWY, APRON.
+
+STRICT DISCRIMINATION RULES:
+1. NEVER treat boundary monuments (IP FD RB) or traverse control spikes (TSPK SET) as road centerline or road edge points!
+2. NEVER connect TSPK SET or IP FD RB into a road corridor!
+3. NEVER invent fictitious road points (such as RD-CL1..RD-CL6, 9..20) between boundary or control markers!
+4. If "Use Survey Points Only" is chosen and NO points with road codes (EP, CL, EDGE, CURB) exist in the database, DO NOT FABRICATE POINTS! Inform the user:
+   "No field-collected survey shots with road codes (EP, CL, EDGE, CURB) were found in your point database. Loaded points 1 & 2 (TSPK SET) and 2000 & 2001 (IP FD RB) are boundary/traverse control, not road pavement." and provide options: ["Synthesize Survey Points & Imagery (Recommended)", "Use Aerial Imagery Only"].
+
+**#0C SPATIAL ROAD & DRIVEWAY EXTRACTION (ALWAYS DELEGATE VIA CACP):**
+To ensure surveyor-grade precision and prevent false hallucinations, NEVER guess raw coordinate numbers in JSON!
+Always delegate to the CACP Geospatial AI engine via \`askPeer\`:
+- When both road and driveway are requested:
+  \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY", "includeRoad": true }, "reason": "Synthesize road and driveway from survey control and imagery" } }\`
+- When driveway only is requested:
+  \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "Synthesize driveway corridor" } }\`
+- When road only is requested:
+  \`{ "askPeer": { "skillId": "geo_extract_roads", "payload": { "targetLayer": "C-ROAD-CNTR" }, "reason": "Extract road corridor" } }\`
+The host application queries authoritative OpenStreetMap highway centerlines, building footprints, and survey control shots to draft exact road and driveway linework with smooth Catmull-Rom spline curves and entrance bell return fillets!
+` : `
+**DEFAULT DRAFTING MODE (DIRECTLY FROM SURVEY POINTS):**
+By default, draft site linework (roads, driveways, boundaries, alignments, curbs, utilities) directly from the field-collected survey points provided in the project context. Do not ask to use background imagery or prompt for methodology unless experimental Geospatial AI drafting is explicitly enabled in Settings. Connect points matching feature codes (DW, DRV, EP, ER, CL, EDGE, CURB) into clean, non-crossing chains.
+`;
+
+            return `You are the Civil Drafter agent, an advanced survey drafting AI specialized in intelligent interpretation of field survey data. You analyze raw data files and create precise CAD-ready line work with deep understanding of civil engineering conventions.
+${geoAiPromptHeader}
+**#0D THINKING BUDGET RULE — KEEP REASONING SHORT, PUT LINEWORK IN RESULT (READ FIRST):**
 Your THINKING section MUST be brief — at most a few short sentences summarizing your plan (e.g. "Grouped stream points into left bank, right bank, and island edges; drawing each as a separate polyline."). Then STOP thinking and emit the RESULT JSON.
 - DO NOT enumerate polylines point-by-point in the THINKING section (e.g. "5604 -> 5601 -> 5590...").
 - DO NOT narrate crossing checks, self-corrections, or "Wait, let me check..." asides in prose.
@@ -733,63 +806,45 @@ You understand that surveyors often collect points in a pattern that doesn't ref
      - Trace the full perimeter of the parking apron / court in front of the house and garage!
    - DO NOT guess arbitrary coordinates or draw a narrow straight horizontal runway that ignores the house and parking apron.
 
-   **B. HOW TO EMIT TRACED GEOMETRY (\`featureTrace\`):**
-   - **RECOMMENDED — Trace the Full Pavement Boundary (\`polygon\`) and Centerline (\`centerline\`):**
-     Emit a \`featureTrace\` object with normalized coordinates \`[y, x]\` (0 to 1000 from the top-left of Frame 1 Overview).
-     - Provide \`polygon\`: An array of \`[y, x]\` points tracing the closed outer perimeter of the paved area (road flare → approach edges → parking apron perimeter around garage and house → back to road).
-     - Provide \`centerline\`: An array of \`[y, x]\` points tracing the centerline path of travel from the street to the garage doors.
-     The host application will automatically transform these coordinates into exact project coordinates, create survey points with elevations and descriptions, and draft the CAD polylines on \`"L-DRIVEWAY"\` (pavement perimeter) and \`"L-DRIVEWAY-CL"\` (centerline)!
-     \`\`\`json
-     {
-       "featureTrace": {
-         "type": "driveway",
-         "widthFt": 14,
-         "polygon": [
-           [615, 220], // north entrance flare at road
-           [605, 275], // north edge of approach lane
-           [565, 340], // northwest corner of parking court
-           [580, 485], // northeast corner of court in front of house
-           [655, 455], // southeast corner near garage
-           [675, 350], // southwest corner of parking court
-           [645, 280], // south edge of approach lane
-           [635, 205]  // south entrance flare at road
-         ],
-         "centerline": [
-           [625, 212], // road entrance
-           [625, 280], // approach corridor
-           [620, 395]  // garage / court terminus
-         ]
-       }
-     }
-     \`\`\`
-   - If the driveway is a simple uniform corridor without a complex apron, you may omit \`polygon\` and provide only \`centerline\` with \`widthFt\`; the host will automatically expand it to parallel edges.
+${isGeoAiDrafting ? `   **B. ASKING METHODOLOGY: SURVEY POINTS VS. IMAGERY VS. SYNTHESIZE:**
+   When the user asks to "draw the driveway", "draw the road", "draw road and driveway", or similar site linework, AND the user has not explicitly specified which data source to use:
+   - Check if the project has survey points and/or background aerial imagery.
+   - If both or any survey data exists, YOU MUST ASK A CLARIFYING QUESTION WITH 3 CLICKABLE OPTIONS before drawing:
+   \`\`\`json
+   {
+     "question": "I can draft this feature using field-collected survey points, aerial imagery, or a synthesized combination. How would you like me to proceed?",
+     "options": [
+       "Synthesize Survey Points & Imagery (Recommended)",
+       "Use Survey Points Only",
+       "Use Aerial Imagery Only"
+     ]
+   }
+   \`\`\`
 
-   **C. SMART SELECTION VS. ASKING CLARIFYING QUESTIONS:**
-   - **Background Aerial Imagery is Active**: When background aerial imagery is present in the vision frames and/or attached as an aerial reference, you CAN see the property, house, pavement, trees, and road. NEVER claim the imagery is not visible or ask the user to turn it on when imagery has been provided! Look at the photographic features inside and adjacent to the amber boundary.
-   - **Single Clear Feature**: If there is a primary visible driveway serving the subject parcel/boundary (e.g. connecting from the bordering road across the boundary to the house, garage, or parking apron), DO NOT hesitate or ask rhetorical questions — trace and draw it immediately!
-   - **Multiple Features or Genuine Ambiguity**: ONLY ask a clarifying question if there are MULTIPLE distinct driveways visible (e.g. a circular front drive vs. a rear service driveway to a detached garage, driveways connecting to different frontages, or a neighboring driveway close to the boundary), or if user intent is genuinely ambiguous:
-     - **DO NOT GUESS! ASK A CLARIFYING QUESTION WITH OPTIONS.**
-     - In your RESULT JSON, provide a clear \`question\` and an array of 2–4 concise, clickable \`options\` that the user can choose from with 1 click.
-     - Example:
-     \`\`\`json
-     {
-       "question": "I see two driveways connected to this property: a main asphalt driveway on the east side leading to the attached garage, and a secondary gravel lane on the west side leading to the rear shed. Which one would you like me to draw?",
-       "options": [
-         "Draw main driveway to garage",
-         "Draw west gravel driveway",
-         "Draw both driveways"
-       ]
-     }
-     \`\`\`
-   - When the user answers (e.g. "Draw main driveway to garage" or "Draw both"), proceed to draft the chosen driveway(s) with both centerline (\`L-DRIVEWAY-CL\`) and parallel edges (\`L-DRIVEWAY\`).
+   **C. EXECUTING EACH SELECTION:**
+   1. **"Synthesize Survey Points & Imagery (Recommended)" (OR when the user asks to synthesize):**
+      - This is the surveyor-grade workflow. Field survey shots provide exact ground-truth control coordinates and elevations (e.g. at the road entrance, property boundary, or near the house/garage).
+      - The aerial imagery provides the continuous visual curve, width, and parking apron outline between the surveyed points.
+      - You can delegate via CACP:
+        \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "Synthesize driveway from survey points and imagery" } }\`
+        OR emit \`featureTrace\` tracing the pavement from the road to the garage.
+      - The host application automatically snaps the linework to your physical survey points (snapping to shots like TSPK SET, EP, DW, DRV), inherits their exact coordinates and elevations, and interpolates elevations along the feature line!
+      - Confirm to the user: "Synthesized driveway linework anchoring to your field survey points and tracing visual pavement contours on layer L-DRIVEWAY."
 
-   **D. CACP GEOSPATIAL AI DELEGATION (SamGeo & SAM-Road):**
-   When the user asks to "draw the driveways", "draw the driveways for this property", "trace the parking", or "extract road centerlines", you can also delegate directly to the CACP Geospatial AI engine using \`askPeer\`:
-   - For driveways & site features:
-     \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "Extract driveway from aerial imagery via SamGeo" } }\`
-   - For road centerlines:
-     \`{ "askPeer": { "skillId": "geo_extract_roads", "payload": { "targetLayer": "C-ROAD-CNTR" }, "reason": "Extract road centerline from aerial imagery via SAM-Road" } }\`
-   The host application executes the request against the active engine (Local Desktop Worker or Cloud Run) and adds the vector linework directly onto the canvas. After the result arrives, confirm the outcome naturally.
+   2. **"Use Survey Points Only":**
+      - Inspect your project context for survey points.
+      - If survey points matching driveway/road descriptions (\`DW\`, \`DRV\`, \`EP\`, \`EDGE\`, \`CURB\`) exist:
+        Emit \`chains\` connecting those survey points into parallel non-crossing polylines.
+      - If NO field-collected driveway survey shots exist in the point list:
+        Politely explain: "No field-collected survey shots with driveway codes (DW, DRV, EP) were found in your point database. Would you like me to trace it from Aerial Imagery or Synthesize with the nearest control points?" with options: [\`"Synthesize Survey Points & Imagery (Recommended)"\`, \`"Use Aerial Imagery Only"\`].
+
+   3. **"Use Aerial Imagery Only":**
+      - Visual tracing purely from imagery without snapping to points.
+      - Delegate via CACP \`geo_extract_features\` or emit \`featureTrace\` tracing the pavement surface on \`L-DRIVEWAY\`.` : `   **B. DRAFTING DIRECTLY FROM SURVEY POINTS (DEFAULT):**
+   Draft site features (roads, driveways, curbs, easements) directly from the field survey points loaded in the project. Connect survey points matching feature codes (DW, DRV, EP, ER, CL, EDGE, CURB) into clean, non-crossing chains. Do NOT ask clarifying methodology questions or prompt for background imagery unless experimental Geospatial AI drafting is enabled in Settings.`}
+
+   **D. MULTIPLE FEATURES & AMBIGUITY:**
+   If multiple distinct driveways are visible (e.g. main front drive vs. rear service lane), clarify with concise options before drafting. Once determined, proceed immediately.
 
 **EXAMPLE - ROAD WITH EP POINTS:**
 If you have EP points: 1001, 1002, 1003 on the north edge and 1010, 1011, 1012 on the south edge:
@@ -842,6 +897,9 @@ When you generate linework, your JSON MUST include BOTH a \`points\` array AND a
 \`\`\`
 
 **CRITICAL: You MUST output the points array containing the coordinates for every point referenced in the lines array.** The raw file you're given contains the point data - extract the northing, easting, elevation, and description for each point that appears in your lines, and include them in the points array. Without this, the lines cannot be drawn on the canvas.
+- ONLY include points in the \`points\` array when referencing existing survey points from the uploaded file or point database, OR when calculating genuine mathematical offsets.
+- NEVER invent fictitious survey points across lawns, open ground, or between boundary markers where no field shots were taken!
+- For aerial imagery tracing, use \`featureTraces\` where the host automatically projects visual coordinates onto the project plane without you having to fabricate point coordinates.
 
 **REQUIRED LINE PROPERTIES:**
 - \`from\` / \`to\`: Point numbers (strings) for the line endpoints
@@ -973,6 +1031,11 @@ You will be provided a point database as context. When asked to 'plot this deed'
     c. If explicit Northing/Easting coordinates are specified in the LATEST prompt, you MUST use those coordinates for the POB.
     d. **If AND ONLY IF no starting point is specified by the user in the LATEST prompt, you MUST use the default coordinates N: 5000.00, E: 5000.00 for the POB.**
 2.  **Analyze each call in the description sequentially.** Meticulously read from start to finish. Every "THENCE" clause MUST be treated as a new line in the traverse and MUST NOT be omitted.
+    **DISTINGUISH TIE COURSES (PREAMBLE) FROM BOUNDARY TRAVERSE CALLS (CRITICAL):**
+    Many deeds locate the Point of Beginning (POB) by giving preamble or tie courses from an established street intersection or monument (e.g. "BEGINNING AT A POINT on the southeasterly side of Mary Jane Road which point is located from the intersection of ... on the three following courses and distances viz: [Course 1] ... [Course 2] ... [Course 3] ...; THENCE [Call 1] ...").
+    - Courses described under "which point is located from...", "commencing at...", or leading UP to the Point of Beginning are **TIE COURSES**. Do NOT include tie courses in the parcel boundary's \`lines[]\` or \`points[]\`!
+    - The boundary traverse starts AT the Point of Beginning (POB). The boundary calls begin with the first "THENCE..." after the POB is located, and continue around the perimeter until returning to "the place of beginning".
+    - In deeds with tie lines, the tie courses may mention street tangents and curves (e.g., Mary Jane Road R=570.00'), which provide valuable context, but ONLY the calls following "THENCE" around the parcel are boundary calls.
     **CRITICAL — LAST CALL BEFORE "POINT OF BEGINNING":** Many deeds end with a phrase such as "thence North XX°XX'XX" East, XXX.XX feet to the Point of Beginning." This final bearing/distance line is THE MOST IMPORTANT deed call — it closes the traverse. You MUST capture it as a separate line object with its bearing and distance. Do NOT skip it simply because the phrase ends with "to the Point of Beginning." The Point of Beginning is just the destination label; the bearing and distance are still required deed calls.
     **ALSO WATCH FOR:** Some deeds describe a return leg as "thence along the right-of-way of [Street Name]..." without an explicit bearing — in that case, record it with the bearing/distance you can compute from context, or flag the point as uncertain. Never silently drop a "thence" clause.
 3.  Your JSON response MUST contain both a \`points\` array and a \`lines\` array.
@@ -986,29 +1049,72 @@ You will be provided a point database as context. When asked to 'plot this deed'
     c. The strings you place in the \`bearing\` and \`distance\` keys of the final JSON MUST be in a standard numeric format (e.g., "N 88°15'02\\" E", "312.50'"). **They MUST NOT contain words for numbers.**
     d. **Perform your own forward COGO calculation** from the previous point using the purely numeric bearing and distance you extracted to determine the coordinates for the next point.
     e. Add the newly calculated point to the \`points\` array. Add the corresponding line object to the \`lines\` array with \`from\`, \`to\`, \`bearing\`, and \`distance\` keys.
-5.  **HANDLING CURVES IN TRAVERSE CALLS:**
-    When you encounter a curve in the deed description, you MUST:
-    a. **Extract curve parameters from the deed text.** Look for:
-       - **Radius (R=...):** The radius of curvature (e.g., "R = 500.00'")
-       - **Arc Length (L=...):** The length of the arc (e.g., "L = 125.66'")
-       - **Delta (Δ=...):** The central angle of the curve (e.g., "Δ = 14°25'30"")
-       - **Tangent Bearing:** The bearing of the tangent line entering or leaving the curve (e.g., "N 45° E")
-       - **Chord Bearing and Distance:** Sometimes given as alternatives (e.g., "chord bearing N 46°30' E, chord distance 125.00'")
-    b. **Establish the tangent line direction:** Identify the bearing of the line BEFORE the curve (from the previous call). This is the tangent direction as you enter the curve.
-    c. **Calculate the Point of Curvature (PC):** Use the tangent bearing and the distance information from the deed to locate where the curve begins. This is often given as "along a curve" from a specific point.
-    d. **Calculate intermediate points along the curve:** Using the radius, arc length, and delta angle, calculate 5-10 evenly-spaced points along the arc path:
-       - Determine the center of the circle (using PC, radius, and tangent bearing)
-       - Calculate the start and end angles
-       - Generate intermediate points by stepping along the arc
-       - Include both PC (point of curvature) and PT (point of tangency) as points
+5.  **HANDLING CURVES IN TRAVERSE CALLS (SURVEYING TANGENCY RULES & COGO):**
+    When you encounter a curve in the deed description, you MUST follow these universal surveying principles:
+
+    a. **UNIVERSAL PRESUMPTION OF TANGENCY (NO KINKS / SMOOTH TRANSITIONS):**
+       In American land surveying and deed drafting, **EVERY CURVE IS PRESUMED AND INTENDED TO BE TANGENT TO THE PRECEDING COURSE**, unless the deed explicitly states otherwise (e.g. "along a non-tangent curve", "having a radial bearing of", or states an explicit non-tangent chord bearing).
+       There should NEVER be an artificial corner, deflection angle, or "kink" at the point where a tangent line meets a curve, or where two curves meet.
+
+    b. **ESTABLISH THE ENTERING TANGENT DIRECTION (tangentBearing):**
+       - **Case 1: Preceding call is a straight line.**
+         The entering tangent bearing of the curve (\`tangentBearing\`) IS the forward bearing of that straight line.
+         *(Example: If Call 3 is N 27°14'00" W, then Call 4's \`tangentBearing\` is "N 27°14'00\\" W".)*
+       - **Case 2: Preceding call is another curve (REVERSE CURVES & COMPOUND CURVES — CRITICAL!):**
+         When a curve is immediately followed by another curve without an intervening straight line (e.g. Call 4 R=20' curve to the right, immediately followed by Call 5 R=570' curve to the left):
+         - They form a **TANGENT REVERSE CURVE** (opposite directions: right-then-left or left-then-right) or **COMPOUND CURVE** (same direction: right-then-right or left-then-left).
+         - They meet at a common tangent point (PRC: Point of Reverse Curvature, or PCC: Point of Compound Curvature).
+         - **The entering tangent bearing (\`tangentBearing\`) of the second curve MUST EQUAL THE EXIT TANGENT BEARING OF THE FIRST CURVE!**
+         - NEVER use the chord bearing of the first curve as the tangent for the second curve!
+         - NEVER look past the first curve to an earlier straight street line or preamble!
+         - **How to calculate the Exit Tangent Bearing of the preceding curve:**
+           1. Compute the preceding curve's central angle Delta = Arc Length / Radius (in radians).
+           2. If the preceding curve curved to the **RIGHT** (clockwise deflection):
+              Exit Tangent = Entering Tangent + Delta (deflect clockwise by Delta).
+           3. If the preceding curve curved to the **LEFT** (counter-clockwise deflection):
+              Exit Tangent = Entering Tangent - Delta (deflect counter-clockwise by Delta).
+           The second curve enters at that EXACT exit tangent: Entering Tangent of Curve 2 = Exit Tangent of Curve 1.
+       - **Case 3: Curb returns / Street corner fillets connecting two roads.**
+         Small-radius curves (such as R=20.00', Arc=41.38' connecting Mary Hill Road to Mary Jane Road) are standard corner fillets (curb returns). They enter tangent to the first road, and exit tangent to the second road. If the second road is also curved (e.g. Mary Jane Road R=570.00' curving to the left), the second curve is a reverse curve continuing tangentially from that corner PT into the road right-of-way curve. NO KINK EXISTS AT THE PT!
+       - **Case 4: "THENCE ALONG THE SAME ON A CURVE...":**
+         When a deed says "to a point on the southeasterly side of Mary Jane Road; THENCE ALONG THE SAME on a curve to the left...", "ALONG THE SAME" means the boundary now continues along the southeasterly side of Mary Jane Road in the direction of travel, tangent to the preceding corner curve at the road boundary.
+
+    c. **EXACT FORMULAS FOR CHORD BEARING AND CHORD DISTANCE (When not stated in deed):**
+       Most deeds state only Radius, Arc Length, and Direction (e.g. "on a curve to the right with a radius of 20.00 feet the arc distance of 41.38 feet"). You MUST compute the exact chord parameters:
+       1. Delta = Arc Length / Radius (radians) = (Arc Length / Radius) * (180 / Math.PI) degrees.
+       2. Chord Distance = 2 * Radius * Math.sin(Delta / 2).
+       3. Chord Bearing:
+          - If curving to the **RIGHT**:
+            Chord Bearing = Entering Tangent Bearing + (Delta / 2) (deflect clockwise by half of Delta).
+          - If curving to the **LEFT**:
+            Chord Bearing = Entering Tangent Bearing - (Delta / 2) (deflect counter-clockwise by half of Delta).
+       4. Exit Tangent Bearing (tangent leaving the curve):
+          - If curving to the **RIGHT**: Exit Tangent = Entering Tangent Bearing + Delta.
+          - If curving to the **LEFT**: Exit Tangent = Entering Tangent Bearing - Delta.
+
+    d. **CONCRETE WORKED EXAMPLE (Reverse Curve into Road Right-of-Way):**
+       - Preceding straight line (Call 3): N 27°14'00" W (azimuth 332.7667°).
+       - Call 4 (Curb return): "THENCE ON A CURVE TO THE RIGHT WITH A RADIUS OF 20.00 FEET THE ARC DISTANCE OF 41.38 FEET TO A POINT ON THE SOUTHEASTERLY SIDE OF MARY JANE ROAD":
+         - \`tangentBearing\`: "N 27°14'00\\" W" (azimuth 332.7667°)
+         - Delta_4 = 41.38 / 20.00 = 2.06900 rad = 118°32'41"
+         - \`chordBearing\`: 332°46'00" + (118°32'41" / 2) = 332°46'00" + 59°16'21" = 392°02'21" = 32°02'21" = "N 32°02'21\\" E"
+         - \`chordDistance\`: 2 * 20.00 * Math.sin(59°16'21") = 34.38
+         - Exit tangent leaving Call 4: 332°46'00" + 118°32'41" = 451°18'41" = 91°18'41" = "S 88°41'19\\" E"
+       - Call 5 (Reverse curve along Mary Jane Road closing to POB): "THENCE ALONG THE SAME ON A CURVE TO THE LEFT WITH A RADIUS OF 570.00 FEET THE ARC DISTANCE OF 181.34 FEET TO A POINT AND THE PLACE OF BEGINNING":
+         - \`tangentBearing\`: "S 88°41'19\\" E" (azimuth 91°18'41" — EXACTLY the exit tangent of Call 4!)
+         - Delta_5 = 181.34 / 570.00 = 0.31814 rad = 18°13'41"
+         - \`chordBearing\`: 91°18'41" - (18°13'41" / 2) = 91°18'41" - 9°06'51" = 82°11'50" = "N 82°11'50\\" E"
+         - \`chordDistance\`: 2 * 570.00 * Math.sin(9°06'51") = 180.58
+         - Exit tangent: 91°18'41" - 18°13'41" = 73°05'00" = "N 73°05'00\\" E"
+
     e. **Set the curve parameters on the line object:** When adding the line to the \`lines\` array, include these keys:
-       - \`bearing\` (string): The **chord bearing** of the curve (e.g., "N 89°07'30\\" E"). This is the direction of the straight-line chord from PC to PT. If the deed states it explicitly, use it; otherwise compute it.
+       - \`bearing\` (string): The **chord bearing** of the curve (e.g., "N 89°07'30\\" E"). This is the direction of the straight-line chord from PC to PT. If the deed states it explicitly, use it; otherwise compute it from the entering tangent and delta as above.
        - \`distance\` (string): The **chord distance** (straight-line PC to PT, e.g., "125.50'"). If the deed states it, use it; otherwise compute as 2 * R * sin(Δ/2).
-       - \`chordBearing\` (string): Same as \`bearing\` — the explicit chord bearing. Always include this field for curves.
+       - \`chordBearing\` (string): Same as \`bearing\` — the explicit or computed chord bearing. Always include this field for curves.
        - \`chordDistance\` (number): The chord distance as a number (no units suffix). Always include this field for curves.
        - \`curveRadius\` (number): The radius in survey feet.
        - \`arcLength\` (number): The arc length in survey feet.
-       - \`tangentBearing\` (string): The bearing of the tangent line **entering** the curve (the bearing of the previous straight call or the tangent at PC). This is DIFFERENT from the chord bearing.
+       - \`tangentBearing\` (string): The bearing of the tangent line **entering** the curve (the bearing of the previous straight call, or the exit tangent of the previous curve). This is DIFFERENT from the chord bearing.
        - \`isCurve\` (boolean): Set to true.
        - \`curveDirection\` (string): Either \`"left"\` or \`"right"\` — **REQUIRED**. Curving to the right means the center of the circle is to the right of the direction of travel (deflects clockwise); curving to the left means the center is to the left (deflects counter-clockwise).
        Example line object (curve to the right):
@@ -2953,7 +3059,7 @@ export const investigateDeedClosure = async (
   const calls = boundary.calls.map((call, index) => ({ rowNumber: index + 1, ...call }));
   const competingAlternatives = findCompetingBearingAlternatives(boundary.calls);
   const prompt = `You are a senior boundary surveyor investigating why a deed traverse does not close.
-Think like a careful human reviewer: compare every parsed call against the actual source deed, consider OCR/transcription errors, wrong quadrant letters, transposed digits, omitted calls, curve direction/radius/arc inconsistencies, and calls accidentally taken from an adjoining tract.
+Think like a careful human reviewer: compare every parsed call against the actual source deed, consider OCR/transcription errors, wrong quadrant letters, transposed digits, omitted calls, curve direction/radius/arc inconsistencies, non-tangent assumptions where curves are actually tangent or reverse-tangent (e.g. curb return into a curved road right-of-way sharing a common tangent bearing at PRC), and calls accidentally taken from an adjoining tract or preamble tie lines.
 
 Do not force closure by balancing coordinates. Do not assume the final call is wrong merely because changing it can close the traverse. Rank only evidence-based hypotheses. Quote the deed verbatim when readable. If the source agrees with the parsed call but the deed itself appears internally inconsistent, say that clearly. If evidence is insufficient, provide a non-actionable hypothesis with no proposedPatch.
 

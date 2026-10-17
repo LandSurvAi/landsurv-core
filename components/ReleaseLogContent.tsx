@@ -2,6 +2,27 @@
 
 const releases = [
     {
+        version: "26.10.17.02",
+        date: "October 17, 2026",
+        highlights: [
+            "🔄 Tangent Reverse Curve & Corner Fillet Continuity in Boundary Agent: Formulated universal surveying tangency rules and mathematical formulas in the Boundary Agent system prompt for consecutive curves (reverse curves and compound curves) and street corner curb returns. Solved the 50/50 'coin flip' where the agent previously kinked at points of reverse curvature (PRC) by establishing that the entering tangent bearing of a succeeding curve must strictly equal the exit tangent bearing of the preceding curve (`Entering Tangent 2 = Exit Tangent 1 = Entering Tangent 1 ± Δ1`).",
+            "📐 Street Corner Curb Return & Right-of-Way Arc Continuity: Instructed the agent that small-radius corner fillets (e.g., R=20.00', Arc=41.38') connecting two roadways are smooth tangent transitions that enter tangent to the incoming road and exit tangent to the receiving road right-of-way, seamlessly reversing into receiving road curves without artificial deflection angles or kinks.",
+            "📍 Preamble Tie Courses vs. Boundary Perimeter Disambiguation: Enforced strict separation between preamble tie courses (courses locating the Point of Beginning from distant street intersections) and actual parcel boundary traverse calls starting at POB, preventing tie-line street tangents from overriding boundary curve parameters.",
+            "🛡️ Deterministic Exit Tangent Inheritance: Hardened client-side traverse marching in `DrawingCanvas.tsx` (BFOverlay) and `App.tsx` (`handleDrawBoundaryToLinework` and bounding-box resolution) by tracking `lastExitBearingRad` across calls. Any curve missing explicit chord or tangent bearings now deterministically inherits the preceding course's exit tangent bearing instead of throwing errors or dropping calls.",
+        ],
+    },
+    {
+        version: "26.10.17.01",
+        date: "October 17, 2026",
+        highlights: [
+            "👁️ 'God's Eye View' Pavement-Directed Corridor Alignment & Visual Self-Check: Replaced blind centroid offset heuristics with real-time bidirectional pixel raycasting (`calibrateRoadWidthFromVision`). The engine samples ±4 ft to ±8 ft from the surveyed curb directly on canvas pixels to verify true asphalt orientation, eliminating normal-vector inversions into adjacent lawns and woods. Automatically measures curb-to-curb pavement width (12 ft to 38 ft) across the street to lock the centerline (`C-ROAD-CNTR`) precisely at half-width (+W/2) down the physical crown of the road and the opposite curb (`L-ROAD`) at +W.",
+            "🌲 Tree Canopy & Shadow-Bridging Corridor Synthesis: Overhauled raster segmentation with medial cross-section slicing along the corridor's principal longitudinal axis. When trees or shadows sever asphalt into discontinuous patches, the engine merges collinear components and interpolates across occlusions with Catmull-Rom splines, producing uniform, clean parallel road and driveway corridors without scalloping or zigzagging.",
+            "📐 Ground-Truth Survey Control Anchoring & Anti-Contamination Guard: Near road curbs lock directly to surveyor physical field shots (`ER*`, `EP*`, `EDGE*`) at zero offset while filtering out interior lot points. Added an anti-contamination filter that excludes previous CAD-generated line endpoints (`EP-`, `CL-`, `DW-`, `road-`, `poly-`) from survey control lists so repeat extractions never compound offsets.",
+            "🛠️ Developer Mode Gating for Aerial Drafting in Civil Drafter: Added 'Enable Experimental Geospatial AI / Aerial Drafting in Civil Drafter' (`enableGeoAiDrafting`) under Settings → Developer / Testing. By default (OFF), Civil Drafter drafts directly from survey points as usual without prompting for background imagery. When toggled ON, it enables multi-source methodology selection (Survey Points, Aerial Imagery, or Synthesized) and CACP delegation.",
+            "🚀 One-Click Local Desktop AI Worker Launcher: Created `start-geo-ai-worker.bat` in the project root to automate local daemon startup on port 8765, self-installing Python dependencies (`fastapi`, `uvicorn`, `opencv-python-headless`, `numpy`, `pydantic`). Upgraded default microservice port configuration to 8765 and added automatic canvas viewport bounding box fallback for areas with zero survey points.",
+        ],
+    },
+    {
         version: "26.10.16.01",
         date: "October 16, 2026",
         highlights: [

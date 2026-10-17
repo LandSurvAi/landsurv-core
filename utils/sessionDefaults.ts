@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showPointSymbols: false,
   debugPreflightEstimate: false,
   debugGimbalHud: false,
+  enableGeoAiDrafting: false,
   floodHatch: { style: 'lines', scale: 50, opacity: 0.18 },
   googleMaps: {
     enabled: false,

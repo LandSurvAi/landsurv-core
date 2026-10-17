@@ -222,7 +222,7 @@ import {
 } from './utils/geometryOperations.ts';
 import { parseClFile, calculateCenterlineLength, calculatePointFromStationOffset, formatStation, getCenterlineKeyStations } from './utils/stationing.ts';
 // FIX: Import the new `calculateClosure` function to enable robust, client-side closure calculations.
-import { parseBearingToRadians, parseDistance, inverse, direct, directCurve, calculateChordDistance, calculateClosure, formatBearing, swapBearingDirection } from './utils/cogo.ts';
+import { parseBearingToRadians, parseDistance, inverse, direct, directCurve, calculateChordDistance, calculateClosure, formatBearing, swapBearingDirection, rotateBearing } from './utils/cogo.ts';
 // FIX: Import the new `generateProfile` function to enable client-side profile calculations.
 import { generateContours, generateProfile, generateContoursAsIsoPaths, isoPathsToSurveyLines, suppressEsriContoursInsidePolygon, buildPolygonFromSegments, pointInPolygon, getSegPairs, clipSegmentToPolygon } from './utils/contouring.ts';
 // FIX: Import `CustomSymbol`, `ContourSettings` and `ContourLabel` to be used with new features.
@@ -6784,7 +6784,7 @@ const AppContent = () => {
   }, [logActionToFieldbook]);
 
   // CACP — Geospatial AI skills (SamGeo feature extraction & SAM-Road road centerlines).
-  useGeoSkills({ settings, setLines, pointListsRef, logActionToFieldbook });
+  useGeoSkills({ settings, setLines, setPointLists, pointListsRef, logActionToFieldbook, canvas2dRef });
 
   // CACP � Extended COGO skill suite (forward, intersections, curves, traverse,
   // area, transforms, geodetic, subdivide, offset, self-test). All handlers
@@ -9052,11 +9052,10 @@ const AppContent = () => {
                     const padY = Math.max((maxN - minN) * 0.15, 30);
                     const w = (maxE - minE) + padX * 2;
                     const h = (maxN - minN) + padY * 2;
-                    // LOW-RES on purpose: the gimbal aerial is only for rough
-                    // feature identification (roads/buildings/tree lines), so a
-                    // small tile keeps image tokens cheap. AutoDraft attaches its
-                    // own high-res imagery when precise rectification is needed.
-                    const pxScale = 640 / Math.max(w, h);
+                    // Variable high-resolution aerial reference: 1280px cap for crisp
+                    // feature identification, corridor edge alignment, and optical centering.
+                    const maxDim = 1280;
+                    const pxScale = maxDim / Math.max(w, h);
                     let naip: any = null;
                     try {
                         naip = await getStaticMap({
@@ -9064,8 +9063,8 @@ const AppContent = () => {
                             maptype: 'naip',
                             projectedBbox: [minE - padX, minN - padY, maxE + padX, maxN + padY],
                             sr: projEpsg,
-                            width: Math.max(128, Math.round(w * pxScale)),
-                            height: Math.max(128, Math.round(h * pxScale)),
+                            width: Math.max(256, Math.min(1280, Math.round(w * pxScale))),
+                            height: Math.max(256, Math.min(1280, Math.round(h * pxScale))),
                         }, { geminiKey: settings.userApiKey, mapsKey: settings.googleMaps?.apiKey });
                     } catch (directErr) {
                         try {
@@ -9764,39 +9763,107 @@ const AppContent = () => {
             const payload = (ap.payload ?? {}) as Record<string, unknown>;
             const reason = ap.reason ?? '';
             if (skillId) {
+              const isGeoSkill = skillId === 'geo_extract_features' || skillId === 'geo_extract_roads';
+              if (isGeoSkill) {
+                // Immediately replace raw askPeer JSON in chat bubble with clean status
+                setHistory(prev => {
+                  const newHist = [...prev];
+                  const last = newHist[newHist.length - 1];
+                  if (last && last.role === MessageRole.MODEL) {
+                    newHist[newHist.length - 1] = {
+                      ...last,
+                      text: `🛣️ **Extracting Geospatial Features**\n\nVectorizing ${payload.featureType || 'driveway'} corridor from aerial imagery onto layer \`${payload.targetLayer || 'L-DRIVEWAY'}\`...`,
+                      result: undefined,
+                    };
+                  }
+                  return newHist;
+                });
+              }
+
               try {
-                logActionToFieldbook(`CACP delegation: ${agent} ? askPeer "${skillId}" (${reason || 'no reason given'})`);
+                logActionToFieldbook(`CACP delegation: ${agent} → askPeer "${skillId}" (${reason || 'no reason given'})`);
                 const peerResponse = await interAgentComm.askPeer(agent, skillId, payload, { timeoutMs: 30_000 });
                 const isActionSkill = agentRegistry.findSkill(skillId)?.type === 'action';
                 if (peerResponse?.success && peerResponse.data) {
-                  // Peer answered � re-send the original query with the data injected.
+                  if (isGeoSkill) {
+                    // Update chat directly with success confirmation
+                    setHistory(prev => {
+                      const newHist = [...prev];
+                      const last = newHist[newHist.length - 1];
+                      if (last && last.role === MessageRole.MODEL) {
+                        newHist[newHist.length - 1] = {
+                          ...last,
+                          text: `✅ **Driveway & Road Features Extracted**\n\n${(peerResponse.data?.message as string) || `Successfully extracted vector linework onto layer "${payload.targetLayer || 'L-DRIVEWAY'}".`}\n\n*Layer: \`${payload.targetLayer || 'L-DRIVEWAY'}\`*`,
+                          result: undefined,
+                        };
+                      }
+                      return newHist;
+                    });
+                    skipFinallyUpdate = true;
+                    return;
+                  }
+
+                  // Peer answered — re-send the original query with the data injected.
                   // CACP success is logged in the DevOps CACP Activity Log; no chat noise here.
                   const followUp = isActionSkill
-                    ? `[CACP COMPLETED � ${skillId}]\nResult: ${JSON.stringify(peerResponse.data)}\n\nThe action above has already been executed by the peer agent. Please confirm the outcome to the user in a natural sentence (e.g. "Point X has been deleted."). Do NOT call askPeer again � the task is done.`
-                    : `[CACP RESULT � ${skillId} from ${peerResponse.from}]\n${JSON.stringify(peerResponse.data)}\n\nUsing the data above, please complete the original request: ${query}`;
+                    ? `[CACP COMPLETED — ${skillId}]\nResult: ${JSON.stringify(peerResponse.data)}\n\nThe action above has already been executed by the peer agent. Please confirm the outcome to the user in a natural sentence (e.g. "Point X has been deleted."). Do NOT call askPeer again — the task is done.`
+                    : `[CACP RESULT — ${skillId} from ${peerResponse.from}]\n${JSON.stringify(peerResponse.data)}\n\nUsing the data above, please complete the original request: ${query}`;
                   // Fire-and-forget; user sees streaming as usual.
                   setTimeout(() => { void handleSendMessage(followUp); }, 0);
                   skipFinallyUpdate = true;
                   return;
                 } else {
-                  // Peer failed � re-run with an error note so the agent can respond gracefully.
+                  if (isGeoSkill) {
+                    setHistory(prev => {
+                      const newHist = [...prev];
+                      const last = newHist[newHist.length - 1];
+                      if (last && last.role === MessageRole.MODEL) {
+                        newHist[newHist.length - 1] = {
+                          ...last,
+                          text: `⚠️ **Geospatial Feature Extraction**\n\n${peerResponse?.error || 'Could not extract features from the current view extent. Please ensure aerial imagery or survey points are loaded.'}`,
+                          result: undefined,
+                        };
+                      }
+                      return newHist;
+                    });
+                    skipFinallyUpdate = true;
+                    return;
+                  }
+
+                  // Peer failed — re-run with an error note so the agent can respond gracefully.
                   // CACP failure is logged in the DevOps CACP Activity Log; no chat noise here.
                   const errDetail = peerResponse ? (peerResponse.error ?? 'no data returned') : 'no agent owns this skill';
                   const followUp = isActionSkill
-                    ? `[CACP FAILED � ${skillId}: ${errDetail}]\n\nThe action could not be completed. Please inform the user of this failure. Do NOT retry askPeer.`
-                    : `[CACP FAILED � ${skillId}: ${errDetail}]\n\nThe peer agent could not fulfill the "${skillId}" request. Please handle this gracefully and complete the user's original request as best you can without the external data: ${query}`;
+                    ? `[CACP FAILED — ${skillId}: ${errDetail}]\n\nThe action could not be completed. Please inform the user of this failure. Do NOT retry askPeer.`
+                    : `[CACP FAILED — ${skillId}: ${errDetail}]\n\nThe peer agent could not fulfill the "${skillId}" request. Please handle this gracefully and complete the user's original request as best you can without the external data: ${query}`;
                   setTimeout(() => { void handleSendMessage(followUp); }, 0);
                   skipFinallyUpdate = true;
                   return;
                 }
               } catch (peerErr) {
                 console.error('[CACP] askPeer dispatch failed:', peerErr);
-                // Error logged in DevOps CACP Activity Log � re-run so the agent can recover.
+                // Error logged in DevOps CACP Activity Log — re-run so the agent can recover.
                 const errMsg = peerErr instanceof Error ? peerErr.message : String(peerErr);
+                if (isGeoSkill) {
+                  setHistory(prev => {
+                    const newHist = [...prev];
+                    const last = newHist[newHist.length - 1];
+                    if (last && last.role === MessageRole.MODEL) {
+                      newHist[newHist.length - 1] = {
+                        ...last,
+                        text: `⚠️ **Geospatial Feature Extraction Failed**\n\n${errMsg}`,
+                        result: undefined,
+                      };
+                    }
+                    return newHist;
+                  });
+                  skipFinallyUpdate = true;
+                  return;
+                }
                 const isActionSkillOnErr = agentRegistry.findSkill(skillId)?.type === 'action';
                 const followUp = isActionSkillOnErr
-                  ? `[CACP ERROR � ${skillId}: ${errMsg}]\n\nThe action failed with an error. Please inform the user. Do NOT retry askPeer.`
-                  : `[CACP ERROR � ${skillId}: ${errMsg}]\n\nThe peer agent threw an error. Please handle this gracefully and complete the user's original request as best you can without the external data: ${query}`;
+                  ? `[CACP ERROR — ${skillId}: ${errMsg}]\n\nThe action failed with an error. Please inform the user. Do NOT retry askPeer.`
+                  : `[CACP ERROR — ${skillId}: ${errMsg}]\n\nThe peer agent threw an error. Please handle this gracefully and complete the user's original request as best you can without the external data: ${query}`;
                 setTimeout(() => { void handleSendMessage(followUp); }, 0);
                 skipFinallyUpdate = true;
                 return;
@@ -10310,20 +10377,35 @@ const AppContent = () => {
             }
 
             if (frameBounds) {
-              const existingPns = (pointListsRef.current || pointLists).flatMap(l => l.points).map(p => parseInt(p.pointNumber, 10)).filter(n => !isNaN(n));
+              const allExistingPoints = (pointListsRef.current || pointLists).flatMap(l => l.points);
+              const existingPns = allExistingPoints.map(p => parseInt(p.pointNumber, 10)).filter(n => !isNaN(n));
               let nextNum = existingPns.length > 0 ? Math.max(...existingPns) + 1 : 100;
               const allTracePoints: SurveyPoint[] = [];
               const allTraceLines: SurveyLine[] = [];
               for (const tr of traces) {
-                const res = expandFeatureTrace(tr, frameBounds, nextNum, frameWidth, frameHeight);
+                const res = expandFeatureTrace(
+                  tr,
+                  frameBounds,
+                  nextNum,
+                  frameWidth,
+                  frameHeight,
+                  undefined,
+                  allExistingPoints,
+                  25,
+                  lines
+                );
                 allTracePoints.push(...res.points);
                 allTraceLines.push(...res.lines);
                 nextNum += res.points.length;
               }
-              if (allTracePoints.length > 0) {
-                parsedJson.points = Array.isArray(parsedJson.points) ? [...parsedJson.points, ...allTracePoints] : allTracePoints;
-                parsedJson.lines = Array.isArray(parsedJson.lines) ? [...parsedJson.lines, ...allTraceLines] : allTraceLines;
-                logActionToFieldbook(`Feature trace: generated ${allTracePoints.length} points and ${allTraceLines.length} lines from visual survey.`);
+              if (allTracePoints.length > 0 || allTraceLines.length > 0) {
+                if (allTracePoints.length > 0) {
+                  parsedJson.points = Array.isArray(parsedJson.points) ? [...parsedJson.points, ...allTracePoints] : allTracePoints;
+                }
+                if (allTraceLines.length > 0) {
+                  parsedJson.lines = Array.isArray(parsedJson.lines) ? [...parsedJson.lines, ...allTraceLines] : allTraceLines;
+                }
+                logActionToFieldbook(`Feature trace: synthesized ${allTraceLines.length} lines with ${allExistingPoints.length} survey points.`);
               }
             }
           }
@@ -11054,6 +11136,7 @@ const AppContent = () => {
                     // lands front and center right where the user is currently zoomed/panned to!
                     let relMinE = 0, relMaxE = 0, relMinN = 0, relMaxN = 0;
                     let cursor = { easting: 0, northing: 0 };
+                    let lastExitBearingRad: number | null = null;
                     for (const call of group) {
                       let endPt: { easting: number; northing: number } | null = null;
                       if (call.isCurve && typeof call.curveRadius === 'number' && isFinite(call.curveRadius)
@@ -11063,16 +11146,20 @@ const AppContent = () => {
                         const signedDelta = left ? -centralAngle : centralAngle;
                         const chordStr = call.chordBearing || call.bearing;
                         const chordRad = chordStr ? parseBearingToRadians(chordStr) : null;
-                        const tRad = chordRad !== null
+                        let tRad = chordRad !== null
                           ? chordRad - signedDelta / 2
-                          : (call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : null);
-                        if (tRad !== null) endPt = directCurve(cursor, tRad, call.curveRadius, signedDelta);
+                          : (call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : (lastExitBearingRad !== null ? lastExitBearingRad : null));
+                        if (tRad !== null) {
+                          endPt = directCurve(cursor, tRad, call.curveRadius, signedDelta);
+                          lastExitBearingRad = tRad + signedDelta;
+                        }
                       } else {
                         const bStr = call.bearing || call.chordBearing;
                         const bRad = bStr ? parseBearingToRadians(bStr) : null;
                         const dist = call.distance ? parseDistance(call.distance) : null;
                         if (bRad !== null && typeof dist === 'number' && isFinite(dist)) {
                           endPt = direct(cursor, bRad, dist);
+                          lastExitBearingRad = bRad;
                         }
                       }
                       if (endPt && isFinite(endPt.easting) && isFinite(endPt.northing)) {
@@ -13526,7 +13613,8 @@ const AppContent = () => {
 
   const handleBoundaryTransformChange = useCallback((
     id: string,
-    patch: { translationE?: number | null; translationN?: number | null; rotationDeg?: number | null }
+    patch: { translationE?: number | null; translationN?: number | null; rotationDeg?: number | null },
+    opts?: { immediate?: boolean }
   ) => {
     // Read "was already drawn?" synchronously from the stable ref � don't
     // rely on a side-effect mutation inside the state updater (unreliable in
@@ -13553,17 +13641,23 @@ const AppContent = () => {
       return next;
     }));
     if (wasDrawn) {
-      // Debounce so typing in the input doesn't redraw per keystroke.
       const timers = transformRedrawTimerRef.current;
       if (timers[id]) clearTimeout(timers[id]);
-      timers[id] = setTimeout(() => {
-        // Use the ref so we always pick up the latest captured-state handler;
-        // useCallback([]) would otherwise pin this to the first-render
-        // handler, leaving the redraw operating on stale points/files.
+      if (opts?.immediate) {
+        delete timers[id];
         const fn = handleDrawBoundaryToLineworkRef.current;
         if (fn) fn(id, { silent: true });
-        delete timers[id];
-      }, 220);
+      } else {
+        // Debounce so typing in the input doesn't redraw per keystroke.
+        timers[id] = setTimeout(() => {
+          // Use the ref so we always pick up the latest captured-state handler;
+          // useCallback([]) would otherwise pin this to the first-render
+          // handler, leaving the redraw operating on stale points/files.
+          const fn = handleDrawBoundaryToLineworkRef.current;
+          if (fn) fn(id, { silent: true });
+          delete timers[id];
+        }, 220);
+      }
     }
   }, []);
 
@@ -13724,8 +13818,30 @@ const AppContent = () => {
     // CRITICAL (v26.05.30): existingPob lookup must also exclude ALL boundary-drawn
     // points. Without this, tract 2's POB resolves to tract 1's drafted POB entry in
     // pointMap (because both tracts share PN "1"), causing tract 2 to anchor on tract 1.
-    if (existingPob && !allBoundaryDrawnIds.has(existingPob.pointNumber)) {
-      pob = { easting: existingPob.easting, northing: existingPob.northing };
+    // If this boundary was previously drafted, recover its original UN-BAKED
+    // POB from the drafted POB and baked transform (mirrors DrawingCanvas BFOverlay).
+    // Without this, redrawing during/after transform changes (e.g. corner-align)
+    // loses the true POB and erroneously falls back to externalPoints centroid,
+    // which rotates the linework around a different anchor than the silhouette.
+    const draftedPob = file.drawnPointIds && file.drawnPointIds.length > 0
+      ? pointMap.get(file.drawnPointIds[0])
+      : undefined;
+    let unbakedPob: { easting: number; northing: number } | undefined;
+    if (draftedPob) {
+      const baked0 = file.bakedTransform;
+      unbakedPob = {
+        easting: draftedPob.easting - (baked0?.translationE ?? 0),
+        northing: draftedPob.northing - (baked0?.translationN ?? 0),
+      };
+    }
+
+    const pobFromMap = unbakedPob
+      ?? ((existingPob && !allBoundaryDrawnIds.has(existingPob.pointNumber))
+        ? { easting: existingPob.easting, northing: existingPob.northing }
+        : undefined);
+
+    if (pobFromMap) {
+      pob = pobFromMap;
     } else if (file.pobOverride) {
       pob = file.pobOverride;
     } else if (externalPoints.length > 0) {
@@ -13856,10 +13972,13 @@ const AppContent = () => {
 
     let prevPointNumber = pobNum;
     let drewAny = false;
+    let lastExitBearingRad: number | null = null;
 
     for (let i = 0; i < file.calls.length; i++) {
       const call = file.calls[i];
       let nextXY: { x: number; y: number } | null = null;
+      let callLeft = false;
+      let callTangentRad: number | null = null;
 
       try {
         // v26.05.20.1 � cursor is kept in canvas {x=easting, y=northing} format for
@@ -13892,7 +14011,7 @@ const AppContent = () => {
           } else if (call.curveDirection === 'right') {
             left = false;
           } else {
-            const tempTRad = call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : null;
+            const tempTRad = call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : (lastExitBearingRad != null ? lastExitBearingRad : null);
             const dirStr = call.chordBearing || call.bearing;
             const dirRad = dirStr ? parseBearingToRadians(dirStr) : null;
             if (tempTRad != null && dirRad != null) {
@@ -13907,27 +14026,31 @@ const AppContent = () => {
               if (dL < dR) left = true;
             }
           }
+          callLeft = left;
 
           // (2) signed delta
           const signedDelta = left ? -deltaAngle : deltaAngle;
 
-          // (3) derive tangent from chord; fall back to explicit tangentBearing
+          // (3) derive tangent from chord; fall back to explicit tangentBearing or preceding exit bearing
           const chordStr = call.chordBearing || call.bearing;
           const chordRad = chordStr ? parseBearingToRadians(chordStr) : null;
-          const tangentRad: number | null = chordRad != null
+          let tangentRad: number | null = chordRad != null
             ? chordRad - signedDelta / 2
-            : (call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : null);
+            : (call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : (lastExitBearingRad != null ? lastExitBearingRad : null));
           if (tangentRad == null) throw new Error('curve missing chord/tangent bearing');
+          callTangentRad = tangentRad;
 
           // (4) march
           const pt = directCurve(cogoCursor, tangentRad, call.curveRadius, signedDelta);
           nextXY = { x: pt.easting, y: pt.northing };
+          lastExitBearingRad = tangentRad + signedDelta;
         } else if (call.bearing && call.distance) {
           const brRad = parseBearingToRadians(call.bearing);
           const dist = parseDistance(call.distance);
           if (brRad == null || dist == null) throw new Error('bad bearing/distance');
           const pt = direct(cogoCursor, brRad, dist);
           nextXY = { x: pt.easting, y: pt.northing };
+          lastExitBearingRad = brRad;
         }
       } catch (err) {
         console.warn(`[DrawBoundary] Skipping call ${call.id}:`, err);
@@ -13962,28 +14085,19 @@ const AppContent = () => {
         });
       }
 
-      // Rotate stored bearings by the boundary file's rotation so they stay in
-      // the same coordinate frame as the (already-rotated) from/to endpoints.
-      // Without this the DXF exporter computes arc centers off an unrotated
-      // tangent + rotated endpoints, producing a curve in the wrong place.
-      const rotateBearing = (b: string | undefined): string | undefined => {
-        if (!b || rotRad === 0) return b;
-        const r = parseBearingToRadians(b);
-        return r == null ? b : formatBearing(r + rotRad);
-      };
       newLines.push({
         id: `bf-draw-${file.id}-${i}-${tractStamp}`,
         from: prevPointNumber,
         to: endPointNumber,
-        bearing: rotateBearing(call.bearing),
+        bearing: rotateBearing(call.bearing, rotRad),
         distance: call.distance,
         isCurve: call.isCurve,
         curveRadius: call.curveRadius,
         arcLength: call.arcLength,
-        chordBearing: rotateBearing(call.chordBearing),
+        chordBearing: rotateBearing(call.chordBearing, rotRad),
         chordDistance: typeof call.chordDistance === 'number' ? call.chordDistance : undefined,
-        tangentBearing: rotateBearing(call.tangentBearing),
-        curveDirection: call.curveDirection,
+        tangentBearing: rotateBearing(call.tangentBearing || (callTangentRad != null ? formatBearing(callTangentRad) : undefined), rotRad),
+        curveDirection: call.curveDirection || (call.isCurve ? (callLeft ? 'left' : 'right') : undefined),
         layer: lineLayer,
         lineType,
         polylineId: `bf-draw-${file.id}`,

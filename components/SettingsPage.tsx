@@ -340,6 +340,23 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                     </div>
 
                     <div>
+                        <label className="flex items-center gap-3 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={!!settings.enableGeoAiDrafting}
+                                onChange={e => {
+                                    const val = e.target.checked;
+                                    handleSettingChange('enableGeoAiDrafting', val);
+                                    try { localStorage.setItem('landsurv_enable_geo_ai_drafting', String(val)); } catch {}
+                                }}
+                                className={`w-4 h-4 ${themeAccent}`}
+                            />
+                            <span className="text-sm font-medium text-gray-300 light-theme:text-gray-700">Enable Experimental Geospatial AI / Aerial Drafting in Civil Drafter</span>
+                        </label>
+                        <p className="text-xs text-gray-500 mt-1 ml-7">Developer / Experimental setting. When disabled (default), Civil Drafter drafts directly from field survey points as usual without asking about background aerial imagery. When enabled, Civil Drafter offers multi-source methodology choices (points, aerial imagery, or synthesis) and can vectorize corridors from aerial imagery.</p>
+                    </div>
+
+                    <div>
                         <label htmlFor="holidayTheme" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Holiday Theme Override 🎄</label>
                         <select
                             id="holidayTheme"

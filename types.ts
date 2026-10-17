@@ -880,6 +880,12 @@ export interface Settings {
        */
       debugGimbalHud?: boolean;
       /**
+       * Developer / Experimental setting: enable background aerial imagery extraction
+       * and multi-source methodology prompting in Civil Drafter.
+       * Default: false (Civil Drafter drafts directly from survey points as usual).
+       */
+      enableGeoAiDrafting?: boolean;
+      /**
        * Geospatial AI execution mode for SamGeo & SAM-Road:
        * 'local' (desktop daemon on localhost, $0 cloud cost) or
        * 'cloud' (Google Cloud Run on-demand scale-to-zero).

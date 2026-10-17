@@ -4,6 +4,7 @@
 
 import axios from 'axios';
 import { withOptionalUserApiKeyHeaders } from './apiAuth';
+import { segmentDrivewaysFromCanvas } from '../utils/geoRasterSegmentation';
 
 export interface BoundingBox {
   minX: number;
@@ -18,8 +19,11 @@ export interface GeoFeatureSegmentRequest {
   targetLayer?: string;
   bbox?: BoundingBox;
   confidenceThreshold?: number;
+  imageBase64?: string;
   imageUrls?: string[];
   imageSource?: string;
+  canvas?: HTMLCanvasElement;
+  controlPoints?: Array<{ easting: number; northing: number; description?: string }>;
 }
 
 export interface GeoExtractedPolygon {
@@ -36,7 +40,7 @@ export interface GeoFeatureSegmentResponse {
   featureCount: number;
   targetLayer: string;
   features: GeoExtractedPolygon[];
-  engine: 'local' | 'cloud' | 'synthetic';
+  engine: 'local' | 'cloud' | 'cv-client';
   warnings?: string[];
 }
 
@@ -44,7 +48,9 @@ export interface GeoRoadNetworkRequest {
   targetLayer?: string;
   bbox?: BoundingBox;
   simplifyTolerance?: number;
+  imageBase64?: string;
   imageUrls?: string[];
+  canvas?: HTMLCanvasElement;
 }
 
 export interface GeoExtractedRoad {
@@ -59,7 +65,7 @@ export interface GeoRoadNetworkResponse {
   intersectionCount: number;
   targetLayer: string;
   roads: GeoExtractedRoad[];
-  engine: 'local' | 'cloud' | 'synthetic';
+  engine: 'local' | 'cloud' | 'cv-client';
   warnings?: string[];
 }
 
@@ -122,12 +128,14 @@ export class GeoAiService {
     const targetLayer = req.targetLayer || (req.featureType === 'building' ? 'L-BLD-AI' : 'L-DRIVEWAY');
     const prompt = req.prompt || (req.featureType === 'driveway' ? 'paved driveway, asphalt, entrance apron' : req.featureType || 'driveway');
 
+    const bbox = req.bbox || options.fallbackBbox;
     const payload = {
       feature_type: req.featureType || 'driveway',
       prompt,
       target_layer: targetLayer,
-      bbox: req.bbox || options.fallbackBbox,
+      bbox,
       confidence_threshold: req.confidenceThreshold ?? 0.35,
+      image_base64: req.imageBase64,
       image_urls: req.imageUrls,
     };
 
@@ -137,7 +145,7 @@ export class GeoAiService {
           headers: { 'Content-Type': 'application/json' },
           timeout: 30000,
         });
-        if (res.data?.success && Array.isArray(res.data?.features)) {
+        if (res.data?.success && Array.isArray(res.data?.features) && res.data.features.length > 0) {
           return {
             success: true,
             featureCount: res.data.features.length,
@@ -147,7 +155,7 @@ export class GeoAiService {
           };
         }
       } catch (err: any) {
-        console.warn('[GeoAiService] Local daemon call failed, falling back to spatial generator:', err.message);
+        console.warn('[GeoAiService] Local daemon call failed, falling back to client-side CV:', err.message);
       }
     } else {
       try {
@@ -155,7 +163,7 @@ export class GeoAiService {
           headers: withOptionalUserApiKeyHeaders({ 'Content-Type': 'application/json' }),
           timeout: 45000,
         });
-        if (res.data?.success && Array.isArray(res.data?.features)) {
+        if (res.data?.success && Array.isArray(res.data?.features) && res.data.features.length > 0) {
           return {
             success: true,
             featureCount: res.data.features.length,
@@ -165,66 +173,33 @@ export class GeoAiService {
           };
         }
       } catch (err: any) {
-        console.warn('[GeoAiService] Cloud gateway call failed, falling back to spatial generator:', err.message);
+        console.warn('[GeoAiService] Cloud gateway call failed, falling back to client-side CV:', err.message);
       }
     }
 
-    // Fallback: If neither live service responds, generate high-fidelity geometric features
-    // around the project bounding box so the user's natural language command succeeds.
-    const bbox = req.bbox || options.fallbackBbox || { minX: 1000, minY: 1000, maxX: 1200, maxY: 1200 };
-    const width = Math.max(20, bbox.maxX - bbox.minX);
-    const height = Math.max(20, bbox.maxY - bbox.minY);
+    // Client-side computer vision fallback directly on the canvas image pixels
+    if (req.canvas && bbox) {
+      const cvFeatures = segmentDrivewaysFromCanvas(
+        req.canvas,
+        { minE: bbox.minX, maxE: bbox.maxX, minN: bbox.minY, maxN: bbox.maxY },
+        { featureType: req.featureType, targetLayer, controlPoints: req.controlPoints }
+      );
+      if (cvFeatures.length > 0) {
+        return {
+          success: true,
+          featureCount: cvFeatures.length,
+          targetLayer,
+          features: cvFeatures,
+          engine: 'cv-client',
+        };
+      }
+    }
 
-    // Synthesize two realistic driveway polygons connecting the boundary inward
-    const d1_startX = bbox.minX + width * 0.25;
-    const d1_startY = bbox.minY;
-    const d1_width = Math.min(18, width * 0.12);
-    const d1_length = Math.min(75, height * 0.45);
-
-    const driveway1: GeoExtractedPolygon = {
-      id: `ai-driveway-${Date.now()}-1`,
-      label: 'Driveway 1',
-      layer: targetLayer,
-      confidence: 0.88,
-      isClosed: true,
-      coordinates: [
-        { x: d1_startX, y: d1_startY, z: 0 },
-        { x: d1_startX + d1_width, y: d1_startY, z: 0 },
-        { x: d1_startX + d1_width, y: d1_startY + d1_length, z: 0 },
-        { x: d1_startX, y: d1_startY + d1_length, z: 0 },
-        { x: d1_startX, y: d1_startY, z: 0 },
-      ],
-    };
-
-    const d2_startX = bbox.minX + width * 0.65;
-    const d2_startY = bbox.minY;
-    const driveway2: GeoExtractedPolygon = {
-      id: `ai-driveway-${Date.now()}-2`,
-      label: 'Driveway 2',
-      layer: targetLayer,
-      confidence: 0.84,
-      isClosed: true,
-      coordinates: [
-        { x: d2_startX, y: d2_startY, z: 0 },
-        { x: d2_startX + d1_width * 1.2, y: d2_startY, z: 0 },
-        { x: d2_startX + d1_width * 1.2, y: d2_startY + d1_length * 0.85, z: 0 },
-        { x: d2_startX, y: d2_startY + d1_length * 0.85, z: 0 },
-        { x: d2_startX, y: d2_startY, z: 0 },
-      ],
-    };
-
-    return {
-      success: true,
-      featureCount: 2,
-      targetLayer,
-      features: [driveway1, driveway2],
-      engine: 'synthetic',
-      warnings: [
-        mode === 'local'
-          ? `Local worker at ${localEndpoint} not detected; generated spatial driveways from project geometry.`
-          : 'Cloud Run service warming up; generated spatial driveways from project geometry.',
-      ],
-    };
+    throw new Error(
+      mode === 'local'
+        ? `Local SamGeo worker is not reachable at ${localEndpoint}. Start your local daemon (python -m uvicorn ...) or check your aerial imagery.`
+        : 'Cloud Geospatial AI service (Cloud Run) is currently unavailable. Please deploy the container or check your aerial imagery.'
+    );
   }
 
   /**
@@ -241,11 +216,13 @@ export class GeoAiService {
     const mode = options.mode ?? 'local';
     const localEndpoint = (options.localEndpoint || 'http://127.0.0.1:8765').trim().replace(/\/+$/, '');
     const targetLayer = req.targetLayer || 'C-ROAD-CNTR';
+    const bbox = req.bbox || options.fallbackBbox;
 
     const payload = {
       target_layer: targetLayer,
-      bbox: req.bbox || options.fallbackBbox,
+      bbox,
       simplify_tolerance: req.simplifyTolerance ?? 1.0,
+      image_base64: req.imageBase64,
       image_urls: req.imageUrls,
     };
 
@@ -255,7 +232,7 @@ export class GeoAiService {
           headers: { 'Content-Type': 'application/json' },
           timeout: 30000,
         });
-        if (res.data?.success && Array.isArray(res.data?.roads)) {
+        if (res.data?.success && Array.isArray(res.data?.roads) && res.data.roads.length > 0) {
           return {
             success: true,
             roadSegmentCount: res.data.roads.length,
@@ -266,7 +243,7 @@ export class GeoAiService {
           };
         }
       } catch (err: any) {
-        console.warn('[GeoAiService] Local SAM-Road call failed:', err.message);
+        console.warn('[GeoAiService] Local SAM-Road call failed, falling back to client-side CV:', err.message);
       }
     } else {
       try {
@@ -274,7 +251,7 @@ export class GeoAiService {
           headers: withOptionalUserApiKeyHeaders({ 'Content-Type': 'application/json' }),
           timeout: 45000,
         });
-        if (res.data?.success && Array.isArray(res.data?.roads)) {
+        if (res.data?.success && Array.isArray(res.data?.roads) && res.data.roads.length > 0) {
           return {
             success: true,
             roadSegmentCount: res.data.roads.length,
@@ -285,31 +262,38 @@ export class GeoAiService {
           };
         }
       } catch (err: any) {
-        console.warn('[GeoAiService] Cloud SAM-Road call failed:', err.message);
+        console.warn('[GeoAiService] Cloud SAM-Road call failed, falling back to client-side CV:', err.message);
       }
     }
 
-    const bbox = req.bbox || options.fallbackBbox || { minX: 1000, minY: 1000, maxX: 1200, maxY: 1200 };
-    const centerY = (bbox.minY + bbox.maxY) / 2;
-    const road1: GeoExtractedRoad = {
-      id: `ai-road-${Date.now()}-1`,
-      layer: targetLayer,
-      coordinates: [
-        { x: bbox.minX - 50, y: centerY, z: 0 },
-        { x: (bbox.minX + bbox.maxX) / 2, y: centerY, z: 0 },
-        { x: bbox.maxX + 50, y: centerY, z: 0 },
-      ],
-    };
+    // Client-side computer vision fallback directly on the canvas image pixels
+    if (req.canvas && bbox) {
+      const cvFeatures = segmentDrivewaysFromCanvas(
+        req.canvas,
+        { minE: bbox.minX, maxE: bbox.maxX, minN: bbox.minY, maxN: bbox.maxY },
+        { featureType: 'road', targetLayer }
+      );
+      if (cvFeatures.length > 0) {
+        return {
+          success: true,
+          roadSegmentCount: cvFeatures.length,
+          intersectionCount: 1,
+          targetLayer,
+          roads: cvFeatures.map((f, i) => ({
+            id: `road-cl-${i + 1}`,
+            layer: targetLayer,
+            coordinates: f.coordinates,
+          })),
+          engine: 'cv-client',
+        };
+      }
+    }
 
-    return {
-      success: true,
-      roadSegmentCount: 1,
-      intersectionCount: 1,
-      targetLayer,
-      roads: [road1],
-      engine: 'synthetic',
-      warnings: ['Service warming up; synthesized road centerline along project baseline.'],
-    };
+    throw new Error(
+      mode === 'local'
+        ? `Local SAM-Road worker is not reachable at ${localEndpoint}. Run "start-geo-ai-worker.bat" (or python -m uvicorn main:app --port 8765 inside geo-ai-service) to start your local daemon, or check your aerial imagery.`
+        : 'Cloud SAM-Road service (Cloud Run) is currently unavailable. Please deploy the container or check your aerial imagery.'
+    );
   }
 }
 

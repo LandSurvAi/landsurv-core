@@ -45,6 +45,11 @@ export const GEO_AI_SKILLS: SkillSchema[] = [
         description: 'Minimum prediction confidence score (0.0 to 1.0). Default: 0.35.',
         default: 0.35,
       },
+      includeRoad: {
+        type: 'boolean',
+        description: 'When true, also extracts and aligns the public road corridor along the frontage (layers C-ROAD-CNTR and L-ROAD).',
+        default: false,
+      },
     },
     outputs: {
       success: { type: 'boolean', required: true },

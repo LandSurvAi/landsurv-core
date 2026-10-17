@@ -126,6 +126,7 @@ export const AppStateProvider: React.FC<AppStateProviderProps> = ({ children, av
     showPointSymbols: false,
     debugPreflightEstimate: false,
     debugGimbalHud: false,
+    enableGeoAiDrafting: (typeof window !== 'undefined' && localStorage.getItem('landsurv_enable_geo_ai_drafting') === 'true') || false,
     showCacpNotifications: false,
     showCacpHandlerNotifications: false,
     geoAiMode: (typeof window !== 'undefined' && localStorage.getItem('landsurv_geo_ai_mode') as ('local' | 'cloud')) || 'local',

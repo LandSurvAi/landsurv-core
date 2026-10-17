@@ -376,6 +376,296 @@ export interface FeatureTraceInput {
   }>;
 }
 
+/**
+ * Checks whether an existing survey point description is relevant for road/driveway corridor snapping.
+ * Disqualifies boundary pins, traverse spikes, utility poles, trees, and non-corridor markers.
+ */
+export function isPointRelevantForCorridor(desc: string | undefined, featureType?: string): boolean {
+  if (!desc) return true;
+  // Strip common field coding symbols (* for side-shots, # for point notes) and clean whitespace
+  const d = desc.trim().toUpperCase().replace(/[*#]/g, ' ');
+  const f = (featureType || '').toLowerCase();
+
+  // Codes that should NEVER be snapped to for road or driveway corridors unless they explicitly carry a road/driveway token:
+  const IRRELEVANT_PATTERNS = [
+    /\b(IP|IR|PIN|MON|MONUMENT|REBAR|RB|PIPE|ROD)\b/, // Boundary markers
+    /\b(TSPK|SPK|PK|MAG|NAIL)\b/,                     // Traverse / control spikes
+    /\b(TREE|OAK|PINE|MAPLE|BIRCH|CEDAR)\b/,         // Trees / vegetation
+    /\b(POLE|PP|UTIL|VALVE|METER|HYD|HYDRANT)\b/,    // Utilities
+    /\b(BM|TBM|BENCH|CALC)\b/,                       // Benchmarks
+    /\b(COR|CORNER)\b/,                              // Boundary corners (unless DW COR)
+    /\b(BLDG|HOUSE|SHED|GAR|GARAGE)\b/,              // Buildings
+  ];
+
+  // Driveway-specific tokens (driveways, aprons, entrances, cuts)
+  const DRIVEWAY_TOKENS = /\b(DW\d*|DRV\d*|DRIVE\d*|DRWY\d*|APRON\d*|ENTRANCE)\b/;
+
+  // Road-specific tokens (edges of pavement/road, curbs, centerlines)
+  const ROAD_TOKENS = /\b(ER\d*|EP\d*|EOP\d*|ET\d*|ES\d*|EG\d*|EC\d*|EDGE\d*|PAV\d*|PVMT\d*|ROAD\d*|CURB\d*|TC\d*|BC\d*|TBC\d*|GUTTER\d*|FL\d*|FLOW\d*|CL\d*|CTR\d*|TIE)\b/;
+
+  if (f.includes('drive')) {
+    return DRIVEWAY_TOKENS.test(d);
+  }
+  if (f.includes('road')) {
+    return ROAD_TOKENS.test(d);
+  }
+
+  // General corridor check (either road or driveway)
+  if (DRIVEWAY_TOKENS.test(d) || ROAD_TOKENS.test(d)) {
+    return true;
+  }
+
+  // If it matches an irrelevant pattern and has NO road/driveway token:
+  for (const rx of IRRELEVANT_PATTERNS) {
+    if (rx.test(d)) return false;
+  }
+
+  return false;
+}
+
+/**
+ * Searches for the nearest existing survey point within snapRadiusFt (ground truth control).
+ * Only snaps to survey points relevant to the given featureType.
+ */
+export function findNearestSurveyPoint(
+  targetE: number,
+  targetN: number,
+  existingPoints: SurveyPoint[] = [],
+  maxDistFt: number = 25,
+  featureType?: string,
+): SurveyPoint | null {
+  let closest: SurveyPoint | null = null;
+  let minDist = maxDistFt;
+
+  for (const p of existingPoints) {
+    const e = typeof p.easting === 'number' ? p.easting : (p as any).x;
+    const n = typeof p.northing === 'number' ? p.northing : (p as any).y;
+    if (typeof e !== 'number' || typeof n !== 'number' || !Number.isFinite(e) || !Number.isFinite(n)) continue;
+
+    if (featureType && !isPointRelevantForCorridor(p.description, featureType)) {
+      continue;
+    }
+
+    const dist = Math.hypot(e - targetE, n - targetN);
+    if (dist < minDist) {
+      minDist = dist;
+      closest = p;
+    }
+  }
+  return closest;
+}
+
+/**
+ * Interpolates 3D elevations along an ordered chain of survey points.
+ * Uses any non-zero elevations from snapped survey points to estimate elevations for intermediate points.
+ */
+export function interpolateChainElevations(pts: SurveyPoint[]): void {
+  if (pts.length < 2) return;
+  const knownIndices: number[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    if (typeof pts[i].elevation === 'number' && pts[i].elevation !== 0 && Number.isFinite(pts[i].elevation)) {
+      knownIndices.push(i);
+    }
+  }
+
+  if (knownIndices.length === 0) return;
+
+  // Single known elevation: propagate to all
+  if (knownIndices.length === 1) {
+    const baseElev = pts[knownIndices[0]].elevation!;
+    for (let i = 0; i < pts.length; i++) {
+      if (pts[i].elevation === 0 || pts[i].elevation === undefined) {
+        pts[i].elevation = parseFloat(baseElev.toFixed(2));
+      }
+    }
+    return;
+  }
+
+  // Multiple known elevations: calculate cumulative distances and interpolate
+  const cumDist: number[] = [0];
+  for (let i = 1; i < pts.length; i++) {
+    const d = Math.hypot(pts[i].easting - pts[i - 1].easting, pts[i].northing - pts[i - 1].northing);
+    cumDist.push(cumDist[i - 1] + d);
+  }
+
+  for (let k = 0; k < knownIndices.length - 1; k++) {
+    const i0 = knownIndices[k];
+    const i1 = knownIndices[k + 1];
+    const z0 = pts[i0].elevation!;
+    const z1 = pts[i1].elevation!;
+    const d0 = cumDist[i0];
+    const d1 = cumDist[i1];
+    const span = d1 - d0;
+
+    for (let j = i0 + 1; j < i1; j++) {
+      if (span > 0.01) {
+        const frac = (cumDist[j] - d0) / span;
+        pts[j].elevation = parseFloat((z0 + frac * (z1 - z0)).toFixed(2));
+      } else {
+        pts[j].elevation = parseFloat(z0.toFixed(2));
+      }
+    }
+  }
+
+  // Extrapolate before first known
+  const firstKnown = knownIndices[0];
+  if (firstKnown > 0) {
+    const zFirst = pts[firstKnown].elevation!;
+    for (let j = 0; j < firstKnown; j++) {
+      pts[j].elevation = parseFloat(zFirst.toFixed(2));
+    }
+  }
+
+  // Extrapolate after last known
+  const lastKnown = knownIndices[knownIndices.length - 1];
+  if (lastKnown < pts.length - 1) {
+    const zLast = pts[lastKnown].elevation!;
+    for (let j = lastKnown + 1; j < pts.length; j++) {
+      pts[j].elevation = parseFloat(zLast.toFixed(2));
+    }
+  }
+}
+
+/**
+ * Evaluates a Catmull-Rom spline through an array of points to produce smooth curvilinear geometry.
+ * Spacing between generated vertices is approximately 2 to 4 survey feet.
+ */
+export function smoothSplinePoints(
+  controlPoints: Array<{ easting: number; northing: number }>,
+  subdivisionsPerSegment = 6,
+  isClosed = false,
+): Array<{ easting: number; northing: number }> {
+  if (controlPoints.length < 3) return controlPoints;
+
+  const n = controlPoints.length;
+  const result: Array<{ easting: number; northing: number }> = [];
+
+  const getPt = (idx: number) => {
+    if (isClosed) {
+      return controlPoints[(idx + n) % n];
+    }
+    if (idx < 0) {
+      const p0 = controlPoints[0];
+      const p1 = controlPoints[1];
+      return { easting: 2 * p0.easting - p1.easting, northing: 2 * p0.northing - p1.northing };
+    }
+    if (idx >= n) {
+      const pn1 = controlPoints[n - 1];
+      const pn2 = controlPoints[n - 2];
+      return { easting: 2 * pn1.easting - pn2.easting, northing: 2 * pn1.northing - pn2.northing };
+    }
+    return controlPoints[idx];
+  };
+
+  const segments = isClosed ? n : n - 1;
+  for (let i = 0; i < segments; i++) {
+    const p0 = getPt(i - 1);
+    const p1 = getPt(i);
+    const p2 = getPt(i + 1);
+    const p3 = getPt(i + 2);
+
+    for (let s = 0; s < subdivisionsPerSegment; s++) {
+      const t = s / subdivisionsPerSegment;
+      const t2 = t * t;
+      const t3 = t2 * t;
+
+      const e = 0.5 * (
+        (2 * p1.easting) +
+        (-p0.easting + p2.easting) * t +
+        (2 * p0.easting - 5 * p1.easting + 4 * p2.easting - p3.easting) * t2 +
+        (-p0.easting + 3 * p1.easting - 3 * p2.easting + p3.easting) * t3
+      );
+      const nor = 0.5 * (
+        (2 * p1.northing) +
+        (-p0.northing + p2.northing) * t +
+        (2 * p0.northing - 5 * p1.northing + 4 * p2.northing - p3.northing) * t2 +
+        (-p0.northing + 3 * p1.northing - 3 * p2.northing + p3.northing) * t3
+      );
+      result.push({ easting: parseFloat(e.toFixed(2)), northing: parseFloat(nor.toFixed(2)) });
+    }
+  }
+
+  if (!isClosed) {
+    const last = controlPoints[n - 1];
+    result.push({ easting: parseFloat(last.easting.toFixed(2)), northing: parseFloat(last.northing.toFixed(2)) });
+  } else if (result.length > 0) {
+    result.push({ ...result[0] });
+  }
+
+  return result;
+}
+
+/**
+ * Searches for existing road linework or survey points to anchor and calibrate driveway tie-ins.
+ */
+export function findRoadTieInOffset(
+  entrancePt: { easting: number; northing: number },
+  existingLines: SurveyLine[] = [],
+  existingPoints: SurveyPoint[] = []
+): { deltaE: number; deltaN: number } {
+  // Find road lines on the canvas (e.g. V-ROAD-CNTR, V-ROAD-EDGE, L-ROAD, L-EDGE-PAVEMENT)
+  const roadLines = existingLines.filter(l => 
+    (l.layer && /road|pave|street|edge|ep|er/i.test(l.layer)) ||
+    (l.polylineId && /road/i.test(l.polylineId)) ||
+    (l.lineType && /center/i.test(l.lineType))
+  );
+
+  let bestDist = Infinity;
+  let targetRoadPt: { easting: number; northing: number } | null = null;
+
+  for (const l of roadLines) {
+    if (!l.fromPt || !l.toPt) continue;
+    const x1 = l.fromPt.x, y1 = l.fromPt.y;
+    const x2 = l.toPt.x, y2 = l.toPt.y;
+    const dx = x2 - x1, dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq < 1) continue;
+
+    // Project entrance onto this road line segment
+    const t = Math.max(0, Math.min(1, ((entrancePt.easting - x1) * dx + (entrancePt.northing - y1) * dy) / lenSq));
+    const projE = x1 + t * dx;
+    const projN = y1 + t * dy;
+    const d = Math.hypot(entrancePt.easting - projE, entrancePt.northing - projN);
+
+    if (d < bestDist) {
+      bestDist = d;
+      targetRoadPt = { easting: projE, northing: projN };
+    }
+  }
+
+  // If the entrance is within reasonable frontage distance (e.g. 180 ft), snap its entrance directly onto the road edge line
+  if (targetRoadPt && bestDist < 180 && bestDist > 1) {
+    return {
+      deltaE: targetRoadPt.easting - entrancePt.easting,
+      deltaN: targetRoadPt.northing - entrancePt.northing,
+    };
+  }
+
+  // Fallback: Check road survey points (EP, ER, DYL)
+  const roadPts = existingPoints.filter(p => isPointRelevantForCorridor(p.description, 'road'));
+  if (roadPts.length >= 2) {
+    let closestPt: SurveyPoint | null = null;
+    let minD = Infinity;
+    for (const p of roadPts) {
+      const pe = typeof p.easting === 'number' ? p.easting : (p as any).x;
+      const pn = typeof p.northing === 'number' ? p.northing : (p as any).y;
+      const d = Math.hypot(entrancePt.easting - pe, entrancePt.northing - pn);
+      if (d < minD) {
+        minD = d;
+        closestPt = p;
+      }
+    }
+    if (closestPt && minD < 180 && minD > 1) {
+      return {
+        deltaE: closestPt.easting - entrancePt.easting,
+        deltaN: closestPt.northing - entrancePt.northing,
+      };
+    }
+  }
+
+  return { deltaE: 0, deltaN: 0 };
+}
+
 export function expandFeatureTrace(
   trace: FeatureTraceInput,
   bounds: { minE: number; maxE: number; minN: number; maxN: number },
@@ -383,6 +673,9 @@ export function expandFeatureTrace(
   canvasWidth: number = DEFAULT_W,
   canvasHeight: number = DEFAULT_H,
   margin: number = MARGIN,
+  existingPoints?: SurveyPoint[],
+  snapRadiusFt: number = 25,
+  existingLines?: SurveyLine[],
 ): { points: SurveyPoint[]; lines: SurveyLine[] } {
   const generatedPoints: SurveyPoint[] = [];
   const generatedLines: SurveyLine[] = [];
@@ -393,8 +686,30 @@ export function expandFeatureTrace(
   const clLayer = isDriveway ? 'L-DRIVEWAY-CL' : 'L-CENTERLINE';
   const edgeLayer = trace.layer || (isDriveway ? 'L-DRIVEWAY' : 'L-ROAD');
 
+  const resolvePoint = (
+    worldCoord: { easting: number; northing: number },
+    defaultDesc: string,
+    targetLayer: string,
+  ): SurveyPoint => {
+    const snapped = findNearestSurveyPoint(worldCoord.easting, worldCoord.northing, existingPoints, snapRadiusFt, featureType);
+    if (snapped) {
+      return snapped;
+    }
+    const newPt: SurveyPoint = {
+      pointNumber: String(pn++),
+      easting: worldCoord.easting,
+      northing: worldCoord.northing,
+      elevation: 0,
+      description: defaultDesc,
+      layer: targetLayer,
+    };
+    generatedPoints.push(newPt);
+    return newPt;
+  };
+
   const addChainLines = (pts: SurveyPoint[], layer: string, polylineId: string, isClosed = false) => {
     if (pts.length < 2) return;
+    interpolateChainElevations(pts);
     for (let i = 0; i < pts.length - 1; i++) {
       generatedLines.push({
         from: pts[i].pointNumber,
@@ -413,156 +728,138 @@ export function expandFeatureTrace(
     }
   };
 
-  // 1. Complex Driveway Pavement Perimeter (Polygon)
-  const rawPolygon = trace.polygon || trace.outline || trace.perimeter;
-  const hasPolygon = Array.isArray(rawPolygon) && rawPolygon.length >= 3;
+  // 1. Convert raw coordinates to world space
+  const rawCenterline = Array.isArray(trace.centerline) && trace.centerline.length >= 2 ? trace.centerline : null;
+  const rawPolygon = (trace.polygon || trace.outline || trace.perimeter) && Array.isArray(trace.polygon || trace.outline || trace.perimeter)
+    ? (trace.polygon || trace.outline || trace.perimeter)!
+    : null;
 
-  if (hasPolygon) {
-    const polyWorld = rawPolygon.map(pt => convertNormPosToWorld(pt, bounds, canvasWidth, canvasHeight, margin));
+  let clWorld = rawCenterline ? rawCenterline.map(pt => convertNormPosToWorld(pt, bounds, canvasWidth, canvasHeight, margin)) : [];
+  let polyWorld = rawPolygon && rawPolygon.length >= 3 ? rawPolygon.map(pt => convertNormPosToWorld(pt, bounds, canvasWidth, canvasHeight, margin)) : [];
+
+  // 2. Automatic Road Tie-in & Alignment Calibration
+  if (isDriveway && existingLines && existingLines.length > 0) {
+    const entrancePt = clWorld[0] || polyWorld[0];
+    if (entrancePt) {
+      const { deltaE, deltaN } = findRoadTieInOffset(entrancePt, existingLines, existingPoints);
+      if (Math.abs(deltaE) > 0.01 || Math.abs(deltaN) > 0.01) {
+        if (clWorld.length > 0) {
+          clWorld = clWorld.map(p => ({ easting: p.easting + deltaE, northing: p.northing + deltaN }));
+        }
+        if (polyWorld.length > 0) {
+          polyWorld = polyWorld.map(p => ({ easting: p.easting + deltaE, northing: p.northing + deltaN }));
+        }
+      }
+    }
+  }
+
+  // 3. Centerline Alignment & Smooth Corridor Curves
+  if (clWorld.length >= 2) {
+    // Apply Catmull-Rom spline interpolation to eliminate 8-bit straight lines
+    const smoothCl = smoothSplinePoints(clWorld, 6, false);
+    const clPoints: SurveyPoint[] = [];
+
+    for (let i = 0; i < smoothCl.length; i++) {
+      const cur = smoothCl[i];
+      const desc = i === 0 ? 'DW CL ENTRANCE' : i === smoothCl.length - 1 ? 'DW CL APRON' : 'DW CL';
+      const pt = resolvePoint(cur, desc, clLayer);
+      clPoints.push(pt);
+    }
+
+    addChainLines(clPoints, clLayer, `${featureType}-cl`, false);
+
+    // Generate smooth parallel edges from centerline with entrance bell flare
+    const defaultWidth = typeof trace.widthFt === 'number' && trace.widthFt > 0 ? trace.widthFt : 14;
+    const leftPoints: SurveyPoint[] = [];
+    const rightPoints: SurveyPoint[] = [];
+    const totalPts = smoothCl.length;
+
+    for (let i = 0; i < totalPts; i++) {
+      const cur = smoothCl[i];
+      let halfWidth = defaultWidth / 2;
+
+      // Bell flare at road entrance (first 25% of approach widens out to meet road)
+      if (i < totalPts * 0.25) {
+        const flareRatio = 1 - (i / (totalPts * 0.25));
+        const flareW = 10 * (flareRatio * flareRatio); // Smooth quadratic flare
+        halfWidth += flareW;
+      }
+
+      let dx = 0;
+      let dy = 0;
+      if (i === 0) {
+        dx = smoothCl[1].easting - cur.easting;
+        dy = smoothCl[1].northing - cur.northing;
+      } else if (i === totalPts - 1) {
+        dx = cur.easting - smoothCl[i - 1].easting;
+        dy = cur.northing - smoothCl[i - 1].northing;
+      } else {
+        dx = smoothCl[i + 1].easting - smoothCl[i - 1].easting;
+        dy = smoothCl[i + 1].northing - smoothCl[i - 1].northing;
+      }
+
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+
+      const lWorld = { easting: cur.easting + nx * halfWidth, northing: cur.northing + ny * halfWidth };
+      const rWorld = { easting: cur.easting - nx * halfWidth, northing: cur.northing - ny * halfWidth };
+
+      const lPt = resolvePoint(lWorld, i === 0 ? 'DW NORTH ENTRANCE' : 'DW NORTH EDGE', edgeLayer);
+      const rPt = resolvePoint(rWorld, i === 0 ? 'DW SOUTH ENTRANCE' : 'DW SOUTH EDGE', edgeLayer);
+
+      leftPoints.push(lPt);
+      rightPoints.push(rPt);
+    }
+
+    addChainLines(leftPoints, edgeLayer, `${featureType}-edge-left`, false);
+    addChainLines(rightPoints, edgeLayer, `${featureType}-edge-right`, false);
+  } else if (polyWorld.length >= 3) {
+    // If only polygon provided, smooth the polygon vertices with spline interpolation
+    const smoothPoly = smoothSplinePoints(polyWorld, 5, true);
     const polyPoints: SurveyPoint[] = [];
 
-    for (let i = 0; i < polyWorld.length; i++) {
-      const cur = polyWorld[i];
-      const desc = i === 0 || i === polyWorld.length - 1 ? 'DW ENTRANCE' : 'DW EDGE';
-      const pt: SurveyPoint = {
-        pointNumber: String(pn++),
-        easting: cur.easting,
-        northing: cur.northing,
-        elevation: 0,
-        description: desc,
-        layer: edgeLayer,
-      };
+    for (let i = 0; i < smoothPoly.length; i++) {
+      const cur = smoothPoly[i];
+      const desc = i === 0 || i === smoothPoly.length - 1 ? 'DW ENTRANCE' : 'DW EDGE';
+      const pt = resolvePoint(cur, desc, edgeLayer);
       polyPoints.push(pt);
-      generatedPoints.push(pt);
     }
 
     addChainLines(polyPoints, edgeLayer, `${featureType}-perimeter`, true);
   }
 
-  // 2. Separate Parking Apron / Turnaround Court
+  // 4. Separate Parking Apron / Turnaround Court
   const rawApron = trace.apron || trace.parking;
   if (Array.isArray(rawApron) && rawApron.length >= 3) {
-    const apronWorld = rawApron.map(pt => convertNormPosToWorld(pt, bounds, canvasWidth, canvasHeight, margin));
+    let apronWorld = rawApron.map(pt => convertNormPosToWorld(pt, bounds, canvasWidth, canvasHeight, margin));
+    const smoothApron = smoothSplinePoints(apronWorld, 4, true);
     const apronPoints: SurveyPoint[] = [];
 
-    for (let i = 0; i < apronWorld.length; i++) {
-      const cur = apronWorld[i];
-      const pt: SurveyPoint = {
-        pointNumber: String(pn++),
-        easting: cur.easting,
-        northing: cur.northing,
-        elevation: 0,
-        description: 'DW APRON',
-        layer: edgeLayer,
-      };
+    for (let i = 0; i < smoothApron.length; i++) {
+      const cur = smoothApron[i];
+      const pt = resolvePoint(cur, 'DW APRON', edgeLayer);
       apronPoints.push(pt);
-      generatedPoints.push(pt);
     }
 
     addChainLines(apronPoints, edgeLayer, `${featureType}-apron`, true);
   }
 
-  // 3. Centerline Alignment
-  if (Array.isArray(trace.centerline) && trace.centerline.length >= 2) {
-    const clWorld = trace.centerline.map(pt => convertNormPosToWorld(pt, bounds, canvasWidth, canvasHeight, margin));
-    const clPoints: SurveyPoint[] = [];
-
-    for (let i = 0; i < clWorld.length; i++) {
-      const cur = clWorld[i];
-      const desc = i === 0 ? 'DW CL ENTRANCE' : i === clWorld.length - 1 ? 'DW CL APRON' : 'DW CL';
-      const pt: SurveyPoint = {
-        pointNumber: String(pn++),
-        easting: cur.easting,
-        northing: cur.northing,
-        elevation: 0,
-        description: desc,
-        layer: clLayer,
-      };
-      clPoints.push(pt);
-      generatedPoints.push(pt);
-    }
-
-    addChainLines(clPoints, clLayer, `${featureType}-cl`, false);
-
-    // If NO boundary polygon was supplied, generate parallel edges from centerline
-    if (!hasPolygon) {
-      const defaultWidth = typeof trace.widthFt === 'number' && trace.widthFt > 0 ? trace.widthFt : 14;
-      const leftPoints: SurveyPoint[] = [];
-      const rightPoints: SurveyPoint[] = [];
-
-      for (let i = 0; i < clWorld.length; i++) {
-        const cur = clWorld[i];
-        const halfWidth = Array.isArray(trace.widthFt) && typeof trace.widthFt[i] === 'number'
-          ? trace.widthFt[i] / 2
-          : defaultWidth / 2;
-
-        let dx = 0;
-        let dy = 0;
-        if (i === 0) {
-          dx = clWorld[1].easting - cur.easting;
-          dy = clWorld[1].northing - cur.northing;
-        } else if (i === clWorld.length - 1) {
-          dx = cur.easting - clWorld[i - 1].easting;
-          dy = cur.northing - clWorld[i - 1].northing;
-        } else {
-          dx = clWorld[i + 1].easting - clWorld[i - 1].easting;
-          dy = clWorld[i + 1].northing - clWorld[i - 1].northing;
-        }
-
-        const len = Math.hypot(dx, dy) || 1;
-        const nx = -dy / len;
-        const ny = dx / len;
-
-        const lPt: SurveyPoint = {
-          pointNumber: String(pn++),
-          easting: cur.easting + nx * halfWidth,
-          northing: cur.northing + ny * halfWidth,
-          elevation: 0,
-          description: i === 0 ? 'DW NORTH ENTRANCE' : 'DW NORTH EDGE',
-          layer: edgeLayer,
-        };
-
-        const rPt: SurveyPoint = {
-          pointNumber: String(pn++),
-          easting: cur.easting - nx * halfWidth,
-          northing: cur.northing - ny * halfWidth,
-          elevation: 0,
-          description: i === 0 ? 'DW SOUTH ENTRANCE' : 'DW SOUTH EDGE',
-          layer: edgeLayer,
-        };
-
-        leftPoints.push(lPt);
-        rightPoints.push(rPt);
-        generatedPoints.push(lPt, rPt);
-      }
-
-      addChainLines(leftPoints, edgeLayer, `${featureType}-edge-left`, false);
-      addChainLines(rightPoints, edgeLayer, `${featureType}-edge-right`, false);
-    }
-  }
-
-  // 4. Custom Edge Chains
+  // 5. Custom Edge Chains
   if (Array.isArray(trace.edges) && trace.edges.length > 0) {
     for (let eIdx = 0; eIdx < trace.edges.length; eIdx++) {
       const edge = trace.edges[eIdx];
       if (!Array.isArray(edge.points) || edge.points.length < 2) continue;
       const ptsWorld = edge.points.map(pt => convertNormPosToWorld(pt, bounds, canvasWidth, canvasHeight, margin));
+      const smoothEdge = smoothSplinePoints(ptsWorld, 5, edge.isClosed || false);
       const edgePts: SurveyPoint[] = [];
 
-      for (let i = 0; i < ptsWorld.length; i++) {
-        const pt: SurveyPoint = {
-          pointNumber: String(pn++),
-          easting: ptsWorld[i].easting,
-          northing: ptsWorld[i].northing,
-          elevation: 0,
-          description: 'DW EDGE',
-          layer: edge.layer || edgeLayer,
-        };
+      for (let i = 0; i < smoothEdge.length; i++) {
+        const pt = resolvePoint(smoothEdge[i], 'DW EDGE', edge.layer || edgeLayer);
         edgePts.push(pt);
-        generatedPoints.push(pt);
       }
 
-      addChainLines(edgePts, edge.layer || edgeLayer, edge.polylineId || `${featureType}-edge-${eIdx + 1}`, !!edge.isClosed);
+      addChainLines(edgePts, edge.layer || edgeLayer, edge.polylineId || `${featureType}-edge-${eIdx + 1}`, edge.isClosed || false);
     }
   }
 

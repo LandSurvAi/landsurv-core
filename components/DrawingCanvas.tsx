@@ -150,6 +150,7 @@ export interface DrawingCanvasHandles {
   getViewCenterWorld?: () => { easting: number; northing: number };
   isPointInView?: (easting: number, northing: number) => boolean;
   isBboxInView?: (minE: number, maxE: number, minN: number, maxN: number) => boolean;
+  getViewportBboxWorld?: () => { minE: number; maxE: number; minN: number; maxN: number; minX: number; maxX: number; minY: number; maxY: number };
   getMapOverlayTiles?: () => Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: WorldQuad; opacity?: number }>;
 }
 
@@ -346,7 +347,7 @@ interface DrawingCanvasProps {
     onPointSelected?: (point: SurveyPoint) => void;
     /** Boundary-align tool — patch translationE/N/rotationDeg on a boundary file.
      *  Mirrors BoundaryEditor's onTransformChange so the silent-redraw debounce is shared. */
-    onUpdateBoundaryTransform?: (id: string, patch: { translationE?: number | null; translationN?: number | null; rotationDeg?: number | null }) => void;
+    onUpdateBoundaryTransform?: (id: string, patch: { translationE?: number | null; translationN?: number | null; rotationDeg?: number | null }, opts?: { immediate?: boolean }) => void;
     /** When set (an incrementing token + movable bf id), arms the boundary-align tool with
      *  movable preset and waits for the user to click one line on movable, one on target. */
     boundaryAlignRequest?: { token: number; movableBfId: string } | null;
@@ -1663,16 +1664,17 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 }
 
                 let chordRadArc: number | null = null;
-                const chordStr = line.chordBearing || line.bearing;
-                if (chordStr) {
-                    chordRadArc = parseBearingToRadians(chordStr);
-                } else {
+                if (x1 !== undefined && y1 !== undefined && x2 !== undefined && y2 !== undefined) {
                     const dE = x2 - x1;
                     const dN = y2 - y1;
-                    if (Math.hypot(dE, dN) > 1e-9) {
-                        let az = Math.atan2(dE, dN);
-                        if (az < 0) az += 2 * Math.PI;
-                        chordRadArc = az;
+                    if (Math.hypot(dE, dN) > 1e-4) {
+                        chordRadArc = normalizeAng(Math.atan2(dE, dN));
+                    }
+                }
+                if (chordRadArc === null) {
+                    const chordStr = line.chordBearing || line.bearing;
+                    if (chordStr) {
+                        chordRadArc = parseBearingToRadians(chordStr);
                     }
                 }
 
@@ -4176,6 +4178,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const sMaxY = Math.max(p1.y, p2.y);
             return sMaxX >= 0 && sMinX <= w && sMaxY >= 0 && sMinY <= h;
         },
+        getViewportBboxWorld: () => {
+            const container = containerRef.current;
+            const w = container?.clientWidth || 800;
+            const h = container?.clientHeight || 600;
+            const p1 = screenToWorld(0, 0);
+            const p2 = screenToWorld(w, h);
+            const minE = Math.min(p1.easting, p2.easting);
+            const maxE = Math.max(p1.easting, p2.easting);
+            const minN = Math.min(p1.northing, p2.northing);
+            const maxN = Math.max(p1.northing, p2.northing);
+            return {
+                minE, maxE, minN, maxN,
+                minX: minE, maxX: maxE, minY: minN, maxY: maxN,
+            };
+        },
         getMapOverlayTiles: () => {
             const tiles: Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: WorldQuad; opacity?: number }> = [];
             if (googleOverlayImage) {
@@ -5900,9 +5917,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
                 // Resolve tangent bearing geometrically: tangentBearing = chordBearing - signedΔ/2
                 // More reliable than AI-provided tangentBearing which is sometimes incorrect.
+                // When endpoints exist, derive chord bearing directly from them so the arc
+                // remains locked to p1Coords and p2Coords across any transformations.
                 const signedDeltaArc = isLeftCurve ? -centralAngle : centralAngle;
-                const chordStrArc = line.chordBearing || line.bearing;
-                const chordRadArc = chordStrArc ? parseBearingToRadians(chordStrArc) : null;
+                let chordRadArc: number | null = null;
+                if (p1Coords && p2Coords) {
+                    const dE = p2Coords.x - p1Coords.x;
+                    const dN = p2Coords.y - p1Coords.y;
+                    if (Math.hypot(dE, dN) > 1e-4) {
+                        chordRadArc = normalizeAng(Math.atan2(dE, dN));
+                    }
+                }
+                if (chordRadArc === null) {
+                    const chordStrArc = line.chordBearing || line.bearing;
+                    chordRadArc = chordStrArc ? parseBearingToRadians(chordStrArc) : null;
+                }
                 const tangentAngle: number | null = chordRadArc !== null
                     ? chordRadArc - signedDeltaArc / 2
                     : (line.tangentBearing ? parseBearingToRadians(line.tangentBearing) : null);
@@ -7332,6 +7361,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     if (firstCall.from) synthMap.set(firstCall.from, pob);
                     bfPobOriginal = { easting: pob.easting, northing: pob.northing };
                     let cursor = pob;
+                    let lastExitBearingRad: number | null = null;
                     for (const call of bf.calls) {
                         // Walk using synthMap ONLY — pointMap entries are potentially stale
                         // drawn positions and must not influence intermediate vertices.
@@ -7345,7 +7375,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             if ((call as any).curveDirection === 'left') left = true;
                             else if ((call as any).curveDirection === 'right') left = false;
                             else {
-                                const tempT = call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : null;
+                                const tempT = call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : (lastExitBearingRad !== null ? lastExitBearingRad : null);
                                 const dirStr = call.chordBearing || call.bearing;
                                 if (tempT !== null && dirStr) {
                                     const dirRad = parseBearingToRadians(dirStr);
@@ -7365,9 +7395,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             const chordRad = chordStr ? parseBearingToRadians(chordStr) : null;
                             const tRad: number | null = chordRad !== null
                                 ? chordRad - signedDelta / 2
-                                : (call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : null);
+                                : (call.tangentBearing ? parseBearingToRadians(call.tangentBearing) : (lastExitBearingRad !== null ? lastExitBearingRad : null));
                             if (tRad !== null) {
                                 endPt = directCurve(fromHere, tRad, call.curveRadius, signedDelta);
+                                lastExitBearingRad = tRad + signedDelta;
                             }
                         } else {
                             const bStr = call.bearing || call.chordBearing;
@@ -7375,6 +7406,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             const dist = call.distance ? parseDistance(call.distance) : (typeof (call as any).distanceFt === 'number' ? (call as any).distanceFt : null);
                             if (bRad !== null && typeof dist === 'number' && isFinite(dist)) {
                                 endPt = direct(fromHere, bRad, dist);
+                                lastExitBearingRad = bRad;
                             }
                         }
                         if (endPt) {
@@ -9737,7 +9769,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             translationE: fit.translationE,
             translationN: fit.translationN,
             rotationDeg: fit.rotationDeg,
-        });
+        }, { immediate: true });
         setCornerAlignFit({ rmse: fit.rmse, maxResidual: fit.maxResidual, rotDeg: fit.rotationDeg });
     }, [props, solveCornerAlign]);
 
@@ -9750,7 +9782,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 cache.txN = cornerAlignBaseTxRef.current.translationN;
                 cache.rotDeg = cornerAlignBaseTxRef.current.rotationDeg;
             }
-            props.onUpdateBoundaryTransform(cornerAlignBfId, cornerAlignBaseTxRef.current);
+            props.onUpdateBoundaryTransform(cornerAlignBfId, cornerAlignBaseTxRef.current, { immediate: true });
         }
         cornerAlignBaseTxRef.current = null;
         setCornerAlignBfId(null);
@@ -12950,7 +12982,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                     cache.txN = cornerAlignBaseTxRef.current.translationN;
                                                     cache.rotDeg = cornerAlignBaseTxRef.current.rotationDeg;
                                                 }
-                                                props.onUpdateBoundaryTransform?.(cornerAlignBfId, cornerAlignBaseTxRef.current);
+                                                props.onUpdateBoundaryTransform?.(cornerAlignBfId, cornerAlignBaseTxRef.current, { immediate: true });
                                                 setCornerAlignFit(null);
                                             }
                                         }}
