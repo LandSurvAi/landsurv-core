@@ -47,7 +47,7 @@ import { findMatchingSymbol, libraryToSymbolDefinition } from '../data/surveySym
 import { buildAnnotationMatchers, resolveAnnotation, renderAnnotationTemplate } from '../utils/annotationResolver.ts';
 import { fetchImageBlobViaProxy } from '../utils/corsProxy.ts';
 import { getCachedBitmap, planMapTiles, mapWithConcurrency, decodeImageCached, trackTileLoad, subscribeTileActivity, getPendingTileCount, type PlannedTile } from '../utils/mapTileCache.ts';
-import { WebGpuBasemap, GpuLineBatch, parseCssColor, type BasemapLayer, type BasemapSource, type WorldQuad } from '../utils/webgpuBasemap.ts';
+import { WebGpuBasemap, GpuLineBatch, parseCssColor, isWebGpuEnabled, WEBGPU_PREF_EVENT, type BasemapLayer, type BasemapSource, type WorldQuad } from '../utils/webgpuBasemap.ts';
 import { buildParcelLabelLines, resolveParcelTextStyle } from '../utils/parcelLabelFormatter.ts';
 import { applyAnnotationTextCase, resolveAnnotationCategoryTextStyle, resolveAnnotationTextSize } from '../utils/annotationTextStyle.ts';
 import { getStaticMap, type StaticMapRequest } from '../services/staticMapsService.ts';
@@ -757,6 +757,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const gpuCanvasRef = useRef<HTMLCanvasElement>(null);
     const gpuBasemapRef = useRef<WebGpuBasemap | null>(null);
+    /** Bumped when the user changes a WebGPU preference so the renderer re-initialises. */
+    const [gpuPrefVersion, setGpuPrefVersion] = useState(0);
     const containerRef = useRef<HTMLDivElement>(null);
     const [transform, setTransform] = useState<{ scale: number; offsetX: number; offsetY: number }>(() => initialTransform || { scale: 1, offsetX: 0, offsetY: 0 });
     const transformRef = useRef(transform);
@@ -7354,9 +7356,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 sumE += p.easting; sumN += p.northing; cnt++;
                             }
                         });
+                        // Last resort: local origin. Manual / CSV / AI-created
+                        // files carry a persisted `pobOverride`, so this only
+                        // applies to legacy or restored files. This MUST be a
+                        // fixed world point, never the live view center: a
+                        // view-derived anchor is recomputed every frame, which
+                        // pins the silhouette to the viewport while panning and
+                        // makes Draft commit at a different location.
                         pob = cnt > 0
                             ? { easting: sumE / cnt, northing: sumN / cnt }
-                            : screenToWorld(logicalWidth / 2, logicalHeight / 2);
+                            : { easting: 0, northing: 0 };
                     }
                     if (firstCall.from) synthMap.set(firstCall.from, pob);
                     bfPobOriginal = { easting: pob.easting, northing: pob.northing };
@@ -8311,15 +8320,28 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     }, [scheduleDraw, pushToolbarOutOfChatIfNeeded]);
 
     useEffect(() => {
+        const onPrefsChanged = () => setGpuPrefVersion(v => v + 1);
+        window.addEventListener(WEBGPU_PREF_EVENT, onPrefsChanged);
+        return () => window.removeEventListener(WEBGPU_PREF_EVENT, onPrefsChanged);
+    }, []);
+
+    useEffect(() => {
         const gpuCanvas = gpuCanvasRef.current;
         const canvas = canvasRef.current;
         if (!gpuCanvas || !canvas) return;
+
+        // Settings → Graphics & WebGPU can turn hardware acceleration off at
+        // runtime; the Canvas2D basemap underneath takes over without a reload.
+        if (!isWebGpuEnabled() || !WebGpuBasemap.isSupported()) {
+            gpuCanvas.style.display = 'none';
+            scheduleDraw();
+            return;
+        }
+
         let disposed = false;
         let created: WebGpuBasemap | null = null;
-        try {
-            if (localStorage.getItem('landsurv-webgpu') === 'off') return;
-        } catch { /* storage unavailable */ }
 
+        gpuCanvas.style.display = '';
         gpuCanvas.width = canvas.width;
         gpuCanvas.height = canvas.height;
         WebGpuBasemap.create(gpuCanvas, () => {
@@ -8341,7 +8363,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             gpuBasemapRef.current = null;
             created?.dispose();
         };
-    }, [scheduleDraw]);
+    }, [scheduleDraw, gpuPrefVersion]);
 
     const isOverLabelArea = useCallback((mouseX: number, mouseY: number, p: SurveyPoint) => {
         const { scale } = transform;

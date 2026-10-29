@@ -95,6 +95,13 @@ export interface BoundaryEditorProps {
     onToggleDock?: () => void;
     isMinimized?: boolean;
     onToggleMinimize?: () => void;
+
+    // Free-deed allowance (5 per device, metered by the fingerprint ledger)
+    freeDeedsRemaining?: number | null;
+    freeDeedsLimit?: number;
+    freeDeedsUnlimited?: boolean;
+    /** Opens the upgrade dialog once the free deeds are spent. */
+    onUpgrade?: () => void;
 }
 
 /** CSS keyframes for the lite-scan animation */
@@ -247,6 +254,10 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
     onToggleDock,
     isMinimized: controlledMinimized,
     onToggleMinimize,
+    freeDeedsRemaining = null,
+    freeDeedsLimit = 5,
+    freeDeedsUnlimited = false,
+    onUpgrade,
 }) => {
     const [internalMinimized, setInternalMinimized] = useState(false);
     const isMinimized = controlledMinimized !== undefined ? controlledMinimized : internalMinimized;
@@ -824,6 +835,54 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                     </div>
                 </div>
             </div>
+
+            {/* Free-deed allowance strip: keeps the 5 free deeds visible while the
+                user works, and turns into an upgrade prompt once they are spent. */}
+            {!isMinimized && !freeDeedsUnlimited && freeDeedsRemaining !== null && (
+                <div
+                    className={`shrink-0 flex items-center justify-between gap-2 border-b px-3.5 py-2 light-theme:text-gray-900 ${
+                        freeDeedsRemaining > 0
+                            ? 'border-emerald-500/30 bg-emerald-950/30 light-theme:bg-emerald-50'
+                            : 'border-amber-500/40 bg-amber-950/30 light-theme:bg-amber-50'
+                    }`}
+                >
+                    <div className="flex items-center gap-2 min-w-0">
+                        <span
+                            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider ${
+                                freeDeedsRemaining > 0
+                                    ? 'bg-emerald-400/20 text-emerald-300 border border-emerald-500/40 light-theme:text-emerald-800'
+                                    : 'bg-amber-400/20 text-amber-200 border border-amber-500/40 light-theme:text-amber-800'
+                            }`}
+                        >
+                            🎁 Free deeds
+                        </span>
+                        <span className="text-[11px] font-semibold text-gray-200 light-theme:text-gray-700 truncate">
+                            {freeDeedsRemaining > 0
+                                ? `${freeDeedsRemaining} of ${freeDeedsLimit} left`
+                                : 'All 5 free deeds used'}
+                        </span>
+                        {freeDeedsRemaining > 0 && (
+                            <span className="flex items-center gap-1" aria-hidden="true">
+                                {Array.from({ length: freeDeedsLimit }).map((_, index) => (
+                                    <span
+                                        key={index}
+                                        className={`h-1.5 w-1.5 rounded-full ${index < freeDeedsRemaining ? 'bg-emerald-400' : 'bg-gray-600'}`}
+                                    />
+                                ))}
+                            </span>
+                        )}
+                    </div>
+                    {freeDeedsRemaining <= 0 && onUpgrade && (
+                        <button
+                            onClick={onUpgrade}
+                            className="shrink-0 rounded-md bg-gradient-to-br from-amber-400 via-amber-500 to-orange-600 px-2.5 py-1 text-[11px] font-extrabold text-gray-900 shadow-sm hover:from-amber-300 hover:via-amber-400 hover:to-orange-500 transition-colors active:scale-95"
+                            title="Unlock unlimited AI deed drafting"
+                        >
+                            Unlock unlimited →
+                        </button>
+                    )}
+                </div>
+            )}
 
             {/* Dialog Content Area */}
             {!isMinimized && (
@@ -1500,6 +1559,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                 <div className="space-y-1">
                                                     <span className="text-[10px] text-gray-300 font-extrabold uppercase tracking-wider block">Point #</span>
                                                     <input
+                                                        key={`pob-pn-${selectedFile.id}-${selectedFile.calls[0]?.from ?? ''}`}
                                                         type="text"
                                                         defaultValue={selectedFile.calls[0]?.from ?? ''}
                                                         onBlur={(e) => {
@@ -1515,6 +1575,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                 <div className="space-y-1">
                                                     <span className="text-[10px] text-gray-300 font-extrabold uppercase tracking-wider block">Northing (Y)</span>
                                                     <input
+                                                        key={`pob-n-${selectedFile.id}-${selectedFile.pobOverride?.northing ?? 'none'}`}
                                                         type="number"
                                                         step="0.01"
                                                         defaultValue={selectedFile.pobOverride?.northing ?? ''}
@@ -1537,6 +1598,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                 <div className="space-y-1">
                                                     <span className="text-[10px] text-gray-300 font-extrabold uppercase tracking-wider block">Easting (X)</span>
                                                     <input
+                                                        key={`pob-e-${selectedFile.id}-${selectedFile.pobOverride?.easting ?? 'none'}`}
                                                         type="number"
                                                         step="0.01"
                                                         defaultValue={selectedFile.pobOverride?.easting ?? ''}

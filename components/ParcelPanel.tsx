@@ -1,5 +1,14 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
-import { PARCEL_GIS_SERVICES, PARCEL_LAYER_TAG, type ParcelFeatureSummary } from '../services/parcelGisService.ts';
+import {
+  PARCEL_LAYER_TAG,
+  type ParcelFeatureSummary,
+  type ParcelGisServiceDef,
+  type ParcelServiceCandidate,
+  getAllParcelServices,
+  saveCustomParcelService,
+  deleteCustomParcelService,
+  describeParcelService,
+} from '../services/parcelGisService.ts';
 import { type AnnotationCategoryStyle, type ParcelCadTextStyle, type ParcelLabelFormatter, DEFAULT_PARCEL_LABEL_FORMATTER } from '../types.ts';
 import { applyAnnotationTextCase } from '../utils/annotationTextStyle.ts';
 import { buildParcelLabelLines, resolveEffectiveParcelTextStyle } from '../utils/parcelLabelFormatter.ts';
@@ -22,14 +31,31 @@ export interface ParcelPanelProps {
   parcelLineCount: number;
   /** Most recent fetch summary (parcels with id/owner). */
   lastFetchedParcels: ParcelFeatureSummary[];
+  /** Set when owner/deed attributes came from a secondary county layer. */
+  lastEnrichment?: {
+    source: string;
+    sourceName?: string;
+    matched: number;
+    enriched: number;
+    auto: boolean;
+  } | null;
   /** True while a fetch is in flight. */
   isFetching: boolean;
   /** Trigger a fetch — App.tsx builds the bbox (inclusion or description) and calls the service. */
   onFetchParcels: (
-    serviceUrl: string,
+    service: ParcelGisServiceDef,
     mode: 'inclusion' | 'description',
     descriptionText?: string,
   ) => void;
+  /**
+   * Discover ArcGIS Online parcel layers covering the current AOI. This is the
+   * nationwide path: it finds the local county's layer on demand instead of
+   * relying on a hand-curated list.
+   */
+  onSearchParcelServices?: (
+    mode: 'inclusion' | 'description',
+    descriptionText?: string,
+  ) => Promise<ParcelServiceCandidate[]>;
   /** Remove every line in the project tagged with PARCEL_LAYER_TAG. */
   onClearParcels: () => void;
   /** Current parcel label formatter settings. */
@@ -58,6 +84,19 @@ export interface ParcelPanelProps {
 
 export type ParcelPanelMode = 'query' | 'labels' | 'parcels';
 
+const LAST_SERVICE_KEY = 'landsurv.parcel.lastService';
+
+/** Default to the last service used on this device, then the PA county fabric
+ *  the Boundary Agent shipped with, then whatever is first in the registry. */
+function readInitialServiceId(): string {
+  const all = getAllParcelServices();
+  try {
+    const saved = localStorage.getItem(LAST_SERVICE_KEY);
+    if (saved && all.some(s => s.id === saved)) return saved;
+  } catch { /* private mode */ }
+  return all.find(s => s.id === 'montco-pa')?.id ?? all[0]?.id ?? '';
+}
+
 /**
  * Boundary-Agent GIS panel for fetching public county parcel (tax-boundary)
  * layers from ArcGIS REST services.
@@ -70,8 +109,10 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
   inclusionSegmentCount,
   parcelLineCount,
   lastFetchedParcels,
+  lastEnrichment = null,
   isFetching,
   onFetchParcels,
+  onSearchParcelServices,
   onClearParcels,
   parcelLabelFormatter = DEFAULT_PARCEL_LABEL_FORMATTER,
   cadTextStyles = [],
@@ -86,10 +127,22 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
   reservedBottom = 0,
 }) => {
   const [activeMode, setActiveMode] = useState<ParcelPanelMode>('query');
-  const [selectedServiceId, setSelectedServiceId] = useState<string>(PARCEL_GIS_SERVICES[0]?.id ?? '');
+  const [services, setServices] = useState<ParcelGisServiceDef[]>(() => getAllParcelServices());
+  const [selectedServiceId, setSelectedServiceIdRaw] = useState<string>(() => readInitialServiceId());
   const [queryMode, setQueryMode] = useState<'inclusion' | 'description'>('description');
   const [descriptionText, setDescriptionText] = useState<string>('');
   const [parcelSearchFilter, setParcelSearchFilter] = useState<string>('');
+
+  // Custom-server + discovery state (nationwide coverage).
+  const [showCustomServer, setShowCustomServer] = useState(false);
+  const [customUrl, setCustomUrl] = useState('');
+  const [customLabel, setCustomLabel] = useState('');
+  const [isProbing, setIsProbing] = useState(false);
+  const [customError, setCustomError] = useState<string | null>(null);
+  const [customNotice, setCustomNotice] = useState<string | null>(null);
+  const [discoveries, setDiscoveries] = useState<ParcelServiceCandidate[]>([]);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
 
   // Floating window position & drag handling
   const panelRef = useRef<HTMLDivElement>(null);
@@ -288,9 +341,96 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
   }, [isDocked, reservedBottom, reservedRight]);
 
   const selectedService = useMemo(
-    () => PARCEL_GIS_SERVICES.find(s => s.id === selectedServiceId) ?? PARCEL_GIS_SERVICES[0],
-    [selectedServiceId],
+    () => services.find(s => s.id === selectedServiceId) ?? services[0],
+    [services, selectedServiceId],
   );
+
+  const statewideServices = useMemo(() => services.filter(s => s.scope === 'statewide'), [services]);
+  const countyServices = useMemo(
+    () => services.filter(s => s.scope !== 'statewide' && s.scope !== 'custom'),
+    [services],
+  );
+  const customServices = useMemo(() => services.filter(s => s.scope === 'custom'), [services]);
+
+  const setSelectedServiceId = useCallback((id: string) => {
+    setSelectedServiceIdRaw(id);
+    try { localStorage.setItem(LAST_SERVICE_KEY, id); } catch { /* private mode */ }
+  }, []);
+
+  const addService = useCallback((def: ParcelGisServiceDef) => {
+    saveCustomParcelService(def);
+    setServices(getAllParcelServices());
+    setSelectedServiceId(def.id);
+    setCustomError(null);
+    setCustomUrl('');
+    setCustomLabel('');
+    setShowCustomServer(false);
+  }, []);
+
+  const handleCheckCustomServer = useCallback(async () => {
+    const url = customUrl.trim();
+    if (!url || isProbing) return;
+    setIsProbing(true);
+    setCustomError(null);
+    setCustomNotice(null);
+    try {
+      const probe = await describeParcelService(url, { label: customLabel });
+      addService(probe.def);
+      setCustomNotice(
+        `✓ ${probe.layerName} · ${probe.def.parcelIdFields?.length ? probe.def.parcelIdFields.slice(0, 2).join(' / ') : 'no id field detected'} · added to your servers`,
+      );
+    } catch (e) {
+      setCustomError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsProbing(false);
+    }
+  }, [addService, customLabel, customUrl, isProbing, setSelectedServiceId]);
+
+  const currentQueryText = queryMode === 'description' ? descriptionText.trim() : undefined;
+  const canQuery = queryMode === 'inclusion' ? inclusionSegmentCount > 0 : (currentQueryText ?? '').length > 0;
+
+  const handleDiscover = useCallback(async () => {
+    if (!onSearchParcelServices || isDiscovering) return;
+    setIsDiscovering(true);
+    setDiscoverError(null);
+    setDiscoveries([]);
+    try {
+      const found = await onSearchParcelServices(queryMode, currentQueryText);
+      setDiscoveries(found);
+      if (found.length === 0) {
+        setDiscoverError('No parcel layers found for this area in ArcGIS Online. Try a nearby town name, or paste your county GIS server URL.');
+      }
+    } catch (e) {
+      setDiscoverError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsDiscovering(false);
+    }
+  }, [currentQueryText, isDiscovering, onSearchParcelServices, queryMode]);
+
+  const handleUseDiscovery = useCallback(async (candidate: ParcelServiceCandidate) => {
+    setIsProbing(true);
+    setCustomError(null);
+    setCustomNotice(null);
+    try {
+      const probe = await describeParcelService(candidate.url, { label: candidate.title });
+      addService(probe.def);
+      setDiscoveries([]);
+      setCustomNotice(`✓ ${probe.layerName} added — Fetch Parcels will use it.`);
+    } catch (e) {
+      setCustomError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsProbing(false);
+    }
+  }, [addService, setSelectedServiceId]);
+
+  const handleRemoveCustom = useCallback(() => {
+    if (!selectedService || selectedService.scope !== 'custom') return;
+    deleteCustomParcelService(selectedService.id);
+    const next = getAllParcelServices();
+    setServices(next);
+    setSelectedServiceId(next[0]?.id ?? '');
+    setCustomNotice(null);
+  }, [selectedService, setSelectedServiceId]);
 
   const hasInclusion = inclusionSegmentCount > 0;
   const stylePresetOptions: Array<{ value: NonNullable<ParcelLabelFormatter['stylePreset']>; label: string }> = [
@@ -304,14 +444,11 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
   const typographyLockedByCad = propertyOwnerStyleManagedByCategory || (parcelLabelFormatter.styleSource ?? 'local') === 'cad-manager';
   const effectiveParcelTextStyle = resolveEffectiveParcelTextStyle(parcelLabelFormatter, cadTextStyles, propertyOwnerCategory);
   
-  const canFetch =
-    !!selectedService &&
-    !isFetching &&
-    (queryMode === 'inclusion' ? hasInclusion : descriptionText.trim().length > 0);
+  const canFetch = !!selectedService && !isFetching && canQuery;
 
   const handleFetch = () => {
     if (!selectedService || !canFetch) return;
-    onFetchParcels(selectedService.url, queryMode, queryMode === 'description' ? descriptionText.trim() : undefined);
+    onFetchParcels(selectedService, queryMode, currentQueryText);
   };
 
   // Sample preview data for typography tab
@@ -502,28 +639,165 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                 </p>
               </div>
 
-              {/* County / service picker */}
+              {/* County / state / custom service picker */}
               <label className="block">
-                <span className="text-xs font-semibold text-gray-300 mb-1 block light-theme:text-gray-700">
-                  County GIS Service
+                <span className="flex items-baseline justify-between text-xs font-semibold text-gray-300 mb-1 light-theme:text-gray-700">
+                  <span>Parcel GIS Service</span>
+                  <span className="text-[10px] font-normal text-gray-500">{services.length} available</span>
                 </span>
                 <select
                   value={selectedServiceId}
                   onChange={e => setSelectedServiceId(e.target.value)}
                   className="w-full px-2.5 py-1.5 bg-gray-800 border border-gray-700 rounded-md text-xs text-gray-200 focus:outline-none focus:border-orange-500 light-theme:bg-gray-100 light-theme:border-gray-300 light-theme:text-gray-800"
                 >
-                  {PARCEL_GIS_SERVICES.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.label} ({s.region})
-                    </option>
-                  ))}
+                  {statewideServices.length > 0 && (
+                    <optgroup label="Statewide (all counties)">
+                      {statewideServices.map(s => (
+                        <option key={s.id} value={s.id}>{s.region}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {countyServices.length > 0 && (
+                    <optgroup label="Counties">
+                      {countyServices.map(s => (
+                        <option key={s.id} value={s.id}>{s.label}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {customServices.length > 0 && (
+                    <optgroup label="Your servers">
+                      {customServices.map(s => (
+                        <option key={s.id} value={s.id}>{s.label}</option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
                 {selectedService && (
                   <span className="text-[10px] text-gray-500 mt-1 block truncate" title={selectedService.url}>
                     {selectedService.region} · {selectedService.url}
                   </span>
                 )}
+                {selectedService?.scope === 'custom' && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveCustom}
+                    className="mt-1 text-[10px] font-semibold text-rose-400 hover:text-rose-300"
+                  >
+                    Remove this server
+                  </button>
+                )}
               </label>
+
+              {/* Nationwide helpers: discover near the AOI, or add any ArcGIS server */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleDiscover}
+                  disabled={!onSearchParcelServices || !canQuery || isDiscovering || isProbing}
+                  className={`px-2.5 py-1.5 rounded-md text-[11px] font-semibold border transition-all flex items-center justify-center gap-1.5 ${
+                    onSearchParcelServices && canQuery && !isDiscovering
+                      ? 'bg-gray-800 border-cyan-700/70 text-cyan-300 hover:bg-gray-700 light-theme:bg-gray-100 light-theme:border-gray-300'
+                      : 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed'
+                  }`}
+                  title="Search ArcGIS Online for parcel layers covering this area"
+                >
+                  {isDiscovering
+                    ? <><div className="w-3 h-3 border-2 border-cyan-300/30 border-t-cyan-300 rounded-full animate-spin" /><span>Searching…</span></>
+                    : <><span aria-hidden="true">🔎</span><span>Find layers here</span></>}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowCustomServer(v => !v); setCustomError(null); }}
+                  className="px-2.5 py-1.5 rounded-md text-[11px] font-semibold border bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 transition-all flex items-center justify-center gap-1.5 light-theme:bg-gray-100 light-theme:border-gray-300 light-theme:text-gray-700"
+                  title="Use your own county / consultant ArcGIS REST layer"
+                >
+                  <span aria-hidden="true">＋</span>
+                  <span>Add server URL</span>
+                </button>
+              </div>
+
+              {showCustomServer && (
+                <div className="rounded-lg border border-orange-500/40 bg-orange-950/15 p-2.5 space-y-2">
+                  <p className="text-[11px] text-gray-300 leading-relaxed light-theme:text-gray-600">
+                    Paste the county's ArcGIS REST layer URL (usually ends in{' '}
+                    <span className="font-mono text-orange-300">/FeatureServer/0</span>). A service root also works — we
+                    probe it and pick the parcel polygon layer. It is saved on this device.
+                  </p>
+                  <input
+                    type="url"
+                    value={customUrl}
+                    onChange={e => setCustomUrl(e.target.value)}
+                    placeholder="https://gis.examplecounty.gov/arcgis/rest/services/Parcels/FeatureServer/0"
+                    className="w-full px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-[11px] font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:border-orange-500"
+                    onKeyDown={e => { if (e.key === 'Enter') handleCheckCustomServer(); }}
+                  />
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={customLabel}
+                      onChange={e => setCustomLabel(e.target.value)}
+                      placeholder="Label (optional) — e.g. York County, PA"
+                      className="flex-1 min-w-0 px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-[11px] text-gray-200 placeholder-gray-600 focus:outline-none focus:border-orange-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCheckCustomServer}
+                      disabled={!customUrl.trim() || isProbing}
+                      className={`px-3 py-1.5 rounded-md text-[11px] font-bold border transition-all flex items-center gap-1.5 ${
+                        customUrl.trim() && !isProbing
+                          ? 'bg-orange-600 border-orange-400 text-white hover:bg-orange-500'
+                          : 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed'
+                      }`}
+                    >
+                      {isProbing && <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                      {isProbing ? 'Checking…' : 'Test & add'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {customError && (
+                <div className="text-[11px] text-rose-300 bg-rose-950/40 border border-rose-800/60 rounded-md p-2">
+                  {customError}
+                </div>
+              )}
+              {customNotice && (
+                <div className="text-[11px] text-emerald-300 bg-emerald-950/40 border border-emerald-800/60 rounded-md p-2">
+                  {customNotice}
+                </div>
+              )}
+              {discoverError && (
+                <div className="text-[11px] text-amber-300 bg-amber-950/40 border border-amber-800/60 rounded-md p-2">
+                  {discoverError}
+                </div>
+              )}
+
+              {discoveries.length > 0 && (
+                <div className="rounded-lg border border-cyan-700/50 bg-gray-950/60 p-2 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-cyan-300">{discoveries.length} parcel layers near this area</span>
+                    <button type="button" onClick={() => setDiscoveries([])} className="text-[10px] text-gray-500 hover:text-gray-300">Dismiss</button>
+                  </div>
+                  <div className="max-h-44 overflow-y-auto space-y-1">
+                    {discoveries.map(c => (
+                      <div key={c.itemId || c.url} className="flex items-start gap-2 rounded-md bg-gray-900/70 border border-gray-800 px-2 py-1.5">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[11px] font-semibold text-gray-200 truncate" title={c.title}>{c.title}</div>
+                          <div className="text-[10px] text-gray-500 truncate" title={c.url}>{c.publisher || 'unknown publisher'} · {c.url}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleUseDiscovery(c)}
+                          disabled={isProbing}
+                          className="shrink-0 px-2 py-1 rounded text-[10px] font-bold bg-cyan-600 hover:bg-cyan-500 text-white disabled:bg-gray-700 disabled:text-gray-500"
+                        >
+                          Use
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Query Area Mode Selector */}
               <div>
@@ -627,6 +901,17 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                   Clear
                 </button>
               </div>
+
+              {/* Owner / deed enrichment source (second-layer lookup) */}
+              {lastEnrichment && lastEnrichment.enriched > 0 && (
+                <div className="rounded-md border border-cyan-800/60 bg-cyan-950/25 px-2.5 py-1.5 text-[10px] leading-relaxed text-cyan-200">
+                  ✍️ Owner / deed data for{' '}
+                  <span className="font-bold">{lastEnrichment.enriched} parcel{lastEnrichment.enriched === 1 ? '' : 's'}</span>{' '}
+                  came from{' '}
+                  <span className="font-semibold">{lastEnrichment.sourceName ?? 'the county attribute layer'}</span>
+                  {lastEnrichment.auto ? ' (auto-detected)' : ''}.
+                </div>
+              )}
 
               {/* Quick Status Bar */}
               <div className="pt-2 border-t border-gray-800/80 flex items-center justify-between text-xs text-gray-400">

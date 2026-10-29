@@ -6,6 +6,7 @@ import { LINEAR_UNIT_OPTIONS, getLinearUnitAbbreviation, type LinearUnit } from 
 import { setHolidayThemeOverride } from './InitialAgentSelection.tsx';
 import { useErrorReporter } from '../contexts/AppStateContext';
 import { PROVIDER_KEY_URLS, type ByokProvider } from '../services/providerKeys.ts';
+import { WebGpuBasemap, isWebGpuEnabled, getGpuPowerPreference, WEBGPU_ENABLED_KEY, WEBGPU_POWER_KEY, WEBGPU_PREF_EVENT, type GpuPowerPreference } from '../utils/webgpuBasemap.ts';
 
 const AUTO_SELECTOR_OPTION = 'auto';
 const getSelectorModelValue = (modelName: string): string => modelName;
@@ -67,6 +68,26 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     const [isProbingGeoAi, setIsProbingGeoAi] = useState(false);
     const [geoAiProbeResult, setGeoAiProbeResult] = useState<{ status: 'ok' | 'error'; message: string } | null>(null);
     const googleMapsSectionRef = useRef<HTMLDivElement | null>(null);
+    const [webgpuEnabled, setWebgpuEnabled] = useState(() => isWebGpuEnabled());
+    const [gpuPower, setGpuPower] = useState<GpuPowerPreference>(() => getGpuPowerPreference());
+    const webgpuSupported = WebGpuBasemap.isSupported();
+
+    const handleWebgpuEnabledChange = (enabled: boolean) => {
+        setWebgpuEnabled(enabled);
+        try {
+            if (enabled) localStorage.removeItem(WEBGPU_ENABLED_KEY);
+            else localStorage.setItem(WEBGPU_ENABLED_KEY, 'off');
+        } catch { /* storage unavailable */ }
+        window.dispatchEvent(new Event(WEBGPU_PREF_EVENT));
+    };
+
+    const handleGpuPowerChange = (preference: GpuPowerPreference) => {
+        setGpuPower(preference);
+        try {
+            localStorage.setItem(WEBGPU_POWER_KEY, preference);
+        } catch { /* storage unavailable */ }
+        window.dispatchEvent(new Event(WEBGPU_PREF_EVENT));
+    };
     const { reportError, notify } = useErrorReporter();
 
     const handleProbeGeoAi = async () => {
@@ -506,6 +527,57 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                 </span>
                             </span>
                         </label>
+                    </div>
+                </div>
+            </div>
+            {/* Graphics & WebGPU Acceleration Section */}
+            <div>
+                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800 flex items-center gap-2">
+                    <span className="text-emerald-400 font-mono text-base font-bold">GPU</span>
+                    <span>Graphics &amp; WebGPU Acceleration</span>
+                </h3>
+                <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-4 light-theme:bg-gray-100 light-theme:border-gray-300">
+                    <div>
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={webgpuEnabled}
+                                onChange={e => handleWebgpuEnabledChange(e.target.checked)}
+                                className={`mt-0.5 h-4 w-4 rounded border-gray-500 bg-gray-700 ${themeAccent} focus:ring-2 ${themeFocusRing}`}
+                            />
+                            <span>
+                                <span className="block text-sm font-medium text-gray-200 light-theme:text-gray-800">Enable WebGPU Hardware Acceleration</span>
+                                <span className="block text-xs text-gray-400 mt-0.5 light-theme:text-gray-600">
+                                    Renders basemap imagery and anti-aliased linework on the GPU. Turn it off to force the Canvas2D fallback, which helps on machines with unstable graphics drivers.
+                                </span>
+                            </span>
+                        </label>
+                    </div>
+                    <div>
+                        <label htmlFor="webgpu-power" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">GPU Power Preference</label>
+                        <select
+                            id="webgpu-power"
+                            value={gpuPower}
+                            onChange={e => handleGpuPowerChange(e.target.value as GpuPowerPreference)}
+                            className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
+                        >
+                            <option value="high-performance">High Performance (Discrete GPU)</option>
+                            <option value="low-power">Low Power (Integrated GPU / Battery Saver)</option>
+                            <option value="default">Default (System Decision)</option>
+                        </select>
+                        <p className="text-xs text-gray-500 mt-1 light-theme:text-gray-600">
+                            Asks the browser for a discrete or integrated GPU. The viewport re-initialises its renderer immediately when this changes.
+                        </p>
+                    </div>
+                    <div className="flex items-start gap-2 pt-1 border-t border-gray-600/50">
+                        <span className={`mt-1 h-2 w-2 rounded-full shrink-0 ${!webgpuSupported ? 'bg-red-500' : webgpuEnabled ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                        <span className="text-xs text-gray-400 light-theme:text-gray-600">
+                            {!webgpuSupported
+                                ? 'This browser does not expose WebGPU, so the Canvas2D fallback is always used.'
+                                : webgpuEnabled
+                                    ? 'WebGPU is available in this browser and hardware acceleration is on.'
+                                    : 'WebGPU is available but turned off — the Canvas2D fallback is in use.'}
+                        </span>
                     </div>
                 </div>
             </div>

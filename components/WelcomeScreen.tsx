@@ -14,6 +14,14 @@ export interface WelcomeScreenProps {
   version: string;
   onLaunchAgenticCad?: (mode?: 'blank' | 'sample' | 'existing') => void;
   onGoHome?: () => void;
+  /** Opens the deed upload screen (Boundary Agent input) directly. */
+  onOpenDeedUpload?: () => void;
+  /** Free deeds left on this device (fingerprint ledger); null while loading. */
+  freeDeedsRemaining?: number | null;
+  /** Total free deeds granted per device. */
+  freeDeedsLimit?: number;
+  /** True when the user holds a key and deeds are not metered. */
+  freeDeedsUnlimited?: boolean;
   hasExistingPoints?: boolean;
   existingPointCount?: number;
   initialMode?: WelcomeMode;
@@ -24,6 +32,10 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   version,
   onLaunchAgenticCad,
   onGoHome,
+  onOpenDeedUpload,
+  freeDeedsRemaining = null,
+  freeDeedsLimit = 5,
+  freeDeedsUnlimited = false,
   hasExistingPoints = false,
   existingPointCount = 0,
   initialMode = 'main'
@@ -46,6 +58,14 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   const handleHomeClick = () => {
     if (onGoHome) {
       onGoHome();
+    } else {
+      onClose();
+    }
+  };
+
+  const handleDeedDraftClick = () => {
+    if (onOpenDeedUpload) {
+      onOpenDeedUpload();
     } else {
       onClose();
     }
@@ -159,8 +179,8 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 </div>
               </div>
 
-              {/* SECONDARY DESTINATIONS: Home & Free Code */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* SECONDARY DESTINATIONS: Home, Draft Deed & Free Code */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {/* Home Destination */}
                 <div 
                   onClick={handleHomeClick}
@@ -177,12 +197,75 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   </div>
                 </div>
 
+                {/* Draft Deed Destination */}
+                <div 
+                  onClick={handleDeedDraftClick}
+                  className="group relative overflow-hidden rounded-lg border border-l-0 border-dashed border-green-500/60 hover:border-green-400 bg-gray-800/40 p-4 sm:p-5 transition-colors duration-150 cursor-pointer light-theme:bg-gray-50 light-theme:border-green-500 light-theme:hover:border-green-600"
+                >
+                  <span className="absolute inset-y-0 left-0 w-1 bg-green-500" aria-hidden="true" />
+                  <div className="space-y-1 pl-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="text-base font-semibold text-white light-theme:text-gray-900">
+                        Draft Deed
+                      </h4>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider border ${
+                          freeDeedsUnlimited || (freeDeedsRemaining ?? freeDeedsLimit) > 0
+                            ? 'bg-green-400/20 text-green-300 border-green-400/40 light-theme:text-green-800 light-theme:bg-green-100'
+                            : 'bg-amber-400/20 text-amber-200 border-amber-400/40 light-theme:text-amber-800 light-theme:bg-amber-100'
+                        }`}
+                      >
+                        {freeDeedsUnlimited ? 'Unlimited deeds' : `🎁 ${freeDeedsLimit} free deeds`}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-400 light-theme:text-gray-600 leading-relaxed">
+                      Upload a deed PDF or paste a legal description and have the Boundary Agent draft the parcel.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {!freeDeedsUnlimited && (
+                        <span className="flex items-center gap-1" aria-hidden="true">
+                          {Array.from({ length: freeDeedsLimit }).map((_, index) => (
+                            <span
+                              key={index}
+                              className={`h-1.5 w-1.5 rounded-full ${
+                                index < (freeDeedsRemaining ?? freeDeedsLimit) ? 'bg-green-400' : 'bg-gray-600'
+                              }`}
+                            />
+                          ))}
+                        </span>
+                      )}
+                      <p
+                        className={`text-xs font-semibold ${
+                          freeDeedsUnlimited
+                            ? 'text-green-400 light-theme:text-green-700'
+                            : freeDeedsRemaining === null
+                              ? 'text-gray-500 light-theme:text-gray-500'
+                              : freeDeedsRemaining > 0
+                                ? 'text-green-300 light-theme:text-green-700'
+                                : 'text-amber-300 light-theme:text-amber-700'
+                        }`}
+                      >
+                        {freeDeedsUnlimited
+                          ? 'Unlimited deeds with your key'
+                          : freeDeedsRemaining === null
+                            ? `${freeDeedsLimit} free deeds included`
+                            : freeDeedsRemaining > 0
+                              ? `${freeDeedsRemaining} of ${freeDeedsLimit} free deeds remaining`
+                              : 'Free deeds used — add a key to continue'}
+                      </p>
+                    </div>
+                    <p className="pt-1 text-xs font-extrabold text-green-300 group-hover:text-green-200 light-theme:text-green-700 light-theme:group-hover:text-green-800">
+                      {!freeDeedsUnlimited && freeDeedsRemaining === 0 ? 'Unlock unlimited →' : 'Start free →'}
+                    </p>
+                  </div>
+                </div>
+
                 {/* Free Code Destination */}
                 <div 
                   onClick={() => setMode('free-code')}
-                  className="group relative overflow-hidden rounded-lg border border-l-0 border-dashed border-emerald-500/60 hover:border-emerald-400 bg-gray-800/40 p-4 sm:p-5 transition-colors duration-150 cursor-pointer light-theme:bg-gray-50 light-theme:border-emerald-500 light-theme:hover:border-emerald-600"
+                  className="group relative overflow-hidden rounded-lg border border-l-0 border-dashed border-yellow-500/60 hover:border-yellow-400 bg-gray-800/40 p-4 sm:p-5 transition-colors duration-150 cursor-pointer light-theme:bg-gray-50 light-theme:border-yellow-500 light-theme:hover:border-yellow-600"
                 >
-                  <span className="absolute inset-y-0 left-0 w-1 bg-emerald-500" aria-hidden="true" />
+                  <span className="absolute inset-y-0 left-0 w-1 bg-yellow-500" aria-hidden="true" />
                   <div className="space-y-1 pl-2">
                     <h4 className="text-base font-semibold text-white light-theme:text-gray-900 flex items-center gap-2">
                       Free Software

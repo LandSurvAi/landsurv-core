@@ -17,6 +17,18 @@ interface DeedInputProps {
   backButtonTitle?: string;
   /** Optional: skip the upload screen and open the canvas with an empty boundary editor. */
   onStartFromScratch?: () => void;
+  /** Free deeds left on this device (fingerprint ledger); null while unknown. */
+  freeDeedsRemaining?: number | null;
+  /** Total free deeds granted per device. */
+  freeDeedsLimit?: number;
+  /** True when the user holds a key, so deeds are not metered. */
+  freeDeedsUnlimited?: boolean;
+  /** True when the last count came from the offline fallback. */
+  freeDeedsUnverified?: boolean;
+  /** Opens the upgrade dialog (used by the "out of free deeds" call to action). */
+  onShowUpgrade?: () => void;
+  /** Opens the Boundary Agent GIS panel (county parcel lookup) on the canvas. */
+  onOpenGis?: () => void;
 }
 
 interface FileWithPages {
@@ -26,7 +38,7 @@ interface FileWithPages {
 
 type InputMode = 'text' | 'files';
 
-const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmitted, onGoBack, backButtonTitle = 'Go to Home Screen', onStartFromScratch }) => {
+const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmitted, onGoBack, backButtonTitle = 'Go to Home Screen', onStartFromScratch, freeDeedsRemaining = null, freeDeedsLimit = 5, freeDeedsUnlimited = false, freeDeedsUnverified = false, onShowUpgrade, onOpenGis }) => {
   const [deedText, setDeedText] = useState('');
   const [mode, setMode] = useState<InputMode>('files');
   const [isDragging, setIsDragging] = useState(false);
@@ -273,6 +285,10 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
     document.getElementById('deed-file-input')?.click();
   };
 
+  // null = count still loading; treat it as a full allowance for the offer copy.
+  const freeDeedsLeft = freeDeedsRemaining === null ? freeDeedsLimit : Math.max(0, freeDeedsRemaining);
+  const isOutOfFreeDeeds = !freeDeedsUnlimited && freeDeedsLeft <= 0;
+
   const handleFolderClick = () => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -309,6 +325,79 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
       </h1>
       
       <div className="w-full max-w-2xl flex flex-col items-center gap-4">
+        {/* Free-deed offer: 5 per device, metered by the fingerprint ledger. */}
+        <div
+          className={`w-full rounded-xl border px-4 py-3 text-left ${
+            freeDeedsUnlimited
+              ? 'border-emerald-500/40 bg-emerald-950/30'
+              : isOutOfFreeDeeds
+                ? 'border-amber-500/60 bg-amber-950/30'
+                : 'border-emerald-400/60 bg-gradient-to-r from-emerald-950/60 via-gray-900 to-emerald-950/40 shadow-lg shadow-emerald-950/40'
+          }`}
+          title={
+            freeDeedsUnlimited
+              ? 'Your key includes unlimited deed processing'
+              : freeDeedsUnverified
+                ? 'Offline count — will sync with the server when available'
+                : `This device gets ${freeDeedsLimit} free deeds`
+          }
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="flex flex-wrap items-center gap-2 text-sm font-extrabold text-white">
+                <span className="text-base leading-none">🎁</span>
+                {freeDeedsUnlimited
+                  ? 'Unlimited deeds on your key'
+                  : isOutOfFreeDeeds
+                    ? `You've used all ${freeDeedsLimit} free deeds`
+                    : `${freeDeedsLimit} free deeds included`}
+                {!freeDeedsUnlimited && !isOutOfFreeDeeds && (
+                  <span className="rounded-full bg-emerald-400/20 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-emerald-300 border border-emerald-400/40">
+                    No card needed
+                  </span>
+                )}
+                {freeDeedsUnverified && !freeDeedsUnlimited && (
+                  <span className="text-[10px] font-normal text-emerald-200/60">offline count</span>
+                )}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-gray-300">
+                {freeDeedsUnlimited
+                  ? 'Your Enabling Key covers every deed you upload.'
+                  : isOutOfFreeDeeds
+                    ? 'Unlock unlimited AI deed drafting with an Enabling Key or compute credits — your drafted boundaries stay on the canvas.'
+                    : `${freeDeedsLeft} of ${freeDeedsLimit} left. Upload a deed and the Boundary Agent drafts the parcel for you.`}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
+              {!freeDeedsUnlimited && (
+                <div
+                  className="flex items-center gap-1"
+                  aria-label={`${freeDeedsLeft} of ${freeDeedsLimit} free deeds left`}
+                >
+                  {Array.from({ length: freeDeedsLimit }).map((_, index) => (
+                    <span
+                      key={index}
+                      className={`h-2.5 w-2.5 rounded-full ${
+                        index < freeDeedsLeft ? 'bg-emerald-400 shadow-sm shadow-emerald-500/50' : 'bg-gray-600'
+                      }`}
+                    />
+                  ))}
+                </div>
+              )}
+              {isOutOfFreeDeeds && onShowUpgrade && (
+                <button
+                  type="button"
+                  onClick={onShowUpgrade}
+                  className="rounded-lg bg-gradient-to-br from-amber-400 via-amber-500 to-orange-600 px-3 py-1.5 text-xs font-extrabold text-gray-900 shadow-md hover:from-amber-300 hover:via-amber-400 hover:to-orange-500 transition-colors active:scale-95"
+                >
+                  Unlock unlimited →
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
         <p className="text-gray-400 mb-2">
           Paste the legal description or upload a PDF/image (including scans) for the AI to analyze and plot.
         </p>
@@ -423,7 +512,7 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
         )}
 
         {mode === 'text' && (
-          <div className="mt-6 text-center text-gray-400">
+          <div className="text-center text-gray-400">
             <p>
               Or,{' '}
               <button
@@ -436,15 +525,28 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
           </div>
         )}
 
-        {onStartFromScratch && (
-          <div className="mt-4 text-center">
-            <button
-              onClick={onStartFromScratch}
-              className="text-sm px-4 py-2 border border-gray-600 text-gray-300 rounded-lg hover:border-green-500 hover:text-green-300 hover:bg-gray-800/60 transition-colors"
-              title="Skip upload and enter bearings/distances by hand in the Boundary Editor"
-            >
-              Skip — start a blank boundary from scratch →
-            </button>
+        {/* Secondary ways in: no upload required. */}
+        {(onStartFromScratch || onOpenGis) && (
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            {onStartFromScratch && (
+              <button
+                onClick={onStartFromScratch}
+                className="text-sm px-4 py-2 border border-gray-600 text-gray-300 rounded-lg hover:border-green-500 hover:text-green-300 hover:bg-gray-800/60 transition-colors"
+                title="Skip upload and enter bearings/distances by hand in the Boundary Editor"
+              >
+                Skip — start a blank boundary from scratch →
+              </button>
+            )}
+            {onOpenGis && (
+              <button
+                onClick={onOpenGis}
+                className="inline-flex items-center gap-2 text-sm px-4 py-2 border border-gray-600 text-gray-300 rounded-lg hover:border-green-500 hover:text-green-300 hover:bg-gray-800/60 transition-colors"
+                title="Pull the county's tax-parcel boundaries (parcel ID, owner, deed book/page) onto the canvas with the Boundary Agent GIS panel"
+              >
+                <CourthouseIcon className="w-4 h-4" />
+                Look up parcel in GIS →
+              </button>
+            )}
           </div>
         )}
       </div>

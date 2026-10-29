@@ -28,7 +28,7 @@ import proj4 from 'proj4';
 import { useAppState, useErrorReporter } from '../contexts/AppStateContext';
 import { useCanvasState } from '../contexts/CanvasStateContext';
 import { getStaticMap, clearStaticMapsCache } from '../services/staticMapsService';
-import { WebGpuBasemap } from '../utils/webgpuBasemap';
+import { WebGpuBasemap, isWebGpuEnabled, WEBGPU_PREF_EVENT } from '../utils/webgpuBasemap';
 import { clearMapCache, decodeImageCached } from '../utils/mapTileCache';
 import {
     TitleblockEditor,
@@ -969,7 +969,14 @@ const ViewportBasemapCanvas: React.FC<ViewportBasemapCanvasProps> = React.memo((
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const gpuRef = useRef<WebGpuBasemap | null>(null);
-    const [use2D, setUse2D] = useState(!WebGpuBasemap.isSupported());
+    const [use2D, setUse2D] = useState(!WebGpuBasemap.isSupported() || !isWebGpuEnabled());
+
+    // Follow the Settings → Graphics & WebGPU toggle without a reload.
+    useEffect(() => {
+        const onPrefsChanged = () => setUse2D(!isWebGpuEnabled() || !WebGpuBasemap.isSupported());
+        window.addEventListener(WEBGPU_PREF_EVENT, onPrefsChanged);
+        return () => window.removeEventListener(WEBGPU_PREF_EVENT, onPrefsChanged);
+    }, []);
 
     const wpx = Math.round(vp.wIn * ppi);
     const hpx = Math.round(vp.hIn * ppi);

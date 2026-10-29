@@ -190,7 +190,6 @@ const DemoRequestModal: React.FC<DemoRequestModalProps> = ({ isOpen, onClose }) 
                     onChange={(e) => setEmailConfirm(e.target.value)}
                     required
                     autoComplete="off"
-                    autoFocus
                     onPaste={(e) => e.preventDefault()}
                     onDrop={(e) => e.preventDefault()}
                     disabled={stage === 'submitting'}

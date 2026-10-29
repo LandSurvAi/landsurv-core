@@ -56,6 +56,8 @@ export interface UpgradeModalProps {
   serviceAccessExpiresAt?: string | null;
   computeCredits?: number;
   initialPlan?: 'service' | 'compute';
+  /** Contextual banner, e.g. the free-deed allowance running out. */
+  notice?: { title: string; message: string } | null;
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -85,6 +87,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
   hasServiceAccess = false,
   serviceAccessExpiresAt = null,
   computeCredits = 0,
+  notice = null,
 }) => {
   const initialEmail = (customerEmail && customerEmail !== 'msersen@gmail.com')
     ? customerEmail
@@ -373,6 +376,16 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
 
         {/* Scrollable Content (scrolls inside modal, footer stays pinned at bottom) */}
         <div className="flex-1 min-h-0 px-5 py-3.5 overflow-y-auto space-y-4">
+          {notice && (
+            <div
+              role="status"
+              className="rounded-lg border border-amber-500/50 bg-amber-950/40 px-3 py-2.5"
+            >
+              <p className="text-xs font-bold text-amber-200">{notice.title}</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-amber-100/80">{notice.message}</p>
+            </div>
+          )}
+
           {/* Section 1: Service Access */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
@@ -768,7 +781,6 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                           ? 'border-emerald-500/80 focus:ring-emerald-400 focus:border-emerald-400'
                           : 'border-gray-700 focus:ring-emerald-400 focus:border-emerald-400'
                     }`}
-                    autoFocus
                   />
                   {emailFullyVerified && (
                     <span className="shrink-0 inline-flex items-center px-2 py-0.5 text-xs font-bold text-emerald-300 bg-emerald-950/70 border border-emerald-500/50 rounded-md">

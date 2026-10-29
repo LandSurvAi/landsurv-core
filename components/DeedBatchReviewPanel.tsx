@@ -14,7 +14,7 @@ import {
   runCountyAdapterPreflight,
   type BatchPreflightResult,
 } from '../services/batchDeedProcessor.ts';
-import { PARCEL_GIS_SERVICES } from '../services/parcelGisService.ts';
+import { getAllParcelServices, findParcelServiceById } from '../services/parcelGisService.ts';
 
 export interface BatchParcelLabelPoint {
   parcelId: string | null;
@@ -26,7 +26,7 @@ export interface DeedBatchReviewPanelProps {
   job: DeedBatchJob;
   countyCandidates: ParcelMatchCandidate[];
   parcelLabelPoints: BatchParcelLabelPoint[];
-  /** Active county service ID (matches PARCEL_GIS_SERVICES[].id). */
+  /** Active parcel service ID (built-in or user-added). */
   activeCountyServiceId?: string;
   onComputeFile: (fileId: string) => void;
   onCoarseAlign: (fileId: string, targetParcelId: string) => void;
@@ -267,16 +267,16 @@ export const DeedBatchReviewPanel: React.FC<DeedBatchReviewPanelProps> = ({
   };
 
   const handleRunPreflight = async () => {
-    const serviceId = activeCountyServiceId ?? PARCEL_GIS_SERVICES[0]?.id;
-    const service = PARCEL_GIS_SERVICES.find(s => s.id === serviceId);
+    const service = (activeCountyServiceId ? findParcelServiceById(activeCountyServiceId) : null)
+      ?? getAllParcelServices()[0];
     if (!service) return;
     setPreflightRunning(true);
     setPreflight(null);
     try {
       const result = await runCountyAdapterPreflight(
         service.url,
-        service.parcelIdFields,
-        service.ownerFields,
+        service.parcelIdFields ?? [],
+        service.ownerFields ?? [],
         service.attributeLookup?.deedBookFields,
         service.attributeLookup?.deedPageFields,
       );

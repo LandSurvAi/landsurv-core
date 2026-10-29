@@ -35,8 +35,14 @@ export interface EsriServiceInfoLite {
   objectIdField?: string;
   /** Uppercased field names present on the layer. */
   fieldsUpper: string[];
+  /** Field names exactly as the service reports them (SQL-safe casing). */
+  fieldNames: string[];
   /** esriGeometryPolygon / esriGeometryPolyline / esriGeometryPoint … */
   geometryType?: string;
+  /** Sibling layers advertised by a service root (used for attribute enrichment). */
+  layers?: Array<{ id: number; name: string }>;
+  /** Non-spatial tables advertised by a service root (CAMA/assessment data). */
+  tables?: Array<{ id: number; name: string }>;
 }
 
 export interface EsriFetchRetryOptions {
@@ -225,7 +231,7 @@ export async function getServiceInfo(url: string, opts: EsriFetchRetryOptions = 
     return ses;
   }
 
-  const fallback: EsriServiceInfoLite = { supportsPagination: false, fieldsUpper: [] };
+  const fallback: EsriServiceInfoLite = { supportsPagination: false, fieldsUpper: [], fieldNames: [] };
   try {
     const svcInfo = await fetchEsriJson<{
       spatialReference?: { wkid?: number; latestWkid?: number };
@@ -236,6 +242,8 @@ export async function getServiceInfo(url: string, opts: EsriFetchRetryOptions = 
       objectIdField?: string;
       fields?: Array<{ name?: string; type?: string }>;
       geometryType?: string;
+      layers?: Array<{ id?: number; name?: string }>;
+      tables?: Array<{ id?: number; name?: string }>;
     }>(`${url}?f=json`, { ...opts, retries: opts.retries ?? 1 });
 
     const srObj = svcInfo?.spatialReference ?? svcInfo?.extent?.spatialReference;
@@ -247,7 +255,14 @@ export async function getServiceInfo(url: string, opts: EsriFetchRetryOptions = 
       supportsPagination: !!(svcInfo?.advancedQueryCapabilities?.supportsPagination ?? svcInfo?.supportsPagination),
       objectIdField: svcInfo?.objectIdField ?? oidFromFields,
       fieldsUpper: (svcInfo?.fields ?? []).map(f => String(f?.name ?? '').toUpperCase()).filter(Boolean),
+      fieldNames: (svcInfo?.fields ?? []).map(f => String(f?.name ?? '')).filter(Boolean),
       geometryType: svcInfo?.geometryType,
+      layers: (svcInfo?.layers ?? [])
+        .filter(l => Number.isFinite(Number(l?.id)))
+        .map(l => ({ id: Number(l.id), name: String(l?.name ?? '') })),
+      tables: (svcInfo?.tables ?? [])
+        .filter(t => Number.isFinite(Number(t?.id)))
+        .map(t => ({ id: Number(t.id), name: String(t?.name ?? '') })),
     };
     svcInfoMemCache.set(url, { at: Date.now(), info });
     writeSessionCache(url, info);

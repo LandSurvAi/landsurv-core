@@ -286,6 +286,12 @@ import { useGeolocation } from './hooks/useGeolocation.ts';
 import { useInitialLoader } from './hooks/useInitialLoader.ts';
 import { useSubdomainRouting } from './hooks/useSubdomainRouting.ts';
 import { useUsageTimer } from './hooks/useUsageTimer.ts';
+import {
+  consumeFreeDeed,
+  refreshDeedCreditStatus,
+  FREE_DEED_LIMIT,
+  type DeedCreditSnapshot,
+} from './services/deedCredits.ts';
 import { useCheckoutRouting } from './hooks/useCheckoutRouting.tsx';
 
 // ============================================================================
@@ -1195,7 +1201,7 @@ const AppContent = () => {
   // On first agent click (after splash + API key) we block the user with a
   // signature form. Persisted in localStorage so it appears only once per device.
   const [showLegalGate, setShowLegalGate] = useState(false);
-  const pendingLegalLaunchRef = useRef<'blank' | 'sample' | 'existing' | null>(null);
+  const pendingLegalLaunchRef = useRef<'blank' | 'sample' | 'existing' | 'deed' | null>(null);
   const [hasLegalSignature, setHasLegalSignature] = useState<boolean>(() => {
     try { return hasSignedLegalAgreement(); } catch { return false; }
   });
@@ -1577,6 +1583,7 @@ const AppContent = () => {
   // County parcel (tax-boundary) GIS fetch state � Boundary Agent feature.
   const [isFetchingParcels, setIsFetchingParcels] = useState(false);
   const [lastFetchedParcels, setLastFetchedParcels] = useState<import('./services/parcelGisService.ts').ParcelFeatureSummary[]>([]);
+  const [lastParcelEnrichment, setLastParcelEnrichment] = useState<import('./services/parcelGisService.ts').ParcelEnrichmentSummary | null>(null);
   const [isParcelPanelVisible, setIsParcelPanelVisible] = useState(false);
   const [isParcelPanelDocked, setIsParcelPanelDocked] = useState(true);
   const [isParcelPanelMinimized, setIsParcelPanelMinimized] = useState(false);
@@ -1955,6 +1962,9 @@ const AppContent = () => {
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showHostCostReminder, setShowHostCostReminder] = useState(false);
+  // Free-deed allowance (5 per device, metered by the fingerprint ledger).
+  const [deedCreditSnapshot, setDeedCreditSnapshot] = useState<DeedCreditSnapshot | null>(null);
+  const [upgradeModalNotice, setUpgradeModalNotice] = useState<{ title: string; message: string } | null>(null);
   const [welcomeInitialMode, setWelcomeInitialMode] = useState<WelcomeMode>('main');
   const [isLockDismissed, setIsLockDismissed] = useState(false);
   const [apiKeyModalTrigger, setApiKeyModalTrigger] = useState<'apikey' | 'rinex' | 'lsvz'>('apikey');
@@ -2611,6 +2621,22 @@ const AppContent = () => {
       setIsLockDismissed(false);
     }
   }, [isFreeTierTimeLocked]);
+
+  // Load the device's free-deed balance (fingerprint ledger) once at startup so
+  // the welcome card and deed upload screen can show it before the first deed.
+  useEffect(() => {
+    let cancelled = false;
+    void refreshDeedCreditStatus()
+      .then((snapshot) => {
+        if (!cancelled) setDeedCreditSnapshot(snapshot);
+      })
+      .catch(() => {
+        /* status is best-effort - the deed gate refreshes it again on submit */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // REMOVED: Auto-open API key modal when 4hr timer trips.
   // Instead, the app does nothing when the timer trips; the 15-minute host cost reminder dialog
@@ -3637,12 +3663,65 @@ const AppContent = () => {
     setIsInitialScreen(true);
   }, [setShowWelcome, setIsInitialScreen]);
 
-  const handleDeedSubmitted = useCallback((file: SessionFile) => {
-    if (isFreeTierTimeLocked) {
-      setIsLockDismissed(false);
-      setShowHostCostReminder(true);
-      return;
+  // Key holders already paid for access, so they are never metered by the
+  // free-deed allowance.
+  const isDeedMeterExempt = Boolean(
+    isSuperUser ||
+    hasLandSurvKey ||
+    hasServiceAccess ||
+    hasLsaiEnablingKey ||
+    settings.userApiKey?.trim()?.startsWith('lsa_')
+  );
+
+  /**
+   * Spend one free deed before processing a submitted deed.
+   * Returns false when the device has used all of its free deeds, in which case
+   * the upgrade dialog explains what happened and how to keep going.
+   */
+  const ensureDeedCredit = useCallback(async (file: SessionFile): Promise<boolean> => {
+    if (isDeedMeterExempt) return true;
+
+    const fileType = file.fileData
+      ? (file.fileData.startsWith('data:application/pdf') ? 'pdf' : 'image')
+      : 'text';
+
+    const outcome = await consumeFreeDeed({ deedName: file.name, fileType });
+    setDeedCreditSnapshot(outcome.snapshot);
+
+    if (!outcome.allowed) {
+      const limit = outcome.snapshot.limit || FREE_DEED_LIMIT;
+      setUpgradeModalNotice({
+        title: 'Your 5 free deeds are used',
+        message: `This device has processed all ${limit} free deeds. Add an Enabling Key or a compute credit pack to keep drafting boundaries — your work so far stays on the canvas.`,
+      });
+      setShowUpgradeModal(true);
+      addNotification({
+        kind: 'deed-credits',
+        severity: 'warning',
+        title: 'Free deeds used',
+        message: `All ${limit} free deeds on this device have been processed. Add a key or credits to continue.`,
+      });
+      return false;
     }
+
+    const { remaining, limit, unverified } = outcome.snapshot;
+    addNotification({
+      kind: 'deed-credits',
+      severity: remaining <= 1 ? 'warning' : 'info',
+      title: remaining <= 1 ? 'Last free deed' : 'Free deed used',
+      message: unverified
+        ? `${remaining} of ${limit} free deeds left on this device (counted offline).`
+        : `${remaining} of ${limit} free deeds left on this device.`,
+    });
+    return true;
+  }, [addNotification, isDeedMeterExempt]);
+
+  /**
+   * Applies a deed to the Boundary Agent. No metering happens here — this path is
+   * also used to re-open a deed that was already processed (file-manager switch),
+   * which must not spend another free deed.
+   */
+  const applyDeedSubmission = useCallback(async (file: SessionFile) => {
     try {
       // Clear empty Manual Boundary placeholder so the real deed geometry takes center stage
       setBoundaryFiles(prev => prev.filter(f => f.name !== 'Manual Boundary' || f.calls.some(c => Boolean(c.bearing && c.distance))));
@@ -3765,7 +3844,36 @@ const AppContent = () => {
       setError(`Initialization Error: ${errorMessage}`);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isFreeTierTimeLocked, activeModel, showView, startSession, logActionToFieldbook, initializedAgents, deedFile, settings, clearHighlights, startChatWithOverride]);
+  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, deedFile, settings, clearHighlights, startChatWithOverride]);
+
+  /**
+   * Deed submission from the upload screen: spends one free deed first (free
+   * users are metered by the 5-deed fingerprint allowance instead of the 4-hour
+   * free cycle, so deeds can be drafted at any time until they run out).
+   */
+  const handleDeedSubmitted = useCallback(async (file: SessionFile) => {
+    const allowed = await ensureDeedCredit(file);
+    if (!allowed) return;
+    await applyDeedSubmission(file);
+  }, [ensureDeedCredit, applyDeedSubmission]);
+
+  /** Upgrade pitch shown from the deed screens once the 5 free deeds are spent. */
+  /** Jump from the deed upload screen to the Boundary Agent GIS parcel panel. */
+  const handleOpenParcelGisFromUpload = useCallback(() => {
+    setIsParcelPanelVisible(true);
+    setIsParcelPanelDocked(true);
+    setIsParcelPanelMinimized(false);
+    showView('canvas');
+  }, [showView]);
+
+  const openDeedUpgradeDialog = useCallback(() => {
+    const limit = deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT;
+    setUpgradeModalNotice({
+      title: 'Unlock unlimited deed drafting',
+      message: `You've used your ${limit} free deeds on this device. An Enabling Key or a compute credit pack unlocks unlimited deed processing, and everything you've already drafted stays on the canvas.`,
+    });
+    setShowUpgradeModal(true);
+  }, [deedCreditSnapshot?.limit]);
 
 
 
@@ -4090,12 +4198,18 @@ const AppContent = () => {
       setSuggestedQuestions([]);
       setError(null);
 
-      // NOTE: We intentionally do NOT seed a phantom POB at (0,0) here.
-      // Doing so used to leave a dangling "1 / 0,0 / POB" point sitting on
-      // the canvas regardless of where the user's actual deed eventually
+      // NOTE: We intentionally do NOT seed a phantom POB *point* at (0,0)
+      // here. Doing so used to leave a dangling "1 / 0,0 / POB" point sitting
+      // on the canvas regardless of where the user's actual deed eventually
       // landed (and inflated the auto-fit bbox so the real boundary
-      // appeared off-screen). The Boundary Editor's POB row + Draw
-      // Boundary's (0,0) fallback already cover the manual-entry case.
+      // appeared off-screen).
+      //
+      // We DO anchor the preview at the current view center in WORLD
+      // coordinates. Without this the silhouette has no POB and BFOverlay
+      // recomputes its anchor from screen center on every frame, so it stays
+      // glued to the viewport while the scene pans, and Draft commits it at a
+      // different location (0,0).
+      const blankPob = canvas2dRef.current?.getViewCenterWorld?.();
 
       // Create an empty boundary file and show the Boundary Dialog immediately.
       const blankFile: import('./types.ts').BoundaryFile = {
@@ -4103,6 +4217,7 @@ const AppContent = () => {
         name: 'Manual Boundary',
         createdAt: new Date().toISOString(),
         calls: [],
+        ...(blankPob ? { pobOverride: blankPob } : {}),
       };
       setBoundaryFiles(prev => [...prev, blankFile]);
       setActiveBoundaryFileId(blankFile.id);
@@ -8236,74 +8351,89 @@ const AppContent = () => {
    * bbox; 'description' geocodes a free-text query via Nominatim. Returned
    * polygon rings become SurveyLines tagged layer='COUNTY-PARCEL', type='parcel'.
    */
+  /**
+   * Resolve the Boundary Agent query bbox (WGS84) from either the drawn
+   * inclusion polygon or a geocoded free-text description. Shared by the
+   * parcel fetch and by ArcGIS Online parcel-layer discovery.
+   */
+  const resolveParcelBbox = useCallback(async (
+    mode: 'inclusion' | 'description',
+    descriptionText?: string,
+  ): Promise<{ xmin: number; ymin: number; xmax: number; ymax: number }> => {
+    const epsg = settings.projection?.epsg;
+    if (mode === 'inclusion') {
+      const activeB = activeInclusionBoundaryRef.current;
+      const inclusionLines = lines.filter(l => l.type === 'inclusion' && (!activeB || l.polylineId === activeB.polylineId));
+      if (inclusionLines.length === 0) {
+        throw new Error(activeB ? `Active inclusion boundary "${activeB.name}" has no lines.` : 'No inclusion lines drawn. Use the canvas Inclusion tool first.');
+      }
+      const pointMap = new Map(points.map((p: { pointNumber: string; easting: number; northing: number }) => [p.pointNumber, p]));
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, found = false;
+      for (const line of inclusionLines) {
+        const coords = [
+          line.fromPt ? { x: line.fromPt.x, y: line.fromPt.y } :
+            pointMap.get(line.from) ? { x: (pointMap.get(line.from) as { easting: number; northing: number }).easting, y: (pointMap.get(line.from) as { easting: number; northing: number }).northing } : null,
+          line.toPt ? { x: line.toPt.x, y: line.toPt.y } :
+            pointMap.get(line.to) ? { x: (pointMap.get(line.to) as { easting: number; northing: number }).easting, y: (pointMap.get(line.to) as { easting: number; northing: number }).northing } : null,
+        ];
+        for (const c of coords) {
+          if (c) { x0 = Math.min(x0, c.x); y0 = Math.min(y0, c.y); x1 = Math.max(x1, c.x); y1 = Math.max(y1, c.y); found = true; }
+        }
+      }
+      if (!found || !isFinite(x0)) throw new Error('Could not read inclusion coordinates.');
+      if (epsg && epsg !== 4326) {
+        try {
+          const proj4mod = (await import('proj4')).default;
+          const sw = proj4mod(`EPSG:${epsg}`, 'EPSG:4326', [x0, y0]);
+          const ne = proj4mod(`EPSG:${epsg}`, 'EPSG:4326', [x1, y1]);
+          return { xmin: sw[0], ymin: sw[1], xmax: ne[0], ymax: ne[1] };
+        } catch {
+          // proj4 unavailable - assume the coordinates are already WGS84.
+        }
+      }
+      return { xmin: x0, ymin: y0, xmax: x1, ymax: y1 };
+    }
+
+    const desc = (descriptionText || '').trim();
+    if (!desc) throw new Error('Please enter an area description.');
+    const geocodeUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(desc)}&format=json&limit=1`;
+    const geoResp = await fetch(geocodeUrl, { headers: { 'Accept-Language': 'en', 'User-Agent': 'LandSurv.ai/1.0' } });
+    if (!geoResp.ok) throw new Error(`Geocoding failed: ${geoResp.statusText}`);
+    const geoData = await geoResp.json();
+    if (!geoData || geoData.length === 0) throw new Error(`No location found for "${desc}".`);
+    const hit = geoData[0];
+    let [south, north, west, east] = (hit.boundingbox || []).map(Number);
+    const centerLat = parseFloat(hit.lat);
+    const centerLon = parseFloat(hit.lon);
+    // Parcel layers are dense - keep the minimum span tighter than contours so
+    // a description like "Norristown PA" doesn't blow the transfer limit.
+    const MIN_SPAN = 0.01; // ~1 km
+    if (!isFinite(north - south) || (north - south) < MIN_SPAN) { south = centerLat - MIN_SPAN / 2; north = centerLat + MIN_SPAN / 2; }
+    if (!isFinite(east - west) || (east - west) < MIN_SPAN) { west = centerLon - MIN_SPAN / 2; east = centerLon + MIN_SPAN / 2; }
+    return { xmin: west, ymin: south, xmax: east, ymax: north };
+  }, [lines, points, settings]);
+
+  /**
+   * Fetch county tax-parcel boundaries (Boundary Agent feature).
+   * Takes the full service definition so curated county/state layers, user-added
+   * ArcGIS servers and discovered ArcGIS Online layers all work identically.
+   * 'inclusion' uses a drawn polygon for the bbox; 'description' geocodes a
+   * free-text query via Nominatim. Returned polygon rings become SurveyLines
+   * tagged layer='COUNTY-PARCEL', type='parcel'.
+   */
   const handleFetchParcels = useCallback(async (
-    serviceUrl: string,
+    service: import('./services/parcelGisService.ts').ParcelGisServiceDef,
     mode: 'inclusion' | 'description',
     descriptionText?: string,
   ) => {
     setIsFetchingParcels(true);
     setError(null);
     try {
-      const { PARCEL_GIS_SERVICES, PARCEL_LAYER_TAG, fetchParcelsForBbox } = await import('./services/parcelGisService.ts');
-      const service = PARCEL_GIS_SERVICES.find(s => s.url === serviceUrl) ?? PARCEL_GIS_SERVICES[0];
-      if (!service) throw new Error('No parcel GIS service configured.');
+      const { PARCEL_LAYER_TAG, fetchParcelsForBbox } = await import('./services/parcelGisService.ts');
+      if (!service?.url) throw new Error('No parcel GIS service selected.');
       const epsg = settings.projection?.epsg;
+      const { xmin, ymin, xmax, ymax } = await resolveParcelBbox(mode, descriptionText);
 
-      // -- 1. bbox (WGS84) ----------------------------------------------
-      let xmin: number, ymin: number, xmax: number, ymax: number;
-      if (mode === 'inclusion') {
-        const activeB = activeInclusionBoundaryRef.current;
-        const inclusionLines = lines.filter(l => l.type === 'inclusion' && (!activeB || l.polylineId === activeB.polylineId));
-        if (inclusionLines.length === 0) {
-          throw new Error(activeB ? `Active inclusion boundary "${activeB.name}" has no lines.` : 'No inclusion lines drawn. Use the canvas Inclusion tool first.');
-        }
-        const pointMap = new Map(points.map((p: { pointNumber: string; easting: number; northing: number }) => [p.pointNumber, p]));
-        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, found = false;
-        for (const line of inclusionLines) {
-          const coords = [
-            line.fromPt ? { x: line.fromPt.x, y: line.fromPt.y } :
-              pointMap.get(line.from) ? { x: (pointMap.get(line.from) as { easting: number; northing: number }).easting, y: (pointMap.get(line.from) as { easting: number; northing: number }).northing } : null,
-            line.toPt ? { x: line.toPt.x, y: line.toPt.y } :
-              pointMap.get(line.to) ? { x: (pointMap.get(line.to) as { easting: number; northing: number }).easting, y: (pointMap.get(line.to) as { easting: number; northing: number }).northing } : null,
-          ];
-          for (const c of coords) {
-            if (c) { x0 = Math.min(x0, c.x); y0 = Math.min(y0, c.y); x1 = Math.max(x1, c.x); y1 = Math.max(y1, c.y); found = true; }
-          }
-        }
-        if (!found || !isFinite(x0)) throw new Error('Could not read inclusion coordinates.');
-        // Reproject project EPSG ? WGS84 for the service query.
-        if (epsg && epsg !== 4326) {
-          try {
-            const proj4mod = (await import('proj4')).default;
-            const sw = proj4mod(`EPSG:${epsg}`, 'EPSG:4326', [x0, y0]);
-            const ne = proj4mod(`EPSG:${epsg}`, 'EPSG:4326', [x1, y1]);
-            xmin = sw[0]; ymin = sw[1]; xmax = ne[0]; ymax = ne[1];
-          } catch {
-            // proj4 unavailable � assume already WGS84
-            xmin = x0; ymin = y0; xmax = x1; ymax = y1;
-          }
-        } else {
-          xmin = x0; ymin = y0; xmax = x1; ymax = y1;
-        }
-      } else {
-        const desc = (descriptionText || '').trim();
-        if (!desc) throw new Error('Please enter an area description.');
-        const geocodeUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(desc)}&format=json&limit=1`;
-        const geoResp = await fetch(geocodeUrl, { headers: { 'Accept-Language': 'en', 'User-Agent': 'LandSurv.ai/1.0' } });
-        if (!geoResp.ok) throw new Error(`Geocoding failed: ${geoResp.statusText}`);
-        const geoData = await geoResp.json();
-        if (!geoData || geoData.length === 0) throw new Error(`No location found for "${desc}".`);
-        const hit = geoData[0];
-        let [south, north, west, east] = (hit.boundingbox || []).map(Number);
-        const centerLat = parseFloat(hit.lat);
-        const centerLon = parseFloat(hit.lon);
-        // Parcel layers are dense � keep the minimum span tighter than contours
-        // so a description like "Norristown PA" doesn't blow the transfer limit.
-        const MIN_SPAN = 0.01; // ~1 km
-        if (!isFinite(north - south) || (north - south) < MIN_SPAN) { south = centerLat - MIN_SPAN / 2; north = centerLat + MIN_SPAN / 2; }
-        if (!isFinite(east - west)  || (east - west)  < MIN_SPAN) { west  = centerLon - MIN_SPAN / 2; east  = centerLon + MIN_SPAN / 2; }
-        xmin = west; ymin = south; xmax = east; ymax = north;
-      }
 
       // -- 2. Delegate to service module --------------------------------
       const result = await fetchParcelsForBbox(
@@ -8323,6 +8453,7 @@ const AppContent = () => {
         ...result.lines,
       ]);
       setLastFetchedParcels(result.parcels);
+      setLastParcelEnrichment(result.enrichment ?? null);
 
       // Create parcel centroid annotation labels with N/F owner notation.
       if (result.labelPoints.length > 0) {
@@ -8354,14 +8485,31 @@ const AppContent = () => {
     } finally {
       setIsFetchingParcels(false);
     }
-  }, [lines, points, settings, logActionToFieldbook, showView, dbgLog]);
+  }, [resolveParcelBbox, settings, logActionToFieldbook, showView, dbgLog]);
 
   /** Remove all county-parcel lines from the canvas. */
   const handleClearParcels = useCallback(() => {
     setLines((prev: SurveyLine[]) => prev.filter((l: SurveyLine) => l.layer !== 'COUNTY-PARCEL'));
     setLastFetchedParcels([]);
+    setLastParcelEnrichment(null);
     setParcelLabels([]);
   }, []);
+
+  /**
+   * Boundary Agent discovery: ask ArcGIS Online which parcel feature services
+   * cover the current AOI (inclusion polygon or geocoded description). This is
+   * what makes coverage nationwide without shipping thousands of county URLs.
+   */
+  const handleSearchParcelServices = useCallback(async (
+    mode: 'inclusion' | 'description',
+    descriptionText?: string,
+  ) => {
+    const { searchParcelServicesNearby } = await import('./services/parcelGisService.ts');
+    const bbox = await resolveParcelBbox(mode, descriptionText);
+    return searchParcelServicesNearby(bbox, {
+      log: (msg, payload) => dbgLog('Parcel', { msg, ...((payload as object) ?? {}) }),
+    });
+  }, [resolveParcelBbox, dbgLog]);
 
   const handleSaveProfile = useCallback(() => {
     if (!profileData || profileData.length === 0 || !profileInfo) {
@@ -8548,7 +8696,8 @@ const AppContent = () => {
             handleFileUploaded(fileToSwitch.content, fileToSwitch.name);
             break;
         case AgentType.DEED_READER:
-            handleDeedSubmitted(fileToSwitch);
+            // Re-opens a deed already in the session — it was metered on first submit.
+            void applyDeedSubmission(fileToSwitch);
             break;
         case AgentType.DXF_ANALYZER:
             handleDxfUploaded(fileToSwitch.content, fileToSwitch.name);
@@ -8560,7 +8709,7 @@ const AppContent = () => {
             handleClFileUploaded(fileToSwitch.content, fileToSwitch.name);
             break;
     }
-  }, [activeAgent, rawFile, deedFile, dxfFile, clFile, gisFile, generatedFiles, handleFileUploaded, handleDeedSubmitted, handleDxfUploaded, handleGisUploaded, handleClFileUploaded, settings.userApiKey, hasConfirmedApiKey, addNotification]);
+  }, [activeAgent, rawFile, deedFile, dxfFile, clFile, gisFile, generatedFiles, handleFileUploaded, applyDeedSubmission, handleDxfUploaded, handleGisUploaded, handleClFileUploaded, settings.userApiKey, hasConfirmedApiKey, addNotification]);
 
   const handleSendMessage = useCallback(async (query: string, agentOverride?: AgentType) => {
     console.log('[handleSendMessage] Called with query:', query, 'activeAgent:', activeAgent, 'override:', agentOverride);
@@ -8584,9 +8733,12 @@ const AppContent = () => {
       });
     }
 
-    // Free-trial off period: block inference when 4hr timer trips unless continuous service access or superuser is present.
-    // Instead of bringing up the API key box, show the 15-minute host cost reminder dialog.
-    if (isFreeTierTimeLocked) {
+    // Free-trial off period: block inference when the 4hr timer trips unless continuous
+    // service access or superuser is present. Boundary Agent turns are exempt: free
+    // users get 5 fingerprinted free deeds that are metered separately, so a deed can
+    // be drafted at any time until the allowance runs out.
+    const requestedAgent = agentOverride ?? activeAgent;
+    if (isFreeTierTimeLocked && requestedAgent !== AgentType.DEED_READER) {
       setIsLockDismissed(false);
       setShowHostCostReminder(true);
       return;
@@ -12463,6 +12615,21 @@ const AppContent = () => {
     }
   }, [isAddingData, handleCancelAddData, handleGoBackToInitialScreen]);
 
+  // Welcome screen "Draft Deed" shortcut: dismiss the welcome modal and land the
+  // user straight on the deed upload screen (Boundary Agent input).
+  const handleOpenDeedUpload = useCallback(() => {
+    // First-time legal gate: remember the intent so signing continues to the upload screen.
+    if (!hasLegalSignature && !hasSignedLegalAgreement()) {
+      pendingLegalLaunchRef.current = 'deed';
+      setShowWelcome(false);
+      setShowLegalGate(true);
+      return;
+    }
+    setShowWelcome(false);
+    setWelcomeInitialMode('main');
+    handleAgentChange(AgentType.DEED_READER);
+  }, [hasLegalSignature, handleAgentChange, setShowWelcome, setWelcomeInitialMode]);
+
   const handleClearCanvas = useCallback(() => {
     logActionToFieldbook('Cleared canvas view by hiding all elements.');
     setPointLists(prev => hideAllPointLists(prev));
@@ -12874,8 +13041,17 @@ const AppContent = () => {
       bearing: '',
       distance: '',
     };
+    // First call on a POB-less file: lock the preview to the current view
+    // center in world coordinates. Covers blank sessions started before the
+    // canvas mounted (where creation-time anchoring was unavailable).
+    const needsPobAnchor = targetFile.calls.length === 0 && !targetFile.pobOverride;
+    const viewCenterAnchor = needsPobAnchor ? canvas2dRef.current?.getViewCenterWorld?.() : undefined;
     pushHistory();
-    setBoundaryFiles(prev => prev.map(f => f.id === fileId ? { ...f, calls: [...f.calls, newCall] } : f));
+    setBoundaryFiles(prev => prev.map(f => f.id === fileId ? {
+      ...f,
+      calls: [...f.calls, newCall],
+      ...(viewCenterAnchor && !f.pobOverride ? { pobOverride: viewCenterAnchor } : {}),
+    } : f));
   }, [boundaryFiles, pointLists, settings.pointLabelingSettings, pushHistory]);
 
   // Remove a call (and its matching SurveyLine), then propagate forward from that index.
@@ -13713,7 +13889,14 @@ const AppContent = () => {
   }, []);
 
   const handleLoadBoundaryFile = useCallback((file: import('./types.ts').BoundaryFile) => {
-    setBoundaryFiles(prev => [...prev, file]);
+    // Anchor loaded files that have no resolvable POB to the current view
+    // center once, so their silhouette pans with the scene instead of being
+    // re-pinned to the viewport on every redraw.
+    const viewCenter = canvas2dRef.current?.getViewCenterWorld?.();
+    setBoundaryFiles(prev => [...prev, {
+      ...file,
+      ...(viewCenter && !file.pobOverride ? { pobOverride: viewCenter } : {}),
+    }]);
     setIsBoundaryEditorVisible(false);
     setIsBoundaryEditorButtonPulsing(true);
     logActionToFieldbook(`Loaded boundary "${file.name}" from CSV (${file.calls.length} calls).`);
@@ -13854,14 +14037,14 @@ const AppContent = () => {
         logActionToFieldbook(`Draw Boundary: no resolvable POB � anchored at centroid of existing points (E=${pob.easting.toFixed(2)}, N=${pob.northing.toFixed(2)}).`);
       }
     } else {
-      // v26.05.22.1 � No POB resolvable and no existing points to anchor to.
-      // Default to local (0, 0) so a freshly-loaded deed (or a manual-entry
-      // session) can still be drafted. The user can set an explicit POB
-      // through the new POB row in the Boundary Editor, or by loading a
-      // matching control point.
+      // No POB resolvable and no existing points to anchor to. Must match
+      // BFOverlay's own last-resort anchor (local origin) so the silhouette
+      // and the committed linework land on the same world coordinates. New
+      // manual / CSV files get a real `pobOverride` anchored to the view
+      // center, so this branch only applies to legacy or restored files.
       pob = { easting: 0, northing: 0 };
       if (!opts?.silent) {
-        logActionToFieldbook(`Draft "${file.name}": no POB resolvable � starting at local origin (0, 0). Set a POB in the editor to relocate.`);
+        logActionToFieldbook(`Draft "${file.name}": no POB resolvable - starting at local origin (0, 0). Set a POB in the editor to relocate.`);
       }
     }
 
@@ -15939,6 +16122,10 @@ const AppContent = () => {
       selectedPointNumber={selectedPoint?.pointNumber}
       selectedFileId={activeBoundaryFileId}
       onSelectFile={setActiveBoundaryFileId}
+      freeDeedsRemaining={deedCreditSnapshot?.remaining ?? null}
+      freeDeedsLimit={deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT}
+      freeDeedsUnlimited={Boolean(deedCreditSnapshot?.unlimited || isDeedMeterExempt)}
+      onUpgrade={openDeedUpgradeDialog}
       showRotatedBearings={showRotatedBearings}
       onShowRotatedBearingsChange={setShowRotatedBearings}
       onAssociatePoints={handleAssociatePointsToBoundary}
@@ -16009,7 +16196,9 @@ const AppContent = () => {
       parcelLineCount={lines.filter((l: SurveyLine) => l.layer === 'COUNTY-PARCEL').length}
       lastFetchedParcels={lastFetchedParcels}
       isFetching={isFetchingParcels}
+      lastEnrichment={lastParcelEnrichment}
       onFetchParcels={handleFetchParcels}
+      onSearchParcelServices={handleSearchParcelServices}
       onClearParcels={handleClearParcels}
       parcelLabelFormatter={parcelLabelFormatter}
       cadTextStyles={parcelCadTextStyles}
@@ -16216,7 +16405,7 @@ const AppContent = () => {
                   <>
                     {activeAgent === AgentType.RAW_CRAWLER && <FileUpload onFileUploaded={handleFileUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.CIVIL_DRAFTER && <CivilDrafterFileUpload onFileUploaded={handleCivilDrafterFileUploaded} onPdfUploaded={handleCivilDrafterPdfUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} existingPointCount={pointLists.reduce((sum, l) => sum + l.points.length, 0)} onUseExistingPoints={handleCivilDrafterUseExistingPoints} />}
-                    {activeAgent === AgentType.DEED_READER && <DeedInput onDeedSubmitted={handleDeedSubmitted} onStartFromScratch={handleDeedStartFromScratch} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
+                    {activeAgent === AgentType.DEED_READER && <DeedInput onDeedSubmitted={handleDeedSubmitted} onStartFromScratch={handleDeedStartFromScratch} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} freeDeedsRemaining={deedCreditSnapshot?.remaining ?? null} freeDeedsLimit={deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT} freeDeedsUnlimited={Boolean(deedCreditSnapshot?.unlimited || isDeedMeterExempt)} freeDeedsUnverified={Boolean(deedCreditSnapshot?.unverified)} onShowUpgrade={openDeedUpgradeDialog} onOpenGis={handleOpenParcelGisFromUpload} />}
                     {activeAgent === AgentType.CIVIL_PLAN_EXPERT && <PlanInput onPlansSubmitted={handlePlansSubmitted} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.DXF_ANALYZER && <DxfInput onDxfUploaded={handleDxfUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.GIS_AGENT && <GisInput onGisUploaded={handleGisUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} inclusionBoundaries={inclusionBoundaries} activeInclusionBoundaryId={activeInclusionBoundaryId} hasInclusionLines={lines.some((l: SurveyLine) => l.type === 'inclusion')} getInclusionBboxWgs84={getInclusionBboxWgs84} />}
@@ -16638,6 +16827,7 @@ const AppContent = () => {
                                             }}
                                             onParcelResult={(result) => {
                                                 setLastFetchedParcels(result.parcels);
+                                                setLastParcelEnrichment(result.enrichment ?? null);
                                                 if (result.labelPoints.length > 0) {
                                                     const ts = Date.now();
                                                     setParcelLabels(result.labelPoints.map((lp, i) => ({
@@ -17066,6 +17256,10 @@ const AppContent = () => {
                                       onClose={() => setShowWelcome(false)}
                                       onLaunchAgenticCad={handleLaunchAgenticCad}
                                       onGoHome={handleGoHome}
+                                      onOpenDeedUpload={handleOpenDeedUpload}
+                                      freeDeedsRemaining={deedCreditSnapshot?.remaining ?? null}
+                                      freeDeedsLimit={deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT}
+                                      freeDeedsUnlimited={Boolean(deedCreditSnapshot?.unlimited || isDeedMeterExempt)}
                                       hasExistingPoints={pointLists.some(l => l.points.length > 0)}
                                       existingPointCount={pointLists.reduce((sum, l) => sum + l.points.length, 0)}
                                     />
@@ -17573,7 +17767,11 @@ const AppContent = () => {
                 setShowLegalGate(false);
                 const pendingLaunch = pendingLegalLaunchRef.current;
                 pendingLegalLaunchRef.current = null;
-                if (pendingLaunch) handleLaunchAgenticCad(pendingLaunch);
+                if (pendingLaunch === 'deed') {
+                  handleOpenDeedUpload();
+                } else if (pendingLaunch) {
+                  handleLaunchAgenticCad(pendingLaunch);
+                }
               }}
             />
           )}
@@ -18050,6 +18248,10 @@ const AppContent = () => {
               }}
               onLaunchAgenticCad={handleLaunchAgenticCad}
               onGoHome={handleGoHome}
+              onOpenDeedUpload={handleOpenDeedUpload}
+              freeDeedsRemaining={deedCreditSnapshot?.remaining ?? null}
+              freeDeedsLimit={deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT}
+              freeDeedsUnlimited={Boolean(deedCreditSnapshot?.unlimited || isDeedMeterExempt)}
               hasExistingPoints={pointLists.some(l => l.points.length > 0)}
               existingPointCount={pointLists.reduce((sum, l) => sum + l.points.length, 0)}
             />
@@ -18143,7 +18345,11 @@ const AppContent = () => {
           {/* Dedicated Upgrade and Payment Modal */}
           <UpgradeModal
             isOpen={!showWelcome && showUpgradeModal}
-            onClose={() => setShowUpgradeModal(false)}
+            notice={upgradeModalNotice}
+            onClose={() => {
+              setShowUpgradeModal(false);
+              setUpgradeModalNotice(null);
+            }}
             onOpenKeyModal={() => {
               setShowUpgradeModal(false);
               setShowApiKeyModal(true);

@@ -29,6 +29,31 @@ export interface BasemapView {
   project: (e: number, n: number) => { x: number; y: number };
 }
 
+/** Keys shared by the Settings UI and every WebGPU consumer. */
+export const WEBGPU_ENABLED_KEY = 'landsurv-webgpu';
+export const WEBGPU_POWER_KEY = 'landsurv-webgpu-power';
+/** Dispatched on window whenever the user changes a WebGPU preference. */
+export const WEBGPU_PREF_EVENT = 'landsurv-webgpu-pref-changed';
+
+export type GpuPowerPreference = 'high-performance' | 'low-power' | 'default';
+
+/** Hardware acceleration is on unless the user explicitly turned it off. */
+export function isWebGpuEnabled(): boolean {
+  try {
+    return localStorage.getItem(WEBGPU_ENABLED_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+}
+
+export function getGpuPowerPreference(): GpuPowerPreference {
+  try {
+    const stored = localStorage.getItem(WEBGPU_POWER_KEY);
+    if (stored === 'high-performance' || stored === 'low-power' || stored === 'default') return stored;
+  } catch { /* storage unavailable */ }
+  return 'high-performance';
+}
+
 const SHADER = /* wgsl */ `
 struct Params {
   c01: vec4<f32>,
@@ -127,10 +152,10 @@ export class WebGpuBasemap {
 
   /** Resolves to null when WebGPU is unavailable or setup fails. */
   static async create(canvas: HTMLCanvasElement, onLost: () => void): Promise<WebGpuBasemap | null> {
-    if (!WebGpuBasemap.isSupported()) return null;
+    if (!isWebGpuEnabled() || !WebGpuBasemap.isSupported()) return null;
     try {
       const gpu = (navigator as any).gpu;
-      const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
+      const adapter = await gpu.requestAdapter({ powerPreference: getGpuPowerPreference() });
       if (!adapter) return null;
       const device = await adapter.requestDevice();
       const context = canvas.getContext('webgpu') as any;

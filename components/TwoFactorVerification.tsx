@@ -100,7 +100,6 @@ export const TwoFactorVerification: React.FC<TwoFactorVerificationProps> = ({
                   onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
                   disabled={isLoading}
                   className="code-input totp-input"
-                  autoFocus
                 />
                 <div className="time-display">
                   <div className="time-indicator">
@@ -120,7 +119,6 @@ export const TwoFactorVerification: React.FC<TwoFactorVerificationProps> = ({
                   onChange={(e) => setCode(e.target.value.toUpperCase())}
                   disabled={isLoading}
                   className="code-input backup-input"
-                  autoFocus
                 />
                 <p className="backup-hint">Format: XXXX-XXXX</p>
               </>

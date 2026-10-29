@@ -33,8 +33,10 @@ import { AgentType } from '../types.ts';
 import { resolveAoi, type AoiResult } from './aoiResolver.ts';
 import { fetchFemaFloodHazards, type FloodFetchResult } from '../services/floodService.ts';
 import {
-  PARCEL_GIS_SERVICES,
+  ALL_PARCEL_SERVICES_LABEL,
   fetchParcelsForBbox,
+  findStatewideParcelService,
+  getAllParcelServices,
   type ParcelFetchResult,
   type ParcelGisServiceDef,
 } from '../services/parcelGisService.ts';
@@ -220,25 +222,34 @@ function descriptionGroups(points: SurveyPoint[]): Record<string, number> {
   return groups;
 }
 
-/** Find the county-parcel service matching the zoning context, e.g.
- *  county="Chester", state="PA" → the "Chester County, PA" registry entry. */
+/** Find the parcel service matching the zoning context, e.g.
+ *  county="Chester", state="PA" → the "Chester County, PA" entry. Counties we
+ *  don't curate fall back to their state's statewide parcel fabric (22 states
+ *  publish one), and user-added servers are searched too. */
 export function findParcelService(county?: string, state?: string): ParcelGisServiceDef | null {
-  if (!county) return null;
-  const c = county.trim().toLowerCase().replace(/\s+county$/, '');
-  if (!c) return null;
-  const stateNorm = (state ?? '').trim().toLowerCase();
-  const matches = PARCEL_GIS_SERVICES.filter(s => s.label.toLowerCase().startsWith(c));
-  if (matches.length === 0) return null;
-  if (matches.length === 1 || !stateNorm) return matches[0];
-  // Disambiguate by state when several counties share a name.
-  const byState = matches.find(s => {
-    const label = s.label.toLowerCase();
-    const region = s.region.toLowerCase();
-    return label.endsWith(`, ${stateNorm}`) || region === stateNorm ||
-      (stateNorm === 'pa' && region === 'pennsylvania') ||
-      (stateNorm === 'pennsylvania' && label.endsWith(', pa'));
-  });
-  return byState ?? matches[0];
+  const services = getAllParcelServices();
+  const c = (county ?? '').trim().toLowerCase().replace(/\s+county$/, '');
+  if (c) {
+    const stateNorm = (state ?? '').trim().toLowerCase();
+    const matches = services.filter(s =>
+      s.scope !== 'statewide' && s.label.toLowerCase().startsWith(c),
+    );
+    if (matches.length > 0) {
+      if (matches.length === 1 || !stateNorm) return matches[0];
+      // Disambiguate by state when several counties share a name.
+      const byState = matches.find(s => {
+        const label = s.label.toLowerCase();
+        const region = s.region.toLowerCase();
+        return label.endsWith(`, ${stateNorm}`) || region === stateNorm ||
+          (stateNorm === 'pa' && region === 'pennsylvania') ||
+          (stateNorm === 'pennsylvania' && label.endsWith(', pa'));
+      });
+      if (byState) return byState;
+      return matches[0];
+    }
+  }
+  // Statewide fallback — covers every county in the states we have a fabric for.
+  return findStatewideParcelService(state);
 }
 
 /** Static-map zoom that frames the AOI bbox inside a 640px tile. */
@@ -727,7 +738,7 @@ export async function runAutoDraft(opts: AutoDraftOptions): Promise<void> {
     const service = findParcelService(county, state);
     if (!service) {
       parcelBlock = county
-        ? `(No parcel GIS service registered for ${county} County${state ? ', ' + state : ''} — supported: ${PARCEL_GIS_SERVICES.map(s => s.label).join('; ')})`
+        ? `(No parcel GIS service for ${county} County${state ? ', ' + state : ''}. ${ALL_PARCEL_SERVICES_LABEL})`
         : '(County not set — configure location in the Zoning Agent tab to enable parcel fetch)';
       skip('parcels', county ? `${county} County not in registry` : 'No county set');
       return;
