@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { executeDemoRequestRecaptcha } from '../utils/recaptcha.ts';
 
 /**
  * DemoRequestModal — self-serve $24 / 24-hour demo API key purchase flow.
@@ -36,9 +37,22 @@ const DemoRequestModal: React.FC<DemoRequestModalProps> = ({ isOpen, onClose }) 
     setStage('submitting');
     setErrorMsg('');
     try {
+      // /api/demo/request is reCAPTCHA-protected (action 'demo-request').
+      // When verification is not configured server-side the token is optional,
+      // so a blocked/unavailable script must not block the purchase outright.
+      let recaptchaToken: string | null = null;
+      try {
+        recaptchaToken = await executeDemoRequestRecaptcha();
+      } catch (recaptchaError) {
+        console.warn('[DemoRequest] reCAPTCHA unavailable; server will enforce it if required', recaptchaError);
+      }
+
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (recaptchaToken) headers['x-recaptcha-token'] = recaptchaToken;
+
       const resp = await fetch('/api/demo/request', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           email: email.trim(),
           name: name.trim() || undefined,
@@ -46,7 +60,11 @@ const DemoRequestModal: React.FC<DemoRequestModalProps> = ({ isOpen, onClose }) 
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data.approveUrl) {
-        throw new Error(data.error || `Request failed (${resp.status})`);
+        const serverMessage = String(data.error || `Request failed (${resp.status})`);
+        if (/recaptcha token required/i.test(serverMessage)) {
+          throw new Error('Security verification could not run in this browser. Disable content blockers or try another browser, then submit again.');
+        }
+        throw new Error(serverMessage);
       }
       setStage('redirecting');
       // Hand off to PayPal. New tab so we don't lose the SPA state.

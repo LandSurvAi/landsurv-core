@@ -1,17 +1,29 @@
-import React, { useRef, useState, useEffect } from 'react';
-import { parseCanvasCommand, executeCanvasCommand, type CommandContext } from '../utils/canvasCommands';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { parseCanvasCommand, executeCanvasCommand, describeCommand, type CommandContext, type CommandResult, type HelpGroup } from '../utils/canvasCommands';
+
+export interface TerminalLink {
+  label: string;
+  onClick: () => void;
+}
 
 export interface TerminalEntry {
   id: string;
   type: 'input' | 'output' | 'hint' | 'status';
   text: string;
   timestamp: number;
-  tone?: 'normal' | 'ok' | 'error' | 'info';
+  tone?: 'normal' | 'ok' | 'error' | 'info' | 'warn' | 'command';
+  /** Inline actions rendered after the message (open in editor, copy, …). */
+  links?: TerminalLink[];
+  /** Formatted help sections (HELP); when present they replace the plain text. */
+  helpGroups?: HelpGroup[];
+  helpNotes?: string[];
 }
 
 interface CanvasTerminalProps {
   /** Live hint/prompt to display on the active command line (e.g. "LINE: Specify next point...") */
   activePrompt?: string;
+  /** Increment to hand focus back to the command line (e.g. after a command's picks are applied). */
+  focusRequest?: number;
   /** Command context providing callbacks to drawing canvas handlers */
   commandContext: CommandContext;
   /** Callback when user executes a command */
@@ -28,6 +40,10 @@ interface CanvasTerminalProps {
   };
   /** External trigger to append a hint or message to the terminal feed */
   incomingMessage?: { text: string; tone?: 'normal' | 'ok' | 'error' | 'info' } | null;
+  /** Open the selection Properties dialog (the PROP command does the same). */
+  onOpenProperties?: () => void;
+  /** Hand a command result to the app's full text editor. */
+  onOpenTextEditor?: (content: string) => void;
   /** Snaps and ortho status display */
   statusBadges?: {
     runningOsnaps?: string;
@@ -36,23 +52,85 @@ interface CanvasTerminalProps {
   };
 }
 
+const HELP_ACCENTS: Record<string, { text: string; dot: string; rule: string; chip: string }> = {
+  cyan: { text: 'text-cyan-300', dot: 'bg-cyan-400', rule: 'border-cyan-500/40', chip: 'bg-cyan-500/10' },
+  emerald: { text: 'text-emerald-300', dot: 'bg-emerald-400', rule: 'border-emerald-500/40', chip: 'bg-emerald-500/10' },
+  amber: { text: 'text-amber-300', dot: 'bg-amber-400', rule: 'border-amber-500/40', chip: 'bg-amber-500/10' },
+  sky: { text: 'text-sky-300', dot: 'bg-sky-400', rule: 'border-sky-500/40', chip: 'bg-sky-500/10' },
+  violet: { text: 'text-violet-300', dot: 'bg-violet-400', rule: 'border-violet-500/40', chip: 'bg-violet-500/10' },
+  rose: { text: 'text-rose-300', dot: 'bg-rose-400', rule: 'border-rose-500/40', chip: 'bg-rose-500/10' },
+};
+
+/** Formatted HELP reference: colored group headers, command chips, italic notes. */
+const CommandHelpView: React.FC<{ groups: HelpGroup[]; notes?: string[] }> = ({ groups, notes }) => (
+  <div className="mt-1 space-y-2">
+    <div className="flex items-center gap-2 font-mono text-[10px] text-gray-500">
+      <span className="font-extrabold uppercase tracking-[0.18em] text-gray-300">Commands:</span>
+      <span className="text-gray-600">·</span>
+      <span className="italic">grouped reference — links below open it in the editor</span>
+    </div>
+    <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+      {groups.map(group => {
+        const accent = HELP_ACCENTS[group.accent] ?? HELP_ACCENTS.cyan;
+        return (
+          <div key={group.title} className={`overflow-hidden rounded-md border bg-gray-950/50 ${accent.rule}`}>
+            <div className={`flex items-center gap-2 border-b border-gray-800/80 px-2 py-1 ${accent.chip}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${accent.dot}`} />
+              <span className={`font-mono text-[10px] font-extrabold uppercase tracking-[0.16em] underline decoration-2 underline-offset-4 ${accent.text}`}>
+                {group.title}
+              </span>
+              <span className="ml-auto font-mono text-[9px] font-medium italic text-gray-500">
+                {group.entries.length} {group.entries.length === 1 ? 'command' : 'commands'}
+              </span>
+            </div>
+            <div className="divide-y divide-gray-800/50">
+              {group.entries.map(entry => (
+                <div key={entry.command} className="flex items-baseline gap-2 px-2 py-[3px]">
+                  <span className={`w-[108px] shrink-0 truncate font-mono text-[11px] font-bold underline decoration-dotted underline-offset-2 ${accent.text}`} title={entry.command}>
+                    {entry.command}
+                  </span>
+                  <span className="min-w-0 flex-1 font-mono text-[10px] leading-snug text-gray-300">
+                    {entry.description}
+                    {entry.note ? <span className="ml-1 font-mono text-[9px] italic text-gray-500">{entry.note}</span> : null}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+    {notes?.length ? (
+      <div className="rounded-md border border-gray-800 bg-gray-950/40 px-2 py-1.5">
+        {notes.map(note => (
+          <div key={note} className="flex gap-2 py-[1px] font-mono text-[9px] italic leading-snug text-gray-500">
+            <span className="text-cyan-500">›</span>
+            <span>{note}</span>
+          </div>
+        ))}
+      </div>
+    ) : null}
+  </div>
+);
+
 export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   activePrompt,
+  focusRequest,
   commandContext,
   onExecuteCommand,
+  onOpenProperties,
+  onOpenTextEditor,
   keyInfo,
   incomingMessage,
   statusBadges,
 }) => {
   const [history, setHistory] = useState<TerminalEntry[]>([]);
   const [inputText, setInputText] = useState('');
-  const [isExpanded, setIsExpanded] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('landsurv-canvas-terminal-expanded') === 'true';
-    } catch {
-      return false;
-    }
-  });
+  // Single command line: rests as a lightweight "Press Space" hint and becomes
+  // the focused CAD input when Space (or a click) activates it.
+  const [isCommandLineActive, setIsCommandLineActive] = useState(false);
+  // History stays collapsed on load; expansion is a per-session action.
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const [panelHeight, setPanelHeight] = useState<number>(() => {
     try {
@@ -86,6 +164,44 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     return () => clearTimeout(timer);
   }, [isCollapsePulsing]);
 
+  const activateCommandLine = useCallback(() => {
+    setIsCommandLineActive(true);
+    // The input mounts on first activation; the effect below focuses it.
+    // When already active but blurred, focus it directly.
+    inputRef.current?.focus();
+  }, []);
+
+  // Command hand-off: after a command finishes with canvas picks, put the caret
+  // back on the command line so the next command can be typed without Space.
+  useEffect(() => {
+    if (!focusRequest) return;
+    setIsCommandLineActive(true);
+    const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [focusRequest]);
+
+  // Space activates the resting command line without stealing spaces from text fields.
+  useEffect(() => {
+    const handleWindowKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== ' ' && e.code !== 'Space') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'SELECT' || tag === 'A' || target?.isContentEditable) return;
+      e.preventDefault();
+      activateCommandLine();
+    };
+    window.addEventListener('keydown', handleWindowKeyDown);
+    return () => window.removeEventListener('keydown', handleWindowKeyDown);
+  }, [activateCommandLine]);
+
+  // Focus the command input as soon as it activates so typing starts immediately.
+  useEffect(() => {
+    if (isCommandLineActive) {
+      inputRef.current?.focus();
+    }
+  }, [isCommandLineActive]);
+
   // Append incoming external messages / tool feedback
   useEffect(() => {
     if (!incomingMessage || !incomingMessage.text.trim()) return;
@@ -100,6 +216,31 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       },
     ]);
   }, [incomingMessage]);
+
+  const copyText = (text: string) => {
+    try {
+      void navigator.clipboard?.writeText(text);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+
+  const resultLinks = (result: CommandResult): TerminalLink[] => {
+    const links: TerminalLink[] = [];
+    for (const link of result.links ?? []) {
+      if (link.action === 'open-text-editor' && onOpenTextEditor) {
+        links.push({ label: link.label ?? 'Open in Text Editor', onClick: () => onOpenTextEditor(link.payload ?? result.message) });
+      } else if (link.action === 'open-properties' && commandContext.onOpenProperties) {
+        links.push({ label: link.label ?? 'Open Properties', onClick: () => commandContext.onOpenProperties?.() });
+      } else if (link.action === 'select-all' && commandContext.onSelectAll) {
+        links.push({ label: link.label ?? 'Select All', onClick: () => commandContext.onSelectAll?.() });
+      } else if (link.action === 'help') {
+        links.push({ label: link.label ?? 'Show Help', onClick: executeHelp });
+      }
+    }
+    links.push({ label: 'Copy', onClick: () => copyText(result.message) });
+    return links;
+  };
 
   const executeHelp = () => {
     const raw = 'help';
@@ -125,20 +266,19 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       text: result.message,
       timestamp: Date.now(),
       tone: 'info',
+      links: resultLinks(result),
+      helpGroups: result.helpGroups,
+      helpNotes: result.helpNotes,
     };
 
     setHistory(prev => [...prev.slice(-80), newEntry, outEntry]);
     setIsExpanded(true);
     setIsCollapsePulsing(true);
-    try {
-      localStorage.setItem('landsurv-canvas-terminal-expanded', 'true');
-    } catch { /* ignore */ }
     onExecuteCommand?.(raw);
   };
 
-  const handleSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const raw = inputText.trim();
+  const runCommand = (rawInput: string) => {
+    const raw = rawInput.trim();
     if (!raw) return;
 
     commandHistoryRef.current.push(raw);
@@ -153,14 +293,12 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     };
 
     const parsed = parseCanvasCommand(raw);
+    commandContext.onCommandSubmitted?.(parsed.verb);
 
     // If typing "help" or "?", expand the command line and pulse the collapse button
     if (parsed.verb === 'help') {
       setIsExpanded(true);
       setIsCollapsePulsing(true);
-      try {
-        localStorage.setItem('landsurv-canvas-terminal-expanded', 'true');
-      } catch { /* ignore */ }
     } else {
       setIsCollapsePulsing(false);
     }
@@ -180,9 +318,9 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
           text: msg,
           timestamp: Date.now(),
           tone: isBoth ? 'ok' : 'info',
+          links: [{ label: 'Copy', onClick: () => copyText(msg) }],
         },
       ]);
-      setInputText('');
       onExecuteCommand?.(raw);
       return;
     }
@@ -198,14 +336,30 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       text: result.message,
       timestamp: Date.now(),
       tone: result.status === 'error' ? 'error' : result.status === 'ok' ? 'ok' : 'info',
+      links: resultLinks(result),
+      helpGroups: result.helpGroups,
+      helpNotes: result.helpNotes,
     };
 
     setHistory(prev => [...prev.slice(-80), newEntry, outEntry]);
-    setInputText('');
     onExecuteCommand?.(raw);
   };
 
+  const handleSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!inputText.trim()) return;
+    runCommand(inputText);
+    setInputText('');
+  };
+
   const handleKeyDownInput = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Enter on an empty command line confirms whatever the canvas is waiting on
+    // (a command's picks) instead of being a dead key.
+    if (e.key === 'Enter' && !inputText.trim()) {
+      e.preventDefault();
+      commandContext.onApplyPendingSelection?.();
+      return;
+    }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
       const list = commandHistoryRef.current;
@@ -229,24 +383,22 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       e.preventDefault();
       if (inputText) {
         setInputText('');
-      } else if (isExpanded) {
-        setIsExpanded(false);
-        setIsCollapsePulsing(false);
       } else {
+        // Esc always cancels the active command first, even when the history
+        // panel is open — then the panel collapses on the next press.
+        setIsCommandLineActive(false);
         commandContext.onCancel?.();
+        if (isExpanded) {
+          setIsExpanded(false);
+          setIsCollapsePulsing(false);
+        }
       }
     }
   };
 
   const toggleExpand = () => {
     setIsCollapsePulsing(false);
-    setIsExpanded(prev => {
-      const next = !prev;
-      try {
-        localStorage.setItem('landsurv-canvas-terminal-expanded', String(next));
-      } catch { /* ignore */ }
-      return next;
-    });
+    setIsExpanded(prev => !prev);
   };
 
   // Resize expanded history area
@@ -288,9 +440,18 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     ? `^ [${historyIndexRef.current + 1}/${commandHistoryRef.current.length}] ${commandHistoryRef.current[historyIndexRef.current]}`
     : null;
 
+  // Live feedback for the command being typed: canonical verb + description,
+  // or an "unknown" chip when the alias does not resolve.
+  const parsedPreview = inputText.trim() ? parseCanvasCommand(inputText) : null;
+  const previewDescription = parsedPreview ? describeCommand(parsedPreview.verb) : undefined;
+
+  // The terminal sits inside the canvas viewport, whose wheel handler zooms the
+  // drawing. Keep wheel events here so scrolling the command history (or just
+  // hovering the command line) never changes the scene scale.
   return (
     <div
       style={{ touchAction: 'none' }}
+      onWheel={e => e.stopPropagation()}
       className="absolute bottom-0 left-0 right-0 z-30 select-none border-t border-cyan-500/50 bg-[#080d14] shadow-[0_-8px_24px_rgba(0,0,0,0.7)] backdrop-blur-md font-mono text-gray-200 overflow-hidden flex flex-col"
     >
       {/* Top resize handle when history is expanded */}
@@ -315,18 +476,56 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
           {history.map(item => {
             const toneColor =
               item.tone === 'error'
-                ? 'text-red-400'
+                ? 'text-red-300'
                 : item.tone === 'ok'
-                ? 'text-emerald-400'
+                ? 'text-emerald-300'
                 : item.tone === 'info'
-                ? 'text-cyan-300'
-                : 'text-gray-300';
+                ? 'text-sky-300'
+                : item.tone === 'warn'
+                ? 'text-amber-300'
+                : item.tone === 'command'
+                ? 'text-cyan-200'
+                : 'text-gray-200';
+            const tokens = item.text.trim().split(/\s+/);
             return (
-              <div key={item.id} className="flex gap-2">
-                <span className="text-gray-600 shrink-0 select-none">
-                  {item.type === 'input' ? '>' : item.type === 'hint' ? '·' : '='}
+              <div key={item.id} className="group flex items-start gap-2 rounded px-1 py-0.5 hover:bg-gray-800/40">
+                {item.type === 'input' ? (
+                  <>
+                    <span className="shrink-0 select-none font-bold text-cyan-500">CAD &gt;</span>
+                    <span className="break-words text-gray-300">
+                      <span className="font-semibold text-amber-300">{tokens[0]}</span>
+                      {tokens.length > 1 ? <span className="text-gray-400"> {tokens.slice(1).join(' ')}</span> : null}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className={`shrink-0 select-none ${item.tone === 'error' ? 'text-red-500' : item.tone === 'ok' ? 'text-emerald-500' : 'text-sky-500'}`}>
+                      {item.type === 'hint' ? '·' : '='}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      {item.helpGroups?.length ? (
+                        <CommandHelpView groups={item.helpGroups} notes={item.helpNotes} />
+                      ) : (
+                        <span className={`break-words ${toneColor}`}>{item.text}</span>
+                      )}
+                    </div>
+                  </>
+                )}
+                <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
+                  {item.links?.map((link, index) => (
+                    <button
+                      key={`${item.id}-link-${index}`}
+                      type="button"
+                      onClick={link.onClick}
+                      className="rounded border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-100"
+                    >
+                      {link.label}
+                    </button>
+                  ))}
+                  <span className="text-[9px] tabular-nums text-gray-600">
+                    {new Date(item.timestamp).toLocaleTimeString([], { hour12: false })}
+                  </span>
                 </span>
-                <span className={`break-words ${toneColor}`}>{item.text}</span>
               </div>
             );
           })}
@@ -374,7 +573,9 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                 : 'text-gray-300'
             }`}
           >
-            {latestEntry.text}
+            {latestEntry.helpGroups?.length
+              ? `HELP — ${latestEntry.helpGroups.length} groups · ${latestEntry.helpGroups.reduce((total, group) => total + group.entries.length, 0)} commands — see history`
+              : latestEntry.text}
           </span>
         ) : (
           <span
@@ -386,8 +587,34 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
           </span>
         )}
 
+        {latestEntry?.links?.length ? (
+          <span className="flex shrink-0 items-center gap-1.5 border-l border-gray-800/60 pl-2">
+            {latestEntry.links.slice(0, 3).map((link, index) => (
+              <button
+                key={`latest-link-${index}`}
+                type="button"
+                onClick={link.onClick}
+                className="rounded border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-100"
+              >
+                {link.label}
+              </button>
+            ))}
+          </span>
+        ) : null}
+
         {/* Live Snaps / Ortho Badges in the history line (no key badge here) */}
         <div className="ml-auto flex items-center gap-2 shrink-0 text-[10px] border-l border-gray-800/60 pl-2">
+          {onOpenProperties && (
+            <button
+              type="button"
+              data-no-drag
+              onClick={onOpenProperties}
+              className="text-cyan-300/90 underline-offset-2 hover:text-cyan-200 hover:underline"
+              title="Properties — inspect and edit selected entities (or type PROP)"
+            >
+              PROPERTIES
+            </button>
+          )}
           {statusBadges?.isOrthoEnabled !== undefined && (
             <span className={statusBadges.isOrthoEnabled ? 'text-emerald-400 font-bold' : 'text-gray-600'}>
               ORTHO
@@ -401,24 +628,58 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
         </div>
       </div>
 
-      {/* Line 2: Interactive CAD Command Prompt Line */}
-      <form onSubmit={handleSubmit} className="flex items-center gap-2 px-3 py-1.5 bg-[#080d14]">
-        <span className="text-emerald-400 font-bold text-xs shrink-0 tracking-tight flex items-center gap-1">
-          <span className="text-cyan-400">CAD</span>
-          <span>&gt;</span>
-        </span>
-        <input
-          ref={inputRef}
-          data-no-drag
-          type="text"
-          value={inputText}
-          onChange={e => setInputText(e.target.value)}
-          onKeyDown={handleKeyDownInput}
-          placeholder="Type command (L, C, S, T, ZE...) or coord (5000,1000)"
-          className="flex-1 bg-transparent text-gray-100 placeholder-gray-500 outline-none font-mono text-xs selection:bg-cyan-500/30"
-          spellCheck={false}
-          autoComplete="off"
-        />
+      {/* Line 2: Single interactive CAD command line — resting hint or active input */}
+      <div className="flex h-7 items-center gap-2 px-3 bg-[#080d14]">
+        {isCommandLineActive ? (
+          <form onSubmit={handleSubmit} className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="text-emerald-400 font-bold text-xs shrink-0 tracking-tight flex items-center gap-1">
+              <span className="text-cyan-400">CAD</span>
+              <span>&gt;</span>
+            </span>
+            <input
+              ref={inputRef}
+              data-no-drag
+              type="text"
+              value={inputText}
+              onChange={e => setInputText(e.target.value)}
+              onKeyDown={handleKeyDownInput}
+              onBlur={e => {
+                // Return the empty line to its "Press Space" resting state when
+                // the user clicks back to the canvas; keep typed text active.
+                if (!e.currentTarget.value.trim()) setIsCommandLineActive(false);
+              }}
+              placeholder="Type command (L, C, REC, POL, AR, PA, M, RO, SC...)"
+              className="min-w-0 flex-1 bg-transparent text-gray-100 placeholder-gray-500 outline-none font-mono text-xs selection:bg-cyan-500/30"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            {parsedPreview?.verb ? (
+              <span
+                className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${previewDescription ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300' : 'border-red-500/40 bg-red-500/10 text-red-300'}`}
+                title={previewDescription ?? 'Unknown command — type HELP for the list'}
+              >
+                {previewDescription ? parsedPreview.verb.replace(/_/g, ' ') : 'unknown'}
+              </span>
+            ) : null}
+          </form>
+        ) : (
+          <button
+            type="button"
+            data-no-drag
+            onClick={activateCommandLine}
+            className="group flex min-w-0 flex-1 items-center gap-2 bg-transparent text-left cursor-pointer"
+            title="Press Space to type a command"
+            aria-label="Activate command line"
+          >
+            <span className="text-emerald-400 font-bold text-xs shrink-0 tracking-tight flex items-center gap-1">
+              <span className="text-cyan-400">CAD</span>
+              <span>&gt;</span>
+            </span>
+            <span className="font-mono text-[10px] text-gray-500 transition-colors group-hover:text-gray-300">
+              Press Space
+            </span>
+          </button>
+        )}
         {keyInfo?.hasServiceAndInference && (
           <span
             onClick={keyInfo.onClick}
@@ -428,7 +689,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
             ● Service &amp; Inference Enabled
           </span>
         )}
-      </form>
+      </div>
     </div>
   );
 };

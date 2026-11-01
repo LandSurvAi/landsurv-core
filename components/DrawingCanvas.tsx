@@ -57,7 +57,7 @@ import { useDocumentScrollLock } from '../hooks/useDocumentScrollLock.ts';
 import { StandardsEditor } from './CadManager/StandardsEditor.tsx';
 import type { StandardDefinition } from '../contexts/types/CadManager.types';
 import { convertLinearUnits, getLinearUnitAbbreviation, type LinearUnit } from '../utils/linearUnits.ts';
-import { LayersIcon, RedrawIcon, ZoomExtentsIcon, ScaleIcon, AttributeScaleIcon, DownloadIcon, ZoomToPointIcon, XMarkIcon, EyeIcon, PencilSquareIcon, BreaklineIcon, InclusionLineIcon, ExclusionLineIcon, ScissorsIcon, UndoIcon, RedoIcon, ExtendIcon, PolylineIcon, ListBulletIcon, CircleIcon, CrosshairsIcon, TrashIcon } from './icons.tsx';
+import { LayersIcon, RedrawIcon, ZoomExtentsIcon, ScaleIcon, AttributeScaleIcon, DownloadIcon, ZoomToPointIcon, XMarkIcon, EyeIcon, PencilSquareIcon, BreaklineIcon, InclusionLineIcon, ExclusionLineIcon, ScissorsIcon, UndoIcon, RedoIcon, ExtendIcon, PolylineIcon, ListBulletIcon, CircleIcon, CrosshairsIcon, TrashIcon, DocumentDuplicateIcon } from './icons.tsx';
 import proj4 from 'proj4';
 import { createFloatingOriginContext } from '../utils/floatingOriginContext.ts';
 import { PointAgent } from '../services/PointAgent.ts';
@@ -155,7 +155,25 @@ export interface DrawingCanvasHandles {
 }
 
 import { CanvasTerminal } from './CanvasTerminal';
-import { parseCanvasCommand, executeCanvasCommand, type CommandContext } from '../utils/canvasCommands';
+import { ArrayManipulator } from './ArrayManipulator';
+import { PolarArrayManipulator } from './PolarArrayManipulator';
+import { PolygonInputHud } from './PolygonInputHud';
+import { CommandPromptHud } from './CommandPromptHud';
+import { PropertiesDialog } from './PropertiesDialog';
+import { parseCanvasCommand, executeCanvasCommand, parseCoordinateToken, MAX_RECTANGULAR_ARRAY_ITEMS, type CommandContext, type CommandPromptSpec } from '../utils/canvasCommands';
+import {
+    buildClosedSegments,
+    polygonVertices,
+    rectangleVertices,
+    reflectionTransform,
+    rotationTransform,
+    scalingTransform,
+    transformSurveyLine,
+    translationTransform,
+    type PlanarPoint,
+    type PlanarTransform,
+} from '../utils/cadTransforms.ts';
+import { orderConnectedChain, offsetOrderedChain, offsetCircleRadius, resolveArcGeometry, type ChainSegment, type OffsetEntitySegment } from '../utils/offsetGeometry';
 
 interface DrawingCanvasProps {
     /** Initial 2D canvas transform (scale/zoom & pan offsets) restored from saved session state. */
@@ -204,6 +222,8 @@ interface DrawingCanvasProps {
     ownerNameOffset?: { x: number; y: number }; // Offset for owner name label in world coordinates
     onAddLine: (newLine: SurveyLine) => void;
     onDeleteLine: (lineId: string) => void;
+    /** Apply a multi-entity edit as a single undo step (used by typed CAD commands). */
+    onBatchLinesChange?: (removeIds: string[], addLines: SurveyLine[]) => void;
     canUndo: boolean;
     canRedo: boolean;
     onUndo: () => void;
@@ -320,6 +340,8 @@ interface DrawingCanvasProps {
     onSwapBoundaryCallBearingDirection?: (fileId: string, callId: string) => void;
     // Line layer query/edit
     onUpdateLine?: (lineId: string, changes: Partial<SurveyLine>) => void;
+    /** Open the app text editor with long command results (terminal links). */
+    onOpenTextEditor?: (content: string) => void;
     availableLayers?: string[];
     // Active drawing layer — applied to manually drawn polylines (not AI lines)
     activeDrawingLayer?: string;
@@ -828,6 +850,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [hoveredShrinkwrapPn, setHoveredShrinkwrapPn] = useState<string | null>(null);
     // Dynamic input / Cursor HUD screen position
     const [cursorScreenPos, setCursorScreenPos] = useState<{ x: number; y: number } | null>(null);
+    // Multi-value command prompt (ARRAY / POLARARRAY / REC / POL / DI): values
+    // are owned here so the arrow pad and the command line edit the same state.
+    const [activeCommandPrompt, setActiveCommandPrompt] = useState<CommandPromptSpec | null>(null);
+    const [commandPromptValues, setCommandPromptValues] = useState<Record<string, string>>({});
+    const [commandPromptIndex, setCommandPromptIndex] = useState(0);
+    const commandPromptOpenedRef = useRef(false);
+    /** POLARARRAY: the next canvas left-click sets the rotation center. */
+    const [isPickingPolarCenter, setIsPickingPolarCenter] = useState(false);
+    /** Sticky side/fit for the array widget so tiny bounds changes don't flicker it. */
+    const arrayWidgetSideRef = useRef<string | null>(null);
     // Shift+hover quick-info tooltip
     const [shiftHoverPoints, setShiftHoverPoints] = useState<SurveyPoint[]>([]);
     const [shiftHoverPos, setShiftHoverPos] = useState<{ clientX: number; clientY: number } | null>(null);
@@ -853,6 +885,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         | 'inclusion'
         | 'exclusion'
         | 'circle'
+        | 'polygon'
         | 'boundary-line'
         | 'aligned-dim'
         | 'horiz-dim'
@@ -884,6 +917,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [ttrEntity1, setTtrEntity1] = useState<TtrEntity | null>(null);
     const [ttrEntity2, setTtrEntity2] = useState<TtrEntity | null>(null);
     const [ttrHoverEntity, setTtrHoverEntity] = useState<TtrEntity | null>(null);
+    // Polygon drawing state (POL command): snapped center, live radial preview.
+    const [polygonCenter, setPolygonCenter] = useState<{ easting: number; northing: number } | null>(null);
+    const [polygonSides, setPolygonSides] = useState(6);
+    const [typedPolygonDiameter, setTypedPolygonDiameter] = useState('');
     const [polylinePoints, setPolylinePoints] = useState<SurveyPoint[]>([]);
     const [typedSegmentLength, setTypedSegmentLength] = useState('');
     // AutoCAD-style Arc submode for the polyline tool (A toggles on, L back off).
@@ -1208,7 +1245,31 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
     // Terminal incoming notification/event feed
     const [terminalIncoming, setTerminalIncoming] = useState<{ text: string; tone?: 'normal' | 'ok' | 'error' | 'info' } | null>(null);
-    
+    /** Modify/array command waiting for canvas picks — left-click selects, Enter applies, Esc cancels. */
+    const [pendingSelectionCommand, setPendingSelectionCommand] = useState<{ raw: string; label: string } | null>(null);
+    const runPendingSelectionCommandRef = useRef<() => void>(() => {});
+    /** Bumped when a command finishes so the terminal can take the next typed command. */
+    const [commandFocusRequest, setCommandFocusRequest] = useState(0);
+    /** Interactive ROTATE: base point first, then a clicked point or typed angle. */
+    const [isRotatingSelection, setIsRotatingSelection] = useState(false);
+    const [rotatePivot, setRotatePivot] = useState<{ easting: number; northing: number } | null>(null);
+    /** Interactive MIRROR: two snapped axis points, with a live reflected ghost. */
+    const [isMirroringSelection, setIsMirroringSelection] = useState(false);
+    const [mirrorAxisStart, setMirrorAxisStart] = useState<{ easting: number; northing: number } | null>(null);
+    /** Interactive MOVE: snapped base point, then snapped destination. */
+    const [isMovingSelection, setIsMovingSelection] = useState(false);
+    const [moveBasePoint, setMoveBasePoint] = useState<{ easting: number; northing: number } | null>(null);
+    /** Angle typed on the canvas while ROTATE is live (no command-line focus needed). */
+    const [typedRotateAngle, setTypedRotateAngle] = useState('');
+    /** Interactive SCALE: reference point first, then a clicked point or typed factor. */
+    const [isScalingSelection, setIsScalingSelection] = useState(false);
+    const [scaleBasePoint, setScaleBasePoint] = useState<{ easting: number; northing: number } | null>(null);
+    /** Factor typed on the canvas while SCALE is live. */
+    const [typedScaleFactor, setTypedScaleFactor] = useState('');
+    /** The old auto selection card is retired in favour of the Properties dialog. */
+    const [isSelectionInfoEnabled] = useState(false);
+    const [isPropertiesOpen, setIsPropertiesOpen] = useState(false);
+
     // Helper to determine flyout direction based on toolbar position
     const getFlyoutDirection = useCallback((toolbarX: number, toolbarY: number) => {
         const screenWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
@@ -1239,6 +1300,42 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     // Line query panel drag state
     const [lineQueryPanelPos, setLineQueryPanelPos] = useState<{ x: number; y: number } | null>(null);
     const lineQueryDragState = useRef<{ dragging: boolean; startX: number; startY: number; startPosX: number; startPosY: number }>({ dragging: false, startX: 0, startY: 0, startPosX: 0, startPosY: 0 });
+
+    // COPY / OFFSET command-line interaction state
+    const [isCopyingSelection, setIsCopyingSelection] = useState(false);
+    const [copyBasePoint, setCopyBasePoint] = useState<{ easting: number; northing: number } | null>(null);
+    const [isOffsetMode, setIsOffsetMode] = useState(false);
+    const [offsetDistance, setOffsetDistance] = useState<number | null>(null);
+    const [offsetTargetId, setOffsetTargetId] = useState<string | null>(null);
+    const [offsetPickStart, setOffsetPickStart] = useState<{ easting: number; northing: number } | null>(null);
+    const offsetPreviewSegmentsRef = useRef<OffsetEntitySegment[] | null>(null);
+    const offsetPreviewKeyRef = useRef<string | null>(null);
+    /** Dashed transform ghost segments (rotated / scaled / mirrored / moved selection). */
+    const rotatePreviewSegmentsRef = useRef<OffsetEntitySegment[] | null>(null);
+    const rotatePreviewAngleRef = useRef<number | null>(null);
+    /** Distance from the SCALE reference point to the selection edge, captured on pick. */
+    const scaleReferenceRadiusRef = useRef<number | null>(null);
+    /** True while the buffered ghost is a SCALE preview (drawn in emerald). */
+    const scaleGhostActiveRef = useRef(false);
+    /** Key of the ghost currently buffered, so identical mousemove events skip the rebuild. */
+    const previewKeyRef = useRef<string | null>(null);
+    /** Base geometry + array offsets shown while the AR X/Y manipulator is open. */
+    const arrayPreviewRef = useRef<{
+        baseSegments: OffsetEntitySegment[];
+        rows: number;
+        columns: number;
+        rowGap: number;
+        columnGap: number;
+        cos: number;
+        sin: number;
+    } | null>(null);
+    /** Base geometry + polar sweep shown while the PA manipulator is open. */
+    const polarPreviewRef = useRef<{
+        baseSegments: OffsetEntitySegment[];
+        center: { x: number; y: number };
+        count: number;
+        fillAngle: number;
+    } | null>(null);
     
     // Use ref for cursor position to avoid re-creating draw callback on every mouse move
     const cursorWorldPosRef = useRef<{ x: number, y: number } | null>(null);
@@ -1536,6 +1633,880 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             drawRef.current?.();
         });
     }, [makeTempWorldPoint, buildLineEndpoint, onAddLine, activeDrawingLayer]);
+
+    /** Resolve a SurveyLine's endpoints from its point records (fallback: stored coords). */
+    const resolveLineEndpoints = useCallback((line: SurveyLine): { p1: { x: number; y: number }; p2: { x: number; y: number } } | null => {
+        const pt1 = pointMap.get(line.from);
+        const pt2 = pointMap.get(line.to);
+        const p1 = pt1 ? { x: pt1.easting, y: pt1.northing } : (line.fromPt ? { x: line.fromPt.x, y: line.fromPt.y } : null);
+        const p2 = pt2 ? { x: pt2.easting, y: pt2.northing } : (line.toPt ? { x: line.toPt.x, y: line.toPt.y } : null);
+        if (!p1 || !p2) return null;
+        return { p1, p2 };
+    }, [pointMap]);
+
+    /** True for a full-circle entity (handles both modern and legacy encodings). */
+    const isCircleLine = useCallback((line: SurveyLine): boolean => {
+        if (line.isCircle) return true;
+        if (!line.isCurve || !line.curveRadius || line.chordBearing || line.tangentBearing) return false;
+        const ends = resolveLineEndpoints(line);
+        return !!ends && Math.abs(ends.p1.x - ends.p2.x) < 1e-6 && Math.abs(ends.p1.y - ends.p2.y) < 1e-6;
+    }, [resolveLineEndpoints]);
+
+    /** COPY: duplicate the current selection by a world-coordinate displacement. */
+    const duplicateSelectedLines = useCallback((dx: number, dy: number): number => {
+        if (selectedLineIds.size === 0 || (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9)) return 0;
+        const stamp = Date.now();
+        const polylineMap = new Map<string, string>();
+        let copied = 0;
+
+        selectedLineIds.forEach((selId, index) => {
+            const line = lines.find(l => (l.id || `${l.from}-${l.to}`) === selId);
+            if (!line || line.hidden) return;
+            const ends = resolveLineEndpoints(line);
+            if (!ends) return;
+
+            const fromRef = `COPY_${stamp}_${index}_A`;
+            const toRef = `COPY_${stamp}_${index}_B`;
+            const newLine: SurveyLine = {
+                ...line,
+                id: undefined,
+                from: fromRef,
+                to: toRef,
+                fromPt: { x: ends.p1.x + dx, y: ends.p1.y + dy, z: 0 },
+                toPt: { x: ends.p2.x + dx, y: ends.p2.y + dy, z: 0 },
+            };
+
+            if (line.circleCenter) {
+                newLine.circleCenter = {
+                    x: line.circleCenter.x + dx,
+                    y: line.circleCenter.y + dy,
+                    z: line.circleCenter.z ?? 0,
+                };
+            }
+
+            if (isCircleLine(line)) {
+                const center = line.circleCenter
+                    ? { x: line.circleCenter.x, y: line.circleCenter.y }
+                    : ends.p1;
+                newLine.fromPt = { x: center.x + dx, y: center.y + dy, z: 0 };
+                newLine.toPt = { ...newLine.fromPt };
+                newLine.circleCenter = { x: center.x + dx, y: center.y + dy, z: line.circleCenter?.z ?? 0 };
+            }
+
+            if (line.polylineId) {
+                if (!polylineMap.has(line.polylineId)) {
+                    polylineMap.set(line.polylineId, `COPY_${stamp}_${polylineMap.size}`);
+                }
+                newLine.polylineId = polylineMap.get(line.polylineId);
+            }
+
+            onAddLine(newLine);
+            copied++;
+        });
+
+        return copied;
+    }, [selectedLineIds, lines, resolveLineEndpoints, isCircleLine, onAddLine]);
+
+    // ── Typed CAD drafting commands ──────────────────────────────────────
+    // These are reachable only from the CAD command line (no toolbar buttons):
+    // transforms, arrays, erase, and rectangle/polygon primitives.
+
+    const getSelectedLineEntities = useCallback(() => {
+        const entities: Array<{
+            selectionId: string;
+            line: SurveyLine;
+            ends: { p1: { x: number; y: number }; p2: { x: number; y: number } };
+            isCircle: boolean;
+        }> = [];
+        selectedLineIds.forEach(selectionId => {
+            const line = lines.find(l => (l.id || `${l.from}-${l.to}`) === selectionId);
+            if (!line || line.hidden) return;
+            const ends = resolveLineEndpoints(line);
+            if (!ends) return;
+            entities.push({ selectionId, line, ends, isCircle: isCircleLine(line) });
+        });
+        return entities;
+    }, [selectedLineIds, lines, resolveLineEndpoints, isCircleLine]);
+
+    const getSelectionBoundingCenter = useCallback((): PlanarPoint | null => {
+        const entities = getSelectedLineEntities();
+        if (entities.length === 0) return null;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        const include = (x: number, y: number) => {
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+        };
+        entities.forEach(entity => {
+            if (entity.isCircle) {
+                const center = entity.line.circleCenter ?? entity.ends.p1;
+                const radius = entity.line.curveRadius ?? 0;
+                include(center.x - radius, center.y - radius);
+                include(center.x + radius, center.y + radius);
+            } else {
+                include(entity.ends.p1.x, entity.ends.p1.y);
+                include(entity.ends.p2.x, entity.ends.p2.y);
+            }
+        });
+        if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+        return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+    }, [getSelectedLineEntities]);
+
+    const commitLineBatch = useCallback((removeIds: string[], addLines: SurveyLine[]) => {
+        if (removeIds.length === 0 && addLines.length === 0) return;
+        if (props.onBatchLinesChange) {
+            props.onBatchLinesChange(removeIds, addLines);
+        } else {
+            removeIds.forEach(id => onDeleteLine(id));
+            addLines.forEach(line => onAddLine(line));
+        }
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [props.onBatchLinesChange, onDeleteLine, onAddLine]);
+
+    /** Replace the selected entities with transformed copies (move/rotate/scale/mirror). */
+    const transformSelectedLines = useCallback((transform: PlanarTransform, resetAnnotations: boolean): number => {
+        const entities = getSelectedLineEntities();
+        if (entities.length === 0) return 0;
+        const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        const removeIds: string[] = [];
+        const addLines: SurveyLine[] = [];
+        entities.forEach((entity, index) => {
+            addLines.push(transformSurveyLine(entity.line, entity.ends, transform, {
+                refA: `XF_${stamp}_${index}_A`,
+                refB: `XF_${stamp}_${index}_B`,
+                polylineId: entity.line.polylineId ? `XF_${stamp}_${entity.line.polylineId}` : undefined,
+                isCircle: entity.isCircle,
+                resetAnnotations,
+            }));
+            removeIds.push(entity.selectionId);
+        });
+        commitLineBatch(removeIds, addLines);
+        setSelectedLineIds(new Set());
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        return addLines.length;
+    }, [getSelectedLineEntities, commitLineBatch]);
+
+    const arraySelectionCommand = useCallback((rows: number, columns: number, rowSpacing: number, columnSpacing: number, angleDegrees = 0): number => {
+        const entities = getSelectedLineEntities();
+        if (entities.length === 0) return 0;
+        const unit = settings.linearUnits || 'usSurveyFoot';
+        const rowGap = convertLinearUnits(rowSpacing, unit, 'foot');
+        const columnGap = convertLinearUnits(columnSpacing, unit, 'foot');
+        const direction = (angleDegrees * Math.PI) / 180;
+        const cos = Math.cos(direction);
+        const sin = Math.sin(direction);
+        const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        const addLines: SurveyLine[] = [];
+        for (let row = 0; row < rows; row++) {
+            for (let column = 0; column < columns; column++) {
+                if (row === 0 && column === 0) continue;
+                const localX = column * columnGap;
+                const localY = row * rowGap;
+                const transform = translationTransform(localX * cos - localY * sin, localX * sin + localY * cos);
+                entities.forEach((entity, index) => {
+                    addLines.push(transformSurveyLine(entity.line, entity.ends, transform, {
+                        refA: `AR_${stamp}_${row}_${column}_${index}_A`,
+                        refB: `AR_${stamp}_${row}_${column}_${index}_B`,
+                        polylineId: entity.line.polylineId ? `AR_${stamp}_${row}_${column}_${entity.line.polylineId}` : undefined,
+                        isCircle: entity.isCircle,
+                        resetAnnotations: false,
+                    }));
+                });
+            }
+        }
+        commitLineBatch([], addLines);
+        return addLines.length;
+    }, [getSelectedLineEntities, commitLineBatch, settings.linearUnits]);
+
+    const polarArraySelectionCommand = useCallback((count: number, fillAngleDegrees: number, centerArg?: { easting: number; northing: number }): number => {
+        const entities = getSelectedLineEntities();
+        const center = centerArg ? { x: centerArg.easting, y: centerArg.northing } : getSelectionBoundingCenter();
+        if (!center || entities.length === 0) return 0;
+        const step = fillAngleDegrees >= 359.999
+            ? fillAngleDegrees / count
+            : fillAngleDegrees / Math.max(1, count - 1);
+        const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        const addLines: SurveyLine[] = [];
+        for (let item = 1; item < count; item++) {
+            const transform = rotationTransform(center, (item * step * Math.PI) / 180);
+            entities.forEach((entity, index) => {
+                addLines.push(transformSurveyLine(entity.line, entity.ends, transform, {
+                    refA: `PA_${stamp}_${item}_${index}_A`,
+                    refB: `PA_${stamp}_${item}_${index}_B`,
+                    polylineId: entity.line.polylineId ? `PA_${stamp}_${item}_${entity.line.polylineId}` : undefined,
+                    isCircle: entity.isCircle,
+                    resetAnnotations: true,
+                }));
+            });
+        }
+        commitLineBatch([], addLines);
+        return addLines.length;
+    }, [getSelectedLineEntities, getSelectionBoundingCenter, commitLineBatch]);
+
+    const moveSelectionCommand = useCallback((dx: number, dy: number): number => {
+        const unit = settings.linearUnits || 'usSurveyFoot';
+        return transformSelectedLines(
+            translationTransform(
+                convertLinearUnits(dx, unit, 'foot'),
+                convertLinearUnits(dy, unit, 'foot'),
+            ),
+            false,
+        );
+    }, [transformSelectedLines, settings.linearUnits]);
+
+    const rotateSelectionCommand = useCallback((angleDegrees: number, pivot?: { easting: number; northing: number }): number => {
+        const center = pivot ? { x: pivot.easting, y: pivot.northing } : getSelectionBoundingCenter();
+        if (!center) return 0;
+        return transformSelectedLines(rotationTransform(center, (angleDegrees * Math.PI) / 180), true);
+    }, [getSelectionBoundingCenter, transformSelectedLines]);
+
+    const scaleSelectionCommand = useCallback((factor: number, pivot?: { easting: number; northing: number }): number => {
+        const center = pivot ? { x: pivot.easting, y: pivot.northing } : getSelectionBoundingCenter();
+        if (!center) return 0;
+        return transformSelectedLines(scalingTransform(center, factor), true);
+    }, [getSelectionBoundingCenter, transformSelectedLines]);
+
+    /** Farthest distance from a reference point to the selected geometry (drag baseline). */
+    const selectionRadiusFrom = useCallback((reference: { easting: number; northing: number }): number => {
+        let radius = 0;
+        for (const entity of getSelectedLineEntities()) {
+            for (const point of [entity.ends.p1, entity.ends.p2]) {
+                radius = Math.max(radius, Math.hypot(point.x - reference.easting, point.y - reference.northing));
+            }
+            if (entity.line.isCircle && entity.line.curveRadius) {
+                const center = entity.line.circleCenter ?? entity.ends.p1;
+                radius = Math.max(
+                    radius,
+                    Math.hypot(center.x - reference.easting, center.y - reference.northing) + entity.line.curveRadius,
+                );
+            }
+        }
+        return radius;
+    }, [getSelectedLineEntities]);
+
+    const mirrorSelectionCommand = useCallback((p1: { easting: number; northing: number }, p2: { easting: number; northing: number }): number => {
+        return transformSelectedLines(
+            reflectionTransform({ x: p1.easting, y: p1.northing }, { x: p2.easting, y: p2.northing }),
+            true,
+        );
+    }, [transformSelectedLines]);
+
+    const joinSelectionCommand = useCallback((): number => {
+        const entities = getSelectedLineEntities().filter(entity => !entity.isCircle);
+        if (entities.length < 2) return 0;
+        const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        const polylineId = `JOIN_${stamp}`;
+        const addLines: SurveyLine[] = entities.map(entity => ({
+            ...entity.line,
+            id: undefined,
+            polylineId,
+        }));
+        commitLineBatch(entities.map(entity => entity.selectionId), addLines);
+        setSelectedLineIds(new Set());
+        setIsSelectionMode(false);
+        return addLines.length;
+    }, [getSelectedLineEntities, commitLineBatch]);
+
+    const explodeSelectionCommand = useCallback((): number => {
+        const entities = getSelectedLineEntities().filter(entity => entity.line.polylineId);
+        if (entities.length === 0) return 0;
+        const addLines: SurveyLine[] = entities.map(entity => ({
+            ...entity.line,
+            id: undefined,
+            polylineId: undefined,
+        }));
+        commitLineBatch(entities.map(entity => entity.selectionId), addLines);
+        setSelectedLineIds(new Set());
+        setIsSelectionMode(false);
+        return addLines.length;
+    }, [getSelectedLineEntities, commitLineBatch]);
+
+    const eraseSelectionCommand = useCallback((): number => {
+        const ids = Array.from(selectedLineIds);
+        if (ids.length === 0) return 0;
+        commitLineBatch(ids, []);
+        setSelectedLineIds(new Set());
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        return ids.length;
+    }, [selectedLineIds, commitLineBatch]);
+
+    /** Apply a property patch to every selected entity (one canvas refresh). */
+    const handleUpdateSelectedLines = useCallback((ids: string[], changes: Partial<SurveyLine>) => {
+        if (ids.length === 0) return;
+        ids.forEach(id => props.onUpdateLine?.(id, changes));
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [props.onUpdateLine]);
+
+    const selectAllEntitiesCommand = useCallback((): number => {
+        const ids = new Set(
+            lines.filter(line => !line.hidden).map(line => line.id || `${line.from}-${line.to}`),
+        );
+        setSelectedLineIds(ids);
+        setIsSelectionMode(ids.size > 0);
+        setIsBoxSelectMode(false);
+        return ids.size;
+    }, [lines]);
+
+    const deselectAllCommand = useCallback(() => {
+        setSelectedLineIds(new Set());
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+    }, []);
+
+    const drawRectangleCommand = useCallback((p1: { easting: number; northing: number }, p2: { easting: number; northing: number }): number => {
+        const vertices = rectangleVertices(
+            { x: p1.easting, y: p1.northing },
+            { x: p2.easting, y: p2.northing },
+        );
+        if (!vertices) return 0;
+        const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        const segments = buildClosedSegments(vertices, {
+            refPrefix: `REC_${stamp}`,
+            polylineId: `REC_${stamp}`,
+            layer: activeDrawingLayer || undefined,
+        });
+        commitLineBatch([], segments);
+        return segments.length;
+    }, [activeDrawingLayer, commitLineBatch]);
+
+    const drawPolygonCommand = useCallback((sides: number, center: { easting: number; northing: number }, radius: number): number => {
+        const worldRadius = convertLinearUnits(radius, settings.linearUnits || 'usSurveyFoot', 'foot');
+        const vertices = polygonVertices({ x: center.easting, y: center.northing }, worldRadius, sides);
+        if (vertices.length === 0) return 0;
+        const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        const segments = buildClosedSegments(vertices, {
+            refPrefix: `POL_${stamp}`,
+            polylineId: `POL_${stamp}`,
+            layer: activeDrawingLayer || undefined,
+        });
+        commitLineBatch([], segments);
+        return segments.length;
+    }, [activeDrawingLayer, commitLineBatch, settings.linearUnits]);
+
+    const commitPolygonFromRadius = useCallback((radiusInput: number): boolean => {
+        if (!polygonCenter) return false;
+        if (!Number.isFinite(radiusInput) || radiusInput <= 0) {
+            setTerminalIncoming({ text: 'POLYGON: Radius must be a positive number', tone: 'error' });
+            return false;
+        }
+        const segments = drawPolygonCommand(polygonSides, polygonCenter, radiusInput);
+        if (segments <= 0) {
+            setTerminalIncoming({ text: 'POLYGON: Could not create the polygon', tone: 'error' });
+            return false;
+        }
+        setTerminalIncoming({
+            text: `POLYGON: Created ${polygonSides}-sided polygon (${segments} segments) about E ${polygonCenter.easting.toFixed(2)}, N ${polygonCenter.northing.toFixed(2)} — diameter ${Number((radiusInput * 2).toFixed(3))} ${getLinearUnitAbbreviation(settings.linearUnits)}.`,
+            tone: 'ok',
+        });
+        setPolygonCenter(null);
+        setTypedPolygonDiameter('');
+        setDrawingMode('none');
+        setActiveOsnapPoint(null);
+        setCommandFocusRequest(n => n + 1);
+        requestAnimationFrame(() => drawRef.current?.());
+        return true;
+    }, [drawPolygonCommand, polygonCenter, polygonSides, settings.linearUnits]);
+
+    /**
+     * OFFSET: compute the offset geometry for the picked line/polyline/arc/circle
+     * without committing it. Connected segments are treated as one chain and
+     * mitered (line-line, line-arc, arc-arc) at their shared vertices.
+     */
+    const buildOffsetGeometry = useCallback((targetLine: SurveyLine, clickPoint: { x: number; y: number }): {
+        ok: boolean;
+        count: number;
+        message: string;
+        segments?: OffsetEntitySegment[];
+        source?: SurveyLine;
+    } => {
+        if (offsetDistance === null || !(offsetDistance > 0)) {
+            return { ok: false, count: 0, message: 'OFFSET: Specify a positive offset distance first.' };
+        }
+        const ends = resolveLineEndpoints(targetLine);
+        if (!ends) return { ok: false, count: 0, message: 'OFFSET: Could not resolve that entity geometry.' };
+
+        if (isCircleLine(targetLine)) {
+            const radius = targetLine.curveRadius;
+            if (!radius) return { ok: false, count: 0, message: 'OFFSET: That circle has no radius.' };
+            const center = targetLine.circleCenter
+                ? { x: targetLine.circleCenter.x, y: targetLine.circleCenter.y }
+                : ends.p1;
+            const newRadius = offsetCircleRadius(center, radius, offsetDistance, clickPoint);
+            if (newRadius === null) {
+                return { ok: false, count: 0, message: 'OFFSET: Distance is too large for that circle.' };
+            }
+            return {
+                ok: true,
+                count: 1,
+                message: 'OFFSET: Circle offset ready.',
+                segments: [{ kind: 'circle', center, radius: newRadius }],
+                source: targetLine,
+            };
+        }
+
+        const seedId = targetLine.id || `${targetLine.from}-${targetLine.to}`;
+        const candidates = targetLine.polylineId
+            ? lines.filter(l => l.polylineId === targetLine.polylineId && !l.hidden && !isCircleLine(l))
+            : lines.filter(l => !l.hidden && !isCircleLine(l));
+
+        const segments: ChainSegment[] = [];
+        const segmentSources = new Map<string, SurveyLine>();
+        for (const l of candidates) {
+            const e = resolveLineEndpoints(l);
+            if (!e) continue;
+            const id = l.id || `${l.from}-${l.to}`;
+            let curve: ChainSegment['curve'];
+            if (l.isCurve) {
+                if (!l.curveRadius || !l.arcLength) {
+                    if (id === seedId || targetLine.polylineId) {
+                        return { ok: false, count: 0, message: 'OFFSET: Could not resolve a curve in that linework.' };
+                    }
+                    continue;
+                }
+                const resolved = resolveArcGeometry(e.p1, e.p2, {
+                    radius: l.curveRadius,
+                    arcLength: l.arcLength,
+                    center: l.circleCenter ? { x: l.circleCenter.x, y: l.circleCenter.y } : undefined,
+                    curveDirection: l.curveDirection,
+                    tangentBearing: l.tangentBearing,
+                    chordBearing: l.chordBearing,
+                    bearing: l.bearing,
+                });
+                if (!resolved) {
+                    if (id === seedId || targetLine.polylineId) {
+                        return { ok: false, count: 0, message: 'OFFSET: Could not resolve a curve in that linework.' };
+                    }
+                    continue;
+                }
+                curve = resolved;
+            }
+            segments.push({ id, from: e.p1, to: e.p2, curve });
+            segmentSources.set(id, l);
+        }
+
+        const chain = orderConnectedChain(seedId, segments);
+        if (!chain) return { ok: false, count: 0, message: 'OFFSET: Could not order the selected linework.' };
+
+        const result = offsetOrderedChain(chain, offsetDistance, clickPoint, seedId);
+        if (!result) return { ok: false, count: 0, message: 'OFFSET: Could not build the offset geometry.' };
+
+        return {
+            ok: true,
+            count: result.segments.length,
+            message: 'OFFSET: Offset ready.',
+            segments: result.segments,
+            source: segmentSources.get(seedId) ?? targetLine,
+        };
+    }, [offsetDistance, resolveLineEndpoints, isCircleLine, lines]);
+
+    /** OFFSET: commit computed line/arc/circle segments onto the drawing. */
+    const commitOffsetSegments = useCallback((offsetSegments: OffsetEntitySegment[], source: SurveyLine): number => {
+        const stamp = Date.now();
+        const newPolylineId = offsetSegments.length > 1 ? `OFFSET_${stamp}` : undefined;
+        const hasBearingData = !!(source.bearing || source.distance);
+        let created = 0;
+
+        offsetSegments.forEach((seg, index) => {
+            const fromRef = `OFFSET_${stamp}_${index}_A`;
+            const toRef = `OFFSET_${stamp}_${index}_B`;
+
+            if (seg.kind === 'circle') {
+                onAddLine({
+                    ...source,
+                    id: undefined,
+                    from: fromRef,
+                    to: toRef,
+                    fromPt: { x: seg.center.x, y: seg.center.y, z: 0 },
+                    toPt: { x: seg.center.x, y: seg.center.y, z: 0 },
+                    circleCenter: { x: seg.center.x, y: seg.center.y, z: source.circleCenter?.z ?? 0 },
+                    isCurve: true,
+                    isCircle: true,
+                    curveRadius: seg.radius,
+                    arcLength: 2 * Math.PI * seg.radius,
+                    tangentBearing: undefined,
+                    chordBearing: undefined,
+                    chordDistance: undefined,
+                    curveDirection: undefined,
+                    polylineId: newPolylineId,
+                });
+                created++;
+                return;
+            }
+
+            if (seg.kind === 'line') {
+                const dx = seg.to.x - seg.from.x;
+                const dy = seg.to.y - seg.from.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist < 1e-6) return;
+                let az = Math.atan2(dx, dy);
+                if (az < 0) az += 2 * Math.PI;
+                onAddLine({
+                    ...source,
+                    id: undefined,
+                    from: fromRef,
+                    to: toRef,
+                    fromPt: { x: seg.from.x, y: seg.from.y, z: 0 },
+                    toPt: { x: seg.to.x, y: seg.to.y, z: 0 },
+                    isCurve: false,
+                    isCircle: false,
+                    circleCenter: undefined,
+                    curveRadius: undefined,
+                    arcLength: undefined,
+                    tangentBearing: undefined,
+                    chordBearing: undefined,
+                    chordDistance: undefined,
+                    curveDirection: undefined,
+                    bearing: hasBearingData ? formatBearing(az) : undefined,
+                    distance: hasBearingData ? dist.toFixed(2) : undefined,
+                    polylineId: newPolylineId,
+                });
+                created++;
+                return;
+            }
+
+            const arcLength = seg.radius * seg.centralAngle;
+            const startAngle = Math.atan2(seg.from.y - seg.center.y, seg.from.x - seg.center.x);
+            const radial = { x: Math.cos(startAngle), y: Math.sin(startAngle) };
+            const tangent = seg.isLeftCurve
+                ? { x: -radial.y, y: radial.x }
+                : { x: radial.y, y: -radial.x };
+            let tangentAz = Math.atan2(tangent.x, tangent.y);
+            if (tangentAz < 0) tangentAz += 2 * Math.PI;
+            let chordAz = Math.atan2(seg.to.x - seg.from.x, seg.to.y - seg.from.y);
+            if (chordAz < 0) chordAz += 2 * Math.PI;
+            const chordDist = Math.hypot(seg.to.x - seg.from.x, seg.to.y - seg.from.y);
+
+            onAddLine({
+                ...source,
+                id: undefined,
+                from: fromRef,
+                to: toRef,
+                fromPt: { x: seg.from.x, y: seg.from.y, z: 0 },
+                toPt: { x: seg.to.x, y: seg.to.y, z: 0 },
+                isCurve: true,
+                isCircle: false,
+                circleCenter: { x: seg.center.x, y: seg.center.y, z: 0 },
+                curveRadius: seg.radius,
+                arcLength,
+                curveDirection: seg.isLeftCurve ? 'left' : 'right',
+                tangentBearing: formatBearing(tangentAz),
+                chordBearing: formatBearing(chordAz),
+                chordDistance: chordDist,
+                bearing: hasBearingData ? formatBearing(chordAz) : undefined,
+                distance: hasBearingData ? chordDist.toFixed(2) : undefined,
+                polylineId: newPolylineId,
+            });
+            created++;
+        });
+
+        return created;
+    }, [onAddLine]);
+
+    const applyOffsetAtPoint = useCallback((targetLine: SurveyLine, clickPoint: { x: number; y: number }): { ok: boolean; count: number; message: string } => {
+        const built = buildOffsetGeometry(targetLine, clickPoint);
+        if (!built.ok || !built.segments) {
+            return { ok: false, count: 0, message: built.message };
+        }
+        const count = commitOffsetSegments(built.segments, built.source ?? targetLine);
+        if (count === 0) {
+            return { ok: false, count: 0, message: 'OFFSET: The offset produced no usable geometry.' };
+        }
+        return { ok: true, count, message: 'OFFSET: Offset created.' };
+    }, [buildOffsetGeometry, commitOffsetSegments]);
+
+    /** Cheap side key used to avoid rebuilding the preview on every mouse move. */
+    const offsetSideKey = useCallback((target: SurveyLine, pt: { x: number; y: number }): string => {
+        if (isCircleLine(target)) {
+            const ends = resolveLineEndpoints(target);
+            const center = target.circleCenter
+                ? { x: target.circleCenter.x, y: target.circleCenter.y }
+                : ends?.p1;
+            if (!center || !target.curveRadius) return '?';
+            return Math.hypot(pt.x - center.x, pt.y - center.y) >= target.curveRadius ? 'out' : 'in';
+        }
+        if (target.isCurve && target.curveRadius && target.arcLength) {
+            const ends = resolveLineEndpoints(target);
+            if (!ends) return '?';
+            const arc = resolveArcGeometry(ends.p1, ends.p2, {
+                radius: target.curveRadius,
+                arcLength: target.arcLength,
+                center: target.circleCenter ? { x: target.circleCenter.x, y: target.circleCenter.y } : undefined,
+                curveDirection: target.curveDirection,
+                tangentBearing: target.tangentBearing,
+                chordBearing: target.chordBearing,
+                bearing: target.bearing,
+            });
+            if (!arc) return '?';
+            return Math.hypot(pt.x - arc.center.x, pt.y - arc.center.y) >= arc.radius ? 'out' : 'in';
+        }
+        const ends = resolveLineEndpoints(target);
+        if (!ends) return '?';
+        const cross = (ends.p2.x - ends.p1.x) * (pt.y - ends.p1.y) - (ends.p2.y - ends.p1.y) * (pt.x - ends.p1.x);
+        return cross >= 0 ? 'L' : 'R';
+    }, [isCircleLine, resolveLineEndpoints]);
+
+    const clearOffsetPreview = useCallback(() => {
+        offsetPreviewKeyRef.current = null;
+        if (!offsetPreviewSegmentsRef.current) return;
+        offsetPreviewSegmentsRef.current = null;
+        requestAnimationFrame(() => drawRef.current?.());
+    }, []);
+
+    const updateOffsetPreview = useCallback((target: SurveyLine | null, clickPoint: { x: number; y: number }) => {
+        if (!target || offsetDistance === null || offsetTargetId === null) {
+            clearOffsetPreview();
+            return;
+        }
+        const key = `${offsetTargetId}|${offsetDistance}|${offsetSideKey(target, clickPoint)}`;
+        if (key === offsetPreviewKeyRef.current) return;
+        offsetPreviewKeyRef.current = key;
+        const built = buildOffsetGeometry(target, clickPoint);
+        offsetPreviewSegmentsRef.current = built.ok && built.segments ? built.segments : null;
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [offsetDistance, offsetTargetId, offsetSideKey, buildOffsetGeometry, clearOffsetPreview]);
+
+    /** Rotated copies of the selection for the live ROTATE ghost at a trial angle. */
+    const buildRotatePreview = useCallback((angleDegrees: number): OffsetEntitySegment[] => {
+        if (!rotatePivot) return [];
+        const radians = (angleDegrees * Math.PI) / 180;
+        const cos = Math.cos(radians);
+        const sin = Math.sin(radians);
+        const px = rotatePivot.easting;
+        const py = rotatePivot.northing;
+        const rotatePoint = (p: { x: number; y: number }) => {
+            const dx = p.x - px;
+            const dy = p.y - py;
+            return { x: px + dx * cos - dy * sin, y: py + dx * sin + dy * cos };
+        };
+        const preview: OffsetEntitySegment[] = [];
+        for (const entity of getSelectedLineEntities()) {
+            const line = entity.line;
+            const circleLike = line.isCircle
+                || (line.isCurve && line.curveRadius
+                    && (!line.fromPt || (entity.ends.p1.x === entity.ends.p2.x && entity.ends.p1.y === entity.ends.p2.y))
+                    && !line.tangentBearing && !line.chordBearing);
+            if (circleLike) {
+                const center = line.circleCenter ? { x: line.circleCenter.x, y: line.circleCenter.y } : entity.ends.p1;
+                const radius = line.curveRadius ?? Math.hypot(entity.ends.p1.x - center.x, entity.ends.p1.y - center.y);
+                if (radius > 0) preview.push({ kind: 'circle', center: rotatePoint(center), radius });
+                continue;
+            }
+            if (line.isCurve && line.curveRadius && line.arcLength) {
+                const arc = resolveArcGeometry(entity.ends.p1, entity.ends.p2, {
+                    radius: line.curveRadius,
+                    arcLength: line.arcLength,
+                    center: line.circleCenter ? { x: line.circleCenter.x, y: line.circleCenter.y } : undefined,
+                    curveDirection: line.curveDirection,
+                    tangentBearing: line.tangentBearing,
+                    chordBearing: line.chordBearing,
+                    bearing: line.bearing,
+                });
+                if (arc) {
+                    preview.push({
+                        kind: 'arc',
+                        from: rotatePoint(entity.ends.p1),
+                        to: rotatePoint(entity.ends.p2),
+                        center: rotatePoint(arc.center),
+                        radius: arc.radius,
+                        centralAngle: arc.centralAngle,
+                        isLeftCurve: arc.isLeftCurve,
+                    });
+                    continue;
+                }
+            }
+            preview.push({ kind: 'line', from: rotatePoint(entity.ends.p1), to: rotatePoint(entity.ends.p2) });
+        }
+        return preview;
+    }, [rotatePivot, getSelectedLineEntities]);
+
+    const clearRotatePreview = useCallback(() => {
+        rotatePreviewAngleRef.current = null;
+        previewKeyRef.current = null;
+        scaleGhostActiveRef.current = false;
+        if (!rotatePreviewSegmentsRef.current) return;
+        rotatePreviewSegmentsRef.current = null;
+        requestAnimationFrame(() => drawRef.current?.());
+    }, []);
+
+    const updateRotatePreview = useCallback((angleDegrees: number) => {
+        // Ignore sub-0.05° jitter so a normal mouse move redraws at most a few times.
+        if (rotatePreviewAngleRef.current !== null && Math.abs(rotatePreviewAngleRef.current - angleDegrees) < 0.05) return;
+        rotatePreviewAngleRef.current = angleDegrees;
+        previewKeyRef.current = null;
+        const segments = buildRotatePreview(angleDegrees);
+        rotatePreviewSegmentsRef.current = segments.length > 0 ? segments : null;
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [buildRotatePreview]);
+
+    /** Generic ghost builder for MOVE / COPY / MIRROR previews. */
+    const buildSelectionPreview = useCallback((transformPoint: (p: { x: number; y: number }) => { x: number; y: number }): OffsetEntitySegment[] => {
+        const preview: OffsetEntitySegment[] = [];
+        for (const entity of getSelectedLineEntities()) {
+            const line = entity.line;
+            const circleLike = line.isCircle
+                || (line.isCurve && line.curveRadius
+                    && (!line.fromPt || (entity.ends.p1.x === entity.ends.p2.x && entity.ends.p1.y === entity.ends.p2.y))
+                    && !line.tangentBearing && !line.chordBearing);
+            if (circleLike) {
+                const center = line.circleCenter ? { x: line.circleCenter.x, y: line.circleCenter.y } : entity.ends.p1;
+                const radius = line.curveRadius ?? Math.hypot(entity.ends.p1.x - center.x, entity.ends.p1.y - center.y);
+                if (radius > 0) preview.push({ kind: 'circle', center: transformPoint(center), radius });
+                continue;
+            }
+            if (line.isCurve && line.curveRadius && line.arcLength) {
+                const arc = resolveArcGeometry(entity.ends.p1, entity.ends.p2, {
+                    radius: line.curveRadius,
+                    arcLength: line.arcLength,
+                    center: line.circleCenter ? { x: line.circleCenter.x, y: line.circleCenter.y } : undefined,
+                    curveDirection: line.curveDirection,
+                    tangentBearing: line.tangentBearing,
+                    chordBearing: line.chordBearing,
+                    bearing: line.bearing,
+                });
+                if (arc) {
+                    preview.push({
+                        kind: 'arc',
+                        from: transformPoint(entity.ends.p1),
+                        to: transformPoint(entity.ends.p2),
+                        center: transformPoint(arc.center),
+                        radius: arc.radius,
+                        centralAngle: arc.centralAngle,
+                        isLeftCurve: arc.isLeftCurve,
+                    });
+                    continue;
+                }
+            }
+            preview.push({ kind: 'line', from: transformPoint(entity.ends.p1), to: transformPoint(entity.ends.p2) });
+        }
+      return preview;
+  }, [getSelectedLineEntities]);
+
+  /**
+   * Live ARRAY preview. Built from the values owned by the X/Y manipulator so
+   * every drag/typed change shows the resulting copies before Apply.
+   */
+  useEffect(() => {
+    if (activeCommandPrompt?.id !== 'array') {
+      if (!arrayPreviewRef.current) return;
+      arrayPreviewRef.current = null;
+      requestAnimationFrame(() => drawRef.current?.());
+      return;
+    }
+
+    const read = (key: string, fallback: number): number => {
+      const raw = commandPromptValues[key];
+      if (raw === undefined || raw.trim() === '') return fallback;
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const rows = Math.max(1, Math.round(read('rows', 1)));
+    const columns = Math.max(1, Math.round(read('columns', 1)));
+    const rowSpacing = read('rowSpacing', 0);
+    const columnSpacing = read('columnSpacing', 0);
+    const angle = read('angle', 0);
+
+    const unit = settings.linearUnits || 'usSurveyFoot';
+    const rowGap = convertLinearUnits(rowSpacing, unit, 'foot');
+    const columnGap = convertLinearUnits(columnSpacing, unit, 'foot');
+    // Preview every array the command will accept. Large arrays are drawn with
+    // a sampled row/column grid instead of dropping the ghost entirely.
+    const shouldPreview = rows * columns >= 2
+      && rows * columns <= MAX_RECTANGULAR_ARRAY_ITEMS
+      && (Math.abs(rowGap) > 1e-12 || Math.abs(columnGap) > 1e-12);
+    const direction = (angle * Math.PI) / 180;
+    const baseSegments = shouldPreview ? buildSelectionPreview(point => point) : [];
+    arrayPreviewRef.current = baseSegments.length > 0
+      ? {
+          baseSegments,
+          rows,
+          columns,
+          rowGap,
+          columnGap,
+          cos: Math.cos(direction),
+          sin: Math.sin(direction),
+        }
+      : null;
+    requestAnimationFrame(() => drawRef.current?.());
+  }, [activeCommandPrompt, buildSelectionPreview, commandPromptValues, selectedLineIds, settings.linearUnits]);
+
+  /**
+   * Live POLARARRAY preview. The ring dot, count, fill angle and center are
+   * owned by the manipulator, so every drag or typed change updates the ghost.
+   */
+  useEffect(() => {
+    if (activeCommandPrompt?.id !== 'polar_array') {
+      if (!polarPreviewRef.current) return;
+      polarPreviewRef.current = null;
+      requestAnimationFrame(() => drawRef.current?.());
+      return;
+    }
+
+    const read = (key: string, fallback: number): number => {
+      const raw = commandPromptValues[key];
+      if (raw === undefined || raw.trim() === '') return fallback;
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const count = Math.max(2, Math.round(read('count', 6)));
+    const fillAngle = Math.min(360, Math.max(1, read('fillAngle', 360)));
+    const centerToken = (commandPromptValues.center ?? '').trim();
+    const parsedCenter = centerToken ? parseCoordinateToken(centerToken) : null;
+    const center = parsedCenter
+      ? { x: parsedCenter.easting, y: parsedCenter.northing }
+      : getSelectionBoundingCenter();
+    const baseSegments = center ? buildSelectionPreview(point => point) : [];
+    polarPreviewRef.current = baseSegments.length > 0
+      ? { baseSegments, center, count, fillAngle }
+      : null;
+    requestAnimationFrame(() => drawRef.current?.());
+  }, [activeCommandPrompt, buildSelectionPreview, commandPromptValues, getSelectionBoundingCenter, selectedLineIds]);
+
+  const showTransformPreview = useCallback((key: string, transformPoint: (p: { x: number; y: number }) => { x: number; y: number }) => {
+        if (previewKeyRef.current === key) return;
+        previewKeyRef.current = key;
+        scaleGhostActiveRef.current = false;
+        const segments = buildSelectionPreview(transformPoint);
+        rotatePreviewSegmentsRef.current = segments.length > 0 ? segments : null;
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [buildSelectionPreview]);
+
+    /** Emerald ghost of the selection scaled about the current reference point. */
+    const showScalePreview = useCallback((factor: number) => {
+        const base = scaleBasePoint;
+        if (!base || !Number.isFinite(factor) || factor <= 0) return;
+        const key = `SC|${base.easting.toFixed(3)}|${base.northing.toFixed(3)}|${factor.toFixed(4)}`;
+        if (previewKeyRef.current === key) return;
+        previewKeyRef.current = key;
+        scaleGhostActiveRef.current = true;
+        const segments = buildSelectionPreview((point) => ({
+            x: base.easting + (point.x - base.easting) * factor,
+            y: base.northing + (point.y - base.northing) * factor,
+        }));
+        rotatePreviewSegmentsRef.current = segments.length > 0 ? segments : null;
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [scaleBasePoint, buildSelectionPreview]);
+
+    /** Stop ROTATE / MIRROR / MOVE and drop any ghost. */
+    const stopInteractiveTransforms = useCallback(() => {
+        setIsRotatingSelection(false);
+        setRotatePivot(null);
+        setTypedRotateAngle('');
+        setIsMirroringSelection(false);
+        setMirrorAxisStart(null);
+        setIsMovingSelection(false);
+        setMoveBasePoint(null);
+        setIsScalingSelection(false);
+        setScaleBasePoint(null);
+        setTypedScaleFactor('');
+        scaleReferenceRadiusRef.current = null;
+        clearRotatePreview();
+    }, [clearRotatePreview]);
 
     const resolveOsnapAtScreen = useCallback((
         screenX: number,
@@ -6251,6 +7222,72 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
         }
 
+        // Draw rubber band polygon preview
+        if (drawingMode === 'polygon' && polygonCenter) {
+            const cursorPos = cursorWorldPosRef.current;
+            let radiusWorld = cursorPos
+                ? Math.hypot(cursorPos.x - polygonCenter.easting, cursorPos.y - polygonCenter.northing)
+                : 0;
+            if (typedPolygonDiameter.trim().length > 0) {
+                const num = Number(typedPolygonDiameter);
+                if (Number.isFinite(num) && num > 0) {
+                    const fromUnit: LinearUnit = settings.linearUnits || 'usSurveyFoot';
+                    radiusWorld = convertLinearUnits(num / 2, fromUnit, 'foot');
+                }
+            }
+            if (radiusWorld > 1e-6) {
+                const vertices = polygonVertices(
+                    { x: polygonCenter.easting, y: polygonCenter.northing },
+                    radiusWorld,
+                    polygonSides,
+                );
+                if (vertices.length > 0) {
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.moveTo(vertices[0].x, vertices[0].y);
+                    for (let i = 1; i < vertices.length; i++) ctx.lineTo(vertices[i].x, vertices[i].y);
+                    ctx.closePath();
+                    ctx.fillStyle = 'rgba(167, 139, 250, 0.08)';
+                    ctx.fill();
+                    ctx.strokeStyle = '#A78BFA';
+                    ctx.lineWidth = Math.max(1.5 * inverseScale, minScreenPixelWidth);
+                    const dashSize = 5 * inverseScale;
+                    const gapSize = 3 * inverseScale;
+                    ctx.setLineDash([dashSize, gapSize]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+
+                    // Center crosshair and radius connector
+                    const cross = 5 * inverseScale;
+                    ctx.beginPath();
+                    ctx.moveTo(polygonCenter.easting - cross, polygonCenter.northing);
+                    ctx.lineTo(polygonCenter.easting + cross, polygonCenter.northing);
+                    ctx.moveTo(polygonCenter.easting, polygonCenter.northing - cross);
+                    ctx.lineTo(polygonCenter.easting, polygonCenter.northing + cross);
+                    ctx.moveTo(polygonCenter.easting, polygonCenter.northing);
+                    const pointerDx = cursorPos ? cursorPos.x - polygonCenter.easting : 0;
+                    const pointerDy = cursorPos ? cursorPos.y - polygonCenter.northing : 0;
+                    const pointerLength = Math.hypot(pointerDx, pointerDy);
+                    const radiusEnd = pointerLength > 1e-9
+                        ? {
+                            x: polygonCenter.easting + (pointerDx / pointerLength) * radiusWorld,
+                            y: polygonCenter.northing + (pointerDy / pointerLength) * radiusWorld,
+                        }
+                        : {
+                            x: polygonCenter.easting,
+                            y: polygonCenter.northing + radiusWorld,
+                        };
+                    ctx.lineTo(radiusEnd.x, radiusEnd.y);
+                    ctx.strokeStyle = 'rgba(167, 139, 250, 0.55)';
+                    ctx.lineWidth = 1.2 * inverseScale;
+                    ctx.setLineDash([3 * inverseScale, 3 * inverseScale]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.restore();
+                }
+            }
+        }
+
         // Draw rubber band circle preview
         if (drawingMode === 'circle' && circleSubMode === 'center-radius' && circleCenter && cursorWorldPosRef.current) {
             const cursorPos = cursorWorldPosRef.current;
@@ -7236,7 +8273,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             ctx.restore();
         }
 
-        if (activeOsnapPoint && (activeGrip || isPickingOtOrigin || drawingMode === 'circle' || isDimensionDrawingMode(drawingMode) || drawingMode === 'add-point' || drawingMode === 'boundary-line' || drawingMode === 'polylines' || drawingMode === 'breaklines' || drawingMode === 'inclusion' || drawingMode === 'exclusion')) {
+        if (activeOsnapPoint && (activeGrip || isPickingOtOrigin || isPickingPolarCenter || drawingMode === 'circle' || drawingMode === 'polygon' || isDimensionDrawingMode(drawingMode) || drawingMode === 'add-point' || drawingMode === 'boundary-line' || drawingMode === 'polylines' || drawingMode === 'breaklines' || drawingMode === 'inclusion' || drawingMode === 'exclusion')) {
             const sr = 5 * inverseScale;
             ctx.save();
             ctx.strokeStyle = '#FFD700';
@@ -8216,8 +9253,226 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             ctx.stroke();
         }
 
+        // OFFSET ghost preview — dashed parallel geometry following the cursor side.
+        const previewOffsetSegments = offsetPreviewSegmentsRef.current;
+        if (previewOffsetSegments && previewOffsetSegments.length > 0) {
+            ctx.save();
+            ctx.setLineDash([6, 4]);
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(34, 211, 238, 0.95)';
+            ctx.beginPath();
+            for (const seg of previewOffsetSegments) {
+                if (seg.kind === 'circle') {
+                    const c = worldToScreen(seg.center.x, seg.center.y);
+                    const r = seg.radius * transform.scale;
+                    ctx.moveTo(c.x + r, c.y);
+                    ctx.arc(c.x, c.y, r, 0, 2 * Math.PI);
+                    continue;
+                }
+                if (seg.kind === 'arc') {
+                    const c = worldToScreen(seg.center.x, seg.center.y);
+                    const start = worldToScreen(seg.from.x, seg.from.y);
+                    const startAngle = Math.atan2(start.y - c.y, start.x - c.x);
+                    const endAngle = startAngle + (seg.isLeftCurve ? -seg.centralAngle : seg.centralAngle);
+                    ctx.moveTo(start.x, start.y);
+                    ctx.arc(c.x, c.y, seg.radius * transform.scale, startAngle, endAngle, seg.isLeftCurve);
+                    continue;
+                }
+                const a = worldToScreen(seg.from.x, seg.from.y);
+                const b = worldToScreen(seg.to.x, seg.to.y);
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // ARRAY ghost preview — dashed copies while the X/Y manipulator is open.
+        // Draw from one base geometry and per-copy offsets instead of allocating
+        // a translated segment for every copy, so large arrays stay light.
+        const previewArray = arrayPreviewRef.current;
+        if (previewArray && previewArray.baseSegments.length > 0) {
+            ctx.save();
+            ctx.setLineDash([7, 5]);
+            ctx.lineWidth = 1.75;
+            ctx.strokeStyle = 'rgba(196, 181, 253, 0.9)';
+            ctx.beginPath();
+            // At most a 64 × 64 representative grid of ghosts is drawn. This
+            // keeps 100 × 100 arrays smooth while still showing their extent;
+            // Apply always creates the full array.
+            const previewRows = previewArray.rows;
+            const previewColumns = previewArray.columns;
+            const previewSampleAxis = 64;
+            const rowStep = Math.max(1, Math.ceil((previewRows - 1) / previewSampleAxis));
+            const columnStep = Math.max(1, Math.ceil((previewColumns - 1) / previewSampleAxis));
+            for (let row = 0; row < previewRows; row++) {
+                if (row !== 0 && row !== previewRows - 1 && row % rowStep !== 0) continue;
+                for (let column = 0; column < previewColumns; column++) {
+                    if (column !== 0 && column !== previewColumns - 1 && column % columnStep !== 0) continue;
+                    if (row === 0 && column === 0) continue;
+                    const localX = column * previewArray.columnGap;
+                    const localY = row * previewArray.rowGap;
+                    const dx = localX * previewArray.cos - localY * previewArray.sin;
+                    const dy = localX * previewArray.sin + localY * previewArray.cos;
+                    for (const seg of previewArray.baseSegments) {
+                        if (seg.kind === 'circle') {
+                            const c = worldToScreen(seg.center.x + dx, seg.center.y + dy);
+                            const r = seg.radius * transform.scale;
+                            ctx.moveTo(c.x + r, c.y);
+                            ctx.arc(c.x, c.y, r, 0, 2 * Math.PI);
+                            continue;
+                        }
+                        if (seg.kind === 'arc') {
+                            const c = worldToScreen(seg.center.x + dx, seg.center.y + dy);
+                            const start = worldToScreen(seg.from.x + dx, seg.from.y + dy);
+                            const startAngle = Math.atan2(start.y - c.y, start.x - c.x);
+                            const endAngle = startAngle + (seg.isLeftCurve ? -seg.centralAngle : seg.centralAngle);
+                            ctx.moveTo(start.x, start.y);
+                            ctx.arc(c.x, c.y, seg.radius * transform.scale, startAngle, endAngle, seg.isLeftCurve);
+                            continue;
+                        }
+                        const a = worldToScreen(seg.from.x + dx, seg.from.y + dy);
+                        const b = worldToScreen(seg.to.x + dx, seg.to.y + dy);
+                        ctx.moveTo(a.x, a.y);
+                        ctx.lineTo(b.x, b.y);
+                    }
+                }
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // POLARARRAY ghost preview — dashed rotational copies while the ring
+        // manipulator is open. The step matches the commit path exactly.
+        const previewPolar = polarPreviewRef.current;
+        if (previewPolar && previewPolar.baseSegments.length > 0) {
+            ctx.save();
+            ctx.setLineDash([7, 5]);
+            ctx.lineWidth = 1.75;
+            ctx.strokeStyle = 'rgba(196, 181, 253, 0.9)';
+            ctx.beginPath();
+            const step = previewPolar.fillAngle >= 359.999
+                ? previewPolar.fillAngle / previewPolar.count
+                : previewPolar.fillAngle / Math.max(1, previewPolar.count - 1);
+            const previewSampleStep = Math.max(1, Math.ceil((previewPolar.count - 1) / 240));
+            const rotate = (point: { x: number; y: number }, cos: number, sin: number) => {
+                const dx = point.x - previewPolar.center.x;
+                const dy = point.y - previewPolar.center.y;
+                return {
+                    x: previewPolar.center.x + dx * cos - dy * sin,
+                    y: previewPolar.center.y + dx * sin + dy * cos,
+                };
+            };
+            for (let item = 1; item < previewPolar.count; item++) {
+                if (item !== previewPolar.count - 1 && item % previewSampleStep !== 0) continue;
+                const radians = (item * step * Math.PI) / 180;
+                const cos = Math.cos(radians);
+                const sin = Math.sin(radians);
+                for (const seg of previewPolar.baseSegments) {
+                    if (seg.kind === 'circle') {
+                        const center = rotate(seg.center, cos, sin);
+                        const c = worldToScreen(center.x, center.y);
+                        const r = seg.radius * transform.scale;
+                        ctx.moveTo(c.x + r, c.y);
+                        ctx.arc(c.x, c.y, r, 0, 2 * Math.PI);
+                        continue;
+                    }
+                    if (seg.kind === 'arc') {
+                        const center = rotate(seg.center, cos, sin);
+                        const from = rotate(seg.from, cos, sin);
+                        const c = worldToScreen(center.x, center.y);
+                        const start = worldToScreen(from.x, from.y);
+                        const startAngle = Math.atan2(start.y - c.y, start.x - c.x);
+                        const endAngle = startAngle + (seg.isLeftCurve ? -seg.centralAngle : seg.centralAngle);
+                        ctx.moveTo(start.x, start.y);
+                        ctx.arc(c.x, c.y, seg.radius * transform.scale, startAngle, endAngle, seg.isLeftCurve);
+                        continue;
+                    }
+                    const from = rotate(seg.from, cos, sin);
+                    const to = rotate(seg.to, cos, sin);
+                    const a = worldToScreen(from.x, from.y);
+                    const b = worldToScreen(to.x, to.y);
+                    ctx.moveTo(a.x, a.y);
+                    ctx.lineTo(b.x, b.y);
+                }
+            }
+            ctx.stroke();
+            ctx.restore();
+
+            // Show the rotation pivot itself; without this the copies move but
+            // the user has no visual confirmation of the selected center.
+            const pivot = worldToScreen(previewPolar.center.x, previewPolar.center.y);
+            ctx.save();
+            ctx.strokeStyle = 'rgba(196, 181, 253, 0.95)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(pivot.x, pivot.y, 6, 0, 2 * Math.PI);
+            ctx.moveTo(pivot.x - 11, pivot.y);
+            ctx.lineTo(pivot.x + 11, pivot.y);
+            ctx.moveTo(pivot.x, pivot.y - 11);
+            ctx.lineTo(pivot.x, pivot.y + 11);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // Center-pick target follows the cursor, including free points where no
+        // entity/survey snap marker is available.
+        const polarPickCursor = cursorWorldPosRef.current;
+        if (isPickingPolarCenter && polarPickCursor) {
+            const target = worldToScreen(polarPickCursor.x, polarPickCursor.y);
+            ctx.save();
+            ctx.strokeStyle = 'rgba(34, 211, 238, 0.95)';
+            ctx.lineWidth = 1.25;
+            ctx.beginPath();
+            ctx.arc(target.x, target.y, 8, 0, 2 * Math.PI);
+            ctx.moveTo(target.x - 13, target.y);
+            ctx.lineTo(target.x - 9, target.y);
+            ctx.moveTo(target.x + 9, target.y);
+            ctx.lineTo(target.x + 13, target.y);
+            ctx.moveTo(target.x, target.y - 13);
+            ctx.lineTo(target.x, target.y - 9);
+            ctx.moveTo(target.x, target.y + 9);
+            ctx.lineTo(target.x, target.y + 13);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // ROTATE ghost preview — dashed rotated selection following the cursor.
+        const previewRotateSegments = rotatePreviewSegmentsRef.current;
+        if (previewRotateSegments && previewRotateSegments.length > 0) {
+            ctx.save();
+            ctx.setLineDash([5, 4]);
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = scaleGhostActiveRef.current ? 'rgba(52, 211, 153, 0.95)' : 'rgba(251, 191, 36, 0.9)';
+            ctx.beginPath();
+            for (const seg of previewRotateSegments) {
+                if (seg.kind === 'circle') {
+                    const c = worldToScreen(seg.center.x, seg.center.y);
+                    const r = seg.radius * transform.scale;
+                    ctx.moveTo(c.x + r, c.y);
+                    ctx.arc(c.x, c.y, r, 0, 2 * Math.PI);
+                    continue;
+                }
+                if (seg.kind === 'arc') {
+                    const c = worldToScreen(seg.center.x, seg.center.y);
+                    const start = worldToScreen(seg.from.x, seg.from.y);
+                    const startAngle = Math.atan2(start.y - c.y, start.x - c.x);
+                    const endAngle = startAngle + (seg.isLeftCurve ? -seg.centralAngle : seg.centralAngle);
+                    ctx.moveTo(start.x, start.y);
+                    ctx.arc(c.x, c.y, seg.radius * transform.scale, startAngle, endAngle, seg.isLeftCurve);
+                    continue;
+                }
+                const a = worldToScreen(seg.from.x, seg.from.y);
+                const b = worldToScreen(seg.to.x, seg.to.y);
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
         ctx.restore(); // --- End screen-space pass ---
-    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, props.streetLabels, parcelLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines]);
+    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, props.streetLabels, parcelLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter]);
 
     // Throttled draw using requestAnimationFrame to prevent flickering during rapid updates
     const scheduleDraw = useCallback(() => {
@@ -8715,15 +9970,384 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [boundaryAlignSliding, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignFlipped, props]);
 
+    /** Close the active multi-value prompt and hand the caret back. */
+    const cancelCommandPrompt = useCallback(() => {
+        const prompt = activeCommandPrompt;
+        if (!prompt) return;
+        setActiveCommandPrompt(null);
+        setCommandPromptValues({});
+        setCommandPromptIndex(0);
+        setIsPickingPolarCenter(false);
+        setActiveOsnapPoint(null);
+        setTerminalIncoming({ text: `${prompt.title}: Cancelled`, tone: 'info' });
+        setCommandFocusRequest(n => n + 1);
+    }, [activeCommandPrompt]);
+
+    /** Leave just the polar center pick, keeping the array prompt and values intact. */
+    const cancelPolarCenterPick = useCallback(() => {
+        setIsPickingPolarCenter(false);
+        setActiveOsnapPoint(null);
+        setTerminalIncoming({
+            text: 'POLARARRAY: Center pick cancelled — blank uses the selection center, or type E,N.',
+            tone: 'info',
+        });
+        setCommandFocusRequest(n => n + 1);
+    }, []);
+
+    /** Toggle the canvas pick target without closing the polar prompt. */
+    const togglePolarCenterPick = useCallback(() => {
+        if (activeCommandPrompt?.id !== 'polar_array') return;
+        const next = !isPickingPolarCenter;
+        setIsPickingPolarCenter(next);
+        setActiveOsnapPoint(null);
+        setCommandPromptIndex(2);
+        setTerminalIncoming({
+            text: next
+                ? 'POLARARRAY: Pick rotation center — click a free point or snap to an entity / survey point [MMB pans, Esc cancels pick]'
+                : 'POLARARRAY: Center pick cancelled — blank uses the selection center, or type E,N.',
+            tone: 'info',
+        });
+        setCommandFocusRequest(n => n + 1);
+    }, [activeCommandPrompt, isPickingPolarCenter]);
+
+    /**
+     * Arm pick mode for a command that needs entities. Left clicks then select
+     * (toggle) instead of activating grips or drawing tools, middle-drag still
+     * pans, Enter re-runs the original command, and Esc cancels it.
+     */
+    const beginSelectionForCommand = useCallback((raw: string, label: string) => {
+        setPendingSelectionCommand({ raw, label });
+        setDrawingMode('none');
+        setPolylinePoints([]);
+        setPolylineArcMode(false);
+        setTypedSegmentLength('');
+        setCircleCenter(null);
+        setTypedCircleValue('');
+        setCircleSubMode('center-radius');
+        setTtrStep(1);
+        setTtrEntity1(null);
+        setTtrEntity2(null);
+        setTtrHoverEntity(null);
+        setIsTrimmingLines(false);
+        setIsExtendingLines(false);
+        setIsDeletingLines(false);
+        setTrimPoint(null);
+        setExtendFromLine(null);
+        setIsCopyingSelection(false);
+        setCopyBasePoint(null);
+        setIsOffsetMode(false);
+        setOffsetDistance(null);
+        setOffsetTargetId(null);
+        setOffsetPickStart(null);
+        clearOffsetPreview();
+        stopInteractiveTransforms();
+        setSelectedLineIds(new Set());
+        setIsSelectionMode(true);
+        setIsBoxSelectMode(false);
+        setTerminalIncoming({
+            text: `${label}: Select entities — left-click to pick, drag a window to box select, MMB pans. [Enter] apply, [Esc] cancel.`,
+            tone: 'info',
+        });
+    // Setters are stable; clearOffsetPreview may be declared later in the body.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    /**
+     * Enter the interactive ROTATE loop. The selection is kept; the first canvas
+     * click (snaps honored) sets the base point, the second click or a typed
+     * number sets the angle.
+     */
+    const startRotateMode = useCallback(() => {
+        if (selectedLineIds.size === 0) {
+            setTerminalIncoming({ text: 'ROTATE: Nothing selected — pick entities first', tone: 'error' });
+            return;
+        }
+        setPendingSelectionCommand(null);
+        setDrawingMode('none');
+        setPolylinePoints([]);
+        setTypedSegmentLength('');
+        setCircleCenter(null);
+        setTypedCircleValue('');
+        setIsTrimmingLines(false);
+        setIsExtendingLines(false);
+        setIsDeletingLines(false);
+        setTrimPoint(null);
+        setExtendFromLine(null);
+        setIsCopyingSelection(false);
+        setCopyBasePoint(null);
+        setIsOffsetMode(false);
+        setOffsetDistance(null);
+        setOffsetTargetId(null);
+        setOffsetPickStart(null);
+        clearOffsetPreview();
+        stopInteractiveTransforms();
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        setIsRotatingSelection(true);
+        setTerminalIncoming({
+            text: 'ROTATE: Specify base point — click, snap, or type E,N [Esc to cancel]',
+            tone: 'info',
+        });
+    // clearOffsetPreview may be declared later in the body.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedLineIds.size]);
+
+    /** Interactive MIRROR: two snapped axis points, live reflected ghost. */
+    const startMirrorMode = useCallback(() => {
+        if (selectedLineIds.size === 0) {
+            setTerminalIncoming({ text: 'MIRROR: Nothing selected — pick entities first', tone: 'error' });
+            return;
+        }
+        stopInteractiveTransforms();
+        setPendingSelectionCommand(null);
+        setDrawingMode('none');
+        setPolylinePoints([]);
+        setTypedSegmentLength('');
+        setCircleCenter(null);
+        setTypedCircleValue('');
+        setIsTrimmingLines(false);
+        setIsExtendingLines(false);
+        setIsDeletingLines(false);
+        setTrimPoint(null);
+        setExtendFromLine(null);
+        setIsCopyingSelection(false);
+        setCopyBasePoint(null);
+        setIsOffsetMode(false);
+        setOffsetDistance(null);
+        setOffsetTargetId(null);
+        setOffsetPickStart(null);
+        clearOffsetPreview();
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        setMirrorAxisStart(null);
+        setIsMirroringSelection(true);
+        setTerminalIncoming({
+            text: 'MIRROR: Specify first axis point — click, snap, or type E,N [Esc to cancel]',
+            tone: 'info',
+        });
+    // clearOffsetPreview may be declared later in the body.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedLineIds.size, stopInteractiveTransforms]);
+
+    /** Interactive MOVE: snapped base point, then snapped destination. */
+    const startMoveMode = useCallback(() => {
+        if (selectedLineIds.size === 0) {
+            setTerminalIncoming({ text: 'MOVE: Nothing selected — pick entities first', tone: 'error' });
+            return;
+        }
+        stopInteractiveTransforms();
+        setPendingSelectionCommand(null);
+        setDrawingMode('none');
+        setPolylinePoints([]);
+        setTypedSegmentLength('');
+        setCircleCenter(null);
+        setTypedCircleValue('');
+        setIsTrimmingLines(false);
+        setIsExtendingLines(false);
+        setIsDeletingLines(false);
+        setTrimPoint(null);
+        setExtendFromLine(null);
+        setIsCopyingSelection(false);
+        setCopyBasePoint(null);
+        setIsOffsetMode(false);
+        setOffsetDistance(null);
+        setOffsetTargetId(null);
+        setOffsetPickStart(null);
+        clearOffsetPreview();
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        setMoveBasePoint(null);
+        setIsMovingSelection(true);
+        setTerminalIncoming({
+            text: 'MOVE: Specify base point — click, snap, or type E,N [Esc to cancel]',
+            tone: 'info',
+        });
+    // clearOffsetPreview may be declared later in the body.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedLineIds.size, stopInteractiveTransforms]);
+
+    /** Interactive SCALE: reference point, then a clicked point or typed factor. */
+    const startScaleMode = useCallback(() => {
+        if (selectedLineIds.size === 0) {
+            setTerminalIncoming({ text: 'SCALE: Nothing selected — pick entities first', tone: 'error' });
+            return;
+        }
+        stopInteractiveTransforms();
+        setPendingSelectionCommand(null);
+        setDrawingMode('none');
+        setPolylinePoints([]);
+        setTypedSegmentLength('');
+        setCircleCenter(null);
+        setTypedCircleValue('');
+        setIsTrimmingLines(false);
+        setIsExtendingLines(false);
+        setIsDeletingLines(false);
+        setTrimPoint(null);
+        setExtendFromLine(null);
+        setIsCopyingSelection(false);
+        setCopyBasePoint(null);
+        setIsOffsetMode(false);
+        setOffsetDistance(null);
+        setOffsetTargetId(null);
+        setOffsetPickStart(null);
+        clearOffsetPreview();
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        setScaleBasePoint(null);
+        setTypedScaleFactor('');
+        scaleReferenceRadiusRef.current = null;
+        setIsScalingSelection(true);
+        setTerminalIncoming({
+            text: 'SCALE: Specify reference point — click, snap, or type E,N [Esc to cancel]',
+            tone: 'info',
+        });
+    // clearOffsetPreview may be declared later in the body.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedLineIds.size, stopInteractiveTransforms]);
+
     const handleKeyDown = useCallback((e: KeyboardEvent) => {
         const target = e.target as HTMLElement | null;
         const tag = target?.tagName;
         const isTextInput = tag === 'INPUT' || tag === 'TEXTAREA' || !!target?.isContentEditable;
+        // While a multi-value prompt is open, its boxes and the command line are
+        // the only input surfaces; don't let canvas shortcuts edit the drawing.
+        if (activeCommandPrompt && !isTextInput && e.key !== 'Escape') {
+            return;
+        }
         if (e.key === 'Control' || e.key === 'Meta') {
             setIsCtrlPressed(true);
         }
         if (e.key === 'Alt') {
             setIsAltPressed(true);
+        }
+        // ROTATE takes a typed angle at any time, even while the cursor is
+        // showing the preview — no need to click into the command line.
+        if (!isTextInput && isRotatingSelection) {
+            if (/^[0-9.-]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                setTypedRotateAngle(prev => (e.key === '.' && prev.includes('.') ? prev : `${prev}${e.key}`));
+                return;
+            }
+            if (e.key === 'Backspace' && typedRotateAngle.length > 0) {
+                e.preventDefault();
+                setTypedRotateAngle(prev => prev.slice(0, -1));
+                return;
+            }
+            if (e.key === 'Enter' && typedRotateAngle.trim().length > 0) {
+                e.preventDefault();
+                const value = Number(typedRotateAngle);
+                setTypedRotateAngle('');
+                if (!Number.isFinite(value)) {
+                    setTerminalIncoming({ text: 'ROTATE: Angle must be numeric degrees', tone: 'error' });
+                    return;
+                }
+                const about = rotatePivot
+                    ? `E ${rotatePivot.easting.toFixed(2)}, N ${rotatePivot.northing.toFixed(2)}`
+                    : 'the selection center';
+                const turned = rotateSelectionCommand(value, rotatePivot ?? undefined);
+                stopInteractiveTransforms();
+                setCommandFocusRequest(n => n + 1);
+                setTerminalIncoming({ text: `ROTATE: Rotated ${turned} ${turned === 1 ? 'entity' : 'entities'} ${value}° about ${about}.`, tone: 'ok' });
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+        }
+        // SCALE takes a typed factor at any time, mirroring ROTATE's inline entry.
+        if (!isTextInput && isScalingSelection) {
+            if (/^[0-9.]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                e.preventDefault();
+                setTypedScaleFactor(prev => (e.key === '.' && prev.includes('.') ? prev : `${prev}${e.key}`));
+                return;
+            }
+            if (e.key === 'Backspace' && typedScaleFactor.length > 0) {
+                e.preventDefault();
+                setTypedScaleFactor(prev => prev.slice(0, -1));
+                return;
+            }
+            if (e.key === 'Enter' && typedScaleFactor.trim().length > 0) {
+                e.preventDefault();
+                const value = Number(typedScaleFactor);
+                setTypedScaleFactor('');
+                if (!Number.isFinite(value) || value <= 0) {
+                    setTerminalIncoming({ text: 'SCALE: Factor must be a positive number', tone: 'error' });
+                    return;
+                }
+                const about = scaleBasePoint
+                    ? `E ${scaleBasePoint.easting.toFixed(2)}, N ${scaleBasePoint.northing.toFixed(2)}`
+                    : 'the selection center';
+                const scaled = scaleSelectionCommand(value, scaleBasePoint ?? undefined);
+                stopInteractiveTransforms();
+                setCommandFocusRequest(n => n + 1);
+                setTerminalIncoming({ text: `SCALE: Scaled ${scaled} ${scaled === 1 ? 'entity' : 'entities'} by ${value}× (${(value * 100).toFixed(1)}%) about ${about}.`, tone: 'ok' });
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+        }
+        // A command waiting for canvas picks: Enter applies it to the picks,
+        // Esc abandons it. Typing in the command line is left alone.
+        if (e.key === 'Enter' && !isTextInput && pendingSelectionCommand) {
+            e.preventDefault();
+            runPendingSelectionCommandRef.current();
+            return;
+        }
+        if (e.key === 'Escape' && activeCommandPrompt) {
+            if (isTextInput) return;
+            e.preventDefault();
+            if (isPickingPolarCenter) cancelPolarCenterPick();
+            else cancelCommandPrompt();
+            return;
+        }
+        if (e.key === 'Escape' && !isTextInput && pendingSelectionCommand) {
+            e.preventDefault();
+            setPendingSelectionCommand(null);
+            setIsSelectionMode(false);
+            setIsBoxSelectMode(false);
+            setTerminalIncoming({ text: `${pendingSelectionCommand.label}: Cancelled`, tone: 'info' });
+            setCommandFocusRequest(n => n + 1);
+            return;
+        }
+        if (e.key === 'Escape' && !isTextInput && isRotatingSelection) {
+            e.preventDefault();
+            stopInteractiveTransforms();
+            setTerminalIncoming({ text: 'ROTATE: Cancelled', tone: 'info' });
+            return;
+        }
+        if (e.key === 'Escape' && !isTextInput && isScalingSelection) {
+            e.preventDefault();
+            stopInteractiveTransforms();
+            setTerminalIncoming({ text: 'SCALE: Cancelled', tone: 'info' });
+            return;
+        }
+        if (e.key === 'Escape' && !isTextInput && isMirroringSelection) {
+            e.preventDefault();
+            stopInteractiveTransforms();
+            setTerminalIncoming({ text: 'MIRROR: Cancelled', tone: 'info' });
+            return;
+        }
+        if (e.key === 'Escape' && !isTextInput && isMovingSelection) {
+            e.preventDefault();
+            stopInteractiveTransforms();
+            setTerminalIncoming({ text: 'MOVE: Cancelled', tone: 'info' });
+            return;
+        }
+        if (e.key === 'Escape' && !isTextInput && isCopyingSelection) {
+            e.preventDefault();
+            setIsCopyingSelection(false);
+            setCopyBasePoint(null);
+            setTerminalIncoming({ text: 'COPY: Exited', tone: 'info' });
+            return;
+        }
+        if (e.key === 'Escape' && !isTextInput && isOffsetMode) {
+            e.preventDefault();
+            setIsOffsetMode(false);
+            setOffsetDistance(null);
+            setOffsetTargetId(null);
+            setOffsetPickStart(null);
+            offsetPreviewSegmentsRef.current = null;
+            offsetPreviewKeyRef.current = null;
+            requestAnimationFrame(() => drawRef.current?.());
+            setTerminalIncoming({ text: 'OFFSET: Exited', tone: 'info' });
+            return;
         }
         if (!isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey && isLinearDrawingMode(drawingMode) && polylinePoints.length > 0) {
             if (/^[0-9.]$/.test(e.key)) {
@@ -8777,6 +10401,74 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 return;
             }
         }
+        // Polygon mode typing and side controls
+        if (!isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey && drawingMode === 'polygon') {
+            if (e.key === '[' || e.key === ']' || e.key === '-' || e.key === '+') {
+                e.preventDefault();
+                const delta = e.key === ']' || e.key === '+' ? 1 : -1;
+                setPolygonSides(prev => Math.max(3, Math.min(256, prev + delta)));
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+            if (/^[0-9.]$/.test(e.key)) {
+                e.preventDefault();
+                setTypedPolygonDiameter(prev => {
+                    if (e.key === '.' && prev.includes('.')) return prev;
+                    return `${prev}${e.key}`;
+                });
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+            if (e.key === 'Backspace' && typedPolygonDiameter.length > 0) {
+                e.preventDefault();
+                setTypedPolygonDiameter(prev => prev.slice(0, -1));
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (!polygonCenter) {
+                    setTerminalIncoming({ text: 'POLYGON: Pick a center first', tone: 'error' });
+                    return;
+                }
+                let radiusInput: number | null = null;
+                if (typedPolygonDiameter.trim().length > 0) {
+                    const num = Number(typedPolygonDiameter);
+                    if (Number.isFinite(num) && num > 0) radiusInput = num / 2;
+                }
+                if (radiusInput === null && cursorWorldPosRef.current) {
+                    const worldRadius = Math.hypot(
+                        cursorWorldPosRef.current.x - polygonCenter.easting,
+                        cursorWorldPosRef.current.y - polygonCenter.northing,
+                    );
+                    radiusInput = convertLinearUnits(worldRadius, 'foot', settings.linearUnits || 'usSurveyFoot');
+                }
+                if (radiusInput === null) {
+                    setTerminalIncoming({ text: 'POLYGON: Move the cursor or type a diameter', tone: 'error' });
+                    return;
+                }
+                commitPolygonFromRadius(radiusInput);
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                if (polygonCenter) {
+                    setPolygonCenter(null);
+                    setTypedPolygonDiameter('');
+                    setActiveOsnapPoint(null);
+                    setTerminalIncoming({ text: `POLYGON: Pick the center [${polygonSides} sides — scroll or [ ] changes sides]`, tone: 'info' });
+                    requestAnimationFrame(() => drawRef.current?.());
+                } else {
+                    setDrawingMode('none');
+                    setTypedPolygonDiameter('');
+                    setActiveOsnapPoint(null);
+                    setTerminalIncoming({ text: 'POLYGON: Cancelled', tone: 'info' });
+                    requestAnimationFrame(() => drawRef.current?.());
+                }
+                return;
+            }
+        }
+
         // Circle mode typing & commands
         if (!isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey && drawingMode === 'circle') {
             if (e.key === 't' || e.key === 'T') {
@@ -8882,8 +10574,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 return;
             }
         }
-        // L / I / C / S / B — start drawing & selection commands (AutoCAD-like command shortcuts).
+        // L / I / C / S / B / R — start drawing & selection commands (AutoCAD-like command shortcuts).
         if (!isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            if (e.key === 'r' || e.key === 'R') {
+                e.preventDefault();
+                if (isRotatingSelection) {
+                    stopInteractiveTransforms();
+                    setTerminalIncoming({ text: 'Command: R (ROTATE) cancelled', tone: 'info' });
+                } else if (selectedLineIds.size === 0) {
+                    beginSelectionForCommand('ro', 'ROTATE');
+                } else {
+                    startRotateMode();
+                }
+                return;
+            }
             if (e.key === 's' || e.key === 'S') {
                 e.preventDefault();
                 setTerminalIncoming({ text: 'Command: S (SELECT) — click lines or chain [Esc to clear]', tone: 'ok' });
@@ -9148,7 +10852,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTtrEntity2(null);
             setTtrHoverEntity(null);
         }
-    }, [selectedLineIds, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode]);
+    }, [selectedLineIds, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick]);
 
     const handleKeyUp = useCallback((e: KeyboardEvent) => {
         if (e.key === 'Control' || e.key === 'Meta') {
@@ -9176,6 +10880,30 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setSelectedLineIds(new Set());
         }
     }, [isSelectionMode, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines]);
+
+    // A drawing/command mode taking over ends any pending pick-for-command state.
+    useEffect(() => {
+        if (!pendingSelectionCommand) return;
+        if (drawingMode !== 'none' || isTrimmingLines || isExtendingLines || isDeletingLines || isCopyingSelection || isOffsetMode) {
+            setPendingSelectionCommand(null);
+        }
+    }, [pendingSelectionCommand, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, isCopyingSelection, isOffsetMode]);
+
+    // COPY / OFFSET are command-line modes; any canvas tool taking over cancels them.
+    useEffect(() => {
+        if (!isCopyingSelection && !isOffsetMode) return;
+        if (drawingMode !== 'none' || isTrimmingLines || isExtendingLines || isDeletingLines || isSelectionMode || isBoxSelectMode) {
+            setIsCopyingSelection(false);
+            setCopyBasePoint(null);
+            setIsOffsetMode(false);
+            setOffsetDistance(null);
+            setOffsetTargetId(null);
+            setOffsetPickStart(null);
+            offsetPreviewSegmentsRef.current = null;
+            offsetPreviewKeyRef.current = null;
+            requestAnimationFrame(() => drawRef.current?.());
+        }
+    }, [drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode]);
     
     // Toolbar dragging handlers (pointer-event rAF loop)
     useEffect(() => {
@@ -9242,6 +10970,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     }, [isViewToolbarDragging, isDesktop, toolbarOrientation]);
     
     const handleContainerMouseMove = useCallback((e: React.MouseEvent) => {
+        // Floating canvas dialogs (Properties, etc.) own their own hover: skip
+        // hit-testing so selection mode doesn't bleed through them.
+        if ((e.target as HTMLElement | null)?.closest('[data-canvas-ui]')) {
+            if (isOverLine) setIsOverLine(false);
+            return;
+        }
         const canvas = canvasRef.current;
         if (!canvas) return;
         const rect = canvas.getBoundingClientRect();
@@ -9249,6 +10983,34 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const mouseY = e.clientY - rect.top;
 
         setCursorScreenPos({ x: mouseX, y: mouseY });
+
+        // POLARARRAY center pick: hover with the same osnaps the canvas uses,
+        // plus survey points, so the picked pivot is exact.
+        if (activeCommandPrompt?.id === 'polar_array' && isPickingPolarCenter) {
+            const activeModes = inlineOsnapOverride
+                ? new Set<OsnapMode>([inlineOsnapOverride])
+                : new Set<OsnapMode>([
+                    ...(runningOsnaps.size > 0
+                        ? runningOsnaps
+                        : new Set<OsnapMode>(['endpoint', 'midpoint', 'intersection', 'nearest'])),
+                    'endpoint',
+                ]);
+            const snapped = resolveOsnapAtScreen(mouseX, mouseY, activeModes, 25);
+            const nearestExisting = snapped ? null : findNearestSurveyPoint(mouseX, mouseY, 25);
+            const surveySnap: OsnapResult | null = nearestExisting
+                ? {
+                    easting: nearestExisting.easting,
+                    northing: nearestExisting.northing,
+                    mode: 'endpoint',
+                    sourcePoint: nearestExisting,
+                }
+                : null;
+            const target = snapped || surveySnap || screenToWorld(mouseX, mouseY);
+            cursorWorldPosRef.current = { x: target.easting, y: target.northing };
+            setActiveOsnapPoint(snapped ?? surveySnap);
+            if (drawRef.current) requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
 
         if (isCtrlPressed && !isLabelDragging) {
             let foundLabel = false;
@@ -9375,6 +11137,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTrimHoverPreview(null);
         }
 
+        if (drawingMode === 'polygon') {
+            const mouseWorld = screenToWorld(mouseX, mouseY);
+            const activeModes = inlineOsnapOverride ? new Set<OsnapMode>([inlineOsnapOverride]) : (runningOsnaps.size > 0 ? runningOsnaps : new Set<OsnapMode>(['endpoint', 'midpoint', 'intersection', 'nearest']));
+            const anchor = polygonCenter;
+            const snapped = resolveOsnapAtScreen(mouseX, mouseY, activeModes, 20, anchor);
+            setActiveOsnapPoint(snapped);
+            const previewPoint = snapped
+                ? { easting: snapped.easting, northing: snapped.northing }
+                : { easting: mouseWorld.easting, northing: mouseWorld.northing };
+            cursorWorldPosRef.current = { x: previewPoint.easting, y: previewPoint.northing };
+            if (drawRef.current) requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
+
         if (drawingMode === 'circle') {
             const mouseWorld = screenToWorld(mouseX, mouseY);
             if (circleSubMode === 'ttr') {
@@ -9484,9 +11260,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         isCtrlPressed, isLabelDragging, points, isOverLabel, isOverLabelArea,
         drawingMode, polylinePoints.length, transform,
         isSelectionMode, isDeletingLines, isTrimmingLines, isExtendingLines, findLineNearClick, isOverLine,
-        inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, activeOsnapPoint, dimPhase, dimP1, boundaryLineFrom,
+        inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, dimPhase, dimP1, boundaryLineFrom, activeCommandPrompt, isPickingPolarCenter,
         isOrthoEnabled, applyOrthoConstraint, screenToWorld, isPickingOtOrigin,
-        circleSubMode, ttrStep, findTtrEntityNearClick, computeTrimAction, trimHoverPreview,
+        circleSubMode, ttrStep, polygonCenter, findTtrEntityNearClick, computeTrimAction, trimHoverPreview,
         activeGrip, hoveredGrip, findGripNearClick, selectedLineIds, pointMap,
         isDimensionDrawingMode, resolveCurveTargetFromClick, findDimensionNearClick, isOverDim
     ]);
@@ -9517,6 +11293,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
     const handleWheel = useCallback((e: React.WheelEvent) => {
         e.preventDefault();
+        if (drawingMode === 'polygon') {
+            const delta = e.deltaY < 0 ? 1 : -1;
+            setPolygonSides(prev => Math.max(3, Math.min(256, prev + delta)));
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
         const container = containerRef.current;
         if (!container) return;
 
@@ -9535,7 +11317,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const newOffsetY = mouseY - (mouseY - prev.offsetY) * actualZoomFactor;
             return { scale: newScale, offsetX: newOffsetX, offsetY: newOffsetY };
         });
-    }, []);
+    }, [drawingMode]);
 
     // -----------------------------------------------------------------------
     // Boundary-align helpers
@@ -9837,7 +11619,83 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         applyCornerAlign(bfId, next);
     }, [cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPairs, applyCornerAlign]);
 
+    /** Snap-aware world point for a canvas pick: hovered osnap → resolved osnap → survey point → raw. */
+    const resolveSnappedWorld = useCallback((screenX: number, screenY: number, hoveredSnap: { easting: number; northing: number } | null) => {
+        const activeOsnapModes = inlineOsnapOverride
+            ? new Set<OsnapMode>([inlineOsnapOverride])
+            : (runningOsnaps.size > 0 ? runningOsnaps : new Set<OsnapMode>(['endpoint', 'midpoint', 'intersection', 'nearest']));
+        const snapped = hoveredSnap || resolveOsnapAtScreen(screenX, screenY, activeOsnapModes, 25);
+        if (snapped) return { easting: snapped.easting, northing: snapped.northing };
+        const nearest = findNearestSurveyPoint(screenX, screenY, 25);
+        if (nearest) return { easting: nearest.easting, northing: nearest.northing };
+        return screenToWorld(screenX, screenY);
+    }, [inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, screenToWorld]);
+
+    /** Move by a world-space displacement (canvas picks are already in feet). */
+    const moveSelectionByWorld = useCallback((dE: number, dN: number): number => {
+        if (selectedLineIds.size === 0) return 0;
+        return transformSelectedLines(translationTransform(dE, dN), false);
+    }, [selectedLineIds.size, transformSelectedLines]);
+
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
+        // Middle-drag panning stays live even while a command prompt is open.
+        if (e.button === 1) {
+            e.preventDefault();
+            document.body.classList.add('panning');
+            setIsPanning(true);
+            lastMousePos.current = { x: e.clientX, y: e.clientY };
+            return;
+        }
+
+        // POLARARRAY center pick is the one canvas click a prompt allows.
+        if (activeCommandPrompt?.id === 'polar_array' && isPickingPolarCenter) {
+            if (e.button !== 0) return;
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const activeModes = inlineOsnapOverride
+                ? new Set<OsnapMode>([inlineOsnapOverride])
+                : new Set<OsnapMode>([
+                    ...(runningOsnaps.size > 0
+                        ? runningOsnaps
+                        : new Set<OsnapMode>(['endpoint', 'midpoint', 'intersection', 'nearest'])),
+                    'endpoint',
+                ]);
+            const snapped = activeOsnapPoint || resolveOsnapAtScreen(clickX, clickY, activeModes, 25);
+            const nearestExisting = snapped ? null : findNearestSurveyPoint(clickX, clickY, 25);
+            const target = snapped
+                ? { easting: snapped.easting, northing: snapped.northing }
+                : nearestExisting
+                ? { easting: nearestExisting.easting, northing: nearestExisting.northing }
+                : screenToWorld(clickX, clickY);
+            const roundedEasting = Math.round(target.easting * 1000) / 1000;
+            const roundedNorthing = Math.round(target.northing * 1000) / 1000;
+            const source = snapped?.sourcePoint
+                ? `survey point ${snapped.sourcePoint.pointNumber}`
+                : snapped
+                ? `${snapped.mode} snap`
+                : nearestExisting
+                ? `survey point ${nearestExisting.pointNumber}`
+                : 'free point';
+            setCommandPromptValues(prev => ({ ...prev, center: `${roundedEasting},${roundedNorthing}` }));
+            setCommandPromptIndex(2);
+            setIsPickingPolarCenter(false);
+            setActiveOsnapPoint(null);
+            if (inlineOsnapOverride) setInlineOsnapOverride(null);
+            setTerminalIncoming({
+                text: `POLARARRAY: Rotation center set to E ${roundedEasting.toFixed(3)}, N ${roundedNorthing.toFixed(3)} (${source}) — drag the ring dot or press Enter to apply [Esc cancels].`,
+                tone: 'ok',
+            });
+            setCommandFocusRequest(n => n + 1);
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
+
+        // Prompt boxes own their own clicks; canvas picks stay paused until the
+        // prompt is applied or cancelled.
+        if (activeCommandPrompt) return;
         if (inlineOsnapMenuPos) {
             setInlineOsnapMenuPos(null);
         }
@@ -9849,15 +11707,268 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setActiveOsnapPoint(null);
         }
 
-        if (e.button === 1) { // Middle mouse button
-            e.preventDefault();
-            document.body.classList.add('panning');
-            setIsPanning(true);
-            lastMousePos.current = { x: e.clientX, y: e.clientY };
+        if (e.button !== 0) return;
+
+        // COPY command — first click sets the base point, later clicks place
+        // copies at that displacement and keep the base point for repeat copies.
+        if (isCopyingSelection) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const world = resolveSnappedWorld(clickX, clickY, currentSnap);
+
+            if (!copyBasePoint) {
+                setCopyBasePoint(world);
+                setTerminalIncoming({ text: 'COPY: Base point set — click a destination to place copies [Esc to exit]', tone: 'info' });
+                return;
+            }
+
+            const dx = world.easting - copyBasePoint.easting;
+            const dy = world.northing - copyBasePoint.northing;
+            if (Math.hypot(dx, dy) < 1e-9) {
+                setTerminalIncoming({ text: 'COPY: Pick a destination away from the base point', tone: 'error' });
+                return;
+            }
+
+            const count = duplicateSelectedLines(dx, dy);
+            setTerminalIncoming(count > 0
+                ? { text: `COPY: Placed ${count} ${count === 1 ? 'entity' : 'entities'} (ΔE ${dx.toFixed(2)}, ΔN ${dy.toFixed(2)}) — click another destination or Esc`, tone: 'ok' }
+                : { text: 'COPY: Nothing copied — select entities first (S), then run COPY', tone: 'error' });
             return;
         }
 
-        if (e.button !== 0) return;
+        // OFFSET command — first pick chooses the entity, second click chooses
+        // the side. The distance stays armed for repeated offsets.
+        if (isOffsetMode) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const world = screenToWorld(clickX, clickY);
+
+            if (offsetDistance === null) {
+                const measurePoint = currentSnap
+                    ? { easting: currentSnap.easting, northing: currentSnap.northing }
+                    : world;
+                if (!offsetPickStart) {
+                    setOffsetPickStart(measurePoint);
+                    setTerminalIncoming({ text: 'OFFSET: Click a second point to measure the distance, or type one', tone: 'info' });
+                } else {
+                    const measured = Math.hypot(measurePoint.easting - offsetPickStart.easting, measurePoint.northing - offsetPickStart.northing);
+                    if (measured <= 1e-6) {
+                        setTerminalIncoming({ text: 'OFFSET: Pick a second point away from the first', tone: 'error' });
+                        return;
+                    }
+                    setOffsetDistance(measured);
+                    setOffsetPickStart(null);
+                    offsetPreviewKeyRef.current = null;
+                    const shownDistance = convertLinearUnits(measured, 'foot', settings.linearUnits || 'usSurveyFoot');
+                    setTerminalIncoming({
+                        text: `OFFSET: Distance ${shownDistance.toFixed(2)} ${getLinearUnitAbbreviation(settings.linearUnits)} — click the entity to offset`,
+                        tone: 'ok',
+                    });
+                }
+                return;
+            }
+
+            if (!offsetTargetId) {
+                const clicked = findLineNearClick(clickX, clickY, 15);
+                if (!clicked) {
+                    setTerminalIncoming({ text: 'OFFSET: Click a line, polyline, arc or circle to offset', tone: 'error' });
+                    return;
+                }
+                setOffsetTargetId(clicked.id || `${clicked.from}-${clicked.to}`);
+                offsetPreviewKeyRef.current = null;
+                setTerminalIncoming({
+                    text: isCircleLine(clicked)
+                        ? 'OFFSET: Click inside or outside the circle to choose the side [Esc to exit]'
+                        : 'OFFSET: Click the side to offset toward [Esc to exit]',
+                    tone: 'info',
+                });
+                return;
+            }
+
+            const target = lines.find(l => (l.id || `${l.from}-${l.to}`) === offsetTargetId);
+            if (!target) {
+                setOffsetTargetId(null);
+                clearOffsetPreview();
+                setTerminalIncoming({ text: 'OFFSET: That entity is no longer available — pick another', tone: 'error' });
+                return;
+            }
+
+            const result = applyOffsetAtPoint(target, { x: world.easting, y: world.northing });
+            if (result.ok) {
+                clearOffsetPreview();
+                setTerminalIncoming({
+                    text: `OFFSET: Created ${result.count} ${result.count === 1 ? 'entity' : 'entities'} — select another entity to offset, or Esc to exit`,
+                    tone: 'ok',
+                });
+                setOffsetTargetId(null);
+            } else {
+                setTerminalIncoming({ text: result.message, tone: 'error' });
+            }
+            return;
+        }
+
+        // SCALE — first click sets the reference point (snaps honored); the next
+        // click scales relative to the selection radius, or a factor can be typed.
+        if (isScalingSelection) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const world = resolveSnappedWorld(clickX, clickY, currentSnap);
+
+            if (!scaleBasePoint) {
+                const referenceRadius = selectionRadiusFrom(world);
+                scaleReferenceRadiusRef.current = referenceRadius > 1e-9 ? referenceRadius : null;
+                setScaleBasePoint(world);
+                setCommandFocusRequest(n => n + 1);
+                setTerminalIncoming({
+                    text: `SCALE: Reference point E ${world.easting.toFixed(2)}, N ${world.northing.toFixed(2)} — click to scale or type a factor [Esc to cancel]`,
+                    tone: 'ok',
+                });
+                return;
+            }
+
+            const distance = Math.hypot(world.easting - scaleBasePoint.easting, world.northing - scaleBasePoint.northing);
+            if (distance < 1e-9) {
+                setTerminalIncoming({ text: 'SCALE: Pick a point away from the reference point', tone: 'error' });
+                return;
+            }
+            const referenceRadius = scaleReferenceRadiusRef.current;
+            const factor = referenceRadius && referenceRadius > 1e-9 ? distance / referenceRadius : 1;
+            if (!Number.isFinite(factor) || factor <= 0) {
+                setTerminalIncoming({ text: 'SCALE: Could not resolve a positive scale factor', tone: 'error' });
+                return;
+            }
+            const scaled = scaleSelectionCommand(factor, scaleBasePoint);
+            const baseLabel = `E ${scaleBasePoint.easting.toFixed(2)}, N ${scaleBasePoint.northing.toFixed(2)}`;
+            stopInteractiveTransforms();
+            setCommandFocusRequest(n => n + 1);
+            setTerminalIncoming({
+                text: `SCALE: Scaled ${scaled} ${scaled === 1 ? 'entity' : 'entities'} by ${factor.toFixed(3)}× (${(factor * 100).toFixed(1)}%) about ${baseLabel}.`,
+                tone: 'ok',
+            });
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
+
+        // ROTATE — first click sets the base point (snaps honored); the next
+        // click uses the angle from the base point to that click. A typed number
+        // in the command line sets the angle directly.
+        if (isRotatingSelection) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const world = resolveSnappedWorld(clickX, clickY, currentSnap);
+
+            if (!rotatePivot) {
+                setRotatePivot({ easting: world.easting, northing: world.northing });
+                setCommandFocusRequest(n => n + 1);
+                setTerminalIncoming({
+                    text: `ROTATE: Base point E ${world.easting.toFixed(2)}, N ${world.northing.toFixed(2)} — click a point or type the angle [Esc to cancel]`,
+                    tone: 'ok',
+                });
+                return;
+            }
+
+            const dE = world.easting - rotatePivot.easting;
+            const dN = world.northing - rotatePivot.northing;
+            if (Math.hypot(dE, dN) < 1e-9) {
+                setTerminalIncoming({ text: 'ROTATE: Pick a point away from the base point', tone: 'error' });
+                return;
+            }
+            const rawDegrees = (Math.atan2(dN, dE) * 180) / Math.PI;
+            const degrees = e.shiftKey ? Math.round(rawDegrees / 15) * 15 : rawDegrees;
+            const turned = rotateSelectionCommand(degrees, rotatePivot);
+            const pivotLabel = `E ${rotatePivot.easting.toFixed(2)}, N ${rotatePivot.northing.toFixed(2)}`;
+            stopInteractiveTransforms();
+            setCommandFocusRequest(n => n + 1);
+            setTerminalIncoming({
+                text: `ROTATE: Rotated ${turned} ${turned === 1 ? 'entity' : 'entities'} ${degrees.toFixed(2)}° about ${pivotLabel}.`,
+                tone: 'ok',
+            });
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
+
+        // MIRROR — two snapped axis points; the second one applies the reflection.
+        if (isMirroringSelection) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const world = resolveSnappedWorld(clickX, clickY, currentSnap);
+
+            if (!mirrorAxisStart) {
+                setMirrorAxisStart(world);
+                setCommandFocusRequest(n => n + 1);
+                setTerminalIncoming({
+                    text: `MIRROR: First axis point E ${world.easting.toFixed(2)}, N ${world.northing.toFixed(2)} — click or type the second point [Esc to cancel]`,
+                    tone: 'ok',
+                });
+                return;
+            }
+
+            if (Math.hypot(world.easting - mirrorAxisStart.easting, world.northing - mirrorAxisStart.northing) < 1e-9) {
+                setTerminalIncoming({ text: 'MIRROR: Axis points must be different', tone: 'error' });
+                return;
+            }
+            const mirrored = mirrorSelectionCommand(mirrorAxisStart, world);
+            stopInteractiveTransforms();
+            setCommandFocusRequest(n => n + 1);
+            setTerminalIncoming({
+                text: `MIRROR: Mirrored ${mirrored} ${mirrored === 1 ? 'entity' : 'entities'} across E ${mirrorAxisStart.easting.toFixed(2)}, N ${mirrorAxisStart.northing.toFixed(2)} → E ${world.easting.toFixed(2)}, N ${world.northing.toFixed(2)}.`,
+                tone: 'ok',
+            });
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
+
+        // MOVE — snapped base point, then a snapped destination.
+        if (isMovingSelection) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const world = resolveSnappedWorld(clickX, clickY, currentSnap);
+
+            if (!moveBasePoint) {
+                setMoveBasePoint(world);
+                setCommandFocusRequest(n => n + 1);
+                setTerminalIncoming({
+                    text: `MOVE: Base point E ${world.easting.toFixed(2)}, N ${world.northing.toFixed(2)} — click or type the destination [Esc to cancel]`,
+                    tone: 'ok',
+                });
+                return;
+            }
+
+            const dE = world.easting - moveBasePoint.easting;
+            const dN = world.northing - moveBasePoint.northing;
+            if (Math.hypot(dE, dN) < 1e-9) {
+                setTerminalIncoming({ text: 'MOVE: Pick a destination away from the base point', tone: 'error' });
+                return;
+            }
+            const moved = moveSelectionByWorld(dE, dN);
+            const baseLabel = `E ${moveBasePoint.easting.toFixed(2)}, N ${moveBasePoint.northing.toFixed(2)}`;
+            stopInteractiveTransforms();
+            setCommandFocusRequest(n => n + 1);
+            setTerminalIncoming({
+                text: `MOVE: Moved ${moved} ${moved === 1 ? 'entity' : 'entities'} from ${baseLabel} (ΔE ${dE.toFixed(2)}, ΔN ${dN.toFixed(2)}).`,
+                tone: 'ok',
+            });
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
 
         // OT (UCS) Origin Pick Mode — click on canvas or snap to point/line to set origin
         if (isPickingOtOrigin) {
@@ -10204,7 +12315,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         // Dimension Grip selection and manipulation
-        if (selectedDimensionId && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
+        if (selectedDimensionId && !pendingSelectionCommand && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
             const canvas = canvasRef.current;
             if (canvas) {
                 const rect = canvas.getBoundingClientRect();
@@ -10237,7 +12348,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         // Grip selection and stretch manipulation
-        if (selectedLineIds.size > 0 && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
+        if (selectedLineIds.size > 0 && !pendingSelectionCommand && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
             const canvas = canvasRef.current;
             if (canvas) {
                 const rect = canvas.getBoundingClientRect();
@@ -10259,8 +12370,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
         }
 
-        // Line selection mode: dedicated selection tool active
-        if (isSelectionMode && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
+        // Line selection mode: dedicated selection tool, or a command that is
+        // currently waiting for picks. Keeping this independent of the toolbar
+        // toggle means an armed command can never lose its click-to-select.
+        if ((isSelectionMode || pendingSelectionCommand) && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
             const canvas = canvasRef.current;
             if (!canvas) return;
             const rect = canvas.getBoundingClientRect();
@@ -10730,6 +12843,50 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
 
+        if (drawingMode === 'polygon') {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const activeModes = inlineOsnapOverride ? new Set<OsnapMode>([inlineOsnapOverride]) : (runningOsnaps.size > 0 ? runningOsnaps : new Set<OsnapMode>(['endpoint', 'midpoint', 'intersection', 'nearest']));
+            const anchor = polygonCenter;
+            const snapped = currentSnap || resolveOsnapAtScreen(clickX, clickY, activeModes, 20, anchor);
+            if (inlineOsnapOverride) setInlineOsnapOverride(null);
+            const nearestExisting = findNearestSurveyPoint(clickX, clickY, 20);
+            let pickedPt = { easting: 0, northing: 0 };
+            if (snapped) {
+                pickedPt = { easting: snapped.easting, northing: snapped.northing };
+            } else if (nearestExisting) {
+                pickedPt = { easting: nearestExisting.easting, northing: nearestExisting.northing };
+            } else {
+                const worldCoords = screenToWorld(clickX, clickY);
+                pickedPt = { easting: worldCoords.easting, northing: worldCoords.northing };
+            }
+
+            if (!polygonCenter) {
+                setPolygonCenter(pickedPt);
+                setTerminalIncoming({
+                    text: `POLYGON: Center E ${pickedPt.easting.toFixed(2)}, N ${pickedPt.northing.toFixed(2)} — drag, click, or type the diameter [${polygonSides} sides; scroll or [ ] changes sides, Esc cancels]`,
+                    tone: 'ok',
+                });
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+
+            let radiusInput: number | null = null;
+            if (typedPolygonDiameter.trim().length > 0) {
+                const num = Number(typedPolygonDiameter);
+                if (Number.isFinite(num) && num > 0) radiusInput = num / 2;
+            }
+            if (radiusInput === null) {
+                const worldRadius = Math.hypot(pickedPt.easting - polygonCenter.easting, pickedPt.northing - polygonCenter.northing);
+                radiusInput = convertLinearUnits(worldRadius, 'foot', settings.linearUnits || 'usSurveyFoot');
+            }
+            commitPolygonFromRadius(radiusInput);
+            return;
+        }
+
         if (drawingMode === 'circle') {
             const canvas = canvasRef.current;
             if (!canvas) return;
@@ -11170,7 +13327,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         document.body.classList.add('panning');
         setIsPanning(true);
         lastMousePos.current = { x: e.clientX, y: e.clientY };
-    }, [drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode]);
+    }, [drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
         if (shiftBoxSelect) {
@@ -11181,6 +13338,71 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const my = e.clientY - rect.top;
             setShiftBoxSelect(prev => prev ? { ...prev, endX: mx, endY: my } : prev);
             return;
+        }
+
+        // OFFSET ghost preview — mostly redrawn only when the picked side flips.
+        if (isOffsetMode && offsetDistance !== null && offsetTargetId) {
+            const canvas = canvasRef.current;
+            if (canvas) {
+                const rect = canvas.getBoundingClientRect();
+                const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+                const target = lines.find(l => (l.id || `${l.from}-${l.to}`) === offsetTargetId) ?? null;
+                updateOffsetPreview(target, { x: world.easting, y: world.northing });
+            }
+        } else if (offsetPreviewSegmentsRef.current) {
+            clearOffsetPreview();
+        }
+
+        // Live transform ghosts for ROTATE / MIRROR / MOVE / COPY.
+        const previewCanvas = canvasRef.current;
+        if (previewCanvas) {
+            const previewRect = previewCanvas.getBoundingClientRect();
+            const previewWorld = screenToWorld(e.clientX - previewRect.left, e.clientY - previewRect.top);
+            if (isRotatingSelection && rotatePivot) {
+                const dE = previewWorld.easting - rotatePivot.easting;
+                const dN = previewWorld.northing - rotatePivot.northing;
+                if (Math.hypot(dE, dN) > 1e-9) {
+                    const rawDegrees = (Math.atan2(dN, dE) * 180) / Math.PI;
+                    updateRotatePreview(e.shiftKey ? Math.round(rawDegrees / 15) * 15 : rawDegrees);
+                }
+            } else if (isScalingSelection && scaleBasePoint) {
+                // Drag preview: factor is the cursor distance over the reference
+                // radius, so the ghost is 1× at the selection's outer edge.
+                const referenceRadius = scaleReferenceRadiusRef.current;
+                const distance = Math.hypot(previewWorld.easting - scaleBasePoint.easting, previewWorld.northing - scaleBasePoint.northing);
+                if (referenceRadius && referenceRadius > 1e-9 && distance > 1e-9) {
+                    showScalePreview(distance / referenceRadius);
+                }
+            } else if (isMirroringSelection && mirrorAxisStart) {
+                const ax = mirrorAxisStart.easting;
+                const ay = mirrorAxisStart.northing;
+                const dx = previewWorld.easting - ax;
+                const dy = previewWorld.northing - ay;
+                const len2 = dx * dx + dy * dy;
+                if (len2 > 1e-12) {
+                    showTransformPreview(
+                        `MI|${ax.toFixed(2)}|${ay.toFixed(2)}|${previewWorld.easting.toFixed(2)}|${previewWorld.northing.toFixed(2)}`,
+                        (p) => {
+                            const t = ((p.x - ax) * dx + (p.y - ay) * dy) / len2;
+                            const projX = ax + t * dx;
+                            const projY = ay + t * dy;
+                            return { x: 2 * projX - p.x, y: 2 * projY - p.y };
+                        },
+                    );
+                }
+            } else if (isMovingSelection && moveBasePoint) {
+                const dE = previewWorld.easting - moveBasePoint.easting;
+                const dN = previewWorld.northing - moveBasePoint.northing;
+                showTransformPreview(`MV|${dE.toFixed(3)}|${dN.toFixed(3)}`, (p) => ({ x: p.x + dE, y: p.y + dN }));
+            } else if (isCopyingSelection && copyBasePoint) {
+                const dE = previewWorld.easting - copyBasePoint.easting;
+                const dN = previewWorld.northing - copyBasePoint.northing;
+                showTransformPreview(`CP|${dE.toFixed(3)}|${dN.toFixed(3)}`, (p) => ({ x: p.x + dE, y: p.y + dN }));
+            } else if (rotatePreviewSegmentsRef.current) {
+                clearRotatePreview();
+            }
+        } else if (rotatePreviewSegmentsRef.current) {
+            clearRotatePreview();
         }
 
         // Symbol-exclusion hover tooltip — show why the nearest point's
@@ -11463,7 +13685,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 shiftHoverAnchorRef.current = null;
             }
         }
-    }, [isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner]);
+    }, [isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview]);
 
     const handleMouseUp = useCallback(() => {
         if (shiftBoxSelect) {
@@ -11655,7 +13877,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             document.body.classList.remove('panning');
             setIsPanning(false);
         }
-    }, [isLabelDragging, isPanning, shiftBoxSelect, lines, pointMap, transform, activeGrip, isBoxSelectMode, selectedLineIds, commitActiveGrip, screenToWorld, activeOsnapPoint]);
+    }, [isLabelDragging, isPanning, shiftBoxSelect, lines, pointMap, transform, activeGrip, isBoxSelectMode, selectedLineIds, commitActiveGrip, screenToWorld, activeOsnapPoint, isOffsetMode, offsetDistance, offsetTargetId, updateOffsetPreview, clearOffsetPreview]);
     
     const handleTouchStart = useCallback((e: React.TouchEvent) => {
         if (drawingMode !== 'none') return;
@@ -11895,6 +14117,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setTypedSegmentLength('');
         setCircleCenter(null);
         setTypedCircleValue('');
+        setPolygonCenter(null);
+        setTypedPolygonDiameter('');
         setCircleSubMode('center-radius');
         setTtrStep(1);
         setTtrEntity1(null);
@@ -11913,6 +14137,197 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             props.onBoundaryCornerAlignRequestHandled?.();
         }
     };
+
+    const startPolygonMode = useCallback((sides?: number, center?: { easting: number; northing: number }) => {
+        finishDrawing();
+        const nextSides = sides !== undefined && Number.isInteger(sides)
+            ? Math.min(256, Math.max(3, sides))
+            : polygonSides;
+        setPolygonSides(nextSides);
+        setPolygonCenter(center ? { ...center } : null);
+        setTypedPolygonDiameter('');
+        setDrawingMode('polygon');
+        setActiveOsnapPoint(null);
+        setInlineOsnapOverride(null);
+        setTerminalIncoming({
+            text: center
+                ? `POLYGON: ${nextSides} sides about E ${center.easting.toFixed(2)}, N ${center.northing.toFixed(2)} — drag, click, or type the diameter; scroll or [ ] changes sides [Esc cancels]`
+                : `POLYGON: Pick the center — then drag, click, or type the diameter; scroll or [ ] changes sides [Esc cancels]`,
+            tone: 'ok',
+        });
+        setCommandFocusRequest(n => n + 1);
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [finishDrawing, polygonSides]);
+
+    // Shared entry points for the command line and the drawing-tools toolbar.
+    const startCopyMode = () => {
+        finishDrawing();
+        stopInteractiveTransforms();
+        setIsTrimmingLines(false);
+        setIsExtendingLines(false);
+        setIsDeletingLines(false);
+        setTrimPoint(null);
+        setExtendFromLine(null);
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        setIsOffsetMode(false);
+        setOffsetDistance(null);
+        setOffsetTargetId(null);
+        setOffsetPickStart(null);
+        clearOffsetPreview();
+        setIsCopyingSelection(true);
+        setCopyBasePoint(null);
+    };
+
+    const startOffsetMode = (distance?: number) => {
+        finishDrawing();
+        stopInteractiveTransforms();
+        setIsTrimmingLines(false);
+        setIsExtendingLines(false);
+        setIsDeletingLines(false);
+        setTrimPoint(null);
+        setExtendFromLine(null);
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        setSelectedLineIds(new Set());
+        setIsCopyingSelection(false);
+        setCopyBasePoint(null);
+        setIsOffsetMode(true);
+        setOffsetTargetId(null);
+        setOffsetPickStart(null);
+        clearOffsetPreview();
+        setOffsetDistance(
+            distance !== undefined && Number.isFinite(distance) && distance > 0
+                ? convertLinearUnits(distance, settings.linearUnits || 'usSurveyFoot', 'foot')
+                : null,
+        );
+    };
+
+    /** Open an operation-anchored prompt for a command that needs several values. */
+    const openCommandPrompt = useCallback((prompt: CommandPromptSpec) => {
+        commandPromptOpenedRef.current = true;
+        if (prompt.id === 'array' || prompt.id === 'polar_array') arrayWidgetSideRef.current = null;
+        setActiveCommandPrompt(prompt);
+        setCommandPromptValues({ ...(prompt.initialValues ?? {}) });
+        setCommandPromptIndex(0);
+        setIsPickingPolarCenter(false);
+        setPendingSelectionCommand(null);
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+    }, []);
+
+    /** Route one value typed on the command line into the active prompt field. */
+    const applyCommandPromptValue = useCallback((raw: string, kind: 'number' | 'point'): boolean => {
+        const prompt = activeCommandPrompt;
+        if (!prompt) return false;
+        const field = prompt.fields[commandPromptIndex];
+        if (!field) return false;
+        if (field.kind !== kind) {
+            setTerminalIncoming({
+                text: `${prompt.title}: ${field.label} expects ${field.kind === 'point' ? 'an E,N point (e.g. 0,0)' : 'a number'}.`,
+                tone: 'error',
+            });
+            return true;
+        }
+        const value = raw.trim();
+        if (!value) return true;
+        if (field.key === 'center') {
+            setIsPickingPolarCenter(false);
+            setActiveOsnapPoint(null);
+        }
+        setCommandPromptValues(prev => ({ ...prev, [field.key]: value }));
+        const nextIndex = Math.min(prompt.fields.length - 1, commandPromptIndex + 1);
+        setCommandPromptIndex(nextIndex);
+        setTerminalIncoming({
+            text: nextIndex === commandPromptIndex
+                ? `${prompt.title}: ${field.label} = ${value} — press Enter or Apply to run`
+                : `${prompt.title}: ${field.label} = ${value} — next: ${prompt.fields[nextIndex]?.label ?? 'Apply'} (${nextIndex + 1}/${prompt.fields.length})`,
+            tone: 'ok',
+        });
+        return true;
+    }, [activeCommandPrompt, commandPromptIndex]);
+
+    const submitCommandPrompt = useCallback(() => {
+        const prompt = activeCommandPrompt;
+        if (!prompt) return;
+        const result = prompt.submit(commandPromptValues);
+        if (result.status === 'error') {
+            setTerminalIncoming({ text: result.message, tone: 'error' });
+            return;
+        }
+        setActiveCommandPrompt(null);
+        setCommandPromptValues({});
+        setCommandPromptIndex(0);
+        setIsPickingPolarCenter(false);
+        setActiveOsnapPoint(null);
+        setPendingSelectionCommand(null);
+        setTerminalIncoming({ text: result.message, tone: result.status === 'ok' ? 'ok' : 'info' });
+        setCommandFocusRequest(n => n + 1);
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [activeCommandPrompt, commandPromptValues]);
+
+    const handleCommandPromptChange = useCallback((key: string, value: string) => {
+        // Typing a center overrides an armed canvas pick.
+        if (key === 'center') {
+            setIsPickingPolarCenter(false);
+            setActiveOsnapPoint(null);
+        }
+        setCommandPromptValues(prev => ({ ...prev, [key]: value }));
+    }, []);
+
+    const handleCommandPromptActivate = useCallback((index: number) => {
+        setCommandPromptIndex(index);
+    }, []);
+
+    /** Apply a command that was waiting for canvas picks (Enter in pick mode). */
+    const runPendingSelectionCommand = useCallback(() => {
+        const pending = pendingSelectionCommand;
+        if (!pending) return;
+        if (selectedLineIds.size === 0) {
+            setTerminalIncoming({
+                text: `${pending.label}: Select at least one entity, then press Enter [Esc to cancel]`,
+                tone: 'error',
+            });
+            setCommandFocusRequest(n => n + 1);
+            return;
+        }
+        commandPromptOpenedRef.current = false;
+        const result = executeCanvasCommand(parseCanvasCommand(pending.raw), {
+            hasSelection: true,
+            onStartCopy: startCopyMode,
+            onStartRotate: startRotateMode,
+            onStartScale: startScaleMode,
+            onStartMirror: startMirrorMode,
+            onStartMove: startMoveMode,
+            onEraseSelection: eraseSelectionCommand,
+            onMoveSelection: moveSelectionCommand,
+            onRotateSelection: rotateSelectionCommand,
+            onScaleSelection: scaleSelectionCommand,
+            onMirrorSelection: mirrorSelectionCommand,
+            onJoinSelection: joinSelectionCommand,
+            onExplodeSelection: explodeSelectionCommand,
+            onArraySelection: arraySelectionCommand,
+            onPolarArraySelection: polarArraySelectionCommand,
+            onPrompt: openCommandPrompt,
+            linearUnitLabel: getLinearUnitAbbreviation(settings.linearUnits),
+            onAwaitSelection: beginSelectionForCommand,
+        });
+        setPendingSelectionCommand(null);
+        setTerminalIncoming({
+            text: result.message,
+            tone: result.status === 'error' ? 'error' : result.status === 'ok' ? 'ok' : 'info',
+        });
+        // Hand the caret back to the command line unless the command opened a
+        // prompt — the prompt's own input takes focus in that case.
+        if (!commandPromptOpenedRef.current) {
+            setCommandFocusRequest(n => n + 1);
+        }
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [pendingSelectionCommand, selectedLineIds.size, startCopyMode, eraseSelectionCommand, moveSelectionCommand, rotateSelectionCommand, scaleSelectionCommand, mirrorSelectionCommand, joinSelectionCommand, explodeSelectionCommand, arraySelectionCommand, polarArraySelectionCommand, openCommandPrompt, beginSelectionForCommand, startRotateMode, startMirrorMode, startMoveMode, startScaleMode, settings.linearUnits]);
+
+    useEffect(() => {
+        runPendingSelectionCommandRef.current = runPendingSelectionCommand;
+    }, [runPendingSelectionCommand]);
 
     const resetBoundaryLineMode = () => {
         setBoundaryLineFrom(null);
@@ -12043,6 +14458,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     };
 
     const handleDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+        // COPY/OFFSET consume canvas clicks; a double-click must not hijack
+        // the second pick (copy destination / offset side) into a selection.
+        if (isCopyingSelection || isOffsetMode) return;
         const canvas = canvasRef.current;
         if (!canvas) return;
         const rect = canvas.getBoundingClientRect();
@@ -12112,7 +14530,32 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setSelectedLineIds(matchingIds);
         setIsSelectionMode(true);
         requestAnimationFrame(() => drawRef.current?.());
-    }, [findLineNearClick, lines, pointMap]);
+    }, [findLineNearClick, lines, pointMap, isCopyingSelection, isOffsetMode]);
+
+    // Live rotation angle for the ROTATE prompt (base point already picked).
+    const rotateAnglePreview = (() => {
+        if (!isRotatingSelection || !rotatePivot || !cursorScreenPos) return null;
+        const world = screenToWorld(cursorScreenPos.x, cursorScreenPos.y);
+        const radians = Math.atan2(world.northing - rotatePivot.northing, world.easting - rotatePivot.easting);
+        return ((radians * 180) / Math.PI + 360) % 360;
+    })();
+
+    // Live factor for the SCALE prompt (reference point already picked).
+    const scaleFactorPreview = (() => {
+        if (!isScalingSelection || !scaleBasePoint || !cursorScreenPos) return null;
+        const referenceRadius = scaleReferenceRadiusRef.current;
+        if (!referenceRadius || referenceRadius < 1e-9) return null;
+        const world = screenToWorld(cursorScreenPos.x, cursorScreenPos.y);
+        const distance = Math.hypot(world.easting - scaleBasePoint.easting, world.northing - scaleBasePoint.northing);
+        return distance > 1e-9 ? distance / referenceRadius : null;
+    })();
+
+    // Live displacement for the MOVE prompt (base point already picked).
+    const moveDeltaPreview = (() => {
+        if (!isMovingSelection || !moveBasePoint || !cursorScreenPos) return null;
+        const world = screenToWorld(cursorScreenPos.x, cursorScreenPos.y);
+        return { dE: world.easting - moveBasePoint.easting, dN: world.northing - moveBasePoint.northing };
+    })();
 
     return (
         <div 
@@ -12123,6 +14566,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             onMouseLeave={() => {
                 setCursorScreenPos(null);
                 cursorWorldPosRef.current = null;
+                clearOffsetPreview();
                 // Clear shift-hover tooltip when pointer leaves the canvas area
                 if (shiftHoverTimerRef.current !== null) {
                     clearTimeout(shiftHoverTimerRef.current);
@@ -12134,7 +14578,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     shiftHoverAnchorRef.current = null;
                 }
             }}
-            style={{ cursor: isPanning ? 'grabbing' : (isPickingOtOrigin ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : (isSelectionMode ? (isOverLine ? 'pointer' : 'crosshair') : 'default'))))))), overflow: 'visible', isolation: 'isolate' }}
+            style={{ cursor: isPanning ? 'grabbing' : (isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default'))))))), overflow: 'visible', isolation: 'isolate' }}
         >
             <canvas
                 ref={gpuCanvasRef}
@@ -12627,6 +15071,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     isExtendingLines;
 
                 if (!isDrawingActive) return null;
+                // Polygon uses its own operation-anchored input strip below.
+                if (drawingMode === 'polygon') return null;
 
                 const unitAbbrev = getLinearUnitAbbreviation(settings.linearUnits);
                 const mouseWorld = screenToWorld(cursorScreenPos.x, cursorScreenPos.y);
@@ -12660,17 +15106,27 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             <span>[Click] Place · [Esc] Cancel · [O] Ortho</span>
                         </div>
                     );
-                } else if (isSelectionMode) {
-                    badgeText = isBoxSelectMode ? 'SELECT (BOX)' : 'SELECT';
-                    badgeColor = 'bg-cyan-900/80 text-cyan-200 border-cyan-500/50';
+                } else if (isSelectionMode || pendingSelectionCommand) {
+                    badgeText = pendingSelectionCommand ? pendingSelectionCommand.label : (isBoxSelectMode ? 'SELECT (BOX)' : 'SELECT');
+                    badgeColor = pendingSelectionCommand ? 'bg-amber-900/80 text-amber-200 border-amber-500/50' : 'bg-cyan-900/80 text-cyan-200 border-cyan-500/50';
                     primaryInput = (
                         <span className="font-medium text-white">
-                            {selectedLineIds.size > 0 ? `${selectedLineIds.size} entity selected` : (isBoxSelectMode ? 'Drag window/crossing box' : 'Click entity or drag box')}
+                            {selectedLineIds.size > 0
+                                ? `${selectedLineIds.size} ${selectedLineIds.size === 1 ? 'entity' : 'entities'} selected`
+                                : (isBoxSelectMode ? 'Drag window/crossing box' : 'Click entity or drag box')}
                         </span>
                     );
                     secondaryText = (
                         <div className="flex items-center gap-1 text-[10px] text-gray-400">
-                            <span className="text-gray-300 font-semibold">[B]</span> Box · <span className="text-gray-300 font-semibold">[Dbl-Click]</span> Chain · <span className="text-gray-300 font-semibold">[D/Del]</span> Delete · <span className="text-gray-300 font-semibold">[S/Esc]</span> Exit
+                            {pendingSelectionCommand ? (
+                                <>
+                                    <span className="text-gray-300 font-semibold">[Enter]</span> Apply · <span className="text-gray-300 font-semibold">[Esc]</span> Cancel · <span className="text-gray-300 font-semibold">[MMB]</span> Pan
+                                </>
+                            ) : (
+                                <>
+                                    <span className="text-gray-300 font-semibold">[B]</span> Box · <span className="text-gray-300 font-semibold">[Dbl-Click]</span> Chain · <span className="text-gray-300 font-semibold">[D/Del]</span> Delete · <span className="text-gray-300 font-semibold">[S/Esc]</span> Exit
+                                </>
+                            )}
                         </div>
                     );
                 } else if (drawingMode === 'circle') {
@@ -12858,6 +15314,64 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 );
             })()}
             
+            {/* POLYGON operation input — anchored to the polygon center */}
+            {drawingMode === 'polygon' && polygonCenter && (() => {
+                const container = containerRef.current;
+                const containerW = container ? container.clientWidth : (typeof window !== 'undefined' ? window.innerWidth : 800);
+                const containerH = container ? container.clientHeight : (typeof window !== 'undefined' ? window.innerHeight : 600);
+                const anchor = worldToScreen(polygonCenter.easting, polygonCenter.northing);
+                const hudW = 286;
+                const hudH = 58;
+                let left = anchor.x + 26;
+                let top = anchor.y + 26;
+                if (left + hudW > containerW - 10) left = anchor.x - hudW - 26;
+                if (top + hudH > containerH - 82) top = anchor.y - hudH - 26;
+                left = Math.max(10, Math.min(left, Math.max(10, containerW - hudW - 10)));
+                top = Math.max(10, Math.min(top, Math.max(10, containerH - hudH - 82)));
+                const pointer = cursorWorldPosRef.current;
+                const liveDiameter = pointer
+                    ? convertLinearUnits(
+                        2 * Math.hypot(pointer.x - polygonCenter.easting, pointer.y - polygonCenter.northing),
+                        'foot',
+                        settings.linearUnits || 'usSurveyFoot',
+                    )
+                    : null;
+                return (
+                    <PolygonInputHud
+                        x={left}
+                        y={top}
+                        sides={polygonSides}
+                        typedDiameter={typedPolygonDiameter}
+                        liveDiameter={liveDiameter}
+                        unitLabel={getLinearUnitAbbreviation(settings.linearUnits)}
+                        onSidesChange={sides => {
+                            setPolygonSides(sides);
+                            requestAnimationFrame(() => drawRef.current?.());
+                        }}
+                        onDiameterChange={value => {
+                            setTypedPolygonDiameter(value);
+                            requestAnimationFrame(() => drawRef.current?.());
+                        }}
+                        onApply={text => {
+                            const parsed = Number(text);
+                            if (!Number.isFinite(parsed) || parsed <= 0) {
+                                setTerminalIncoming({ text: 'POLYGON: Diameter must be a positive number', tone: 'error' });
+                                return;
+                            }
+                            setTypedPolygonDiameter(text);
+                            commitPolygonFromRadius(parsed / 2);
+                        }}
+                        onCancel={() => {
+                            setPolygonCenter(null);
+                            setTypedPolygonDiameter('');
+                            setActiveOsnapPoint(null);
+                            setTerminalIncoming({ text: `POLYGON: Pick the center [${polygonSides} sides]`, tone: 'info' });
+                            requestAnimationFrame(() => drawRef.current?.());
+                        }}
+                    />
+                );
+            })()}
+
             {/* Line Type Status Banner */}
             {false && drawingMode !== 'none' && (
                 <div className={`absolute top-0 left-0 right-0 z-30 p-3 flex items-center justify-center gap-4 ${
@@ -13123,16 +15637,33 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onClick={onShowSettings} 
             />
 
-            {/* Selection-mode hint banner — visible whenever selection mode is active */}
-            {isSelectionMode && (
-                <div className="fixed top-20 left-1/2 -translate-x-1/2 z-40 px-3 py-1.5 bg-gray-900/90 backdrop-blur-md border border-cyan-500/40 rounded-lg shadow-lg text-xs text-cyan-100 pointer-events-none flex items-center gap-2">
-                    <svg viewBox="0 0 24 24" className="w-4 h-4 text-cyan-300" fill="currentColor"><path d="M5 3 L5 18 L9 14 L11.5 20 L13.5 19.2 L11 13.2 L17 13 Z"/></svg>
-                    <span>Selection Mode — click lines to select · press <kbd className="px-1 py-0.5 bg-gray-800 border border-gray-600 rounded font-mono text-[10px]">D</kbd> to delete · <kbd className="px-1 py-0.5 bg-gray-800 border border-gray-600 rounded font-mono text-[10px]">Esc</kbd> to clear</span>
-                </div>
-            )}
+            {/* Selection hints live in the command line — no floating banner. */}
 
-            {/* Line Selection Info Panel — appears when lines are selected in selection mode */}
-            {selectedLineIds.size > 0 && isSelectionMode && (() => {
+            {/* Selection Properties dialog (opened from the canvas header) */}
+            <PropertiesDialog
+                isOpen={isPropertiesOpen}
+                onClose={() => setIsPropertiesOpen(false)}
+                selectedIds={Array.from(selectedLineIds)}
+                lines={lines}
+                availableLayers={props.availableLayers}
+                onUpdateLines={handleUpdateSelectedLines}
+                onDeleteLines={(ids) => {
+                    ids.forEach(id => onDeleteLine(id));
+                    setSelectedLineIds(new Set());
+                    requestAnimationFrame(() => drawRef.current?.());
+                }}
+                onSelectAll={() => { selectAllEntitiesCommand(); }}
+                onClearSelection={deselectAllCommand}
+                onConvertToBoundary={onConvertSelectionToBoundary
+                    ? (sel) => {
+                        onConvertSelectionToBoundary(sel);
+                        setSelectedLineIds(new Set());
+                    }
+                    : undefined}
+            />
+
+            {/* Line Selection Info Panel — retired by default; the Properties dialog replaces it. */}
+            {isSelectionInfoEnabled && selectedLineIds.size > 0 && isSelectionMode && (() => {
                 const selId = [...selectedLineIds][0];
                 const selLine = lines.find(l => (l.id || `${l.from}-${l.to}`) === selId);
                 if (!selLine) return null;
@@ -13666,7 +16197,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             )}
 
                             {isDrawingToolsMenuOpen && (
-                                <div className={`absolute ${flyoutPlacementClass} p-2 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up w-56 z-30`}>
+                                <div className={`absolute ${flyoutPlacementClass} p-2 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up w-56 max-h-[70vh] overflow-y-auto z-30`}>
                                     <div className="space-y-2">
                                         <button onClick={() => { 
                                             if (drawingMode === 'polylines') {
@@ -13766,7 +16297,43 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                         </button>
                                         
                                         <div className="border-t border-gray-700"></div>
-                                        
+
+                                        <button onClick={() => {
+                                            if (isCopyingSelection) {
+                                                setIsCopyingSelection(false);
+                                                setCopyBasePoint(null);
+                                            } else if (selectedLineIds.size === 0) {
+                                                finishDrawing();
+                                                setIsSelectionMode(true);
+                                                setIsBoxSelectMode(false);
+                                                setTerminalIncoming({ text: 'COPY: Select entities on the canvas, then press COPY again', tone: 'error' });
+                                            } else {
+                                                startCopyMode();
+                                            }
+                                            setIsDrawingToolsMenuOpen(false);
+                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${isCopyingSelection ? 'bg-cyan-600 text-white' : 'hover:bg-gray-700'}`} title="Copy Selected Entities (CP)">
+                                            <DocumentDuplicateIcon className="w-5 h-5"/> Copy Selected (CP)
+                                        </button>
+
+                                        <button onClick={() => {
+                                            if (isOffsetMode) {
+                                                setIsOffsetMode(false);
+                                                setOffsetDistance(null);
+                                                setOffsetTargetId(null);
+                                                setOffsetPickStart(null);
+                                                clearOffsetPreview();
+                                            } else {
+                                                startOffsetMode();
+                                            }
+                                            setIsDrawingToolsMenuOpen(false);
+                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${isOffsetMode ? 'bg-cyan-600 text-white' : 'hover:bg-gray-700'}`} title="Offset Lines, Polylines, Arcs or Circles (OS)">
+                                            <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                                <path d="M4 18 16 6M10 20 20 10" />
+                                                <path d="M12 12 16 8" strokeDasharray="2 2" />
+                                            </svg>
+                                            Offset (OS)
+                                        </button>
+
                                         <button onClick={() => {
                                             if (isTrimmingLines) {
                                                 setIsTrimmingLines(false);
@@ -14388,7 +16955,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setSelectedLineIds(new Set());
                                         }
                                     }}
-                                    className={`p-2.5 rounded-lg transition-colors ${isDrawingToolsMenuOpen || drawingMode !== 'none' || isTrimmingLines || isExtendingLines || isDeletingLines ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
+                                    className={`p-2.5 rounded-lg transition-colors ${isDrawingToolsMenuOpen || drawingMode !== 'none' || isTrimmingLines || isExtendingLines || isDeletingLines || isCopyingSelection || isOffsetMode ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
                                     title="Drawing Tools (L, C, T, I)"
                                 >
                                     <PencilSquareIcon className="w-5 h-5"/>
@@ -14533,9 +17100,53 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
             {/* Interactive CAD Command Terminal */}
             <CanvasTerminal
+                onOpenProperties={() => setIsPropertiesOpen(true)}
+                onOpenTextEditor={props.onOpenTextEditor}
                 activePrompt={
-                    drawingMode === 'polylines' && polylinePoints.length > 0
+                    activeCommandPrompt
+                        ? activeCommandPrompt.id === 'polar_array' && isPickingPolarCenter
+                            ? 'POLARARRAY: Pick rotation center — click a free point or snap to an entity / survey point [MMB pans · Esc cancels pick]'
+                            : (() => {
+                                const field = activeCommandPrompt.fields[commandPromptIndex];
+                                const value = field ? commandPromptValues[field.key] : '';
+                                return `${activeCommandPrompt.title}: ${field ? field.label : 'Apply'}${value ? ` = ${value}` : ''} — type a value${field?.kind === 'point' ? ' (E,N)' : ''} or use the on-canvas controls [${commandPromptIndex + 1}/${activeCommandPrompt.fields.length}] [Enter applies, Esc cancels]`;
+                            })()
+                        : pendingSelectionCommand
+                        ? `${pendingSelectionCommand.label}: Select entities — left-click to pick, drag a window, MMB pans [Enter to apply, Esc to cancel]`
+                        : isScalingSelection
+                        ? scaleBasePoint
+                            ? `SCALE: Specify scale factor — ${typedScaleFactor ? `${typedScaleFactor}× [Enter]` : scaleFactorPreview !== null ? `${scaleFactorPreview.toFixed(3)}× (${(scaleFactorPreview * 100).toFixed(1)}%)` : 'click a point or type a factor'} [Esc cancels]`
+                            : 'SCALE: Specify reference point — click, snap, or type E,N [Esc to cancel]'
+                        : isRotatingSelection
+                        ? rotatePivot
+                            ? `ROTATE: Specify rotation angle — ${typedRotateAngle ? `${typedRotateAngle}° [Enter]` : rotateAnglePreview !== null ? `${rotateAnglePreview.toFixed(2)}°` : 'click a point or type degrees'} [Shift snaps 15°, Esc cancels]`
+                            : 'ROTATE: Specify base point — click, snap, or type E,N [Esc to cancel]'
+                        : isMirroringSelection
+                        ? mirrorAxisStart
+                            ? 'MIRROR: Specify second axis point — click or snap [Esc to cancel]'
+                            : 'MIRROR: Specify first axis point — click, snap, or type E,N [Esc to cancel]'
+                        : isMovingSelection
+                        ? moveBasePoint
+                            ? `MOVE: Specify destination — ΔE ${moveDeltaPreview ? moveDeltaPreview.dE.toFixed(2) : '0.00'}, ΔN ${moveDeltaPreview ? moveDeltaPreview.dN.toFixed(2) : '0.00'} [Esc to cancel]`
+                            : 'MOVE: Specify base point — click, snap, or type E,N [Esc to cancel]'
+                        : isCopyingSelection
+                        ? copyBasePoint
+                            ? 'COPY: Specify destination point — click to place a copy [Esc to exit]'
+                            : 'COPY: Specify base point [Esc to exit]'
+                        : isOffsetMode
+                        ? offsetDistance === null
+                            ? offsetPickStart
+                                ? 'OFFSET: Click a second point to set the distance [Esc to exit]'
+                                : 'OFFSET: Specify offset distance — type a number or click two points [Esc to exit]'
+                            : !offsetTargetId
+                            ? 'OFFSET: Select a line, polyline, arc or circle to offset [Esc to exit]'
+                            : 'OFFSET: Click the side to offset toward [Esc to exit]'
+                        : drawingMode === 'polylines' && polylinePoints.length > 0
                         ? `${polylineArcMode ? 'ARC' : 'LINE'} — Length: ${typedSegmentLength || '_'} ${getLinearUnitAbbreviation(settings.linearUnits)} (Enter to commit, A for Arc, L for Line, Esc to finish)`
+                        : drawingMode === 'polygon'
+                        ? !polygonCenter
+                            ? `POLYGON: Pick center — ${polygonSides} sides; scroll or [ ] changes sides [Esc to cancel]`
+                            : `POLYGON: Diameter = ${typedPolygonDiameter || (cursorWorldPosRef.current ? convertLinearUnits(Math.hypot(cursorWorldPosRef.current.x - polygonCenter.easting, cursorWorldPosRef.current.y - polygonCenter.northing) * 2, 'foot', settings.linearUnits || 'usSurveyFoot').toFixed(2) : '_')} ${getLinearUnitAbbreviation(settings.linearUnits)} · ${polygonSides} sides [scroll/[ ] sides, Enter]`
                         : drawingMode === 'circle'
                         ? circleSubMode === 'ttr'
                             ? ttrStep === 1
@@ -14628,6 +17239,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         setIsOrthoEnabled(prev => !prev);
                     },
                     onToggleSelection: () => {
+                        // While a command is armed for picks, S/B keep pick mode on
+                        // instead of toggling it off and clearing the picks.
+                        if (pendingSelectionCommand) {
+                            setIsSelectionMode(true);
+                            setIsBoxSelectMode(false);
+                            return;
+                        }
                         setIsSelectionMode(p => !p);
                     },
                     onToggleBoxSelect: () => {
@@ -14639,21 +17257,177 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         setIsDeletingLines(false);
                         setDrawingMode('none');
                     },
+                    onStartExtend: () => {
+                        setIsExtendingLines(p => !p);
+                        setIsTrimmingLines(false);
+                        setIsDeletingLines(false);
+                        setDrawingMode('none');
+                        setExtendFromLine(null);
+                    },
+                    onStartCopy: startCopyMode,
+                    onOpenProperties: () => setIsPropertiesOpen(true),
+                    onStartRotate: startRotateMode,
+                    onStartScale: startScaleMode,
+                    onStartMirror: startMirrorMode,
+                    onStartMove: startMoveMode,
+                    onStartOffset: startOffsetMode,
+                    onSelectAll: selectAllEntitiesCommand,
+                    onDeselectAll: deselectAllCommand,
+                    onPrompt: openCommandPrompt,
+                    linearUnitLabel: getLinearUnitAbbreviation(settings.linearUnits),
+                    onAwaitSelection: beginSelectionForCommand,
+                    onApplyPendingSelection: () => {
+                        if (activeCommandPrompt) {
+                            submitCommandPrompt();
+                            return;
+                        }
+                        if (pendingSelectionCommand) {
+                            runPendingSelectionCommand();
+                            return;
+                        }
+                        if (drawingMode === 'polygon') {
+                            if (!polygonCenter) {
+                                setTerminalIncoming({ text: 'POLYGON: Pick a center first', tone: 'error' });
+                                return;
+                            }
+                            let radiusInput: number | null = null;
+                            if (typedPolygonDiameter.trim().length > 0) {
+                                const num = Number(typedPolygonDiameter);
+                                if (Number.isFinite(num) && num > 0) radiusInput = num / 2;
+                            }
+                            if (radiusInput === null && cursorWorldPosRef.current) {
+                                const worldRadius = Math.hypot(
+                                    cursorWorldPosRef.current.x - polygonCenter.easting,
+                                    cursorWorldPosRef.current.y - polygonCenter.northing,
+                                );
+                                radiusInput = convertLinearUnits(worldRadius, 'foot', settings.linearUnits || 'usSurveyFoot');
+                            }
+                            if (radiusInput === null) {
+                                setTerminalIncoming({ text: 'POLYGON: Move the cursor or type a diameter', tone: 'error' });
+                                return;
+                            }
+                            commitPolygonFromRadius(radiusInput);
+                            return;
+                        }
+                        // Plain selection mode: Enter ends the pick session and
+                        // hands the caret back to the command line.
+                        setIsSelectionMode(false);
+                        setIsBoxSelectMode(false);
+                        setCommandFocusRequest(n => n + 1);
+                    },
+                    onCommandSubmitted: (verb: string) => {
+                        // Numbers and points belong to the active prompt; any other
+                        // command supersedes it. Selection helpers keep a pending
+                        // command armed (which also re-arms it if needed).
+                        if (verb === 'numeric' || verb === 'coordinate') return;
+                        if (activeCommandPrompt) cancelCommandPrompt();
+                        if (verb === 'select' || verb === 'box' || verb === 'select_all' || verb === 'deselect' || verb === 'help' || verb === 'key_info' || verb === 'clear' || verb === 'properties') return;
+                        setPendingSelectionCommand(null);
+                        stopInteractiveTransforms();
+                    },
+                    onEraseSelection: eraseSelectionCommand,
+                    onMoveSelection: moveSelectionCommand,
+                    onRotateSelection: rotateSelectionCommand,
+                    onScaleSelection: scaleSelectionCommand,
+                    onMirrorSelection: mirrorSelectionCommand,
+                    onJoinSelection: joinSelectionCommand,
+                    onExplodeSelection: explodeSelectionCommand,
+                    onArraySelection: arraySelectionCommand,
+                    onPolarArraySelection: polarArraySelectionCommand,
+                    onCreateRectangle: drawRectangleCommand,
+                    onStartPolygon: startPolygonMode,
+                    onCreatePolygon: drawPolygonCommand,
+                    selectionCount: selectedLineIds.size,
+                    hasSelection: selectedLineIds.size > 0,
                     onUndo: props.onUndo,
                     onRedo: props.onRedo,
                     onZoomExtents: () => zoomExtents(),
                     onOpenSettings: onShowSettings,
                     onOpenKeyModal: props.keyInfo?.onClick,
                     onCancel: () => {
+                        if (activeCommandPrompt) {
+                            if (isPickingPolarCenter) {
+                                cancelPolarCenterPick();
+                                return;
+                            }
+                            cancelCommandPrompt();
+                            return;
+                        }
                         finishDrawing();
+                        setPendingSelectionCommand(null);
+                        stopInteractiveTransforms();
                         setIsSelectionMode(false);
                         setIsBoxSelectMode(false);
                         setIsTrimmingLines(false);
                         setIsExtendingLines(false);
                         setIsDeletingLines(false);
+                        setIsCopyingSelection(false);
+                        setCopyBasePoint(null);
+                        setIsOffsetMode(false);
+                        setOffsetDistance(null);
+                        setOffsetTargetId(null);
+                        setOffsetPickStart(null);
+                        clearOffsetPreview();
                         setSelectedLineIds(new Set());
                     },
                     onNumericInput: (val: number) => {
+                        if (applyCommandPromptValue(String(val), 'number')) return;
+                        if (isScalingSelection) {
+                            if (!Number.isFinite(val) || val <= 0) {
+                                setTerminalIncoming({ text: 'SCALE: Factor must be a positive number', tone: 'error' });
+                                return;
+                            }
+                            const about = scaleBasePoint
+                                ? `the reference point E ${scaleBasePoint.easting.toFixed(2)}, N ${scaleBasePoint.northing.toFixed(2)}`
+                                : 'the selection center';
+                            const scaled = scaleSelectionCommand(val, scaleBasePoint ?? undefined);
+                            stopInteractiveTransforms();
+                            setCommandFocusRequest(n => n + 1);
+                            setTerminalIncoming({
+                                text: `SCALE: Scaled ${scaled} ${scaled === 1 ? 'entity' : 'entities'} by ${val}× (${(val * 100).toFixed(1)}%) about ${about}.`,
+                                tone: 'ok',
+                            });
+                            requestAnimationFrame(() => drawRef.current?.());
+                            return;
+                        }
+                        if (isRotatingSelection) {
+                            const turned = rotateSelectionCommand(val, rotatePivot ?? undefined);
+                            const about = rotatePivot
+                                ? `the base point E ${rotatePivot.easting.toFixed(2)}, N ${rotatePivot.northing.toFixed(2)}`
+                                : 'the selection center';
+                            stopInteractiveTransforms();
+                            setCommandFocusRequest(n => n + 1);
+                            setTerminalIncoming({
+                                text: `ROTATE: Rotated ${turned} ${turned === 1 ? 'entity' : 'entities'} ${val}° about ${about}.`,
+                                tone: 'ok',
+                            });
+                            requestAnimationFrame(() => drawRef.current?.());
+                            return;
+                        }
+                        if (isOffsetMode) {
+                            if (!Number.isFinite(val) || val <= 0) {
+                                setTerminalIncoming({ text: 'OFFSET: Enter a positive distance', tone: 'error' });
+                                return;
+                            }
+                            setOffsetDistance(convertLinearUnits(val, settings.linearUnits || 'usSurveyFoot', 'foot'));
+                            setOffsetTargetId(null);
+                            setOffsetPickStart(null);
+                            clearOffsetPreview();
+                            setTerminalIncoming({
+                                text: `OFFSET: Distance ${val} ${getLinearUnitAbbreviation(settings.linearUnits)} — click the entity to offset`,
+                                tone: 'ok',
+                            });
+                            return;
+                        }
+                        if (drawingMode === 'polygon') {
+                            if (polygonCenter) {
+                                commitPolygonFromRadius(val / 2);
+                                return;
+                            }
+                            setTypedPolygonDiameter(String(val));
+                            requestAnimationFrame(() => drawRef.current?.());
+                            return;
+                        }
                         if (drawingMode === 'circle') {
                             setTypedCircleValue(String(val));
                         } else if (isLinearDrawingMode(drawingMode)) {
@@ -14661,6 +17435,127 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         }
                     },
                     onCoordinateInput: (pt: { easting: number; northing: number }) => {
+                        if (applyCommandPromptValue(`${pt.easting},${pt.northing}`, 'point')) return;
+                        if (isScalingSelection) {
+                            if (!scaleBasePoint) {
+                                const referenceRadius = selectionRadiusFrom(pt);
+                                scaleReferenceRadiusRef.current = referenceRadius > 1e-9 ? referenceRadius : null;
+                                setScaleBasePoint(pt);
+                                setCommandFocusRequest(n => n + 1);
+                                setTerminalIncoming({
+                                    text: `SCALE: Reference point E ${pt.easting.toFixed(2)}, N ${pt.northing.toFixed(2)} — click to scale or type a factor [Esc to cancel]`,
+                                    tone: 'ok',
+                                });
+                                return;
+                            }
+                            const distance = Math.hypot(pt.easting - scaleBasePoint.easting, pt.northing - scaleBasePoint.northing);
+                            const referenceRadius = scaleReferenceRadiusRef.current;
+                            if (distance < 1e-9) {
+                                setTerminalIncoming({ text: 'SCALE: Pick a point away from the reference point', tone: 'error' });
+                                return;
+                            }
+                            const factor = referenceRadius && referenceRadius > 1e-9 ? distance / referenceRadius : 1;
+                            const scaled = scaleSelectionCommand(factor, scaleBasePoint);
+                            stopInteractiveTransforms();
+                            setCommandFocusRequest(n => n + 1);
+                            setTerminalIncoming({
+                                text: `SCALE: Scaled ${scaled} ${scaled === 1 ? 'entity' : 'entities'} by ${factor.toFixed(3)}× (${(factor * 100).toFixed(1)}%) about E ${scaleBasePoint.easting.toFixed(2)}, N ${scaleBasePoint.northing.toFixed(2)}.`,
+                                tone: 'ok',
+                            });
+                            requestAnimationFrame(() => drawRef.current?.());
+                            return;
+                        }
+                        if (isMirroringSelection) {
+                            if (!mirrorAxisStart) {
+                                setMirrorAxisStart(pt);
+                                setCommandFocusRequest(n => n + 1);
+                                setTerminalIncoming({
+                                    text: `MIRROR: First axis point E ${pt.easting.toFixed(2)}, N ${pt.northing.toFixed(2)} — click or type the second point [Esc to cancel]`,
+                                    tone: 'ok',
+                                });
+                                return;
+                            }
+                            if (Math.hypot(pt.easting - mirrorAxisStart.easting, pt.northing - mirrorAxisStart.northing) < 1e-9) {
+                                setTerminalIncoming({ text: 'MIRROR: Axis points must be different', tone: 'error' });
+                                return;
+                            }
+                            const mirrored = mirrorSelectionCommand(mirrorAxisStart, pt);
+                            stopInteractiveTransforms();
+                            setCommandFocusRequest(n => n + 1);
+                            setTerminalIncoming({
+                                text: `MIRROR: Mirrored ${mirrored} ${mirrored === 1 ? 'entity' : 'entities'}.`,
+                                tone: 'ok',
+                            });
+                            requestAnimationFrame(() => drawRef.current?.());
+                            return;
+                        }
+                        if (isMovingSelection) {
+                            if (!moveBasePoint) {
+                                setMoveBasePoint(pt);
+                                setCommandFocusRequest(n => n + 1);
+                                setTerminalIncoming({
+                                    text: `MOVE: Base point E ${pt.easting.toFixed(2)}, N ${pt.northing.toFixed(2)} — click or type the destination [Esc to cancel]`,
+                                    tone: 'ok',
+                                });
+                                return;
+                            }
+                            const dE = pt.easting - moveBasePoint.easting;
+                            const dN = pt.northing - moveBasePoint.northing;
+                            if (Math.hypot(dE, dN) < 1e-9) {
+                                setTerminalIncoming({ text: 'MOVE: Pick a destination away from the base point', tone: 'error' });
+                                return;
+                            }
+                            const moved = moveSelectionByWorld(dE, dN);
+                            stopInteractiveTransforms();
+                            setCommandFocusRequest(n => n + 1);
+                            setTerminalIncoming({
+                                text: `MOVE: Moved ${moved} ${moved === 1 ? 'entity' : 'entities'} (ΔE ${dE.toFixed(2)}, ΔN ${dN.toFixed(2)}).`,
+                                tone: 'ok',
+                            });
+                            requestAnimationFrame(() => drawRef.current?.());
+                            return;
+                        }
+                        if (isRotatingSelection) {
+                            if (!rotatePivot) {
+                                setRotatePivot(pt);
+                                setCommandFocusRequest(n => n + 1);
+                                setTerminalIncoming({
+                                    text: `ROTATE: Base point E ${pt.easting.toFixed(2)}, N ${pt.northing.toFixed(2)} — click a point or type the angle [Esc to cancel]`,
+                                    tone: 'ok',
+                                });
+                                return;
+                            }
+                            const dE = pt.easting - rotatePivot.easting;
+                            const dN = pt.northing - rotatePivot.northing;
+                            if (Math.hypot(dE, dN) < 1e-9) {
+                                setTerminalIncoming({ text: 'ROTATE: Pick a point away from the base point', tone: 'error' });
+                                return;
+                            }
+                            const degrees = (Math.atan2(dN, dE) * 180) / Math.PI;
+                            const turned = rotateSelectionCommand(degrees, rotatePivot);
+                            stopInteractiveTransforms();
+                            setCommandFocusRequest(n => n + 1);
+                            setTerminalIncoming({
+                                text: `ROTATE: Rotated ${turned} ${turned === 1 ? 'entity' : 'entities'} ${degrees.toFixed(2)}° about E ${rotatePivot.easting.toFixed(2)}, N ${rotatePivot.northing.toFixed(2)}.`,
+                                tone: 'ok',
+                            });
+                            requestAnimationFrame(() => drawRef.current?.());
+                            return;
+                        }
+                        if (drawingMode === 'polygon') {
+                            if (!polygonCenter) {
+                                setPolygonCenter(makeTempWorldPoint(pt.easting, pt.northing));
+                                setTerminalIncoming({
+                                    text: `POLYGON: Center E ${pt.easting.toFixed(2)}, N ${pt.northing.toFixed(2)} — drag, click, or type the diameter [${polygonSides} sides]`,
+                                    tone: 'ok',
+                                });
+                                requestAnimationFrame(() => drawRef.current?.());
+                                return;
+                            }
+                            const worldRadius = Math.hypot(pt.easting - polygonCenter.easting, pt.northing - polygonCenter.northing);
+                            commitPolygonFromRadius(convertLinearUnits(worldRadius, 'foot', settings.linearUnits || 'usSurveyFoot'));
+                            return;
+                        }
                         if (drawingMode === 'circle' && !circleCenter) {
                             setCircleCenter(makeTempWorldPoint(pt.easting, pt.northing));
                         } else if (isLinearDrawingMode(drawingMode)) {
@@ -14670,6 +17565,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     },
                     keyInfo: props.keyInfo,
                 }}
+                focusRequest={commandFocusRequest}
                 keyInfo={props.keyInfo}
                 incomingMessage={terminalIncoming}
                 statusBadges={{
@@ -14678,6 +17574,271 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     isOrthoEnabled,
                 }}
             />
+
+            {/* Operation-anchored arrow pad for multi-value commands */}
+            {activeCommandPrompt && (() => {
+                const container = containerRef.current;
+                const containerW = container ? container.clientWidth : (typeof window !== 'undefined' ? window.innerWidth : 800);
+                const containerH = container ? container.clientHeight : (typeof window !== 'undefined' ? window.innerHeight : 600);
+                const isArrayStylePrompt = activeCommandPrompt.id === 'array' || activeCommandPrompt.id === 'polar_array';
+                const hudW = isArrayStylePrompt ? 320 : 240;
+                const hudH = isArrayStylePrompt ? 144 : 244;
+
+                // Selection commands dock beside the selected geometry; drawing
+                // and measure commands dock at the view center. ARRAY and
+                // POLARARRAY try to sit outside the entire ghost result so the
+                // widget never covers the copies being previewed.
+                let selectionBounds: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+                let anchorScreen: { x: number; y: number } | null = null;
+                const usesSelection = activeCommandPrompt.id === 'array' || activeCommandPrompt.id === 'polar_array';
+                const entities = usesSelection ? getSelectedLineEntities() : [];
+                if (entities.length > 0) {
+                    let minX = Infinity;
+                    let minY = Infinity;
+                    let maxX = -Infinity;
+                    let maxY = -Infinity;
+                    const include = (x: number, y: number) => {
+                        minX = Math.min(minX, x);
+                        minY = Math.min(minY, y);
+                        maxX = Math.max(maxX, x);
+                        maxY = Math.max(maxY, y);
+                    };
+                    entities.forEach(entity => {
+                        if (entity.isCircle) {
+                            const center = entity.line.circleCenter ?? entity.ends.p1;
+                            const radius = entity.line.curveRadius ?? 0;
+                            include(center.x - radius, center.y - radius);
+                            include(center.x + radius, center.y + radius);
+                        } else {
+                            include(entity.ends.p1.x, entity.ends.p1.y);
+                            include(entity.ends.p2.x, entity.ends.p2.y);
+                        }
+                    });
+                    if (Number.isFinite(minX) && Number.isFinite(minY)) {
+                        selectionBounds = { minX, minY, maxX, maxY };
+                        anchorScreen = worldToScreen(maxX, (minY + maxY) / 2);
+                    }
+                }
+
+                let hudLeft = (containerW - hudW) / 2;
+                let hudTop = (containerH - hudH) / 2;
+
+                if (isArrayStylePrompt && selectionBounds) {
+                    const read = (key: string, fallback: number): number => {
+                        const raw = commandPromptValues[key];
+                        if (raw === undefined || raw.trim() === '') return fallback;
+                        const parsed = Number(raw);
+                        return Number.isFinite(parsed) ? parsed : fallback;
+                    };
+                    const rows = Math.max(1, Math.round(read('rows', 1)));
+                    const columns = Math.max(1, Math.round(read('columns', 1)));
+                    const rowSpacing = read('rowSpacing', 0);
+                    const columnSpacing = read('columnSpacing', 0);
+                    const angle = read('angle', 0);
+                    let arrayLeft = 0;
+                    let arrayRight = 0;
+                    let arrayTop = 0;
+                    let arrayBottom = 0;
+
+                    if (activeCommandPrompt.id === 'array') {
+                        const unit = settings.linearUnits || 'usSurveyFoot';
+                        const rowGap = convertLinearUnits(rowSpacing, unit, 'foot');
+                        const columnGap = convertLinearUnits(columnSpacing, unit, 'foot');
+                        const direction = (angle * Math.PI) / 180;
+                        const cos = Math.cos(direction);
+                        const sin = Math.sin(direction);
+                        const xOffsets = [0, (columns - 1) * columnGap];
+                        const yOffsets = [0, (rows - 1) * rowGap];
+                        let minDx = 0;
+                        let maxDx = 0;
+                        let minDy = 0;
+                        let maxDy = 0;
+                        for (const x of xOffsets) {
+                            for (const y of yOffsets) {
+                                const dx = x * cos - y * sin;
+                                const dy = x * sin + y * cos;
+                                minDx = Math.min(minDx, dx);
+                                maxDx = Math.max(maxDx, dx);
+                                minDy = Math.min(minDy, dy);
+                                maxDy = Math.max(maxDy, dy);
+                            }
+                        }
+                        const worldMinX = selectionBounds.minX + minDx;
+                        const worldMaxX = selectionBounds.maxX + maxDx;
+                        const worldMinY = selectionBounds.minY + minDy;
+                        const worldMaxY = selectionBounds.maxY + maxDy;
+                        const topLeft = worldToScreen(worldMinX, worldMaxY);
+                        const bottomRight = worldToScreen(worldMaxX, worldMinY);
+                        arrayLeft = Math.min(topLeft.x, bottomRight.x);
+                        arrayRight = Math.max(topLeft.x, bottomRight.x);
+                        arrayTop = Math.min(topLeft.y, bottomRight.y);
+                        arrayBottom = Math.max(topLeft.y, bottomRight.y);
+                    } else {
+                        const count = Math.max(2, Math.round(read('count', 6)));
+                        const fillAngle = Math.min(360, Math.max(1, read('fillAngle', 360)));
+                        const centerToken = (commandPromptValues.center ?? '').trim();
+                        const parsedCenter = centerToken ? parseCoordinateToken(centerToken) : null;
+                        const center = parsedCenter
+                            ? { x: parsedCenter.easting, y: parsedCenter.northing }
+                            : {
+                                x: (selectionBounds.minX + selectionBounds.maxX) / 2,
+                                y: (selectionBounds.minY + selectionBounds.maxY) / 2,
+                            };
+                        const step = fillAngle >= 359.999
+                            ? fillAngle / count
+                            : fillAngle / Math.max(1, count - 1);
+                        const corners = [
+                            { x: selectionBounds.minX, y: selectionBounds.minY },
+                            { x: selectionBounds.maxX, y: selectionBounds.minY },
+                            { x: selectionBounds.maxX, y: selectionBounds.maxY },
+                            { x: selectionBounds.minX, y: selectionBounds.maxY },
+                        ];
+                        let worldMinX = Infinity;
+                        let worldMinY = Infinity;
+                        let worldMaxX = -Infinity;
+                        let worldMaxY = -Infinity;
+                        for (let item = 0; item < count; item++) {
+                            const radians = (item * step * Math.PI) / 180;
+                            const cos = Math.cos(radians);
+                            const sin = Math.sin(radians);
+                            for (const corner of corners) {
+                                const dx = corner.x - center.x;
+                                const dy = corner.y - center.y;
+                                const x = center.x + dx * cos - dy * sin;
+                                const y = center.y + dx * sin + dy * cos;
+                                worldMinX = Math.min(worldMinX, x);
+                                worldMinY = Math.min(worldMinY, y);
+                                worldMaxX = Math.max(worldMaxX, x);
+                                worldMaxY = Math.max(worldMaxY, y);
+                            }
+                        }
+                        const topLeft = worldToScreen(worldMinX, worldMaxY);
+                        const bottomRight = worldToScreen(worldMaxX, worldMinY);
+                        arrayLeft = Math.min(topLeft.x, bottomRight.x);
+                        arrayRight = Math.max(topLeft.x, bottomRight.x);
+                        arrayTop = Math.min(topLeft.y, bottomRight.y);
+                        arrayBottom = Math.max(topLeft.y, bottomRight.y);
+                    }
+                    const maxLeft = Math.max(10, containerW - hudW - 10);
+                    const maxTop = Math.max(10, containerH - hudH - 78);
+                    const place = (left: number, top: number) => ({
+                        left: Math.max(10, Math.min(left, maxLeft)),
+                        top: Math.max(10, Math.min(top, maxTop)),
+                    });
+                    const overlapArea = (candidate: { left: number; top: number }) => {
+                        const width = Math.max(0, Math.min(candidate.left + hudW, arrayRight) - Math.max(candidate.left, arrayLeft));
+                        const height = Math.max(0, Math.min(candidate.top + hudH, arrayBottom) - Math.max(candidate.top, arrayTop));
+                        return width * height;
+                    };
+                    const gap = 18;
+                    const arrayCenterX = (arrayLeft + arrayRight) / 2;
+                    const arrayCenterY = (arrayTop + arrayBottom) / 2;
+                    const candidates: Array<{ key: string; left: number; top: number }> = [
+                        { key: 'right', ...place(arrayRight + gap, arrayTop + (arrayBottom - arrayTop - hudH) / 2) },
+                        { key: 'left', ...place(arrayLeft - gap - hudW, arrayTop + (arrayBottom - arrayTop - hudH) / 2) },
+                        { key: 'below', ...place(arrayLeft + (arrayRight - arrayLeft - hudW) / 2, arrayBottom + gap) },
+                        { key: 'above', ...place(arrayLeft + (arrayRight - arrayLeft - hudW) / 2, arrayTop - gap - hudH) },
+                        { key: 'right-below', ...place(arrayRight + gap, arrayBottom + gap) },
+                        { key: 'right-above', ...place(arrayRight + gap, arrayTop - gap - hudH) },
+                        { key: 'left-below', ...place(arrayLeft - gap - hudW, arrayBottom + gap) },
+                        { key: 'left-above', ...place(arrayLeft - gap - hudW, arrayTop - gap - hudH) },
+                        { key: 'container-tl', ...place(10, 10) },
+                        { key: 'container-tr', ...place(maxLeft, 10) },
+                        { key: 'container-bl', ...place(10, maxTop) },
+                        { key: 'container-br', ...place(maxLeft, maxTop) },
+                    ];
+                    const score = (candidate: { left: number; top: number }) => {
+                        const overlap = overlapArea(candidate);
+                        const cx = candidate.left + hudW / 2;
+                        const cy = candidate.top + hudH / 2;
+                        return overlap * 1000 + Math.hypot(cx - arrayCenterX, cy - arrayCenterY);
+                    };
+                    const isClear = (candidate: { left: number; top: number }) => overlapArea(candidate) <= 0.5;
+                    const stickyKey = arrayWidgetSideRef.current;
+                    const sticky = stickyKey ? candidates.find(candidate => candidate.key === stickyKey) : undefined;
+                    let chosen = sticky && isClear(sticky) ? sticky : undefined;
+
+                    // Hysteresis: keep the current side while it is clear. Only
+                    // reconsider when it is actually covered; if every side is
+                    // covered, hold the current one rather than bouncing between
+                    // equally bad candidates.
+                    if (!chosen) {
+                        const clearCandidates = candidates.filter(isClear);
+                        if (clearCandidates.length > 0) {
+                            chosen = clearCandidates.reduce(
+                                (best, candidate) => (score(candidate) < score(best) ? candidate : best),
+                                clearCandidates[0],
+                            );
+                        } else if (sticky) {
+                            chosen = sticky;
+                        } else {
+                            chosen = candidates.reduce(
+                                (best, candidate) => (score(candidate) < score(best) ? candidate : best),
+                                candidates[0],
+                            );
+                        }
+                    }
+
+                    arrayWidgetSideRef.current = chosen.key;
+                    hudLeft = chosen.left;
+                    hudTop = chosen.top;
+                } else if (!isArrayStylePrompt) {
+                    hudLeft = anchorScreen ? anchorScreen.x + 20 : (containerW - hudW) / 2;
+                    if (anchorScreen && hudLeft + hudW > containerW - 10) {
+                        hudLeft = anchorScreen.x - hudW - 20;
+                    }
+                    hudLeft = Math.max(10, Math.min(hudLeft, Math.max(10, containerW - hudW - 10)));
+                    const anchorTop = anchorScreen ? anchorScreen.y - hudH / 2 : (containerH - hudH) / 2;
+                    hudTop = Math.max(10, Math.min(anchorTop, Math.max(10, containerH - hudH - 78)));
+                }
+                if (activeCommandPrompt.id === 'array') {
+                    return (
+                        <ArrayManipulator
+                            values={commandPromptValues}
+                            onChange={handleCommandPromptChange}
+                            onActivate={handleCommandPromptActivate}
+                            onSubmit={submitCommandPrompt}
+                            onCancel={cancelCommandPrompt}
+                            x={hudLeft}
+                            y={hudTop}
+                            pixelsPerUnit={Math.max(1e-6, transform.scale * convertLinearUnits(1, settings.linearUnits || 'usSurveyFoot', 'foot'))}
+                            unitLabel={getLinearUnitAbbreviation(settings.linearUnits)}
+                        />
+                    );
+                }
+                if (activeCommandPrompt.id === 'polar_array') {
+                    return (
+                        <PolarArrayManipulator
+                            values={commandPromptValues}
+                            onChange={handleCommandPromptChange}
+                            onActivate={handleCommandPromptActivate}
+                            onSubmit={submitCommandPrompt}
+                            onCancel={() => {
+                                if (isPickingPolarCenter) cancelPolarCenterPick();
+                                else cancelCommandPrompt();
+                            }}
+                            isPickingCenter={isPickingPolarCenter}
+                            onPickCenter={togglePolarCenterPick}
+                            x={hudLeft}
+                            y={hudTop}
+                        />
+                    );
+                }
+                return (
+                    <CommandPromptHud
+                        prompt={activeCommandPrompt}
+                        values={commandPromptValues}
+                        activeIndex={commandPromptIndex}
+                        x={hudLeft}
+                        y={hudTop}
+                        onChange={handleCommandPromptChange}
+                        onActivate={handleCommandPromptActivate}
+                        onSubmit={submitCommandPrompt}
+                        onCancel={cancelCommandPrompt}
+                    />
+                );
+            })()}
+
             {/* Symbol-exclusion hover tooltip */}
             {symbolExclusionMode && exclusionHover && (
                 <div

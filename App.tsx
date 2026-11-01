@@ -68,6 +68,8 @@ import { parsePointFile, pointListToString } from './utils/pointFile.ts';
 import { buildTinFromPoints } from './services/TinService.ts';
 import { runSteepSlopeAnalysis, steepSlopeRunToSurveyLines } from './services/SteepSlopeService.ts';
 import { ESRI_STATE_SERVICES } from './utils/esriStateServices.ts';
+import { readContourElevation } from './utils/esriContourAttributes.ts';
+import type { ContourFetchOptions } from './utils/usgsNationalContours.ts';
 import { runClawDirectives, parseClawDirectives } from './utils/clawClient.ts';
 import { sanitizeZoningAnswer, extractZoningJsonBlock } from './utils/zoningRender.ts';
 import { setBootstrapStatus } from './utils/zoningBootstrap.ts';
@@ -210,6 +212,7 @@ import { loadClaudeConfig, setClaudeConfig, type ClaudeModel } from './services/
 import { generateDxf } from './utils/dxf.ts';
 import { parseDxfGeometry } from './utils/dxfGeometryParser.ts';
 import { expandChainsToLines, expandWidthCodedChains, repairBankCorridorChains, type DrafterChain } from './utils/linework.ts';
+import { buildCivilDrafterLineworkContext } from './utils/civilDrafterLinework.ts';
 import {
   addLineToList,
   addPointToList,
@@ -7478,8 +7481,14 @@ const AppContent = () => {
   const handleFetchEsriContours = useCallback(async (
     serviceUrl: string,
     mode: 'inclusion' | 'description',
-    descriptionText?: string
+    descriptionText?: string,
+    opts?: ContourFetchOptions,
   ) => {
+    // USGS National Map layers arrive pre-classified (index / intermediate /
+    // supplemental) and each gets its own CAD layer; custom/state services keep
+    // the historical single ESRI-CONTOUR layer and elevation-based split.
+    const layerName = opts?.layerName ?? 'ESRI-CONTOUR';
+    const clearPrefix = opts?.clearPrefix ?? 'ESRI-CONTOUR';
     setIsFetchingEsri(true);
     setError(null);
     try {
@@ -7754,19 +7763,10 @@ const AppContent = () => {
       }
 
       // -- 3. Find elevation attribute ----------------------------------------
-      const findElev = (attrs: Record<string, unknown>): number | null => {
-        const candidates = ['CONTOUR', 'CONTOUR_FT', 'CONTOUR_M', 'CONTOURELEV', 'ContourElevation',
-          'Contour_Elevation', 'Elevation', 'ELEV', 'ELEVATION', 'ElevFt', 'ElevM', 'ContLevel',
-          'contour', 'elev', 'elevation'];
-        for (const k of candidates) {
-          if (k in attrs && typeof attrs[k] === 'number') return attrs[k] as number;
-        }
-        for (const [k, v] of Object.entries(attrs)) {
-          const lo = k.toLowerCase();
-          if (typeof v === 'number' && !lo.includes('length') && !lo.includes('area') && !lo.includes('oid') && !lo.includes('objectid') && !lo.includes('_id')) return v;
-        }
-        return null;
-      };
+      // Case-insensitive and unit-aware: the USGS 3DEP service returns
+      // `contourelevation` + `contourunits` (1 = feet, 2 = meters).
+      const findElev = (attrs: Record<string, unknown>): number | null =>
+        readContourElevation(attrs).elevation;
 
       // -- 4. Convert to SurveyLines ------------------------------------------
       // If the project EPSG differs from the queryOutSR (service native SR),
@@ -7792,7 +7792,9 @@ const AppContent = () => {
         const paths = feature.geometry?.paths;
         if (!paths) continue;
         const elev = findElev(feature.attributes ?? {});
-        const isMajor = elev !== null && major > 0 && (Math.abs(elev % major) < 1e-6 || Math.abs((elev % major) - major) < 1e-6);
+        const isMajor = opts?.contourType
+          ? opts.contourType === 'contour-major'
+          : elev !== null && major > 0 && (Math.abs(elev % major) < 1e-6 || Math.abs((elev % major) - major) < 1e-6);
         for (const path of paths) {
           for (let i = 0; i < path.length - 1; i++) {
             let [x1, y1] = path[i];
@@ -7803,7 +7805,7 @@ const AppContent = () => {
               fromPt: { x: x1, y: y1, z: elev ?? 0 },
               toPt: { x: x2, y: y2, z: elev ?? 0 },
               type: (isMajor ? 'contour-major' : 'contour-minor') as SurveyLine['type'],
-              layer: 'ESRI-CONTOUR',
+              layer: layerName,
             });
           }
         }
@@ -7839,13 +7841,13 @@ const AppContent = () => {
         outputLines = clipped;
       }
 
-      setLines((prev: SurveyLine[]) => [...prev.filter((l: SurveyLine) => l.layer !== 'ESRI-CONTOUR'), ...outputLines]);
+      setLines((prev: SurveyLine[]) => [...prev.filter((l: SurveyLine) => !l.layer?.startsWith(clearPrefix)), ...outputLines]);
       dbgLog('ESRI', { step: '5-success', newLineCount: outputLines.length, exceededTransferLimit, tilesFetched });
       const tileSummary = tilesFetched > 1 ? ` across ${tilesFetched} tile(s)${tilesSubdivided > 0 ? ` (${tilesSubdivided} further subdivided)` : ''}` : '';
       const partialNote = exceededTransferLimit
         ? (userStoppedTiling ? ' � tiling stopped by user, coverage is partial' : ' � transfer limit reached on the deepest tile(s), coverage may be partial')
         : '';
-      logActionToFieldbook(`Fetched ${outputLines.length} ESRI contour segments from ${serviceUrl} (${features.length} features${tileSummary}${partialNote}).`);
+      logActionToFieldbook(`Fetched ${outputLines.length} contour segments onto layer ${layerName} from ${serviceUrl} (${features.length} features${tileSummary}${partialNote}).`);
       showView('canvas');
       if (exceededTransferLimit) {
         setError(userStoppedTiling
@@ -8599,6 +8601,18 @@ const AppContent = () => {
     }
   }, [rawFile, deedFile, dxfFile, clFile, gisFile, planFiles, generatedFiles, showView, pointLists, settings]);
 
+  // Command-line results can be handed to the full text editor for longer
+  // inspection or export. Each hand-off replaces a single scratch file so the
+  // file list does not accumulate duplicates.
+  const handleOpenTerminalOutputInEditor = useCallback((content: string) => {
+    const fileName = 'CAD Command Output.txt';
+    setGeneratedFiles(prev => [...prev.filter(file => file.name !== fileName), { name: fileName, content }]);
+    setTextEditorContent(content);
+    setActiveTextEditorFile(fileName);
+    setHasUnsavedChanges(false);
+    showView('texteditor');
+  }, [showView]);
+
   const handleDeleteFile = useCallback((fileName: string) => {
     logActionToFieldbook(`Deleted file: ${fileName}`);
 
@@ -9085,6 +9099,11 @@ const AppContent = () => {
         if (!cdCtx || cdCtx.includePointDatabase) {
             context = `---BEGIN POINT DATABASE---\n${JSON.stringify(contextPointLists, null, 2)}\n---END POINT DATABASE---\n\n`;
         }
+        // Manually drawn CAD entities live in `lines`, not the point database.
+        // Without this block the drafter cannot see circles, arrays, polylines,
+        // or other geometry already on the canvas.
+        const lineworkContext = buildCivilDrafterLineworkContext(lines, points);
+        if (lineworkContext) context += lineworkContext;
     } else if (agent === AgentType.DXF_ANALYZER || agent === AgentType.CIVIL_PLAN_EXPERT || agent === AgentType.IMAGE_ANALYZER) {
         // Make point context public for all data analysis agents
         context = `---BEGIN POINT DATABASE---\n${JSON.stringify(contextPointLists, null, 2)}\n---END POINT DATABASE---\n\n`;
@@ -12818,6 +12837,23 @@ const AppContent = () => {
     const lineWithId = addLineToList(newLine);
     setLines(prev => [...prev, lineWithId]);
     logActionToFieldbook(`Drew line from ${lineWithId.from} to ${lineWithId.to}.`);
+  }, [pushHistory, logActionToFieldbook]);
+
+  /** Apply a multi-entity CAD edit as one history entry and one state update. */
+  const handleBatchLines = useCallback((removeIds: string[], newLines: SurveyLine[]) => {
+    if (removeIds.length === 0 && newLines.length === 0) return;
+    pushHistory(removeIds.length > 0 ? 'Modified line geometry' : 'Added line geometry');
+    setLines(prev => {
+      let working = prev;
+      for (const id of removeIds) working = deleteLineFromList(id, working);
+      const additions = newLines.map(addLineToList);
+      return [...working, ...additions];
+    });
+    logActionToFieldbook(
+      removeIds.length > 0
+        ? `CAD edit: replaced ${removeIds.length} line(s) with ${newLines.length}.`
+        : `CAD edit: added ${newLines.length} line(s).`,
+    );
   }, [pushHistory, logActionToFieldbook]);
 
   // Forward-propagate COGO from a given index through the rest of a traverse.
@@ -16624,6 +16660,7 @@ const AppContent = () => {
                                         ownerNameOffset={deedFile?.ownerNameOffset}
                                         onAddLine={handleAddLine}
                                         onDeleteLine={handleDeleteLine}
+                                        onBatchLinesChange={handleBatchLines}
                                         canUndo={canUndo}
                                         canRedo={canRedo}
                                         onUndo={undo}
@@ -16683,6 +16720,7 @@ const AppContent = () => {
                                         onToggleBoundaryCallLabelRotation={handleToggleBoundaryCallLabelRotation}
                                         onSwapBoundaryCallBearingDirection={handleSwapBoundaryCallBearingDirection}
                                         onUpdateLine={handleUpdateLine}
+                                        onOpenTextEditor={handleOpenTerminalOutputInEditor}
                                         onUpdateBoundaryTransform={handleBoundaryTransformChange}
                                         boundaryAlignRequest={boundaryAlignRequest}
                                         onBoundaryAlignRequestHandled={() => setBoundaryAlignRequest(null)}

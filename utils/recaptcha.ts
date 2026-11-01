@@ -69,3 +69,7 @@ export async function executeCheckoutRecaptcha(): Promise<string> {
 export async function executeContactRecaptcha(): Promise<string> {
   return executeRecaptcha('contact-form');
 }
+
+export async function executeDemoRequestRecaptcha(): Promise<string> {
+  return executeRecaptcha('demo-request');
+}

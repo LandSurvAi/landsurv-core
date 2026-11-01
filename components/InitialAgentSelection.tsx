@@ -28,88 +28,25 @@ import CacpManifestModal from './CacpManifestModal.tsx';
 import { agentRegistry } from '../services/AgentRegistry';
 import { projectionStates, projectionZones } from '../utils/projections.ts';
 import { executeContactRecaptcha } from '../utils/recaptcha.ts';
+import HolidayEffects from './HolidayEffects.tsx';
+import ThanksgivingEffects from './ThanksgivingEffects.tsx';
 
-// Pre-generate stars to avoid re-rendering animation issues
-const generateStars = () => {
-  // North Star (Polaris) - the Christmas star, extra bright and prominent
-  const northStar = {
-    left: 85,
-    top: 8,
-    size: 22,
-    duration: 4,
-    delay: 0,
-    isBright: true,
-    isNorthStar: true,
-  };
-
-  // Big Dipper constellation (fixed positions)
-  const bigDipper = [
-    { left: 15, top: 15, size: 12, duration: 6 + Math.random() * 6, delay: Math.random() * 3, isBright: true, isNorthStar: false }, // Dubhe
-    { left: 22, top: 18, size: 11, duration: 6 + Math.random() * 6, delay: Math.random() * 3, isBright: true, isNorthStar: false }, // Merak
-    { left: 28, top: 22, size: 10, duration: 6 + Math.random() * 6, delay: Math.random() * 3, isBright: false, isNorthStar: false },
-    { left: 32, top: 28, size: 10, duration: 6 + Math.random() * 6, delay: Math.random() * 3, isBright: false, isNorthStar: false },
-    { left: 35, top: 35, size: 10, duration: 6 + Math.random() * 6, delay: Math.random() * 3, isBright: false, isNorthStar: false },
-    { left: 30, top: 40, size: 9, duration: 6 + Math.random() * 6, delay: Math.random() * 3, isBright: false, isNorthStar: false },
-    { left: 25, top: 42, size: 10, duration: 6 + Math.random() * 6, delay: Math.random() * 3, isBright: true, isNorthStar: false }, // Alkaid
-  ];
-
-  // Generate random background stars avoiding overlap
-  const backgroundStars: typeof bigDipper = [];
-  const minDistance = 6; // Minimum distance between stars in %
-  const maxAttempts = 100;
-
-  while (backgroundStars.length < 43) {
-    let attempts = 0;
-    let valid = false;
-
-    while (attempts < maxAttempts && !valid) {
-      const left = Math.random() * 100;
-      const top = Math.random() * 100;
-
-      // Check distance from all existing stars (including Big Dipper and North Star)
-      valid = true;
-      for (const star of [northStar, ...bigDipper, ...backgroundStars]) {
-        const distance = Math.sqrt((left - star.left) ** 2 + (top - star.top) ** 2);
-        if (distance < minDistance) {
-          valid = false;
-          break;
-        }
-      }
-
-      if (valid) {
-        backgroundStars.push({
-          left,
-          top,
-          size: 3 + Math.random() * 10,
-          duration: 6 + Math.random() * 6,
-          delay: Math.random() * 3,
-          isBright: false,
-          isNorthStar: false,
-        });
-      }
-      attempts++;
-    }
-  }
-
-  return [northStar, ...bigDipper, ...backgroundStars];
-};
-
-const STARS = generateStars();
-
-// Pre-generate snowflakes to avoid re-rendering animation issues
-const generateSnowflakes = () => {
-  return Array.from({ length: 20 }, () => {
-    const duration = 8 + Math.random() * 6;
+// Pre-generate bats for Halloween - each flies in once, grows as it approaches, then exits
+const generateBats = () => {
+  return Array.from({ length: 10 }, (_, i) => {
+    const duration = 5.5 + Math.random() * 2.5;
     return {
-      left: Math.random() * 100,
-      size: 12 + Math.random() * 20.4,
+      top: 4 + Math.random() * 70,
+      size: 28 + Math.random() * 24,
       duration,
-      delay: -(Math.random() * duration), // Negative delay for pre-positioning
+      flapDuration: 0.3 + Math.random() * 0.25,
+      delay: Math.random() * 8,
+      fromLeft: i % 2 === 0,
     };
   });
 };
 
-const SNOWFLAKES = generateSnowflakes();
+const BATS = generateBats();
 
 const CONTACT_EMAIL_LINKS = [
   {
@@ -150,78 +87,21 @@ const CONTACT_EMAIL_LINKS = [
   },
 ];
 
-// Pre-generate fireworks for NYE - slow digital rain style with varied sizes
-const generateFireworks = () => {
-  const fireworks = [];
-  const colors = [
-    { core: '#fbbf24', glow: 'rgba(251, 191, 36, 0.9)' }, // Gold
-    { core: '#22d3ee', glow: 'rgba(34, 211, 238, 0.9)' }, // Cyan
-    { core: '#a78bfa', glow: 'rgba(167, 139, 250, 0.9)' }, // Purple
-    { core: '#f472b6', glow: 'rgba(244, 114, 182, 0.9)' }, // Pink
-    { core: '#34d399', glow: 'rgba(52, 211, 153, 0.9)' }, // Emerald
-    { core: '#fb7185', glow: 'rgba(251, 113, 133, 0.9)' }, // Rose
-    { core: '#38bdf8', glow: 'rgba(56, 189, 248, 0.9)' }, // Sky
-    { core: '#facc15', glow: 'rgba(250, 204, 21, 0.9)' }, // Yellow
-  ];
-  
-  // 9 fireworks with orchestrated flow - evenly distributed across screen
-  const configs = [
-    // Wave 1: Opening (0-5s) - far left and far right
-    { left: 8, top: 16, scale: 'large', delayBase: 0 },
-    { left: 88, top: 18, scale: 'medium', delayBase: 2.5 },
-    // Wave 2: Building (5-12s) - left-center and right-center
-    { left: 32, top: 14, scale: 'huge', delayBase: 6 },
-    { left: 72, top: 22, scale: 'medium', delayBase: 8 },
-    // Wave 3: Climax (12-20s) - center massive, left and right companions
-    { left: 50, top: 12, scale: 'massive', delayBase: 13 },
-    { left: 18, top: 20, scale: 'huge', delayBase: 15 },
-    { left: 85, top: 16, scale: 'large', delayBase: 17 },
-    // Wave 4: Afterglow (20-28s) - fill gaps
-    { left: 42, top: 18, scale: 'large', delayBase: 21 },
-    { left: 62, top: 20, scale: 'medium', delayBase: 24 },
-  ];
-  
-  configs.forEach((cfg, i) => {
-    const color = colors[i % colors.length];
-    const scaleSettings = {
-      medium: { size: 450, particles: 50, duration: 14 },
-      large: { size: 650, particles: 70, duration: 16 },
-      huge: { size: 850, particles: 90, duration: 18 },
-      massive: { size: 1100, particles: 120, duration: 20 },
-    };
-    const settings = scaleSettings[cfg.scale as keyof typeof scaleSettings];
-    
-    fireworks.push({
-      left: cfg.left + (Math.random() * 8 - 4),
-      top: cfg.top + (Math.random() * 6 - 3),
-      delay: cfg.delayBase + Math.random() * 1.5,
-      duration: settings.duration,
-      size: settings.size,
-      particleCount: settings.particles,
-      scale: cfg.scale,
-      color,
-    });
-  });
-  return fireworks;
-};
-
-const FIREWORKS = generateFireworks();
-
 // Holiday theme type
-export type HolidayTheme = 'christmas' | 'nye' | null;
+export type HolidayTheme = 'halloween' | 'thanksgiving' | 'christmas' | 'nye' | null;
 
 // Get holiday theme override from localStorage
 const getHolidayThemeOverride = (): HolidayTheme | 'auto' => {
   if (typeof window === 'undefined') return 'auto';
   const override = localStorage.getItem('landsurv-holiday-theme');
-  if (override === 'christmas' || override === 'nye' || override === 'none') {
+  if (override === 'halloween' || override === 'thanksgiving' || override === 'christmas' || override === 'nye' || override === 'none') {
     return override === 'none' ? null : override;
   }
   return 'auto';
 };
 
 // Set holiday theme override in localStorage
-export const setHolidayThemeOverride = (theme: 'auto' | 'christmas' | 'nye' | 'none') => {
+export const setHolidayThemeOverride = (theme: 'auto' | 'halloween' | 'thanksgiving' | 'christmas' | 'nye' | 'none') => {
   if (typeof window === 'undefined') return;
   localStorage.setItem('landsurv-holiday-theme', theme);
   // Trigger re-render by dispatching a storage event
@@ -237,6 +117,16 @@ export const getHolidayTheme = (): HolidayTheme => {
   const month = now.getMonth(); // 0-11
   const day = now.getDate();
   
+  // Halloween: October 25 - November 1 (last week of October through the 1st)
+  if ((month === 9 && day >= 25) || (month === 10 && day === 1)) {
+    return 'halloween';
+  }
+
+  // Thanksgiving: November 2 - November 30 (after Halloween, before Christmas)
+  if (month === 10 && day >= 2) {
+    return 'thanksgiving';
+  }
+
   // NYE: December 26 - January 1
   if ((month === 11 && day >= 26) || (month === 0 && day === 1)) {
     return 'nye';
@@ -250,11 +140,20 @@ export const getHolidayTheme = (): HolidayTheme => {
   return null;
 };
 
-// Legacy function for backward compatibility
-const isChristmasSeason = () => getHolidayTheme() !== null;
+// Christmas and NYE share the music and star decorations; Halloween has its own bats
+const isChristmasSeason = () => {
+  const theme = getHolidayTheme();
+  return theme === 'christmas' || theme === 'nye';
+};
 
 // Check specifically for NYE theme
 export const isNewYearsTheme = () => getHolidayTheme() === 'nye';
+
+// Check specifically for Halloween theme
+export const isHalloweenTheme = () => getHolidayTheme() === 'halloween';
+
+// Check specifically for Thanksgiving theme
+export const isThanksgivingTheme = () => getHolidayTheme() === 'thanksgiving';
 
 // Release stage types and labels
 export type ReleaseStage = 'pre-alpha' | 'alpha' | 'beta' | 'rc' | 'ga';
@@ -1231,33 +1130,6 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
     };
   }, []);
   
-  // Christmas music state
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const [isMusicPlaying, setIsMusicPlaying] = useState(false);
-
-  const toggleMusic = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    
-    if (isMusicPlaying) {
-      audio.pause();
-      setIsMusicPlaying(false);
-    } else {
-      audio.volume = 0.3;
-      audio.muted = false;
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-        playPromise
-          .then(() => setIsMusicPlaying(true))
-          .catch((error) => {
-            console.error('Audio playback failed:', error);
-            audio.currentTime = 0;
-            audio.play().then(() => setIsMusicPlaying(true)).catch(() => {});
-          });
-      }
-    }
-  };
-
   // Removed walking highlight effect - titles now pulse continuously with CSS animation
   
   const handleCardClick = (card: Card) => {
@@ -1445,8 +1317,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
   const playAgentResponse = async () => {
     const responses = [
       "Thank you for calling LandSurv.ai. Your message has been recorded and saved.",
-      "Thank you. We've received your voicemail. Our team will get back to you soon.",
-      "Your message is important to us. Thank you for calling LandSurv.ai."
+      "Thank you. We've received your voicemail. Our team will get back to you soon."
     ];
     const response = responses[Math.floor(Math.random() * responses.length)];
     const cloudPlayed = await playCloudTts(response, 'agent');
@@ -1645,21 +1516,6 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
 
     return (
     <div className="flex flex-col h-full relative aesthetic-grid">
-      {/* Holiday audio element */}
-      {isChristmasSeason() && (
-        <audio
-          ref={audioRef}
-          src={isNewYearsTheme() 
-            ? "https://ia600208.us.archive.org/5/items/78_auld-lang-syne_guy-lombardo-and-his-royal-canadians-robert-burns_gbia0020296a/Auld%20Lang%20Syne%20-%20Guy%20Lombardo%20and%20his%20Royal%20Canadians.mp3"
-            : "https://dn721608.ca.archive.org/0/items/78_sleigh-bells_gbia0033131b/Sleigh%20Bells.mp3"
-          }
-          loop
-          playsInline
-          preload="none"
-          style={{ display: 'none' }}
-        />
-      )}
-      
       {/* C3D Connect + API Key buttons - now rendered inline above chat bar (see scrollable section) */}
       {onShowC3DConnect && null /* moved inline */}
 
@@ -1667,430 +1523,50 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
 
       {/* Settings button - now rendered inline above chat bar (see scrollable section) */}
 
-      {/* Holiday music toggle button - fixed position top-right (shifts left when present) */}
+      {/* Modern seasonal effects: one GPU canvas replaces the old star/snow/firework DOM layers */}
       {isChristmasSeason() && (
-        <button
-          onClick={toggleMusic}
-          className="fixed top-4 right-44 z-50 p-3 rounded-full bg-gray-800/80 hover:bg-gray-700 transition-colors active:bg-gray-600 text-xl backdrop-blur-sm border border-gray-600"
-          aria-label={isMusicPlaying 
-            ? (isNewYearsTheme() ? 'Mute New Year music' : 'Mute Christmas music') 
-            : (isNewYearsTheme() ? 'Play New Year music' : 'Play Christmas music')
-          }
-          type="button"
-        >
-          {isMusicPlaying ? (isNewYearsTheme() ? '🎉' : '🎵') : '🔇'}
-        </button>
+        <HolidayEffects theme={isNewYearsTheme() ? 'nye' : 'christmas'} />
       )}
 
-      {/* Holiday snowfall background - Christmas only (Dec 1-25), not NYE */}
-      {isChristmasSeason() && !isNewYearsTheme() && (
-        <div className="fixed inset-0 pointer-events-none overflow-hidden">
-          {SNOWFLAKES.map((flake, i) => (
+      {/* Halloween bats - black silhouettes that fly in, scale toward the viewer, and vanish */}
+      {isHalloweenTheme() && (
+        <div
+          className="fixed inset-0 pointer-events-none overflow-hidden"
+          style={{ zIndex: 100 }}
+          aria-hidden="true"
+        >
+          {BATS.map((bat, i) => (
             <div
-              key={i}
+              key={`bat-${i}`}
               className="absolute"
               style={{
-                left: `${flake.left}%`,
-                top: `-10px`,
-                width: `${flake.size}px`,
-                height: `${flake.size}px`,
-                animation: `snowfall ${flake.duration}s linear infinite`,
-                animationDelay: `${flake.delay}s`,
-                zIndex: 5,
+                left: 0,
+                top: `${bat.top}%`,
+                animation: `${bat.fromLeft ? 'batFly' : 'batFlyReverse'} ${bat.duration}s ease-in-out 1 both`,
+                animationDelay: `${bat.delay}s`,
               }}
             >
-              {/* Gradient glow background */}
-              <div 
-                className="absolute inset-0 rounded-full"
-                style={{
-                  background: 'radial-gradient(circle, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.4) 40%, rgba(200,220,255,0.2) 70%, transparent 100%)',
-                  boxShadow: '0 0 6px 2px rgba(255,255,255,0.3)',
-                }}
-              />
-              {/* Snowflake shape overlay */}
-              <div 
-                className="absolute inset-0 flex items-center justify-center"
-                style={{
-                  transform: `rotate(${(i * 30) % 360}deg)`,
-                }}
-              >
-                {/* Vertical line */}
-                <div className="absolute bg-white/80" style={{ width: '1px', height: '80%' }} />
-                {/* Horizontal line */}
-                <div className="absolute bg-white/80" style={{ width: '80%', height: '1px' }} />
-                {/* Diagonal lines */}
-                <div className="absolute bg-white/60" style={{ width: '1px', height: '60%', transform: 'rotate(45deg)' }} />
-                <div className="absolute bg-white/60" style={{ width: '1px', height: '60%', transform: 'rotate(-45deg)' }} />
-                {/* Center dot */}
-                <div className="absolute bg-white rounded-full" style={{ width: '20%', height: '20%' }} />
+              {/* Flip right-to-left bats so they face their direction of travel */}
+              <div style={{ transform: bat.fromLeft ? 'none' : 'scaleX(-1)' }}>
+                <span
+                  style={{
+                    display: 'inline-block',
+                    fontSize: `${bat.size}px`,
+                    lineHeight: 1,
+                    animation: `batFlap ${bat.flapDuration}s ease-in-out infinite alternate`,
+                    filter: 'brightness(0)',
+                  }}
+                >
+                  🦇
+                </span>
               </div>
             </div>
           ))}
         </div>
       )}
 
-      {/* Holiday stars - gold for Christmas, colorful fireworks for NYE - twinkle only, no movement */}
-      {isChristmasSeason() && (
-        <div className="fixed inset-0 pointer-events-none overflow-hidden">
-          {STARS.map((star, i) => {
-            // NYE firework colors - cycle through vibrant colors
-            const nyeColors = [
-              { core: '#ff6b6b', glow: 'rgba(255, 107, 107, 0.9)', mid: 'rgba(255, 107, 107, 0.6)' }, // Red
-              { core: '#4ecdc4', glow: 'rgba(78, 205, 196, 0.9)', mid: 'rgba(78, 205, 196, 0.6)' }, // Teal
-                  { core: '#ffe66d', glow: 'rgba(255, 230, 109, 0.9)', mid: 'rgba(255, 230, 109, 0.6)' }, // Yellow
-                  { core: '#ff85a2', glow: 'rgba(255, 133, 162, 0.9)', mid: 'rgba(255, 133, 162, 0.6)' }, // Pink
-                  { core: '#a78bfa', glow: 'rgba(167, 139, 250, 0.9)', mid: 'rgba(167, 139, 250, 0.6)' }, // Purple
-                  { core: '#67e8f9', glow: 'rgba(103, 232, 249, 0.9)', mid: 'rgba(103, 232, 249, 0.6)' }, // Cyan
-                  { core: '#86efac', glow: 'rgba(134, 239, 172, 0.9)', mid: 'rgba(134, 239, 172, 0.6)' }, // Green
-                ];
-                const nyeColor = nyeColors[i % nyeColors.length];
-                const isNYE = isNewYearsTheme();
-                
-                // For NYE, skip the north star special treatment - render all as regular fireworks
-                // For Christmas, north star gets special prominent rendering
-                return star.isNorthStar && !isNYE ? (
-                  // North Star (Christmas only) - custom CSS star with rays
-                  <div
-                    key={`star-${i}`}
-                    className="absolute"
-                    style={{
-                      left: `${star.left}%`,
-                      top: `${star.top}%`,
-                      width: `${star.size}px`,
-                      height: `${star.size}px`,
-                      animation: `northStarPulse ${star.duration}s ease-in-out infinite`,
-                      animationDelay: `${star.delay}s`,
-                      zIndex: 10,
-                    }}
-                  >
-                    {/* Central glowing core */}
-                    <div 
-                      className="absolute rounded-full"
-                      style={{
-                        width: '12px',
-                        height: '12px',
-                        left: '50%',
-                        top: '50%',
-                        transform: 'translate(-50%, -50%)',
-                        background: isNYE 
-                          ? `radial-gradient(circle, #fff 0%, ${nyeColor.core} 40%, ${nyeColor.mid} 70%, transparent 100%)`
-                          : 'radial-gradient(circle, #fffef0 0%, #fef08a 40%, #facc15 70%, transparent 100%)',
-                        boxShadow: isNYE
-                          ? `0 0 15px 8px ${nyeColor.glow}, 0 0 30px 15px ${nyeColor.mid}, 0 0 50px 25px ${nyeColor.mid.replace('0.6', '0.3')}`
-                          : '0 0 15px 8px rgba(254, 240, 138, 0.9), 0 0 30px 15px rgba(250, 204, 21, 0.6), 0 0 50px 25px rgba(234, 179, 8, 0.3)',
-                      }}
-                    />
-                    {/* Main vertical ray */}
-                    <div 
-                      className="absolute"
-                      style={{
-                        width: '3px',
-                        height: '80px',
-                        left: '50%',
-                        top: '50%',
-                        transform: 'translate(-50%, -50%)',
-                        background: isNYE
-                          ? `linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.1) 20%, ${nyeColor.glow} 45%, #fff 50%, ${nyeColor.glow} 55%, rgba(255,255,255,0.1) 80%, transparent 100%)`
-                          : 'linear-gradient(to bottom, transparent 0%, rgba(255,255,240,0.1) 20%, rgba(254,240,138,0.9) 45%, #fffef0 50%, rgba(254,240,138,0.9) 55%, rgba(255,255,240,0.1) 80%, transparent 100%)',
-                        animation: 'rayPulse 4s ease-in-out infinite',
-                      }}
-                    />
-                    {/* Main horizontal ray */}
-                    <div 
-                      className="absolute"
-                      style={{
-                        width: '80px',
-                        height: '3px',
-                        left: '50%',
-                        top: '50%',
-                        transform: 'translate(-50%, -50%)',
-                        background: isNYE
-                          ? `linear-gradient(to right, transparent 0%, rgba(255,255,255,0.1) 20%, ${nyeColor.glow} 45%, #fff 50%, ${nyeColor.glow} 55%, rgba(255,255,255,0.1) 80%, transparent 100%)`
-                          : 'linear-gradient(to right, transparent 0%, rgba(255,255,240,0.1) 20%, rgba(254,240,138,0.9) 45%, #fffef0 50%, rgba(254,240,138,0.9) 55%, rgba(255,255,240,0.1) 80%, transparent 100%)',
-                        animation: 'rayPulse 4s ease-in-out infinite',
-                      }}
-                    />
-                    {/* Diagonal ray 1 */}
-                    <div 
-                      className="absolute"
-                      style={{
-                        width: '2px',
-                        height: '50px',
-                        left: '50%',
-                        top: '50%',
-                        transform: 'translate(-50%, -50%) rotate(45deg)',
-                        background: isNYE
-                          ? `linear-gradient(to bottom, transparent 0%, ${nyeColor.mid} 40%, ${nyeColor.core} 50%, ${nyeColor.mid} 60%, transparent 100%)`
-                          : 'linear-gradient(to bottom, transparent 0%, rgba(254,240,138,0.6) 40%, #fef9c3 50%, rgba(254,240,138,0.6) 60%, transparent 100%)',
-                        animation: 'rayPulse 4s ease-in-out infinite 0.5s',
-                      }}
-                    />
-                    {/* Diagonal ray 2 */}
-                    <div 
-                      className="absolute"
-                      style={{
-                        width: '2px',
-                        height: '50px',
-                        left: '50%',
-                        top: '50%',
-                        transform: 'translate(-50%, -50%) rotate(-45deg)',
-                        background: isNYE
-                          ? `linear-gradient(to bottom, transparent 0%, ${nyeColor.mid} 40%, ${nyeColor.core} 50%, ${nyeColor.mid} 60%, transparent 100%)`
-                          : 'linear-gradient(to bottom, transparent 0%, rgba(254,240,138,0.6) 40%, #fef9c3 50%, rgba(254,240,138,0.6) 60%, transparent 100%)',
-                        animation: 'rayPulse 4s ease-in-out infinite 0.5s',
-                      }}
-                    />
-                  </div>
-                ) : (
-                  // Regular stars - glow blur with crystalline star shape overlay
-                  <div
-                    key={`star-${i}`}
-                    className="absolute"
-                    style={{
-                      left: `${star.left}%`,
-                      top: `${star.top}%`,
-                      width: `${star.size * 2}px`,
-                      height: `${star.size * 2}px`,
-                      animation: `twinkle ${star.duration}s ease-in-out infinite`,
-                      animationDelay: `${star.delay}s`,
-                      zIndex: 3,
-                    }}
-                  >
-                    {/* Glow blur background */}
-                    <div 
-                      className="absolute rounded-full"
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        left: '0',
-                        top: '0',
-                        background: isNYE
-                          ? (star.isBright 
-                              ? `radial-gradient(circle, rgba(255, 255, 255, 0.9) 0%, ${nyeColor.glow} 30%, ${nyeColor.mid} 60%, transparent 100%)`
-                              : `radial-gradient(circle, rgba(255, 255, 255, 0.8) 0%, ${nyeColor.mid} 40%, transparent 100%)`)
-                          : (star.isBright 
-                              ? 'radial-gradient(circle, rgba(254, 252, 232, 0.9) 0%, rgba(254, 240, 138, 0.6) 30%, rgba(250, 204, 21, 0.3) 60%, transparent 100%)'
-                              : 'radial-gradient(circle, rgba(254, 249, 195, 0.8) 0%, rgba(253, 224, 71, 0.4) 40%, transparent 100%)'),
-                        filter: 'blur(1px)',
-                      }}
-                    />
-                    {/* Crystalline star shape overlay */}
-                    <div 
-                      className="absolute"
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        left: '0',
-                        top: '0',
-                      }}
-                    >
-                      {/* Vertical ray */}
-                      <div 
-                        className="absolute"
-                        style={{
-                          width: '1px',
-                          height: '100%',
-                          left: '50%',
-                          top: '0',
-                          transform: 'translateX(-50%)',
-                          background: isNYE
-                            ? (star.isBright 
-                                ? `linear-gradient(to bottom, transparent 0%, ${nyeColor.glow} 30%, #fff 50%, ${nyeColor.glow} 70%, transparent 100%)`
-                                : `linear-gradient(to bottom, transparent 0%, ${nyeColor.mid} 30%, ${nyeColor.core} 50%, ${nyeColor.mid} 70%, transparent 100%)`)
-                            : (star.isBright 
-                                ? 'linear-gradient(to bottom, transparent 0%, rgba(254, 240, 138, 0.9) 30%, #fffef0 50%, rgba(254, 240, 138, 0.9) 70%, transparent 100%)'
-                                : 'linear-gradient(to bottom, transparent 0%, rgba(253, 224, 71, 0.7) 30%, #fef9c3 50%, rgba(253, 224, 71, 0.7) 70%, transparent 100%)'),
-                        }}
-                      />
-                      {/* Horizontal ray */}
-                      <div 
-                        className="absolute"
-                        style={{
-                          width: '100%',
-                          height: '1px',
-                          left: '0',
-                          top: '50%',
-                          transform: 'translateY(-50%)',
-                          background: isNYE
-                            ? (star.isBright 
-                                ? `linear-gradient(to right, transparent 0%, ${nyeColor.glow} 30%, #fff 50%, ${nyeColor.glow} 70%, transparent 100%)`
-                                : `linear-gradient(to right, transparent 0%, ${nyeColor.mid} 30%, ${nyeColor.core} 50%, ${nyeColor.mid} 70%, transparent 100%)`)
-                            : (star.isBright 
-                                ? 'linear-gradient(to right, transparent 0%, rgba(254, 240, 138, 0.9) 30%, #fffef0 50%, rgba(254, 240, 138, 0.9) 70%, transparent 100%)'
-                                : 'linear-gradient(to right, transparent 0%, rgba(253, 224, 71, 0.7) 30%, #fef9c3 50%, rgba(253, 224, 71, 0.7) 70%, transparent 100%)'),
-                        }}
-                      />
-                      {/* Diagonal ray 1 */}
-                      <div 
-                        className="absolute"
-                        style={{
-                          width: '1px',
-                          height: '70%',
-                          left: '50%',
-                          top: '15%',
-                          transform: 'translateX(-50%) rotate(45deg)',
-                          background: isNYE
-                            ? (star.isBright 
-                                ? `linear-gradient(to bottom, transparent 0%, ${nyeColor.mid} 30%, ${nyeColor.core} 50%, ${nyeColor.mid} 70%, transparent 100%)`
-                                : `linear-gradient(to bottom, transparent 0%, ${nyeColor.mid.replace('0.6', '0.5')} 30%, ${nyeColor.core} 50%, ${nyeColor.mid.replace('0.6', '0.5')} 70%, transparent 100%)`)
-                            : (star.isBright 
-                                ? 'linear-gradient(to bottom, transparent 0%, rgba(254, 240, 138, 0.7) 30%, #fef9c3 50%, rgba(254, 240, 138, 0.7) 70%, transparent 100%)'
-                                : 'linear-gradient(to bottom, transparent 0%, rgba(253, 224, 71, 0.5) 30%, #fef9c3 50%, rgba(253, 224, 71, 0.5) 70%, transparent 100%)'),
-                        }}
-                      />
-                      {/* Diagonal ray 2 */}
-                      <div 
-                        className="absolute"
-                        style={{
-                          width: '1px',
-                          height: '70%',
-                          left: '50%',
-                          top: '15%',
-                          transform: 'translateX(-50%) rotate(-45deg)',
-                          background: isNYE
-                            ? (star.isBright 
-                                ? `linear-gradient(to bottom, transparent 0%, ${nyeColor.mid} 30%, ${nyeColor.core} 50%, ${nyeColor.mid} 70%, transparent 100%)`
-                                : `linear-gradient(to bottom, transparent 0%, ${nyeColor.mid.replace('0.6', '0.5')} 30%, ${nyeColor.core} 50%, ${nyeColor.mid.replace('0.6', '0.5')} 70%, transparent 100%)`)
-                            : (star.isBright 
-                                ? 'linear-gradient(to bottom, transparent 0%, rgba(254, 240, 138, 0.7) 30%, #fef9c3 50%, rgba(254, 240, 138, 0.7) 70%, transparent 100%)'
-                                : 'linear-gradient(to bottom, transparent 0%, rgba(253, 224, 71, 0.5) 30%, #fef9c3 50%, rgba(253, 224, 71, 0.5) 70%, transparent 100%)'),
-                        }}
-                      />
-                      {/* Bright center dot */}
-                      <div 
-                        className="absolute rounded-full"
-                        style={{
-                          width: '2px',
-                          height: '2px',
-                          left: '50%',
-                          top: '50%',
-                          transform: 'translate(-50%, -50%)',
-                          background: isNYE ? '#fff' : '#fffef0',
-                          boxShadow: isNYE
-                            ? (star.isBright 
-                                ? `0 0 3px 1px ${nyeColor.glow}`
-                                : `0 0 2px 0px ${nyeColor.mid}`)
-                            : (star.isBright 
-                                ? '0 0 2px 1px rgba(255, 254, 240, 0.9)'
-                                : '0 0 1px 0px rgba(255, 254, 240, 0.7)'),
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-        </div>
-      )}
-
-      {/* NYE Digital Fireworks - pixelated burst then digital rain */}
-      {isNewYearsTheme() && (
-        <div className="fixed inset-0 pointer-events-none overflow-hidden">
-          {FIREWORKS.map((fw, i) => {
-            // Scale multipliers based on explosion size
-            const scaleMultiplier = fw.scale === 'massive' ? 3.0 : fw.scale === 'huge' ? 2.4 : fw.scale === 'large' ? 1.8 : 1.3;
-            const spreadRange = fw.scale === 'massive' ? 550 : fw.scale === 'huge' ? 440 : fw.scale === 'large' ? 340 : 250;
-            const fallRange = fw.scale === 'massive' ? 950 : fw.scale === 'huge' ? 780 : fw.scale === 'large' ? 600 : 450;
-            // Flash size should be similar to particles, not much larger
-            const flashSize = fw.scale === 'massive' ? 6 : fw.scale === 'huge' ? 5 : fw.scale === 'large' ? 4 : 3;
-            const glowSize = fw.scale === 'massive' ? 12 : fw.scale === 'huge' ? 10 : fw.scale === 'large' ? 8 : 6;
-            
-            return (
-              <div
-                key={`firework-${i}`}
-                className="absolute"
-                style={{
-                  left: `${fw.left}%`,
-                  top: `${fw.top}%`,
-                  width: `${fw.size}px`,
-                  height: `${fw.size}px`,
-                  animation: `fireworkBurst ${fw.duration}s ease-out infinite`,
-                  animationDelay: `${fw.delay}s`,
-                }}
-              >
-                {/* Digital rain - diamond/triangle shaped pixels falling */}
-                {Array.from({ length: fw.particleCount }).map((_, j) => {
-                  // Randomize spread - not just a line but scattered
-                  const spreadX = (Math.random() - 0.5) * spreadRange * 2;
-                  const fallDelay = Math.random() * 1.2;
-                  const pixelSize = (2 + Math.floor(Math.random() * 3)) * scaleMultiplier;
-                  const isTriangle = j % 3 === 0;
-                  const isDiamond = j % 3 === 1;
-                  // Random upward burst height - varied per particle (higher ceiling)
-                  const burstHeight = 80 + Math.random() * 160;
-                  
-                  return (
-                    <div
-                      key={`pixel-${i}-${j}`}
-                      className="absolute"
-                      style={{
-                        left: '50%',
-                        top: '50%',
-                        width: 0,
-                        height: 0,
-                        // Triangle pointing down for rain effect
-                        ...(isTriangle ? {
-                          borderLeft: `${pixelSize}px solid transparent`,
-                          borderRight: `${pixelSize}px solid transparent`,
-                          borderTop: `${pixelSize * 1.5}px solid ${fw.color.core}`,
-                          filter: `drop-shadow(0 0 ${pixelSize}px rgba(251, 191, 36, 0.9)) drop-shadow(0 0 ${pixelSize * 2}px rgba(251, 191, 36, 0.6))`,
-                        } : isDiamond ? {
-                          // Diamond shape
-                          width: `${pixelSize}px`,
-                          height: `${pixelSize}px`,
-                          background: fw.color.core,
-                          transform: `rotate(45deg)`,
-                          boxShadow: `0 0 ${pixelSize * 2}px rgba(251, 191, 36, 0.9), 0 0 ${pixelSize * 4}px rgba(251, 191, 36, 0.6)`,
-                        } : {
-                          // Small square pixel
-                          width: `${pixelSize * 0.8}px`,
-                          height: `${pixelSize * 0.8}px`,
-                          background: fw.color.core,
-                          boxShadow: `0 0 ${pixelSize}px rgba(251, 191, 36, 0.9), 0 0 ${pixelSize * 2}px rgba(251, 191, 36, 0.6)`,
-                        }),
-                        animation: `digitalRain ${fw.duration}s ease-in infinite`,
-                        animationDelay: `${fw.delay + fallDelay}s`,
-                        animationFillMode: 'backwards',
-                        '--spread-x': `${spreadX}px`,
-                        '--burst-height': `-${burstHeight}px`,
-                        '--fall-distance': `${fallRange + Math.random() * (fallRange * 0.5)}px`,
-                      } as React.CSSProperties}
-                    />
-                  );
-                })}
-                {/* Secondary smaller white pixels for sparkle depth */}
-                {Array.from({ length: Math.floor(fw.particleCount * 0.6) }).map((_, j) => {
-                  const spreadX = (Math.random() - 0.5) * spreadRange * 1.6;
-                  const fallDelay = 0.1 + Math.random() * 0.8;
-                  const size = 2 * scaleMultiplier;
-                  const burstHeight = 60 + Math.random() * 120;
-                  return (
-                    <div
-                      key={`spark-${i}-${j}`}
-                      className="absolute"
-                      style={{
-                        left: '50%',
-                        top: '50%',
-                        width: 0,
-                        height: 0,
-                        borderLeft: `${size}px solid transparent`,
-                        borderRight: `${size}px solid transparent`,
-                        borderTop: `${size * 1.2}px solid #fff`,
-                        filter: `drop-shadow(0 0 ${size}px rgba(251, 191, 36, 0.9)) drop-shadow(0 0 ${size * 2}px rgba(251, 191, 36, 0.6))`,
-                        animation: `digitalRain ${fw.duration * 0.85}s ease-in infinite`,
-                        animationDelay: `${fw.delay + fallDelay}s`,
-                        animationFillMode: 'backwards',
-                        '--spread-x': `${spreadX}px`,
-                        '--burst-height': `-${burstHeight}px`,
-                        '--fall-distance': `${fallRange * 0.8 + Math.random() * (fallRange * 0.4)}px`,
-                      } as React.CSSProperties}
-                    />
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {/* Thanksgiving harvest - wheat and corn growing from the bottom edge, with a full moon */}
+      {isThanksgivingTheme() && <ThanksgivingEffects />}
 
       <style>{`
         @keyframes yearPulse {
@@ -2131,160 +1607,46 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
           0%, 100% { opacity: 0.3; transform: rotate(var(--base-angle, 0deg)) translateY(var(--base-distance, -80px)) scale(0.8); }
           50% { opacity: 1; transform: rotate(var(--base-angle, 0deg)) translateY(var(--base-distance, -80px)) scale(1.2); }
         }
-        @keyframes snowfall {
+        @keyframes batFly {
           0% {
-            transform: translateY(-100vh) translateX(0px);
-            opacity: 0.8;
-          }
-          10% {
-            opacity: 0.8;
-          }
-          90% {
-            opacity: 0.6;
-          }
-          100% {
-            transform: translateY(100vh) translateX(50px);
+            transform: translateX(-18vw) translateY(0) scale(0.35) rotate(-6deg);
             opacity: 0;
           }
-        }
-        @keyframes twinkle {
-          0%, 100% { opacity: 0.3; }
-          50% { opacity: 1; }
-        }
-        @keyframes northStarPulse {
-          0%, 100% { 
-            opacity: 0.9; 
-            transform: scale(1);
-          }
-          50% { 
-            opacity: 1; 
-            transform: scale(1.15);
-          }
-        }
-        @keyframes rayPulse {
-          0%, 100% { 
-            opacity: 0.4;
-            transform: translate(-50%, -50%) scaleY(0.8);
-          }
-          50% { 
-            opacity: 0.8;
-            transform: translate(-50%, -50%) scaleY(1.2);
-          }
-        }
-        @keyframes fireworkBurst {
-          0% {
-            opacity: 0;
-            transform: scale(0);
-          }
-          5% {
+          12% {
             opacity: 1;
-            transform: scale(0.5);
           }
-          15% {
+          55% {
+            transform: translateX(48vw) translateY(-24px) scale(1.15) rotate(5deg);
             opacity: 1;
-            transform: scale(1);
           }
           100% {
+            transform: translateX(120vw) translateY(8px) scale(1.9) rotate(-4deg);
             opacity: 0;
-            transform: scale(1);
           }
         }
-        @keyframes digitalRain {
+        @keyframes batFlyReverse {
           0% {
+            transform: translateX(120vw) translateY(0) scale(0.35) rotate(6deg);
             opacity: 0;
-            transform: translate(-50%, -50%) translateX(var(--spread-x)) translateY(0);
           }
-          6% {
-            opacity: 0.9;
-            transform: translate(-50%, -50%) translateX(var(--spread-x)) translateY(var(--burst-height));
-          }
-          15% {
-            opacity: 0.85;
-            transform: translate(-50%, -50%) translateX(var(--spread-x)) translateY(calc(var(--burst-height) * 0.85));
-          }
-          35% {
-            opacity: 0.7;
-            transform: translate(-50%, -50%) translateX(var(--spread-x)) translateY(calc(var(--burst-height) * 0.5));
-          }
-          70% {
-            opacity: 0.4;
-            transform: translate(-50%, -50%) translateX(var(--spread-x)) translateY(var(--fall-distance));
-          }
-          100% {
-            opacity: 0;
-            transform: translate(-50%, -50%) translateX(var(--spread-x)) translateY(var(--fall-distance));
-          }
-        }
-        @keyframes pixelFlash {
-          0% {
-            opacity: 0;
-            transform: translate(-50%, -50%) scale(0);
-          }
-          4% {
-            opacity: 0.7;
-            transform: translate(-50%, -50%) scale(1.8);
-          }
-          10% {
-            opacity: 0.5;
-            transform: translate(-50%, -50%) scale(1.2);
-          }
-          25% {
-            opacity: 0.3;
-            transform: translate(-50%, -50%) scale(1);
-          }
-          50% {
-            opacity: 0.15;
-            transform: translate(-50%, -50%) scale(0.6);
-          }
-          100% {
-            opacity: 0;
-            transform: translate(-50%, -50%) scale(0);
-          }
-        }
-        @keyframes particleBurst {
-          0% {
-            opacity: 0;
-            transform: translate(-50%, -50%) rotate(var(--angle)) translateY(0);
-          }
-          15% {
+          12% {
             opacity: 1;
-            transform: translate(-50%, -50%) rotate(var(--angle)) translateY(0);
+          }
+          55% {
+            transform: translateX(52vw) translateY(-24px) scale(1.15) rotate(-5deg);
+            opacity: 1;
           }
           100% {
+            transform: translateX(-18vw) translateY(8px) scale(1.9) rotate(4deg);
             opacity: 0;
-            transform: translate(-50%, -50%) rotate(var(--angle)) translateY(calc(var(--distance) * -1));
           }
         }
-        @keyframes sparkBurst {
+        @keyframes batFlap {
           0% {
-            opacity: 0;
-            transform: translate(-50%, -50%) rotate(var(--angle)) translateY(0);
-          }
-          20% {
-            opacity: 1;
-            transform: translate(-50%, -50%) rotate(var(--angle)) translateY(0);
+            transform: scaleY(1) scaleX(1);
           }
           100% {
-            opacity: 0;
-            transform: translate(-50%, -50%) rotate(var(--angle)) translateY(calc(var(--distance) * -1.5));
-          }
-        }
-        @keyframes centerFlash {
-          0% {
-            opacity: 0;
-            transform: translate(-50%, -50%) scale(0);
-          }
-          10% {
-            opacity: 1;
-            transform: translate(-50%, -50%) scale(1.5);
-          }
-          30% {
-            opacity: 0.8;
-            transform: translate(-50%, -50%) scale(1);
-          }
-          100% {
-            opacity: 0;
-            transform: translate(-50%, -50%) scale(0.5);
+            transform: scaleY(0.55) scaleX(1.1);
           }
         }
         @keyframes receiverFloat {
@@ -2340,49 +1702,6 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
                     }}>🥂</span>
                   </span>
                 </span>
-              )}{isChristmasSeason() && !isNewYearsTheme() && (
-                <div className="absolute" style={{ top: '-28px', left: '3px', width: '45px', height: '34px' }}>
-                  {/* Santa hat base - triangle shape (Christmas only, not NYE) */}
-                  <div className="absolute" style={{
-                    width: '0',
-                    height: '0',
-                    borderLeft: '14px solid transparent',
-                    borderRight: '14px solid transparent',
-                    borderBottom: '20px solid #dc2626',
-                    left: '0',
-                    top: '6px',
-                    transform: 'rotate(-5deg)',
-                  }} />
-                  {/* Droopy part of hat curving right */}
-                  <div className="absolute" style={{
-                    width: '24px',
-                    height: '14px',
-                    background: '#dc2626',
-                    left: '10px',
-                    top: '2px',
-                    borderRadius: '0 0 16px 4px',
-                    transform: 'rotate(25deg)',
-                  }} />
-                  {/* Hat brim (white fur) */}
-                  <div className="absolute rounded-sm" style={{
-                    width: '32px',
-                    height: '6px',
-                    background: 'linear-gradient(to bottom, #ffffff, #e5e5e5)',
-                    left: '-2px',
-                    top: '24px',
-                    boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
-                    borderRadius: '2px',
-                  }} />
-                  {/* Pom-pom at droopy end */}
-                  <div className="absolute rounded-full" style={{
-                    width: '9px',
-                    height: '9px',
-                    background: 'radial-gradient(circle at 30% 30%, #ffffff, #e5e5e5)',
-                    left: '30px',
-                    top: '6px',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-                  }} />
-                </div>
               )}</span></span>
               <PublicConciergeChat compact />
               <a
@@ -2625,14 +1944,6 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
         <GpsStatus geolocationError={geolocationError} currentPosition={currentPosition} version={version} />
       </div>
       
-      {/* Large Christmas trees at bottom left and right (Christmas only, not NYE) */}
-      {isChristmasSeason() && !isNewYearsTheme() && (
-        <>
-          <div className="fixed bottom-0 left-0 opacity-50 pointer-events-none text-9xl z-0">🎄</div>
-          <div className="fixed bottom-0 right-0 opacity-50 pointer-events-none text-9xl z-0">🎄</div>
-        </>
-      )}
-
       {/* CACP Manifest modal — opened by clicking the CACP badge on any agent card */}
       {cacpManifestAgent && (
         <CacpManifestModal agent={cacpManifestAgent} onClose={() => setCacpManifestAgent(null)} />

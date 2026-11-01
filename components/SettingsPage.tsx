@@ -378,23 +378,25 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                     </div>
 
                     <div>
-                        <label htmlFor="holidayTheme" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Holiday Theme Override 🎄</label>
+                        <label htmlFor="holidayTheme" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Holiday Theme Override 🎃</label>
                         <select
                             id="holidayTheme"
                             defaultValue={typeof window !== 'undefined' ? localStorage.getItem('landsurv-holiday-theme') || 'auto' : 'auto'}
                             onChange={e => {
-                                setHolidayThemeOverride(e.target.value as 'auto' | 'christmas' | 'nye' | 'none');
+                                setHolidayThemeOverride(e.target.value as 'auto' | 'halloween' | 'thanksgiving' | 'christmas' | 'nye' | 'none');
                                 // Force page refresh to apply theme immediately
                                 window.location.reload();
                             }}
                             className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
                         >
                             <option value="auto">Auto (based on date)</option>
+                            <option value="halloween">🦇 Halloween (flying bats)</option>
+                            <option value="thanksgiving">🦃 Thanksgiving (wheat, corn, hay bale + full moon)</option>
                             <option value="christmas">🎄 Christmas (snowflakes + gold stars)</option>
-                            <option value="nye">🎆 New Year's Eve (snowflakes + fireworks)</option>
+                            <option value="nye">🎆 New Year's Eve (starfield + fireworks)</option>
                             <option value="none">Off (no holiday decorations)</option>
                         </select>
-                        <p className="text-xs text-gray-500 mt-1">Override the holiday theme for testing. Auto mode shows Christmas Dec 1-25, NYE Dec 26-Jan 1.</p>
+                        <p className="text-xs text-gray-500 mt-1">Override the holiday theme for testing. Auto mode shows Halloween Oct 25-Nov 1, Thanksgiving Nov 2-30, Christmas Dec 1-25, NYE Dec 26-Jan 1.</p>
                     </div>
 
                     <div>

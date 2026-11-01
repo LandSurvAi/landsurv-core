@@ -21,6 +21,7 @@
 
 import type { SurveyPoint, SurveyLine, BoundaryFile } from '../types';
 import { parseBearingToRadians, parseDistance, direct, directCurve } from './cogo';
+import { resolveArcGeometry } from './offsetGeometry';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -279,6 +280,34 @@ function computeExtent(
   }
 
   for (const l of lines) {
+    if (l.hidden) continue;
+
+    // A circle's stored endpoints are its center, so using only from/to clips
+    // the vision frame to the middle of the circle. Include the full radius.
+    // Legacy full circles may omit `isCircle` but still have coincident
+    // endpoints and no chord/tangent bearings.
+    const endpointsCoincide = Boolean(
+      l.fromPt &&
+      l.toPt &&
+      Math.hypot(l.fromPt.x - l.toPt.x, l.fromPt.y - l.toPt.y) < 1e-6,
+    );
+    const circleLike = Boolean(
+      l.isCircle ||
+      (l.isCurve && l.curveRadius && endpointsCoincide && !l.chordBearing && !l.tangentBearing),
+    );
+    if (circleLike) {
+      const center = l.circleCenter ?? l.fromPt;
+      const radius = l.curveRadius ?? 0;
+      if (center && Number.isFinite(center.x) && Number.isFinite(center.y) && radius > 0) {
+        minE = Math.min(minE, center.x - radius);
+        maxE = Math.max(maxE, center.x + radius);
+        minN = Math.min(minN, center.y - radius);
+        maxN = Math.max(maxN, center.y + radius);
+        count++;
+        continue;
+      }
+    }
+
     if (l.fromPt && Number.isFinite(l.fromPt.x) && Number.isFinite(l.fromPt.y)) {
       if (l.fromPt.x < minE) minE = l.fromPt.x;
       if (l.fromPt.x > maxE) maxE = l.fromPt.x;
@@ -1043,22 +1072,31 @@ function renderToCanvas(
   for (const p of points) ptMap.set(p.pointNumber, p);
 
   // ── Linework ────────────────────────────────────────────────────────────────
-  // Group by polylineId for continuous paths
-  const polyGroups = new Map<string, SurveyLine[]>();
-  const standaloneLines: SurveyLine[] = [];
-  for (const l of lines) {
-    if (l.polylineId) {
-      if (!polyGroups.has(l.polylineId)) polyGroups.set(l.polylineId, []);
-      polyGroups.get(l.polylineId)!.push(l);
-    } else {
-      standaloneLines.push(l);
+  const resolveEndpoint = (
+    line: SurveyLine,
+    side: 'from' | 'to',
+  ): { easting: number; northing: number } | null => {
+    const explicit = side === 'from' ? line.fromPt : line.toPt;
+    if (explicit && Number.isFinite(explicit.x) && Number.isFinite(explicit.y)) {
+      return { easting: explicit.x, northing: explicit.y };
     }
-  }
+    const ref = String((side === 'from' ? line.from : line.to) ?? '').trim();
+    const mapped = ptMap.get(ref);
+    if (mapped && Number.isFinite(mapped.easting) && Number.isFinite(mapped.northing)) {
+      return { easting: mapped.easting, northing: mapped.northing };
+    }
+    return null;
+  };
 
-  const drawSegment = (a: SurveyPoint, b: SurveyPoint, layer: string | undefined, alpha = 0.85) => {
-    ctx.globalAlpha  = alpha;
-    ctx.strokeStyle  = layerColor(layer ?? 'default');
-    ctx.lineWidth    = 1.5;
+  const drawSegment = (
+    a: { easting: number; northing: number },
+    b: { easting: number; northing: number },
+    layer: string | undefined,
+    alpha = 0.85,
+  ) => {
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = layerColor(layer ?? 'default');
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(...toScreen(a.easting, a.northing));
     ctx.lineTo(...toScreen(b.easting, b.northing));
@@ -1066,31 +1104,69 @@ function renderToCanvas(
     ctx.globalAlpha = 1;
   };
 
-  for (const [, segs] of polyGroups) {
-    if (!segs.length) continue;
-    ctx.strokeStyle  = layerColor(segs[0].layer ?? 'default');
-    ctx.lineWidth    = 1.8;
-    ctx.globalAlpha  = 0.88;
-    ctx.beginPath();
-    let started = false;
-    for (const s of segs) {
-      const fp = ptMap.get(s.from);
-      const tp = ptMap.get(s.to);
-      if (!fp || !tp) continue;
-      const [x1, y1] = toScreen(fp.easting, fp.northing);
-      const [x2, y2] = toScreen(tp.easting, tp.northing);
-      if (!started) { ctx.moveTo(x1, y1); started = true; }
-      else            ctx.lineTo(x1, y1);
-      ctx.lineTo(x2, y2);
-    }
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
+  // Entity-by-entity rendering: manual circles/arcs store their geometry on
+  // fromPt/toPt/circleCenter rather than in the point database. Resolving only
+  // point IDs made them vanish from every vision frame.
+  for (const l of lines) {
+    if (l.hidden) continue;
+    const fp = resolveEndpoint(l, 'from');
+    const tp = resolveEndpoint(l, 'to');
+    const center = l.circleCenter
+      ? { easting: l.circleCenter.x, northing: l.circleCenter.y }
+      : fp;
+    const endpointsCoincide = Boolean(
+      fp && tp && Math.hypot(fp.easting - tp.easting, fp.northing - tp.northing) < 1e-6,
+    );
+    const isCircle = Boolean(
+      l.isCircle ||
+      (l.isCurve && l.curveRadius && endpointsCoincide && !l.chordBearing && !l.tangentBearing),
+    );
 
-  for (const l of standaloneLines) {
-    const fp = ptMap.get(l.from);
-    const tp = ptMap.get(l.to);
-    if (fp && tp) drawSegment(fp, tp, l.layer);
+    ctx.strokeStyle = layerColor(l.layer ?? 'default');
+
+    if (isCircle && center && l.curveRadius && l.curveRadius > 0) {
+      const [cx, cy] = toScreen(center.easting, center.northing);
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.arc(cx, cy, l.curveRadius * scale, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      continue;
+    }
+
+    if (!fp || !tp) continue;
+
+    if (l.isCurve && l.curveRadius && l.arcLength) {
+      const arc = resolveArcGeometry(
+        { x: fp.easting, y: fp.northing },
+        { x: tp.easting, y: tp.northing },
+        {
+          radius: l.curveRadius,
+          arcLength: l.arcLength,
+          center: l.circleCenter ? { x: l.circleCenter.x, y: l.circleCenter.y } : undefined,
+          curveDirection: l.curveDirection,
+          tangentBearing: l.tangentBearing,
+          chordBearing: l.chordBearing,
+          bearing: l.bearing,
+        },
+      );
+      if (arc) {
+        const [cx, cy] = toScreen(arc.center.x, arc.center.y);
+        const [sx, sy] = toScreen(fp.easting, fp.northing);
+        const startAngle = Math.atan2(sy - cy, sx - cx);
+        const endAngle = startAngle + (arc.isLeftCurve ? -arc.centralAngle : arc.centralAngle);
+        ctx.globalAlpha = 0.88;
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.arc(cx, cy, arc.radius * scale, startAngle, endAngle, arc.isLeftCurve);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        continue;
+      }
+    }
+
+    drawSegment(fp, tp, l.layer, 0.88);
   }
 
   // ── Survey points ────────────────────────────────────────────────────────────

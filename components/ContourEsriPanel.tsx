@@ -1,6 +1,12 @@
 import React, { useState } from 'react';
 import { type ContourSettings, type EsriServiceInfo } from '../types.ts';
 import { ESRI_STATE_SERVICES } from '../utils/esriStateServices.ts';
+import {
+  USGS_NATIONAL_CONTOUR_SOURCES,
+  nationalContourFetchOptions,
+  type ContourFetchOptions,
+} from '../utils/usgsNationalContours.ts';
+import { ContourDownloadForm } from './ContourDownloadForm.tsx';
 
 interface ContourEsriPanelProps {
   settings: ContourSettings;
@@ -12,7 +18,12 @@ interface ContourEsriPanelProps {
   inclusionSegmentCount?: number;
   hasProjectProjection?: boolean;
   isFetchingEsri?: boolean;
-  onFetchEsriContours?: (serviceUrl: string, mode: 'inclusion' | 'description', descriptionText?: string) => void;
+  onFetchEsriContours?: (
+    serviceUrl: string,
+    mode: 'inclusion' | 'description',
+    descriptionText?: string,
+    opts?: ContourFetchOptions,
+  ) => void;
 }
 
 /**
@@ -220,6 +231,69 @@ export const ContourEsriPanel: React.FC<ContourEsriPanelProps> = ({
         )}
       </div>
 
+      {/* Built-in USGS National Map sources */}
+      <div className="border border-teal-700/30 rounded-md p-3 bg-teal-950/10 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] uppercase tracking-wide text-teal-400/80 font-semibold">
+            USGS National Map — Nationwide
+          </div>
+          <span className="text-[9px] text-gray-500">no API key</span>
+        </div>
+        <p className="text-[10px] text-gray-500 leading-snug">
+          1:24,000-scale 3DEP contours, queried for your area of interest. Intervals are assigned per
+          7.5-minute quadrangle, so the values below are nominal and neighbouring quads may differ.
+        </p>
+        <div className="space-y-1.5">
+          {USGS_NATIONAL_CONTOUR_SOURCES.map(source => {
+            const key = `usgs:${source.id}`;
+            const isOpen = fetchOpenUrl === key;
+            return (
+              <div key={source.id} className="rounded border border-gray-700/60 bg-gray-700/30">
+                <div className="flex items-center gap-1 px-2 py-1.5">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] text-teal-200/90 font-medium truncate">{source.name}</div>
+                    <div className="text-[9px] text-gray-500 truncate">{source.notes}</div>
+                  </div>
+                  {onFetchEsriContours && (
+                    <button
+                      type="button"
+                      onClick={() => setFetchOpenUrl(isOpen ? null : key)}
+                      className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                        isOpen
+                          ? 'bg-teal-700/50 border-teal-500/50 text-teal-200'
+                          : 'bg-gray-600/50 border-gray-500/40 text-gray-300 hover:border-teal-500/50 hover:text-teal-300'
+                      }`}
+                      title={`Download ${source.name.toLowerCase()} for the area of interest`}
+                    >
+                      {isOpen ? 'Cancel' : '↓ Download'}
+                    </button>
+                  )}
+                </div>
+                {isOpen && onFetchEsriContours && (
+                  <ContourDownloadForm
+                    mode={fetchMode}
+                    onModeChange={setFetchMode}
+                    description={fetchDescription}
+                    onDescriptionChange={setFetchDescription}
+                    hasInclusionBoundary={hasInclusionBoundary}
+                    inclusionSegmentCount={inclusionSegmentCount}
+                    hasProjectProjection={hasProjectProjection}
+                    isFetching={isFetchingEsri}
+                    onDownload={(mode, desc) =>
+                      onFetchEsriContours(source.url, mode, desc, nationalContourFetchOptions(source))
+                    }
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-[9px] text-gray-600 leading-snug">
+          Public domain · USGS The National Map. Elevations are NAVD88 feet; metric sources are converted
+          to feet. Bulk 1°×1° tiles live in the public prd-tnm S3 bucket — no AWS account required.
+        </p>
+      </div>
+
       {/* Pinned services + download */}
       {(settings.esriServiceUrls ?? []).length > 0 && (
         <div className="space-y-2">
@@ -248,58 +322,17 @@ export const ContourEsriPanel: React.FC<ContourEsriPanelProps> = ({
                 </div>
 
                 {isOpen && onFetchEsriContours && (
-                  <div className="border-t border-gray-600/50 px-3 py-2.5 space-y-2.5 bg-gray-800/50">
-                    <div className="flex gap-2">
-                      <button type="button" onClick={() => setFetchMode('inclusion')}
-                        className={`flex-1 text-[10px] py-1 rounded border transition-colors ${fetchMode === 'inclusion' ? 'bg-green-700/40 border-green-500/50 text-green-200' : 'bg-gray-700/40 border-gray-600/40 text-gray-400 hover:text-gray-200'}`}>
-                        Inclusion Boundary
-                      </button>
-                      <button type="button" onClick={() => setFetchMode('description')}
-                        className={`flex-1 text-[10px] py-1 rounded border transition-colors ${fetchMode === 'description' ? 'bg-blue-700/40 border-blue-500/50 text-blue-200' : 'bg-gray-700/40 border-gray-600/40 text-gray-400 hover:text-gray-200'}`}>
-                        Describe Area
-                      </button>
-                    </div>
-
-                    {fetchMode === 'inclusion' && (
-                      <div className={`text-[10px] rounded px-2 py-1.5 border ${
-                        hasInclusionBoundary && hasProjectProjection
-                          ? 'bg-green-900/20 border-green-700/40 text-green-300'
-                          : 'bg-yellow-900/20 border-yellow-700/40 text-yellow-400'
-                      }`}>
-                        {!hasInclusionBoundary
-                          ? '⚠ No inclusion line drawn — use the canvas toolbar to draw an inclusion boundary first'
-                          : !hasProjectProjection
-                            ? '⚠ Inclusion mode also needs a project projection/EPSG. Without it, local drafting coordinates are not georeferenced for ESRI queries.'
-                            : `✓ Inclusion boundary detected (${inclusionSegmentCount} segment${inclusionSegmentCount !== 1 ? 's' : ''})`}
-                      </div>
-                    )}
-                    {fetchMode === 'description' && (
-                      <div className="space-y-1">
-                        <input
-                          type="text" value={fetchDescription}
-                          onChange={e => setFetchDescription(e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter' && fetchDescription.trim()) onFetchEsriContours(url, 'description', fetchDescription.trim()); }}
-                          placeholder="e.g. Lancaster County PA, downtown Philadelphia…"
-                          className="w-full p-2 text-xs bg-gray-700 border border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-200 placeholder-gray-500"
-                        />
-                        <p className="text-[10px] text-gray-500">Area will be geocoded via OpenStreetMap to build the bounding box.</p>
-                      </div>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (fetchMode === 'inclusion') onFetchEsriContours(url, 'inclusion');
-                        else onFetchEsriContours(url, 'description', fetchDescription.trim());
-                      }}
-                      disabled={isFetchingEsri || (fetchMode === 'inclusion' && (!hasInclusionBoundary || !hasProjectProjection)) || (fetchMode === 'description' && !fetchDescription.trim())}
-                      className="w-full py-1.5 text-xs font-semibold rounded border bg-teal-700/50 hover:bg-teal-600/60 text-teal-100 border-teal-600/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
-                    >
-                      {isFetchingEsri
-                        ? <><span className="w-3 h-3 border border-teal-300 border-t-transparent rounded-full animate-spin" />Fetching…</>
-                        : '↓ Download Contours'}
-                    </button>
-                  </div>
+                  <ContourDownloadForm
+                    mode={fetchMode}
+                    onModeChange={setFetchMode}
+                    description={fetchDescription}
+                    onDescriptionChange={setFetchDescription}
+                    hasInclusionBoundary={hasInclusionBoundary}
+                    inclusionSegmentCount={inclusionSegmentCount}
+                    hasProjectProjection={hasProjectProjection}
+                    isFetching={isFetchingEsri}
+                    onDownload={(mode, desc) => onFetchEsriContours(url, mode, desc)}
+                  />
                 )}
               </div>
             );
