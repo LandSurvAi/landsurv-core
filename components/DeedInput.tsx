@@ -325,66 +325,58 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
       </h1>
       
       <div className="w-full max-w-2xl flex flex-col items-center gap-4">
-        {/* Free-deed offer: 5 per device, metered by the fingerprint ledger. */}
+        {/* Free-deed offer: 5 per device, metered by the fingerprint ledger.
+            Key holders already have unlimited deeds, so show them nothing. */}
+        {!freeDeedsUnlimited && (
         <div
           className={`w-full rounded-xl border px-4 py-3 text-left ${
-            freeDeedsUnlimited
-              ? 'border-emerald-500/40 bg-emerald-950/30'
-              : isOutOfFreeDeeds
-                ? 'border-amber-500/60 bg-amber-950/30'
-                : 'border-emerald-400/60 bg-gradient-to-r from-emerald-950/60 via-gray-900 to-emerald-950/40 shadow-lg shadow-emerald-950/40'
+            isOutOfFreeDeeds
+              ? 'border-amber-500/60 bg-amber-950/30'
+              : 'border-emerald-400/60 bg-gradient-to-r from-emerald-950/60 via-gray-900 to-emerald-950/40 shadow-lg shadow-emerald-950/40'
           }`}
           title={
-            freeDeedsUnlimited
-              ? 'Your key includes unlimited deed processing'
-              : freeDeedsUnverified
-                ? 'Offline count — will sync with the server when available'
-                : `This device gets ${freeDeedsLimit} free deeds`
+            freeDeedsUnverified
+              ? 'Offline count — will sync with the server when available'
+              : `This device gets ${freeDeedsLimit} free deeds`
           }
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="flex flex-wrap items-center gap-2 text-sm font-extrabold text-white">
                 <span className="text-base leading-none">🎁</span>
-                {freeDeedsUnlimited
-                  ? 'Unlimited deeds on your key'
-                  : isOutOfFreeDeeds
-                    ? `You've used all ${freeDeedsLimit} free deeds`
-                    : `${freeDeedsLimit} free deeds included`}
-                {!freeDeedsUnlimited && !isOutOfFreeDeeds && (
+                {isOutOfFreeDeeds
+                  ? `You've used all ${freeDeedsLimit} free deeds`
+                  : `${freeDeedsLimit} free deeds included`}
+                {!isOutOfFreeDeeds && (
                   <span className="rounded-full bg-emerald-400/20 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-emerald-300 border border-emerald-400/40">
                     No card needed
                   </span>
                 )}
-                {freeDeedsUnverified && !freeDeedsUnlimited && (
+                {freeDeedsUnverified && (
                   <span className="text-[10px] font-normal text-emerald-200/60">offline count</span>
                 )}
               </p>
               <p className="mt-1 text-xs leading-relaxed text-gray-300">
-                {freeDeedsUnlimited
-                  ? 'Your Enabling Key covers every deed you upload.'
-                  : isOutOfFreeDeeds
-                    ? 'Unlock unlimited AI deed drafting with an Enabling Key or compute credits — your drafted boundaries stay on the canvas.'
-                    : `${freeDeedsLeft} of ${freeDeedsLimit} left. Upload a deed and the Boundary Agent drafts the parcel for you.`}
+                {isOutOfFreeDeeds
+                  ? 'Unlock unlimited AI deed drafting with an Enabling Key or compute credits — your drafted boundaries stay on the canvas.'
+                  : `${freeDeedsLeft} of ${freeDeedsLimit} left. Upload a deed and the Boundary Agent drafts the parcel for you.`}
               </p>
             </div>
 
             <div className="flex items-center gap-3 shrink-0">
-              {!freeDeedsUnlimited && (
-                <div
-                  className="flex items-center gap-1"
-                  aria-label={`${freeDeedsLeft} of ${freeDeedsLimit} free deeds left`}
-                >
-                  {Array.from({ length: freeDeedsLimit }).map((_, index) => (
-                    <span
-                      key={index}
-                      className={`h-2.5 w-2.5 rounded-full ${
-                        index < freeDeedsLeft ? 'bg-emerald-400 shadow-sm shadow-emerald-500/50' : 'bg-gray-600'
-                      }`}
-                    />
-                  ))}
-                </div>
-              )}
+              <div
+                className="flex items-center gap-1"
+                aria-label={`${freeDeedsLeft} of ${freeDeedsLimit} free deeds left`}
+              >
+                {Array.from({ length: freeDeedsLimit }).map((_, index) => (
+                  <span
+                    key={index}
+                    className={`h-2.5 w-2.5 rounded-full ${
+                      index < freeDeedsLeft ? 'bg-emerald-400 shadow-sm shadow-emerald-500/50' : 'bg-gray-600'
+                    }`}
+                  />
+                ))}
+              </div>
               {isOutOfFreeDeeds && onShowUpgrade && (
                 <button
                   type="button"
@@ -397,6 +389,7 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
             </div>
           </div>
         </div>
+        )}
 
         <p className="text-gray-400 mb-2">
           Paste the legal description or upload a PDF/image (including scans) for the AI to analyze and plot.

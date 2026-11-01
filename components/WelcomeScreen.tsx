@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   XMarkIcon, 
   YouTubeIcon, 
@@ -27,6 +27,9 @@ export interface WelcomeScreenProps {
   initialMode?: WelcomeMode;
 }
 
+// The community invite cycles through these words, then settles on the links.
+const COMMUNITY_WORDS = ['Tutorials', 'Workflows', 'Updates'] as const;
+
 const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ 
   onClose, 
   version,
@@ -42,6 +45,20 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
 }) => {
   const [mode, setMode] = useState<WelcomeMode>(initialMode);
   const [zelleRevealed, setZelleRevealed] = useState(false);
+  const [communityStep, setCommunityStep] = useState(() => {
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      return COMMUNITY_WORDS.length;
+    }
+    return 0;
+  });
+
+  const communityLinksShown = communityStep >= COMMUNITY_WORDS.length;
+
+  useEffect(() => {
+    if (communityLinksShown) return;
+    const timer = window.setTimeout(() => setCommunityStep(step => step + 1), 1200);
+    return () => window.clearTimeout(timer);
+  }, [communityStep, communityLinksShown]);
 
   // Check for holiday theme
   const holidayTheme = getHolidayTheme();
@@ -126,16 +143,6 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           {/* ============================================================== */}
           {mode === 'main' && (
             <div className="space-y-6">
-              {/* Intro */}
-              <div className="space-y-1">
-                <h2 className="text-xl font-semibold tracking-tight text-white light-theme:text-gray-900">
-                  Get started
-                </h2>
-                <p className="text-sm text-gray-400 light-theme:text-gray-600">
-                  Select where you would like to work.
-                </p>
-              </div>
-
               {/* PRIMARY FEATURE CARD: Agentic CAD */}
               <div 
                 onClick={handleAgenticCadClick}
@@ -208,55 +215,55 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                       <h4 className="text-base font-semibold text-white light-theme:text-gray-900">
                         Draft Deed
                       </h4>
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider border ${
-                          freeDeedsUnlimited || (freeDeedsRemaining ?? freeDeedsLimit) > 0
-                            ? 'bg-green-400/20 text-green-300 border-green-400/40 light-theme:text-green-800 light-theme:bg-green-100'
-                            : 'bg-amber-400/20 text-amber-200 border-amber-400/40 light-theme:text-amber-800 light-theme:bg-amber-100'
-                        }`}
-                      >
-                        {freeDeedsUnlimited ? 'Unlimited deeds' : `🎁 ${freeDeedsLimit} free deeds`}
-                      </span>
+                      {!freeDeedsUnlimited && (
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider border ${
+                            (freeDeedsRemaining ?? freeDeedsLimit) > 0
+                              ? 'bg-green-400/20 text-green-300 border-green-400/40 light-theme:text-green-800 light-theme:bg-green-100'
+                              : 'bg-amber-400/20 text-amber-200 border-amber-400/40 light-theme:text-amber-800 light-theme:bg-amber-100'
+                          }`}
+                        >
+                          {`🎁 ${freeDeedsLimit} free deeds`}
+                        </span>
+                      )}
                     </div>
                     <p className="text-sm text-gray-400 light-theme:text-gray-600 leading-relaxed">
                       Upload a deed PDF or paste a legal description and have the Boundary Agent draft the parcel.
                     </p>
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      {!freeDeedsUnlimited && (
-                        <span className="flex items-center gap-1" aria-hidden="true">
-                          {Array.from({ length: freeDeedsLimit }).map((_, index) => (
-                            <span
-                              key={index}
-                              className={`h-1.5 w-1.5 rounded-full ${
-                                index < (freeDeedsRemaining ?? freeDeedsLimit) ? 'bg-green-400' : 'bg-gray-600'
-                              }`}
-                            />
-                          ))}
-                        </span>
-                      )}
-                      <p
-                        className={`text-xs font-semibold ${
-                          freeDeedsUnlimited
-                            ? 'text-green-400 light-theme:text-green-700'
-                            : freeDeedsRemaining === null
-                              ? 'text-gray-500 light-theme:text-gray-500'
+                    {!freeDeedsUnlimited && (
+                      <>
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <span className="flex items-center gap-1" aria-hidden="true">
+                            {Array.from({ length: freeDeedsLimit }).map((_, index) => (
+                              <span
+                                key={index}
+                                className={`h-1.5 w-1.5 rounded-full ${
+                                  index < (freeDeedsRemaining ?? freeDeedsLimit) ? 'bg-green-400' : 'bg-gray-600'
+                                }`}
+                              />
+                            ))}
+                          </span>
+                          <p
+                            className={`text-xs font-semibold ${
+                              freeDeedsRemaining === null
+                                ? 'text-gray-500 light-theme:text-gray-500'
+                                : freeDeedsRemaining > 0
+                                  ? 'text-green-300 light-theme:text-green-700'
+                                  : 'text-amber-300 light-theme:text-amber-700'
+                            }`}
+                          >
+                            {freeDeedsRemaining === null
+                              ? `${freeDeedsLimit} free deeds included`
                               : freeDeedsRemaining > 0
-                                ? 'text-green-300 light-theme:text-green-700'
-                                : 'text-amber-300 light-theme:text-amber-700'
-                        }`}
-                      >
-                        {freeDeedsUnlimited
-                          ? 'Unlimited deeds with your key'
-                          : freeDeedsRemaining === null
-                            ? `${freeDeedsLimit} free deeds included`
-                            : freeDeedsRemaining > 0
-                              ? `${freeDeedsRemaining} of ${freeDeedsLimit} free deeds remaining`
-                              : 'Free deeds used — add a key to continue'}
-                      </p>
-                    </div>
-                    <p className="pt-1 text-xs font-extrabold text-green-300 group-hover:text-green-200 light-theme:text-green-700 light-theme:group-hover:text-green-800">
-                      {!freeDeedsUnlimited && freeDeedsRemaining === 0 ? 'Unlock unlimited →' : 'Start free →'}
-                    </p>
+                                ? `${freeDeedsRemaining} of ${freeDeedsLimit} free deeds remaining`
+                                : 'Free deeds used — add a key to continue'}
+                          </p>
+                        </div>
+                        <p className="pt-1 text-xs font-extrabold text-green-300 group-hover:text-green-200 light-theme:text-green-700 light-theme:group-hover:text-green-800">
+                          {freeDeedsRemaining === 0 ? 'Unlock unlimited →' : 'Start free →'}
+                        </p>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -277,32 +284,47 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 </div>
               </div>
 
-              {/* COMMUNITY LINKS */}
-              <div className="flex flex-col items-center gap-3 pt-5 border-t border-gray-800 light-theme:border-gray-200">
-                <p className="text-sm font-medium text-pink-400 light-theme:text-pink-600">
-                  Tutorials, workflows and updates
-                </p>
-                <div className="flex items-center justify-center gap-6">
-                  <a
-                    href="https://www.youtube.com/@LandSurvAI"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-red-500 hover:text-red-400 hover:scale-110 transition-all"
-                    title="Watch tutorials on YouTube"
-                    aria-label="LandSurv.ai on YouTube"
+              {/* COMMUNITY LINKS — one slot: the invite cycles through the phrase and settles on the links */}
+              <div className="flex items-center justify-center pt-5 border-t border-gray-800 light-theme:border-gray-200">
+                <div className="relative flex h-9 w-full items-center justify-center">
+                  <p
+                    className={`absolute inset-0 flex items-center justify-center text-sm font-medium text-pink-400 light-theme:text-pink-600 transition-opacity duration-300 ${
+                      communityLinksShown ? 'opacity-0' : 'opacity-100'
+                    }`}
                   >
-                    <YouTubeIcon className="w-7 h-7" />
-                  </a>
-                  <a
-                    href="https://www.facebook.com/profile.php?id=61583326114422"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[#1877F2] hover:text-[#4a9bff] hover:scale-110 transition-all"
-                    title="Join our Facebook community"
-                    aria-label="LandSurv.ai on Facebook"
+                    <span key={communityStep} className="animate-fade-in inline-block">
+                      {COMMUNITY_WORDS[Math.min(communityStep, COMMUNITY_WORDS.length - 1)]}
+                    </span>
+                  </p>
+                  <div
+                    className={`flex items-center justify-center gap-6 transition-opacity duration-500 ${
+                      communityLinksShown ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                    }`}
+                    aria-hidden={!communityLinksShown}
                   >
-                    <FacebookIcon className="w-7 h-7" />
-                  </a>
+                    <a
+                      href="https://www.youtube.com/@LandSurvAI"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      tabIndex={communityLinksShown ? 0 : -1}
+                      className="text-red-500 hover:text-red-400 hover:scale-110 transition-all"
+                      title="Watch tutorials on YouTube"
+                      aria-label="LandSurv.ai on YouTube"
+                    >
+                      <YouTubeIcon className="w-7 h-7" />
+                    </a>
+                    <a
+                      href="https://www.facebook.com/profile.php?id=61583326114422"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      tabIndex={communityLinksShown ? 0 : -1}
+                      className="text-[#1877F2] hover:text-[#4a9bff] hover:scale-110 transition-all"
+                      title="Join our Facebook community"
+                      aria-label="LandSurv.ai on Facebook"
+                    >
+                      <FacebookIcon className="w-7 h-7" />
+                    </a>
+                  </div>
                 </div>
               </div>
             </div>

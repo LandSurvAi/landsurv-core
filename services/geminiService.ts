@@ -142,7 +142,14 @@ const isAutoHighThinkingModel = (model: string): model is AutoHighThinkingModel 
 // which passes the API key as a build argument to Docker
 const getAi = (userApiKey?: string): GoogleGenAI => {
     if (!userApiKey) {
-      throw new Error("A Gemini API key is required. Click this warning to add your Google Gemini API key.");
+      // Free tier: no user key and no demo key. Route through the backend proxy,
+      // which uses the server's GOOGLE_API_KEY (mounted from Secret Manager), so
+      // the 5 free deeds and closure investigations on their previews work
+      // without asking the user for a key. OSS/local builds have no backend.
+      if (isOssBuild()) {
+        throw new Error("A Gemini API key is required. Click this warning to add your Google Gemini API key.");
+      }
+      return new ProxyGoogleGenAI('') as unknown as GoogleGenAI;
     }
     // Demo-key users (`lsa_...`) don't have a real Gemini key — route through
     // the backend proxy which uses the server's GOOGLE_API_KEY on their behalf.

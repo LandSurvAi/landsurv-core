@@ -8770,7 +8770,11 @@ const AppContent = () => {
       settings.anthropicApiKey?.trim()
     );
 
-    if (!hasAnyInferenceKey) {
+    // Free tier: the 5 fingerprinted free deeds run on the server's key, so a
+    // deed turn must never be stopped by the BYOK gate. /api/deeds meters the
+    // allowance; free-tier exhaustion is handled by the deed-credit checks.
+    const deedFreeTierEligible = requestedAgent === AgentType.DEED_READER && !isOssBuild();
+    if (!hasAnyInferenceKey && !deedFreeTierEligible) {
       setShowApiKeyModal(true);
       return;
     }
@@ -16427,13 +16431,13 @@ const AppContent = () => {
                         }}
                         currentProjectionEpsg={settings.projection.epsg}
                         onShowClaudeSettings={() => setIsClaudeSettingsVisible(true)}
-                        onProjectionSelect={(state, zoneName, epsg, proj4def) => {
+                        onProjectionSelect={(state, zoneName, epsg, proj4def, epoch) => {
                           try {
-                            proj4.defs(`EPSG:${epsg}`, proj4def);
+                            if (proj4def) proj4.defs(`EPSG:${epsg}`, proj4def);
                           } catch { /* ignore */ }
                           setSettings(prev => ({
                             ...prev,
-                            projection: { state, zoneName, epsg },
+                            projection: { state, zoneName, epsg, epoch: epoch ?? null },
                           }));
                         }}
                     />
@@ -17678,7 +17682,7 @@ const AppContent = () => {
             )}
           </main>
           
-          {isSettingsVisible && <Suspense fallback={<LoadingFallback />}><SettingsPage settings={settings} onSettingsChange={setSettings} onClose={() => { setIsSettingsVisible(false); setPulseApiKey(false); }} onReset={handleReset} activeAgent={activeAgent} activeModel={activeModel} availableModels={visibleAvailableModels} onModelChange={handleModelChange} jobInfo={jobInfo} onJobInfoChange={setJobInfo} pulseProjection={pulseProjection} pulseApiKey={pulseApiKey} onApiKeySubmit={handleSettingsApiKeySubmit} onProviderKeySubmit={handleProviderKeySubmit} isSuperUser={isSuperUser} hasApiKey={hasApiKey} autoHighThinkingModel={autoHighThinkingModel} autoHighThinkingOptions={visibleAutoHighThinkingOptions} onAutoHighThinkingModelChange={(model) => {
+          {isSettingsVisible && <Suspense fallback={<LoadingFallback />}><SettingsPage settings={settings} onSettingsChange={setSettings} onClose={() => { setIsSettingsVisible(false); setPulseApiKey(false); }} onReset={handleReset} activeAgent={activeAgent} activeModel={activeModel} availableModels={visibleAvailableModels} onModelChange={handleModelChange} jobInfo={jobInfo} onJobInfoChange={setJobInfo} pulseProjection={pulseProjection} pulseApiKey={pulseApiKey} onApiKeySubmit={handleSettingsApiKeySubmit} onProviderKeySubmit={handleProviderKeySubmit} isSuperUser={isSuperUser} hasApiKey={hasApiKey} projectBboxWgs84={getInclusionBboxWgs84(activeInclusionBoundaryId)} gpsPosition={currentPosition ? { latitude: currentPosition.coords.latitude, longitude: currentPosition.coords.longitude } : null} autoHighThinkingModel={autoHighThinkingModel} autoHighThinkingOptions={visibleAutoHighThinkingOptions} onAutoHighThinkingModelChange={(model) => {
             if (!confirmFableSelection(model)) return;
             setAutoHighThinkingModel(model);
           }} onTriggerHostCostReminder={() => setShowHostCostReminder(true)} /></Suspense>}
@@ -18548,7 +18552,7 @@ const AppContent = () => {
             activeAgent={activeAgent}
             associatedFiles={[rawFile?.name, deedFile?.name, centerlines[0]?.name]}
           />}
-           {!showWelcome && projectionPrompt && <ProjectionSelectionModal onConfirm={handleConfirmProjection} onClose={() => setProjectionPrompt(null)} />}
+           {!showWelcome && projectionPrompt && <ProjectionSelectionModal onConfirm={handleConfirmProjection} onClose={() => setProjectionPrompt(null)} gpsPosition={currentPosition ? { latitude: currentPosition.coords.latitude, longitude: currentPosition.coords.longitude } : null} />}
 
           {/* C3D Sync Center — webapp-side sync wizard (Phase 2) */}
           <C3DSyncCenter

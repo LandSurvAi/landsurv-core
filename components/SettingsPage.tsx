@@ -7,6 +7,7 @@ import { setHolidayThemeOverride } from './InitialAgentSelection.tsx';
 import { useErrorReporter } from '../contexts/AppStateContext';
 import { PROVIDER_KEY_URLS, type ByokProvider } from '../services/providerKeys.ts';
 import { WebGpuBasemap, isWebGpuEnabled, getGpuPowerPreference, WEBGPU_ENABLED_KEY, WEBGPU_POWER_KEY, WEBGPU_PREF_EVENT, type GpuPowerPreference } from '../utils/webgpuBasemap.ts';
+import GlobalCrsPicker from './GlobalCrsPicker.tsx';
 
 const AUTO_SELECTOR_OPTION = 'auto';
 const getSelectorModelValue = (modelName: string): string => modelName;
@@ -47,6 +48,10 @@ interface SettingsPageProps {
     autoHighThinkingOptions?: string[];
     onAutoHighThinkingModelChange?: (model: string) => void;
     onTriggerHostCostReminder?: () => void;
+    /** WGS84 [west, south, east, north] of the active project boundary, for CRS auto-suggest. */
+    projectBboxWgs84?: [number, number, number, number] | null;
+    /** Latest GPS fix, for CRS auto-suggest. */
+    gpsPosition?: { latitude: number; longitude: number } | null;
 }
 
 const SettingsPage: React.FC<SettingsPageProps> = ({
@@ -56,6 +61,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     , isSuperUser, hasApiKey
     , autoHighThinkingModel, autoHighThinkingOptions, onAutoHighThinkingModelChange
     , onTriggerHostCostReminder
+    , projectBboxWgs84, gpsPosition
 }) => {
     const [isConfirmingReset, setIsConfirmingReset] = useState(false);
     const [showScrollIndicator, setShowScrollIndicator] = useState(true);
@@ -626,6 +632,17 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             {availableZones.map(z => <option key={z.epsg} value={z.epsg}>{z.name}</option>)}
                         </select>
                         </div>
+                    </div>
+                    <div className="pt-3 border-t border-gray-600/60 light-theme:border-gray-300">
+                        <GlobalCrsPicker
+                            currentEpsg={settings.projection.epsg}
+                            bbox={projectBboxWgs84 ?? null}
+                            gpsPosition={gpsPosition ?? null}
+                            onSelect={(projection) => onSettingsChange(prev => ({
+                                ...prev,
+                                projection,
+                            }))}
+                        />
                     </div>
                 </div>
             </div>

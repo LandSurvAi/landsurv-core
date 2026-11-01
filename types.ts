@@ -809,6 +809,8 @@ export interface ProjectionSetting {
     state: string | null;
     zoneName: string | null;
     epsg: number | null;
+    /** Decimal survey epoch for epoch-aware / dynamic datums (e.g. 2026.5). */
+    epoch?: number | null;
 }
 
 export interface NtripSettings {

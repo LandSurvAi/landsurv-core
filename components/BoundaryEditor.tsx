@@ -1461,6 +1461,24 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                 </div>
                             )}
 
+                            {/* Silhouette/preview investigation: a parse too incomplete
+                                for a closure summary is exactly when the calls need
+                                checking against the deed - before anything is drafted. */}
+                            {!closure && selectedFile.calls.length > 0 && onInvestigateClosure && (
+                                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-amber-400/60 bg-amber-500/10 px-4 py-2.5">
+                                    <span className="text-xs text-amber-200">
+                                        Preview only — this traverse has no closure summary yet. Investigate the parsed calls against the deed before drafting.
+                                    </span>
+                                    <button
+                                        onClick={() => onInvestigateClosure(selectedFile.id)}
+                                        className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500/20 text-amber-100 hover:bg-amber-500/30 border border-amber-400/60 shadow-sm transition-colors active:scale-95"
+                                        title="Compare the preview calls with the deed text and propose fixes"
+                                    >
+                                        Investigate
+                                    </button>
+                                </div>
+                            )}
+
                             {/* ========================================================= */}
                             {/* PRIMARY DRAFTING & TOOLBAR                                */}
                             {/* ========================================================= */}

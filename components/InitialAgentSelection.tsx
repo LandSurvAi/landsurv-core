@@ -27,6 +27,9 @@ import { CacpBadge } from './CacpBadge.tsx';
 import CacpManifestModal from './CacpManifestModal.tsx';
 import { agentRegistry } from '../services/AgentRegistry';
 import { projectionStates, projectionZones } from '../utils/projections.ts';
+import { ensureCrsRegistered, searchCrs } from '../utils/crs/registry.ts';
+import { getBundledCrs } from '../utils/crs/globalCatalog.ts';
+import type { CrsDefinition } from '../utils/crs/types.ts';
 import { executeContactRecaptcha } from '../utils/recaptcha.ts';
 import HolidayEffects from './HolidayEffects.tsx';
 import ThanksgivingEffects from './ThanksgivingEffects.tsx';
@@ -262,8 +265,8 @@ interface InitialAgentSelectionProps {
   onOpenContouringFromTin?: () => void;
   /** When the user clicks the Claude AI Settings card. Opens the Claude 4.7 Vertex AI settings panel. */
   onShowClaudeSettings?: () => void;
-  /** When the user picks a state-plane zone from the header Projection dropdown. */
-  onProjectionSelect?: (state: string, zoneName: string, epsg: number, proj4def: string) => void;
+  /** When the user picks a state-plane zone or a worldwide EPSG from the header Projection dropdown. */
+  onProjectionSelect?: (state: string, zoneName: string, epsg: number, proj4def: string, epoch?: number | null) => void;
   /** Currently active projection EPSG (used to show a check / current label in the Projection dropdown). */
   currentProjectionEpsg?: number | null;
   isC3DConnected?: boolean;
@@ -578,7 +581,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
             onClick();
           }
         }}
-          className={`relative px-6 pt-6 pb-12 text-left bg-gray-900/50 rounded-lg transition-all duration-300 border-2 focus:outline-none focus:ring-2 flex flex-col items-start h-full light-theme:bg-gray-100/50`}
+          className={`thanksgiving-card relative px-6 pt-6 pb-12 text-left bg-gray-900/50 rounded-lg transition-all duration-300 border-2 focus:outline-none focus:ring-2 flex flex-col items-start h-full light-theme:bg-gray-100/50`}
             style={{
                 borderColor: '#374151',
                 '--color-start': startColor,
@@ -869,18 +872,29 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
     );
 };
 
+/** Common non-US CRSs shown before the user types, so worldwide support is discoverable. */
+const POPULAR_GLOBAL_CODES = [27700, 2154, 7856, 2193, 3035, 32631];
+const POPULAR_GLOBAL_CRS = POPULAR_GLOBAL_CODES
+  .map(code => getBundledCrs(code))
+  .filter((def): def is CrsDefinition => Boolean(def));
+
 /**
  * Header "Projection" multi-button. Looks like the other menu-bar buttons,
  * but its label rotates "Set" ↔ "Projection" when no projection is set,
- * and shows the active EPSG when one is. Clicking opens a small dropdown
- * with state → zone selection.
+ * and shows the active EPSG when one is. Clicking opens a dropdown with
+ * US State Plane zones and a worldwide EPSG search.
  */
 const ProjectionMenuButton: React.FC<{
   currentEpsg?: number | null;
-  onSelect?: (state: string, zoneName: string, epsg: number, proj4def: string) => void;
+  onSelect?: (state: string, zoneName: string, epsg: number, proj4def: string, epoch?: number | null) => void;
 }> = ({ currentEpsg, onSelect }) => {
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<'us' | 'global'>('us');
   const [stateCode, setStateCode] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [globalResults, setGlobalResults] = useState<CrsDefinition[]>([]);
+  const [globalLoading, setGlobalLoading] = useState(false);
+  const [globalError, setGlobalError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   // Click outside to close
@@ -890,11 +904,59 @@ const ProjectionMenuButton: React.FC<{
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false);
         setStateCode(null);
+        setQuery('');
+        setGlobalError(null);
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
+
+  // Debounced worldwide search (offline catalogue + full EPSG registry).
+  useEffect(() => {
+    if (!open || mode !== 'global') return;
+    const q = query.trim();
+    if (!q) {
+      setGlobalResults([]);
+      setGlobalLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setGlobalLoading(true);
+    const timer = setTimeout(() => {
+      void searchCrs(q, 12)
+        .then(list => {
+          if (!cancelled) {
+            setGlobalResults(list);
+            setGlobalLoading(false);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setGlobalLoading(false);
+            setGlobalError('Worldwide CRS search is unavailable.');
+          }
+        });
+    }, 200);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [open, mode, query]);
+
+  const selectGlobalCrs = async (def: CrsDefinition) => {
+    setGlobalError(null);
+    try {
+      const resolved = await ensureCrsRegistered(def.code, { epoch: def.epoch ?? null }, def);
+      if (!resolved?.proj4) {
+        setGlobalError(`EPSG:${def.code} could not be registered.`);
+        return;
+      }
+      onSelect?.(def.country || 'International', def.name, def.code, resolved.proj4, def.epoch ?? null);
+      setOpen(false);
+      setStateCode(null);
+      setQuery('');
+    } catch (err: any) {
+      setGlobalError(err?.message || `Could not load EPSG:${def.code}.`);
+    }
+  };
 
   const label = currentEpsg
     ? `EPSG:${currentEpsg}`
@@ -909,7 +971,7 @@ const ProjectionMenuButton: React.FC<{
         onClick={() => setOpen(o => !o)}
         className="w-full h-full py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-emerald-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-emerald-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
         type="button"
-        title="Select State-Plane Projection (NAD83 / US Survey Feet)"
+        title="Select Coordinate System (US State Plane or Worldwide EPSG)"
       >
         {label ? (
           <>
@@ -935,8 +997,68 @@ const ProjectionMenuButton: React.FC<{
         )}
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 w-64 max-h-80 overflow-y-auto rounded-lg bg-gray-900/95 border border-gray-700 shadow-2xl backdrop-blur-md z-50">
-          {!stateCode ? (
+        <div className="absolute right-0 mt-1 w-80 max-h-96 overflow-y-auto rounded-lg bg-gray-900/95 border border-gray-700 shadow-2xl backdrop-blur-md z-50">
+          <div className="flex border-b border-gray-700/60 sticky top-0 bg-gray-900/95 z-10">
+            <button
+              type="button"
+              onClick={() => { setMode('us'); setStateCode(null); }}
+              className={`flex-1 px-2 py-2 text-[10px] font-semibold uppercase tracking-wider ${mode === 'us' ? 'text-emerald-400 bg-emerald-600/10' : 'text-gray-400 hover:text-gray-200'}`}
+            >
+              US State Plane
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMode('global'); setStateCode(null); }}
+              className={`flex-1 px-2 py-2 text-[10px] font-semibold uppercase tracking-wider ${mode === 'global' ? 'text-emerald-400 bg-emerald-600/10' : 'text-gray-400 hover:text-gray-200'}`}
+            >
+              Worldwide / EPSG
+            </button>
+          </div>
+
+          {mode === 'global' ? (
+            <>
+              <div className="p-2 border-b border-gray-700/60">
+                <input
+                  type="text"
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  placeholder="EPSG code, country, or projection name"
+                  aria-label="Search worldwide coordinate systems"
+                  autoFocus
+                  className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+              {globalError && <div className="px-3 py-2 text-[11px] text-red-400">{globalError}</div>}
+              {!query.trim() && (
+                <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-emerald-400 border-b border-gray-700/60">Popular worldwide</div>
+              )}
+              {query.trim() && globalLoading && (
+                <div className="px-3 py-2 text-xs text-gray-400">Searching EPSG registry…</div>
+              )}
+              {query.trim() && !globalLoading && globalResults.length === 0 && (
+                <div className="px-3 py-2 text-xs text-gray-400">No matching coordinate systems.</div>
+              )}
+              {(query.trim() ? globalResults : POPULAR_GLOBAL_CRS).map(def => (
+                <button
+                  key={def.code}
+                  type="button"
+                  onClick={() => { void selectGlobalCrs(def); }}
+                  className={`w-full text-left px-3 py-1.5 hover:bg-emerald-600/20 ${currentEpsg === def.code ? 'text-emerald-300 font-semibold' : 'text-gray-200 hover:text-emerald-300'}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm truncate">{def.name}</div>
+                      <div className="text-[10px] text-gray-500 truncate">{def.country || def.area || 'Worldwide'}</div>
+                    </div>
+                    <span className="text-[10px] text-gray-500 shrink-0">EPSG:{def.code}</span>
+                  </div>
+                </button>
+              ))}
+              <div className="px-3 py-1.5 text-[9px] text-gray-600 border-t border-gray-700/60">
+                EPSG Geodetic Parameter Dataset · epsg.org
+              </div>
+            </>
+          ) : !stateCode ? (
             <>
               <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-emerald-400 border-b border-gray-700/60">Select State</div>
               {projectionStates.map(s => (
@@ -1515,7 +1637,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
   };
 
     return (
-    <div className="flex flex-col h-full relative aesthetic-grid">
+    <div className={`flex flex-col h-full relative aesthetic-grid${isThanksgivingTheme() ? ' thanksgiving-ui' : ''}`}>
       {/* C3D Connect + API Key buttons - now rendered inline above chat bar (see scrollable section) */}
       {onShowC3DConnect && null /* moved inline */}
 
@@ -1565,8 +1687,12 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
         </div>
       )}
 
-      {/* Thanksgiving harvest - wheat and corn growing from the bottom edge, with a full moon */}
-      {isThanksgivingTheme() && <ThanksgivingEffects />}
+      {/* Autumn harvest - wheat, corn, pumpkins, grass, the survey crew and the sky above.
+          Thanksgiving adds the blue daytime sky and sun; Halloween keeps the dark backdrop,
+          the full moon and its bats. */}
+      {(isThanksgivingTheme() || isHalloweenTheme()) && (
+        <ThanksgivingEffects theme={isHalloweenTheme() ? 'halloween' : 'thanksgiving'} />
+      )}
 
       <style>{`
         @keyframes yearPulse {
@@ -1659,6 +1785,16 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
             filter: drop-shadow(0 0 6px rgba(34, 211, 238, 0.28));
           }
         }
+        /* Thanksgiving only: with the bright sky behind them, cards use their
+           hover fill at rest and rely on the edge highlight to signal hover.
+           The chrome buttons share the same fill. */
+        body:not(.light-theme) .thanksgiving-ui .thanksgiving-card,
+        body:not(.light-theme) .thanksgiving-ui .thanksgiving-chrome button {
+          background-color: #1f2937 !important;
+        }
+        body:not(.light-theme) .thanksgiving-ui .thanksgiving-chrome button {
+          background-image: none !important;
+        }
       `}</style>
 
       {/* Fixed Blurred Header - positioned over scrolling content */}
@@ -1740,7 +1876,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
       <div className="flex-1 overflow-y-auto scrollbar-hide relative z-20 aesthetic-grid" onScroll={() => setShowScrollIndicator(false)}>
         <div className="pt-36 pb-8 px-4 md:px-8">
           {/* Menu bar - scrolls with content */}
-          <div className="w-full max-w-5xl mx-auto mb-3 flex flex-wrap items-stretch gap-2">
+          <div className="thanksgiving-chrome w-full max-w-5xl mx-auto mb-3 flex flex-wrap items-stretch gap-2">
             {onShowC3DConnect && (
               <button
                 onClick={onShowC3DConnect}
@@ -1852,7 +1988,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
           {/* Project-context row: equal thirds for Job Info / Set Projection / Settings.
               Duplicated here for quick access to the primary project-level entry points.
               `jobInfo` populated here is shared via context with every agent. */}
-          <div className="w-full max-w-5xl mx-auto mb-3 grid grid-cols-3 gap-2">
+          <div className="thanksgiving-chrome w-full max-w-5xl mx-auto mb-3 grid grid-cols-3 gap-2">
             <button
               onClick={() => setIsJobInfoOpen(true)}
               className="py-3 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-teal-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-teal-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"

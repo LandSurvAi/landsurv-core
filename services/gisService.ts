@@ -1,5 +1,6 @@
 import proj4 from 'proj4';
 import { initProjections } from '../utils/projections.ts';
+import { registerBundledCrs } from '../utils/crs/registry.ts';
 import { SurveyPoint, SurveyLine, GisFeature, Settings } from '../types.ts';
 
 /**
@@ -19,6 +20,10 @@ export class GisService {
     private static resolveTargetEpsg(requested: number): { epsg: number; fellBack: boolean } {
         initProjections();
         const key = `EPSG:${requested}`;
+        // Global CRS catalogue entries (UTM, ETRS89, GDA2020, national grids,
+        // …) can be injected synchronously; network-only EPSG codes still fall
+        // back rather than dropping every coordinate.
+        if (!proj4.defs(key)) registerBundledCrs(requested);
         if (proj4.defs(key)) return { epsg: requested, fellBack: false };
         console.warn(`[GisService] EPSG:${requested} is not registered — plotting in WGS84 instead.`);
         return { epsg: 4326, fellBack: true };

@@ -16,6 +16,7 @@
  */
 
 import type { Part } from '../types.ts';
+import { getDeviceFingerprint } from './deviceFingerprint.ts';
 
 type HistoryEntry = { role: 'user' | 'model'; parts: Array<Part | { text: string }> };
 type MessageInput = string | Array<Part | { text: string }>;
@@ -30,6 +31,49 @@ interface ChatConfig {
 
 const GEN_ENDPOINT = '/api/demo/gemini/generateContent';
 const STREAM_ENDPOINT = '/api/demo/gemini/stream';
+
+/**
+ * Headers for the AI proxy. With a key we authenticate normally; without one we
+ * identify the device so the backend can serve the free tier from the server's
+ * Secret-Manager `GOOGLE_API_KEY` and enforce its per-device quota.
+ */
+async function proxyHeaders(apiKey: string): Promise<Record<string, string>> {
+  const key = apiKey.trim();
+  if (key) {
+    return { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` };
+  }
+  let deviceId = '';
+  try {
+    deviceId = (await getDeviceFingerprint()).id;
+  } catch {
+    deviceId = '';
+  }
+  return {
+    'Content-Type': 'application/json',
+    'x-landsurv-free-tier': '1',
+    ...(deviceId ? { 'x-landsurv-device': deviceId } : {}),
+  };
+}
+
+async function postProxy(url: string, apiKey: string, body: unknown): Promise<Response> {
+  let response = await fetch(url, {
+    method: 'POST',
+    headers: await proxyHeaders(apiKey),
+    body: JSON.stringify(body),
+  });
+  // A stale or unrecognized `lsa_` key must not dead-end an in-progress
+  // investigation. Retry once on the anonymous free tier; the request then uses
+  // the same server key, just rate-limited per device.
+  if (!response.ok && (response.status === 401 || response.status === 403) && apiKey.trim()) {
+    console.warn('[ProxyGenAI] Key rejected by the AI proxy; retrying on the free tier.');
+    response = await fetch(url, {
+      method: 'POST',
+      headers: await proxyHeaders(''),
+      body: JSON.stringify(body),
+    });
+  }
+  return response;
+}
 
 function normalizeMessage(message: MessageInput): Array<Part | { text: string }> {
   if (typeof message === 'string') return [{ text: message }];
@@ -52,19 +96,12 @@ export class ProxyChat {
     const messageParts = normalizeMessage(args.message);
     const historySnapshot = this.history.map(h => ({ ...h, parts: [...h.parts] }));
 
-    const resp = await fetch(STREAM_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.model,
-        systemInstruction: this.config.systemInstruction,
-        generationConfig: this.config,
-        history: historySnapshot,
-        message: messageParts,
-      }),
+    const resp = await postProxy(STREAM_ENDPOINT, this.apiKey, {
+      model: this.model,
+      systemInstruction: this.config.systemInstruction,
+      generationConfig: this.config,
+      history: historySnapshot,
+      message: messageParts,
     });
 
     if (!resp.ok || !resp.body) {
@@ -126,14 +163,7 @@ class ProxyModels {
     contents: any;
     config?: any;
   }): Promise<{ text: string }> {
-    const resp = await fetch(GEN_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(args),
-    });
+    const resp = await postProxy(GEN_ENDPOINT, this.apiKey, args);
     if (!resp.ok) {
       const errText = await resp.text().catch(() => `${resp.status} ${resp.statusText}`);
       throw new Error(`Demo Gemini proxy error (${resp.status}): ${errText}`);
