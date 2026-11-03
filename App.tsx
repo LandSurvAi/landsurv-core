@@ -127,7 +127,9 @@ import { PdfViewerPanel } from './components/PdfViewerPanel.tsx';
 import NotificationCenter from './components/NotificationCenter.tsx';
 import NotificationScopeMarker from './components/NotificationScopeMarker.tsx';
 import GlobalErrorDialog from './components/GlobalErrorDialog.tsx';
-import TextEditorPanel from './components/TextEditorPanel.tsx';
+import TextEditorPanel, { type TextEditorTone } from './components/TextEditorPanel.tsx';
+import type { TerminalTone } from './components/CanvasTerminal.tsx';
+import type { CommandReference } from './components/CommandHelpView.tsx';
 import SessionSaveModal from './components/SessionSaveModal.tsx';
 import GpsStakeoutPanel from './components/GpsStakeoutPanel.tsx';
 import FileManagerPanel from './components/FileManagerPanel.tsx';
@@ -241,7 +243,11 @@ import { connectGatewayRelay, disconnectGatewayRelay } from './services/gatewayR
 import { agentRegistry } from './services/AgentRegistry.ts';
 import { useCogoExtendedSkills } from './services/cogoSkillHandlers.ts';
 import { useGeoSkills } from './services/geoSkillHandlers.ts';
+import { useClSkills } from './services/clSkillHandlers.ts';
+import { useStationingSkills } from './services/stationingSkillHandlers.ts';
+import { useDomainSkillHandlers } from './services/domainSkillHandlers.ts';
 import { knowledgeBase, extractDeedMetadataFacts, extractRowFactsFromLines, extractZoningFacts } from './services/KnowledgeBase.ts';
+import { LsvzPersistence } from './services/LsvzPersistence.ts';
 import './services/LsvzOrchestrator.ts';
 import { CacpBadge } from './components/CacpBadge.tsx';
 import { hashKey } from './utils/hashKey';
@@ -380,6 +386,14 @@ const getSummarizedLsvzContext = (sessionState: Omit<SessionState, 'version' | '
         })),
         cutSheetInfo: sessionState.cutSheetInfo,
         customSymbols: sessionState.customSymbols.map(s => ({ name: s.name, associatedTerms: s.associatedTerms })),
+        ...summarizeData(sessionState.boundaryFiles, 'boundaryFiles'),
+        ...summarizeData(sessionState.closureReports, 'closureReports'),
+        ...summarizeData(sessionState.knowledgeFacts, 'knowledgeFacts'),
+        ...summarizeData(sessionState.soilMapUnits, 'soilMapUnits'),
+        ...summarizeData(sessionState.steepSlopeRuns, 'steepSlopeRuns'),
+        ...summarizeData(sessionState.draftingStyleLibrary, 'draftingStyleLibrary'),
+        ...summarizeData(sessionState.inclusionBoundaries, 'inclusionBoundaries'),
+        cadStandardName: sessionState.cadManagerState?.standard?.name ?? null,
 
         files: {
             raw: sessionState.rawFile ? { name: sessionState.rawFile.name, content: truncateString(sessionState.rawFile.content, MAX_FILE_CHARS) } : null,
@@ -394,6 +408,7 @@ const getSummarizedLsvzContext = (sessionState: Omit<SessionState, 'version' | '
         chatHistories: {
             raw: truncateHistory(sessionState.rawChatHistory),
             deed: truncateHistory(sessionState.deedChatHistory),
+            civilDrafter: sessionState.civilDrafterChatHistory ? truncateHistory(sessionState.civilDrafterChatHistory) : [],
             dxf: truncateHistory(sessionState.dxfChatHistory),
             stationing: truncateHistory(sessionState.stationingChatHistory),
             pointEditor: truncateHistory(sessionState.pointEditorChatHistory),
@@ -401,8 +416,16 @@ const getSummarizedLsvzContext = (sessionState: Omit<SessionState, 'version' | '
             gpsStakeout: truncateHistory(sessionState.gpsStakeoutChatHistory),
             planExpert: sessionState.planExpertChatHistory ? truncateHistory(sessionState.planExpertChatHistory) : [],
             imageAnalyzer: sessionState.imageAnalyzerChatHistory ? truncateHistory(sessionState.imageAnalyzerChatHistory) : [],
-            // FIX: Add contouring chat history to summarized context for the LSVZ agent.
+            gis: sessionState.gisChatHistory ? truncateHistory(sessionState.gisChatHistory) : [],
             contouring: sessionState.contouringChatHistory ? truncateHistory(sessionState.contouringChatHistory) : [],
+            steepSlope: sessionState.steepSlopeChatHistory ? truncateHistory(sessionState.steepSlopeChatHistory) : [],
+            soils: sessionState.soilsChatHistory ? truncateHistory(sessionState.soilsChatHistory) : [],
+            structures: sessionState.structuresChatHistory ? truncateHistory(sessionState.structuresChatHistory) : [],
+            standardsCompliance: sessionState.standardsComplianceChatHistory ? truncateHistory(sessionState.standardsComplianceChatHistory) : [],
+            profile: sessionState.profileChatHistory ? truncateHistory(sessionState.profileChatHistory) : [],
+            cogo: sessionState.cogoChatHistory ? truncateHistory(sessionState.cogoChatHistory) : [],
+            rinex: sessionState.rinexChatHistory ? truncateHistory(sessionState.rinexChatHistory) : [],
+            zoning: sessionState.zoningChatHistory ? truncateHistory(sessionState.zoningChatHistory) : [],
         }
     };
 
@@ -424,6 +447,14 @@ const getDynamicLsvzContext = (sessionState: Omit<SessionState, 'version' | 'sav
         pointLists: sessionState.pointLists,
         lines: sessionState.lines,
         centerlines: sessionState.centerlines,
+        boundaryFiles: sessionState.boundaryFiles,
+        closureReports: sessionState.closureReports,
+        knowledgeFacts: sessionState.knowledgeFacts,
+        soilMapUnits: sessionState.soilMapUnits,
+        steepSlopeRuns: sessionState.steepSlopeRuns,
+        draftingStyleLibrary: sessionState.draftingStyleLibrary,
+        cadManagerState: sessionState.cadManagerState,
+        inclusionBoundaries: sessionState.inclusionBoundaries,
         cutSheetData: sessionState.cutSheetData,
         fieldbookNotes: sessionState.fieldbookNotes,
         jobInfo: sessionState.jobInfo,
@@ -432,6 +463,7 @@ const getDynamicLsvzContext = (sessionState: Omit<SessionState, 'version' | 'sav
         customSymbols: sessionState.customSymbols,
         rawChatHistory: sessionState.rawChatHistory,
         deedChatHistory: sessionState.deedChatHistory,
+        civilDrafterChatHistory: sessionState.civilDrafterChatHistory,
         planExpertChatHistory: sessionState.planExpertChatHistory,
         dxfChatHistory: sessionState.dxfChatHistory,
         stationingChatHistory: sessionState.stationingChatHistory,
@@ -440,12 +472,15 @@ const getDynamicLsvzContext = (sessionState: Omit<SessionState, 'version' | 'sav
         gpsStakeoutChatHistory: sessionState.gpsStakeoutChatHistory,
         imageAnalyzerChatHistory: sessionState.imageAnalyzerChatHistory,
         gisChatHistory: sessionState.gisChatHistory,
-        // FIX: Add contouring chat history to dynamic context sources for the LSVZ agent.
         contouringChatHistory: sessionState.contouringChatHistory,
-        // FIX: Add profile chat history to dynamic context sources for the LSVZ agent.
+        steepSlopeChatHistory: sessionState.steepSlopeChatHistory,
+        soilsChatHistory: sessionState.soilsChatHistory,
+        structuresChatHistory: sessionState.structuresChatHistory,
+        standardsComplianceChatHistory: sessionState.standardsComplianceChatHistory,
         profileChatHistory: sessionState.profileChatHistory,
         cogoChatHistory: sessionState.cogoChatHistory,
         rinexChatHistory: sessionState.rinexChatHistory,
+        zoningChatHistory: sessionState.zoningChatHistory,
     };
 
     // If source selection fails or is not specific, provide a summary of available data keys.
@@ -1151,6 +1186,12 @@ const AppContent = () => {
     clearNotifications,
   } = useAppState();
   const [isSessionSaveModalOpen, setIsSessionSaveModalOpen] = useState(false);
+  // Tone of the command result currently open in the text editor, so the
+  // editor can render it in the same color the command line used.
+  const [textEditorContentTone, setTextEditorContentTone] = useState<TextEditorTone>('normal');
+  // Formatted HELP reference opened from the command line, so the editor can
+  // render the same grouped cards rather than a plain-text dump.
+  const [textEditorReference, setTextEditorReference] = useState<CommandReference | null>(null);
 
   // ERROR ROUTING: Mirror the legacy global `error` state into the unified
   // reporter. Every `setError('...')` now surfaces in the notification bell;
@@ -1471,6 +1512,8 @@ const AppContent = () => {
   // list (set when entering the Point Editor or after points are uploaded).
   const [isPointListButtonPulsing, setIsPointListButtonPulsing] = useState(false);
   const [isBoundaryEditorButtonPulsing, setIsBoundaryEditorButtonPulsing] = useState(false);
+  /** Nudges the user to the Boundary Editor's first action after choosing the manual route. */
+  const [isAddCallRowPulsing, setIsAddCallRowPulsing] = useState(false);
 
   // Floating Data Visibility panel (canvas toolbar Layers button)
   const [dataVisibilityPos, setDataVisibilityPos] = useState<{ x: number; y: number } | null>(null);
@@ -1607,6 +1650,11 @@ const AppContent = () => {
   useEffect(() => {
     pointListsRef.current = pointLists;
   }, [pointLists]);
+
+  const centerlinesRef = useRef(centerlines);
+  useEffect(() => {
+    centerlinesRef.current = centerlines;
+  }, [centerlines]);
 
   // Faint futuristic background grid on the drawing canvas � purely cosmetic,
   // toggled from the header next to the notification bell.
@@ -1759,6 +1807,7 @@ const AppContent = () => {
   const [isContourEsriMinimized, setIsContourEsriMinimized] = useState<boolean>(false);
   const [isSteepSlopePanelVisible, setIsSteepSlopePanelVisible] = useState<boolean>(false);
   const [isSteepSlopePanelMinimized, setIsSteepSlopePanelMinimized] = useState<boolean>(false);
+  const [tinSurfaces, setTinSurfaces] = useState<TinSurface[]>([]);
   const [isAutoDraftTinHidden, setIsAutoDraftTinHidden] = useState<boolean>(false);
   // Multi-generation contour objects (v26.05.19.3) � each ContourGeneration stores
   // IsoPaths (mathematical representation) + settings for auto-regen and blend.
@@ -2348,6 +2397,33 @@ const AppContent = () => {
   const [c3dDrawings, setC3dDrawings] = useState<Array<{ name: string; fullPath: string; isActive: boolean; layerCount: number }>>([]);
   const [c3dActiveDrawing, setC3dActiveDrawing] = useState<string | null>(null);
   const [c3dDrawingsMenuOpen, setC3dDrawingsMenuOpen] = useState(false);
+
+  // Escape dismisses header dropdowns and the mobile navigation drawer.
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      let closed = false;
+      if (c3dDrawingsMenuOpen) {
+        setC3dDrawingsMenuOpen(false);
+        closed = true;
+      }
+      if (isHistoryPanelOpen) {
+        setIsHistoryPanelOpen(false);
+        closed = true;
+      }
+      if (isMobileMenuOpen) {
+        setIsMobileMenuOpen(false);
+        closed = true;
+      }
+      if (closed) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [c3dDrawingsMenuOpen, isHistoryPanelOpen, isMobileMenuOpen, setIsMobileMenuOpen]);
 
   // Persisted per-browser baseline for sync conflict detection.
   const c3dSyncBaselineKey = 'landsurv_c3d_sync_baseline';
@@ -3244,6 +3320,7 @@ const AppContent = () => {
     setIsBoundaryEditorVisible(false);
     setIsBoundaryEditorButtonPulsing(false);
     setDimensions([]);
+    setTinSurfaces([]);
     setDraftingStyleLibrary([]);
     setCanvasTransform(null);
     
@@ -3863,6 +3940,7 @@ const AppContent = () => {
   /** Upgrade pitch shown from the deed screens once the 5 free deeds are spent. */
   /** Jump from the deed upload screen to the Boundary Agent GIS parcel panel. */
   const handleOpenParcelGisFromUpload = useCallback(() => {
+    setActiveBoundaryDockedTab('gis');
     setIsParcelPanelVisible(true);
     setIsParcelPanelDocked(true);
     setIsParcelPanelMinimized(false);
@@ -6228,17 +6306,78 @@ const AppContent = () => {
 
   // CACP: Register Zoning Agent command handlers so other agents can request zoning data
   useEffect(() => {
+    const getOrInitZoningChat = (): Chat | null => {
+      if (zoningChat) return zoningChat;
+      try {
+        const fresh = startChatWithOverride(AgentType.ZONING_AGENT, '');
+        setZoningChat(fresh);
+        return fresh;
+      } catch (err) {
+        console.warn('[CACP] Failed to lazily initialize Zoning chat:', err);
+        return null;
+      }
+    };
+
     const unsub1 = interAgentComm.onCommand('get_zoning_requirements', async (message) => {
-      if (!zoningChat) return;
       const d = message.data as Record<string, unknown>;
       const s = (d.state as string) || zoningState;
       const c = (d.county as string) || zoningCounty;
       const m = (d.municipality as string) || zoningPlace;
       const dist = (d.district as string) || zoningDistrict || '';
       const fields = (d.fields as string[]) || [];
+
+      const cached = interAgentComm.getCachedResult('get_zoning_requirements', {
+        state: s,
+        county: c,
+        municipality: m,
+        district: dist,
+      });
+      if (cached?.data) {
+        return { requestId: message.id, from: AgentType.ZONING_AGENT, success: true, data: cached.data, timestamp: Date.now() };
+      }
+
+      const kbFacts = knowledgeBase.queryFacts({
+        category: 'zoning.requirements',
+        subject: m || undefined,
+      });
+      if (kbFacts.length > 0 && !zoningChat) {
+        const setbacks: Record<string, unknown> = {};
+        const sources: string[] = [];
+        for (const f of kbFacts) {
+          if (f.predicate === 'setbackFront') setbacks.front = f.value;
+          else if (f.predicate === 'setbackSide') setbacks.side = f.value;
+          else if (f.predicate === 'setbackRear') setbacks.rear = f.value;
+          if (f.source && !sources.includes(f.source)) sources.push(f.source);
+        }
+        return {
+          requestId: message.id,
+          from: AgentType.ZONING_AGENT,
+          success: true,
+          data: {
+            district: dist || 'From Knowledge Base',
+            setbacks,
+            sources,
+            confidence: 0.9,
+            disclaimer: 'Recalled from session Knowledge Base.',
+          },
+          timestamp: Date.now(),
+        };
+      }
+
+      const activeZoningChat = getOrInitZoningChat();
+      if (!activeZoningChat) {
+        return {
+          requestId: message.id,
+          from: AgentType.ZONING_AGENT,
+          success: false,
+          error: 'Zoning Agent chat could not be initialized (check API key configuration).',
+          timestamp: Date.now(),
+        };
+      }
+
       const query = `Provide zoning requirements for ${m}, ${c} County, ${s}${dist ? `, district ${dist}` : ''}. Return structured JSON with fields: district, setbacks{front, side, rear}, maxHeight, minLotArea, lotCoverage, permittedUses[], sources[], confidence, disclaimer.${fields.length ? ` Focus on: ${fields.join(', ')}.` : ''}`;
       try {
-        const stream = await zoningChat.sendMessageStream({ message: query });
+        const stream = await activeZoningChat.sendMessageStream({ message: query });
         let resp = '';
         for await (const chunk of stream) resp += chunk.text;
         const jsonMatch = resp.match(/```json\s*([\s\S]*?)\s*```/);
@@ -6267,22 +6406,31 @@ const AppContent = () => {
     });
 
     const unsub2 = interAgentComm.onCommand('query_zoning', async (message) => {
-      if (!zoningChat) return;
       const d = message.data as Record<string, unknown>;
       const question = (d.question as string) || (d.query as string) || '';
       if (!question) return { requestId: message.id, from: AgentType.ZONING_AGENT, success: false, error: 'No question provided', timestamp: Date.now() };
+      const activeZoningChat = getOrInitZoningChat();
+      if (!activeZoningChat) {
+        return {
+          requestId: message.id,
+          from: AgentType.ZONING_AGENT,
+          success: false,
+          error: 'Zoning Agent chat could not be initialized (check API key configuration).',
+          timestamp: Date.now(),
+        };
+      }
       try {
-        const stream = await zoningChat.sendMessageStream({ message: question });
+        const stream = await activeZoningChat.sendMessageStream({ message: question });
         let resp = '';
         for await (const chunk of stream) resp += chunk.text;
-        return { requestId: message.id, from: AgentType.ZONING_AGENT, success: true, data: { answer: resp }, timestamp: Date.now() };
+        return { requestId: message.id, from: AgentType.ZONING_AGENT, success: true, data: { answer: resp, sources: [] }, timestamp: Date.now() };
       } catch (e) {
         return { requestId: message.id, from: AgentType.ZONING_AGENT, success: false, error: String(e), timestamp: Date.now() };
       }
     });
 
     return () => { unsub1(); unsub2(); };
-  }, [zoningChat, zoningPlace, zoningCounty, zoningState, zoningDistrict]);
+  }, [zoningChat, zoningPlace, zoningCounty, zoningState, zoningDistrict, startChatWithOverride, setZoningChat]);
 
   // CACP: Register CAD Manager skill handlers � these let any agent (or
   // UI component) ask the CAD Manager Agent to resolve a symbol for a given
@@ -6445,7 +6593,7 @@ const AppContent = () => {
         requestId: message.id,
         from: AgentType.CAD_MANAGER,
         success: true,
-        data: { results },
+        data: { resolutions: results, results },
         timestamp: Date.now(),
       };
     });
@@ -7307,14 +7455,14 @@ const AppContent = () => {
   // Auto Draft and Steep Slope tools operate on the same source surface.
   const steepSlopeTinSurfaces = useMemo<TinSurface[]>(() => {
     const tin = buildTinFromPoints(points, { name: 'Survey Points TIN' });
-    if (!tin) return [];
-    return [{
+    const built = tin ? [{
       ...tin,
       id: 'tin-autodraft-survey-points',
       name: 'Survey Points TIN',
       hidden: isAutoDraftTinHidden,
-    }];
-  }, [points, isAutoDraftTinHidden]);
+    }] : [];
+    return [...tinSurfaces, ...built.filter(b => !tinSurfaces.some(t => t.id === b.id))];
+  }, [points, isAutoDraftTinHidden, tinSurfaces]);
 
   const steepSlopeSegmentCount = useMemo(
     () => lines.filter(l => l.type === 'steep-slope').length,
@@ -8347,6 +8495,62 @@ const AppContent = () => {
     return () => { unsubFetch(); unsubClear(); };
   }, [handleFetchFloodZones, logActionToFieldbook]);
 
+  // CACP — Centerline & Stationing skills (`cl_create_from_description`,
+  // `cl_create_from_points`, `place_station_offset_point`, `generate_stationed_points`).
+  useClSkills({ setCenterlines, logActionToFieldbook });
+  useStationingSkills({ centerlinesRef, pointListsRef, setPointLists, logActionToFieldbook });
+
+  // CACP — Domain skill handlers across Structures, Soils, Contouring, Steep
+  // Slope, Profile, Voice, AR, DXF, Civil Drafter, Civil Plan Expert, CAD
+  // Manager (`cad_set_active_drawing_layer`), and remaining survey agents.
+  useDomainSkillHandlers({
+    points,
+    pointLists,
+    setPointLists,
+    lines,
+    setLines,
+    centerlines,
+    settings,
+    activeModel,
+    activeDrawingLayer,
+    setActiveDrawingLayer,
+    agentDrawMode,
+    setAgentDrawMode,
+    lastStructuresResult,
+    lastOsmFootprints,
+    setLastRectifyStats,
+    handleFetchStructures,
+    handleClearStructures,
+    soilMapUnits,
+    soilReportData,
+    setSoilReportData,
+    handleFetchSoils,
+    handleClearSoilsLines,
+    contourSettings,
+    contourGenerations,
+    setContourGenerations,
+    tinSurfaces,
+    steepSlopeTinSurfaces,
+    handleGenerateContours,
+    handleFetchEsriContours,
+    handleDiscoverPublicContourServices,
+    steepSlopeRuns,
+    setSteepSlopeRuns,
+    activeInclusionBoundaryId,
+    addCadCodes: cadManagerContext.addCodes,
+    setProfileData,
+    setProfileInfo,
+    rawFile,
+    deedFile,
+    dxfFile,
+    planFiles,
+    imageFiles,
+    gisFeatures,
+    activeWmsLayers,
+    availableCadLayers: activeCadLayers.map(l => l.name),
+    logActionToFieldbook,
+  });
+
   /**
    * Fetch county tax-parcel boundaries (Boundary Agent feature).
    * Mirrors handleFetchEsriContours: 'inclusion' uses a drawn polygon for the
@@ -8586,6 +8790,8 @@ const AppContent = () => {
 
     if (fileToOpen) {
         setTextEditorContent(fileToOpen.content);
+        setTextEditorContentTone('normal');
+        setTextEditorReference(null);
         setActiveTextEditorFile(fileName);
         setHasUnsavedChanges(false);
         showView('texteditor');
@@ -8594,6 +8800,8 @@ const AppContent = () => {
         if (pointListToOpen) {
             const pointListContent = pointListToString(pointListToOpen, settings);
             setTextEditorContent(pointListContent);
+            setTextEditorContentTone('normal');
+            setTextEditorReference(null);
             setActiveTextEditorFile(fileName);
             setHasUnsavedChanges(false);
             showView('texteditor');
@@ -8604,10 +8812,12 @@ const AppContent = () => {
   // Command-line results can be handed to the full text editor for longer
   // inspection or export. Each hand-off replaces a single scratch file so the
   // file list does not accumulate duplicates.
-  const handleOpenTerminalOutputInEditor = useCallback((content: string) => {
+  const handleOpenTerminalOutputInEditor = useCallback((content: string, tone: TerminalTone = 'info', reference?: CommandReference) => {
     const fileName = 'CAD Command Output.txt';
     setGeneratedFiles(prev => [...prev.filter(file => file.name !== fileName), { name: fileName, content }]);
     setTextEditorContent(content);
+    setTextEditorContentTone(tone === 'command' ? 'normal' : tone);
+    setTextEditorReference(reference ?? null);
     setActiveTextEditorFile(fileName);
     setHasUnsavedChanges(false);
     showView('texteditor');
@@ -8681,6 +8891,7 @@ const AppContent = () => {
     if (activeTextEditorFile === fileName) {
         setActiveTextEditorFile(null);
         setTextEditorContent('');
+        setTextEditorContentTone('normal');
         setHasUnsavedChanges(false);
         if (activeVisualPanel === 'texteditor') showView('canvas');
     }
@@ -8725,8 +8936,8 @@ const AppContent = () => {
     }
   }, [activeAgent, rawFile, deedFile, dxfFile, clFile, gisFile, generatedFiles, handleFileUploaded, applyDeedSubmission, handleDxfUploaded, handleGisUploaded, handleClFileUploaded, settings.userApiKey, hasConfirmedApiKey, addNotification]);
 
-  const handleSendMessage = useCallback(async (query: string, agentOverride?: AgentType) => {
-    console.log('[handleSendMessage] Called with query:', query, 'activeAgent:', activeAgent, 'override:', agentOverride);
+  const handleSendMessage = useCallback(async (query: string, agentOverride?: AgentType, askPeerDepth = 0) => {
+    console.log('[handleSendMessage] Called with query:', query, 'activeAgent:', activeAgent, 'override:', agentOverride, 'askPeerDepth:', askPeerDepth);
 
     // Deterministic symbol-visibility intercept: if the user issued a command
     // like "draw tree symbols" or "hide all manholes", toggle the built-in
@@ -9012,8 +9223,23 @@ const AppContent = () => {
     }
 
     stopGenerationRef.current = false;
-    const userMessage: ChatMessage = { role: MessageRole.USER, text: query };
-    setHistory(prev => [...prev, userMessage, { role: MessageRole.MODEL, text: '' }]);
+    const isInternalFollowUp =
+      askPeerDepth > 0 ||
+      query.startsWith('[CACP ') ||
+      query.startsWith('[KB RECALL');
+
+    if (!isInternalFollowUp && agentRegistry.isCacpEnabled(agent)) {
+      // Broadcast the user's request over the CACP Intent Router so routing
+      // telemetry and mismatch suggestions are captured in the CACP Activity Log.
+      void interAgentComm.offerRequest(agent, query).catch(() => { /* non-fatal */ });
+    }
+
+    if (isInternalFollowUp) {
+      setHistory(prev => [...prev, { role: MessageRole.MODEL, text: '' }]);
+    } else {
+      const userMessage: ChatMessage = { role: MessageRole.USER, text: query };
+      setHistory(prev => [...prev, userMessage, { role: MessageRole.MODEL, text: '' }]);
+    }
     setIsLoading(true);
     setError(null);
     
@@ -9141,6 +9367,26 @@ const AppContent = () => {
     } else if (agent === AgentType.GPS_STAKEOUT && currentPosition) {
         const { latitude, longitude, altitude } = currentPosition.coords;
         queryPrefix = `My current GPS location is Latitude: ${latitude.toFixed(8)}, Longitude: ${longitude.toFixed(8)}, Altitude: ${(altitude ?? 0).toFixed(2) ?? 'N/A'}. All project points are already in the correct coordinate system. \n\n`;
+    }
+
+    // CACP: Inject live session Knowledge Base facts and recent cached peer
+    // answers per turn so already-initialized chats see facts learned mid-session.
+    if (agentRegistry.isCacpEnabled(agent)) {
+      const liveKb = knowledgeBase.getSummaryMarkdown(20);
+      const liveCached = interAgentComm.listCachedResults().slice(0, 5);
+      if (liveKb || liveCached.length > 0) {
+        const parts: string[] = [];
+        if (liveKb) {
+          parts.push(`PROJECT KNOWLEDGE BASE (live session facts):\n${liveKb}`);
+        }
+        if (liveCached.length > 0) {
+          parts.push(
+            `RECENT CACP CACHED RESULTS:\n` +
+            liveCached.map(c => `- ${c.skillId} (from ${c.from}): ${JSON.stringify(c.data).slice(0, 350)}`).join('\n')
+          );
+        }
+        context += `---BEGIN LIVE CACP SESSION MEMORY---\n${parts.join('\n\n')}\n---END LIVE CACP SESSION MEMORY---\n\n`;
+      }
     }
     
     let fullResponse = '';
@@ -9893,7 +10139,8 @@ const AppContent = () => {
           // CACP � recallFact tool call: agent is asking us to look up a fact
           // in the Project Knowledge Base. Cheap, local � no LLM round-trip
           // on the peer side. We answer and re-run the original query.
-          if (parsedJson.recallFact && typeof parsedJson.recallFact === 'object') {
+          const MAX_ASK_PEER_DEPTH = 3;
+          if (parsedJson.recallFact && typeof parsedJson.recallFact === 'object' && askPeerDepth < MAX_ASK_PEER_DEPTH) {
             const rf = parsedJson.recallFact as { category?: string; subject?: string; predicate?: string; query?: string; reason?: string };
             try {
               let facts;
@@ -9919,7 +10166,7 @@ const AppContent = () => {
                 },
               ]));
               const followUp = `[KB RECALL � ${facts.length} fact(s)]\n${JSON.stringify(facts)}\n\nUsing the knowledge above, please complete the original request: ${query}`;
-              setTimeout(() => { void handleSendMessage(followUp); }, 0);
+              setTimeout(() => { void handleSendMessage(followUp, agent, askPeerDepth + 1); }, 0);
               skipFinallyUpdate = true;
               return;
             } catch (kbErr) {
@@ -9932,13 +10179,15 @@ const AppContent = () => {
           // request to a peer agent. We fire it, then auto-resend the user's
           // query to the same agent with the answer injected so it can finish
           // the original task on the next turn.
-          if (parsedJson.askPeer && typeof parsedJson.askPeer === 'object') {
+          if (parsedJson.askPeer && typeof parsedJson.askPeer === 'object' && askPeerDepth < MAX_ASK_PEER_DEPTH) {
             const ap = parsedJson.askPeer as { skillId?: string; payload?: Record<string, unknown>; reason?: string };
             const skillId = ap.skillId;
             const payload = (ap.payload ?? {}) as Record<string, unknown>;
             const reason = ap.reason ?? '';
             if (skillId) {
               const isGeoSkill = skillId === 'geo_extract_features' || skillId === 'geo_extract_roads';
+              const ownerManifest = agentRegistry.findOwnerOfSkill(skillId);
+              const ownerLabel = ownerManifest?.displayName ?? 'Peer Agent';
               if (isGeoSkill) {
                 // Immediately replace raw askPeer JSON in chat bubble with clean status
                 setHistory(prev => {
@@ -9948,6 +10197,20 @@ const AppContent = () => {
                     newHist[newHist.length - 1] = {
                       ...last,
                       text: `🛣️ **Extracting Geospatial Features**\n\nVectorizing ${payload.featureType || 'driveway'} corridor from aerial imagery onto layer \`${payload.targetLayer || 'L-DRIVEWAY'}\`...`,
+                      result: undefined,
+                    };
+                  }
+                  return newHist;
+                });
+              } else {
+                // Replace raw askPeer JSON in chat bubble with concise CACP delegation pill
+                setHistory(prev => {
+                  const newHist = [...prev];
+                  const last = newHist[newHist.length - 1];
+                  if (last && last.role === MessageRole.MODEL) {
+                    newHist[newHist.length - 1] = {
+                      ...last,
+                      text: `🔗 **CACP Delegation** — Calling \`${skillId}\` on **${ownerLabel}**${reason ? ` (${reason})` : ''}…`,
                       result: undefined,
                     };
                   }
@@ -9984,7 +10247,7 @@ const AppContent = () => {
                     ? `[CACP COMPLETED — ${skillId}]\nResult: ${JSON.stringify(peerResponse.data)}\n\nThe action above has already been executed by the peer agent. Please confirm the outcome to the user in a natural sentence (e.g. "Point X has been deleted."). Do NOT call askPeer again — the task is done.`
                     : `[CACP RESULT — ${skillId} from ${peerResponse.from}]\n${JSON.stringify(peerResponse.data)}\n\nUsing the data above, please complete the original request: ${query}`;
                   // Fire-and-forget; user sees streaming as usual.
-                  setTimeout(() => { void handleSendMessage(followUp); }, 0);
+                  setTimeout(() => { void handleSendMessage(followUp, agent, askPeerDepth + 1); }, 0);
                   skipFinallyUpdate = true;
                   return;
                 } else {
@@ -10011,7 +10274,7 @@ const AppContent = () => {
                   const followUp = isActionSkill
                     ? `[CACP FAILED — ${skillId}: ${errDetail}]\n\nThe action could not be completed. Please inform the user of this failure. Do NOT retry askPeer.`
                     : `[CACP FAILED — ${skillId}: ${errDetail}]\n\nThe peer agent could not fulfill the "${skillId}" request. Please handle this gracefully and complete the user's original request as best you can without the external data: ${query}`;
-                  setTimeout(() => { void handleSendMessage(followUp); }, 0);
+                  setTimeout(() => { void handleSendMessage(followUp, agent, askPeerDepth + 1); }, 0);
                   skipFinallyUpdate = true;
                   return;
                 }
@@ -10039,7 +10302,7 @@ const AppContent = () => {
                 const followUp = isActionSkillOnErr
                   ? `[CACP ERROR — ${skillId}: ${errMsg}]\n\nThe action failed with an error. Please inform the user. Do NOT retry askPeer.`
                   : `[CACP ERROR — ${skillId}: ${errMsg}]\n\nThe peer agent threw an error. Please handle this gracefully and complete the user's original request as best you can without the external data: ${query}`;
-                setTimeout(() => { void handleSendMessage(followUp); }, 0);
+                setTimeout(() => { void handleSendMessage(followUp, agent, askPeerDepth + 1); }, 0);
                 skipFinallyUpdate = true;
                 return;
               }
@@ -12586,6 +12849,23 @@ const AppContent = () => {
     }
   }, [isDesktop, isSessionActive, showView, activeVisualPanel, activeAgent, handleStartGpsStakeoutSession, pushNavigation, isInitialScreen, initializedAgents, pointLists, settings, dxfFile, startChatWithOverride, setCivilDrafterChat, setCivilDrafterChatHistory, setRawFile, logActionToFieldbook, cadStandardsLoaded, handleCadManagerSessionStart, initializeDroneAgent]);
 
+  /**
+   * Boundary Agent GIS entry point — shared by the homepage card and the deed
+   * upload screen. Selects and initializes the Boundary Agent first; otherwise
+   * `showUploadScreen` keeps the upload gate on top of the canvas. Then docks
+   * the county-parcel panel with its GIS tab active.
+   */
+  const handleOpenBoundaryGis = useCallback(() => {
+    if (!initializedAgents.has(AgentType.DEED_READER)) {
+      handleDeedStartFromScratch();
+    } else {
+      handleAgentChange(AgentType.DEED_READER);
+    }
+    setActiveBoundaryDockedTab('gis');
+    // Defer one tick so the session/view updates land before the panel docks.
+    setTimeout(() => { handleOpenParcelGisFromUpload(); }, 0);
+  }, [initializedAgents, handleDeedStartFromScratch, handleAgentChange, handleOpenParcelGisFromUpload]);
+
   handleAgentChangeRef.current = handleAgentChange;
   
   const handleModelChange = useCallback((model: string) => {
@@ -14995,7 +15275,10 @@ const AppContent = () => {
         annotationScale,
         closureReports,
         boundaryFiles,
+        deedBatchJob: deedBatchJob ?? undefined,
         dimensions,
+        tinSurfaces: tinSurfaces.length > 0 ? tinSurfaces : undefined,
+        steepSlopeRuns: steepSlopeRuns.length > 0 ? steepSlopeRuns : undefined,
         inclusionBoundaries,
         activeInclusionBoundaryId,
         floodFirmette: floodFirmetteData ?? null,
@@ -15022,8 +15305,10 @@ const AppContent = () => {
         cogoChatHistory,
         rinexChatHistory, // Added rinexChatHistory
         zoningChatHistory,
+        structuresChatHistory: structuresChatHistory.length > 0 ? structuresChatHistory : undefined,
         standardsComplianceChatHistory,
         standardsComplianceControlFile,
+        standardsComplianceControlFiles: standardsComplianceControlFile ? [standardsComplianceControlFile] : undefined,
         standardsComplianceSubjectFile,
         standardsComplianceSourceMode,
         standardsComplianceChecks,
@@ -15047,6 +15332,13 @@ const AppContent = () => {
         // CACP: persist the Project Knowledge Base so every fact learned this session (deed ROW
         // widths, zoning setbacks, parcel ids, monuments) travels with the .lsvz file.
         knowledgeFacts: knowledgeBase.exportFacts() as any,
+        keyframeCache: LsvzPersistence.exportKeyframes().length > 0 ? LsvzPersistence.exportKeyframes() : undefined,
+        cadManagerState: (cadManagerContext.state.standard || cadManagerContext.state.confirmedAliases.length > 0)
+            ? {
+                standard: cadManagerContext.state.standard,
+                confirmedAliases: cadManagerContext.state.confirmedAliases,
+              }
+            : undefined,
         // Drafting Style Library � CAD Manager sub-tool training data
         draftingStyleLibrary: draftingStyleLibrary.length > 0 ? draftingStyleLibrary : undefined,
         // Soils Agent � SSURGO map units and chat history
@@ -15061,6 +15353,7 @@ const AppContent = () => {
             attributeScale,
             lineLabelScale,
             dimensionScale,
+            symbolScale,
             pointLayers,
             activeTextEditorFile,
             isPointEditorFullscreen: false,
@@ -15198,7 +15491,19 @@ const AppContent = () => {
                 if (typeof sessionState.annotationScale === 'number') setAnnotationScale(sessionState.annotationScale);
                 setClosureReports(sessionState.closureReports || []);
                 setBoundaryFiles(sessionState.boundaryFiles || []);
+                if (sessionState.deedBatchJob !== undefined) {
+                  setDeedBatchJob(sessionState.deedBatchJob);
+                }
                 setDimensions(sessionState.dimensions || []);
+                if (sessionState.tinSurfaces) {
+                  setTinSurfaces(sessionState.tinSurfaces);
+                }
+                if (sessionState.steepSlopeRuns) {
+                  setSteepSlopeRuns(sessionState.steepSlopeRuns);
+                }
+                if (sessionState.gisFeatures) {
+                  setGisFeatures(sessionState.gisFeatures);
+                }
                 setInclusionBoundaries(sessionState.inclusionBoundaries || []);
                 setActiveInclusionBoundaryId(sessionState.activeInclusionBoundaryId ?? null);
                 if (sessionState.floodFirmette) {
@@ -15243,8 +15548,12 @@ const AppContent = () => {
                 // FIX: Load profile agent chat history from the session file.
                 setProfileChatHistory(needsMigration ? (sessionState.profileChatHistory || []).map(migrateMessage) : sessionState.profileChatHistory || []);
                 setCogoChatHistory(needsMigration ? (sessionState.cogoChatHistory || []).map(migrateMessage) : sessionState.cogoChatHistory || []);
+                setRinexChatHistory(needsMigration ? (sessionState.rinexChatHistory || []).map(migrateMessage) : sessionState.rinexChatHistory || []);
+                setZoningChatHistory(needsMigration ? (sessionState.zoningChatHistory || []).map(migrateMessage) : sessionState.zoningChatHistory || []);
+                setStructuresChatHistory(needsMigration ? (sessionState.structuresChatHistory || []).map(migrateMessage) : sessionState.structuresChatHistory || []);
+                setImageAnalyzerChatHistory(needsMigration ? (sessionState.imageAnalyzerChatHistory || []).map(migrateMessage) : sessionState.imageAnalyzerChatHistory || []);
                 setStandardsComplianceChatHistory(needsMigration ? (sessionState.standardsComplianceChatHistory || []).map(migrateMessage) : sessionState.standardsComplianceChatHistory || []);
-                setStandardsComplianceControlFile(sessionState.standardsComplianceControlFile || null);
+                setStandardsComplianceControlFile(sessionState.standardsComplianceControlFile || sessionState.standardsComplianceControlFiles?.[0] || null);
                 setStandardsComplianceSubjectFile(sessionState.standardsComplianceSubjectFile || null);
                 setStandardsComplianceSourceMode(sessionState.standardsComplianceSourceMode || 'ask-each-run');
                 setStandardsComplianceChecks(sessionState.standardsComplianceChecks || DEFAULT_STANDARDS_CHECKS);
@@ -15261,6 +15570,17 @@ const AppContent = () => {
                 setCutSheetInfo(sessionState.cutSheetInfo);
                 // Restore Drafting Style Library
                 setDraftingStyleLibrary(sessionState.draftingStyleLibrary || []);
+                // Restore CAD Manager state when present in .lsvz
+                if (sessionState.cadManagerState) {
+                  cadManagerContext.import({
+                    standard: sessionState.cadManagerState.standard ?? null,
+                    confirmedAliases: sessionState.cadManagerState.confirmedAliases ?? [],
+                  });
+                }
+                // Restore cached keyframes
+                if (sessionState.keyframeCache) {
+                  LsvzPersistence.importKeyframes(sessionState.keyframeCache);
+                }
                 // Restore Soils Agent map units and chat history
                 setSoilMapUnits(sessionState.soilMapUnits ?? []);
                 setSoilsChatHistory(needsMigration ? (sessionState.soilsChatHistory || []).map(migrateMessage) : sessionState.soilsChatHistory || []);
@@ -16095,10 +16415,10 @@ const AppContent = () => {
       {activeAgent === AgentType.CIVIL_DRAFTER && isCurrentAgentInitialized && (
         <button
           onClick={() => setShowCivilDrafterContextPanel(v => !v)}
-          className={`flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors duration-200 ${showCivilDrafterContextPanel ? 'bg-fuchsia-600 text-white' : 'bg-gray-700 text-gray-200 hover:bg-gray-600 hover:text-white'} light-theme:bg-gray-200 light-theme:text-gray-700 light-theme:hover:bg-gray-300`}
+          className={`inline-flex h-6 items-center gap-1.5 rounded border px-2 text-[10px] font-semibold transition-colors duration-150 ${showCivilDrafterContextPanel ? 'border-fuchsia-400/40 bg-fuchsia-500/15 text-fuchsia-200' : 'border-white/[0.08] bg-white/[0.03] text-slate-300 hover:border-white/[0.14] hover:bg-white/[0.06] hover:text-white'} light-theme:border-gray-300 light-theme:bg-gray-100 light-theme:text-gray-700 light-theme:hover:bg-gray-200`}
           title="Context settings � control how much conversation the Civil Drafter carries between requests (fixes 'input exceeds maximum tokens' after several draws)"
         >
-          <AdjustmentsHorizontalIcon className="w-4 h-4" />
+          <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">Context</span>
         </button>
       )}
@@ -16107,7 +16427,7 @@ const AppContent = () => {
           <select
             value={currentFileName}
             onChange={(e) => handleFileSwitch(e.target.value)}
-            className="bg-gray-700 text-gray-200 text-xs font-semibold rounded-md pl-3 pr-8 py-1.5 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-white/50 max-w-[120px] sm:max-w-xs appearance-none light-theme:bg-gray-200 light-theme:text-gray-700 light-theme:border-gray-300"
+            className="h-6 max-w-[120px] appearance-none rounded border border-white/[0.08] bg-white/[0.03] pl-2 pr-6 text-[10px] font-semibold text-slate-300 outline-none transition-colors focus:border-cyan-400/40 sm:max-w-xs light-theme:border-gray-300 light-theme:bg-gray-100 light-theme:text-gray-700"
             title="Switch active file for this agent"
           >
             {relevantFilesForAgent.map(file => (
@@ -16116,16 +16436,16 @@ const AppContent = () => {
               </option>
             ))}
           </select>
-          <ChevronDownIcon className="w-4 h-4 text-gray-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <ChevronDownIcon className="h-3 w-3 text-slate-500 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
         </div>
       )}
       {isCurrentAgentInitialized && addDataButtonLabels[activeAgent] && (
         <button
           onClick={() => setIsAddingData(true)}
-          className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors duration-200 bg-gray-700 text-gray-200 hover:bg-gray-600 hover:text-white light-theme:bg-gray-200 light-theme:text-gray-700 light-theme:hover:bg-gray-300"
+          className="inline-flex h-6 items-center gap-1.5 rounded border border-white/[0.08] bg-white/[0.03] px-2 text-[10px] font-semibold text-slate-300 transition-colors duration-150 hover:border-white/[0.14] hover:bg-white/[0.06] hover:text-white light-theme:border-gray-300 light-theme:bg-gray-100 light-theme:text-gray-700 light-theme:hover:bg-gray-200"
           title={addDataButtonLabels[activeAgent]}
         >
-          <ArrowUpTrayIcon className="w-4 h-4" />
+          <ArrowUpTrayIcon className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">{addDataButtonLabels[activeAgent]?.replace('...', '')}</span>
         </button>
       )}
@@ -16142,7 +16462,11 @@ const AppContent = () => {
       reservedRight={isDesktop && isChatPanelVisible ? chatPanelWidth : 0}
       reservedBottom={!isDesktop && isChatPanelVisible ? Math.floor(window.innerHeight / 2) : 0}
       onUpdateCall={handleBoundaryCallUpdate}
-      onAddCall={handleBoundaryRowAdd}
+      onAddCall={(fileId) => {
+        handleBoundaryRowAdd(fileId);
+        setIsAddCallRowPulsing(false);
+      }}
+      isAddCallRowPulsing={isAddCallRowPulsing}
       onRemoveCall={handleBoundaryRowRemove}
       onGenerateClosureReport={handleGenerateBoundaryClosureReport}
       onInvestigateClosure={handleInvestigateClosure}
@@ -16150,6 +16474,7 @@ const AppContent = () => {
       onDrawToLinework={handleDrawBoundaryToLinework}
       onClose={() => {
         setIsBoundaryEditorVisible(false);
+        setIsAddCallRowPulsing(false);
         setDeedSummaryFileIds([]);
         setDeedSummary(null);
       }}
@@ -16389,10 +16714,20 @@ const AppContent = () => {
                             setShowLegalGate(true);
                             return;
                           }
+                          // Point the user at the first row once the blank editor opens.
+                          setIsAddCallRowPulsing(true);
+                          window.setTimeout(() => setIsAddCallRowPulsing(false), 12000);
                           handleAgentChange(AgentType.DEED_READER);
                           // Defer one tick so handleAgentChange's state updates settle
                           // before we open the Boundary Editor scratch session.
                           setTimeout(() => { handleDeedStartFromScratch(); }, 0);
+                        }}
+                        onOpenBoundaryGis={() => {
+                          if (!hasLegalSignature && !hasSignedLegalAgreement()) {
+                            setShowLegalGate(true);
+                            return;
+                          }
+                          handleOpenBoundaryGis();
                         }}
                         onOpenCadStandards={() => {
                           if (!hasLegalSignature && !hasSignedLegalAgreement()) {
@@ -16445,7 +16780,7 @@ const AppContent = () => {
                   <>
                     {activeAgent === AgentType.RAW_CRAWLER && <FileUpload onFileUploaded={handleFileUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.CIVIL_DRAFTER && <CivilDrafterFileUpload onFileUploaded={handleCivilDrafterFileUploaded} onPdfUploaded={handleCivilDrafterPdfUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} existingPointCount={pointLists.reduce((sum, l) => sum + l.points.length, 0)} onUseExistingPoints={handleCivilDrafterUseExistingPoints} />}
-                    {activeAgent === AgentType.DEED_READER && <DeedInput onDeedSubmitted={handleDeedSubmitted} onStartFromScratch={handleDeedStartFromScratch} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} freeDeedsRemaining={deedCreditSnapshot?.remaining ?? null} freeDeedsLimit={deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT} freeDeedsUnlimited={Boolean(deedCreditSnapshot?.unlimited || isDeedMeterExempt)} freeDeedsUnverified={Boolean(deedCreditSnapshot?.unverified)} onShowUpgrade={openDeedUpgradeDialog} onOpenGis={handleOpenParcelGisFromUpload} />}
+                    {activeAgent === AgentType.DEED_READER && <DeedInput onDeedSubmitted={handleDeedSubmitted} onStartFromScratch={handleDeedStartFromScratch} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} freeDeedsRemaining={deedCreditSnapshot?.remaining ?? null} freeDeedsLimit={deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT} freeDeedsUnlimited={Boolean(deedCreditSnapshot?.unlimited || isDeedMeterExempt)} freeDeedsUnverified={Boolean(deedCreditSnapshot?.unverified)} onShowUpgrade={openDeedUpgradeDialog} onOpenGis={handleOpenBoundaryGis} />}
                     {activeAgent === AgentType.CIVIL_PLAN_EXPERT && <PlanInput onPlansSubmitted={handlePlansSubmitted} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.DXF_ANALYZER && <DxfInput onDxfUploaded={handleDxfUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.GIS_AGENT && <GisInput onGisUploaded={handleGisUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} inclusionBoundaries={inclusionBoundaries} activeInclusionBoundaryId={activeInclusionBoundaryId} hasInclusionLines={lines.some((l: SurveyLine) => l.type === 'inclusion')} getInclusionBboxWgs84={getInclusionBboxWgs84} />}
@@ -16461,9 +16796,9 @@ const AppContent = () => {
               </div>
             ) : (
                 <div className={`flex flex-1 min-h-0 ${!isDesktop && 'flex-col'}`}>
-                    <div ref={visualPanelAndEditorContainerRef} className={`flex flex-col min-w-0 transition-all duration-300 ${isDesktop ? 'flex-1' : (isChatPanelVisible ? 'h-1/2' : 'h-full')}`}>
+                    <div ref={visualPanelAndEditorContainerRef} className={`flex flex-col min-w-0 ${isResizingChat ? '' : 'transition-all duration-300'} ${isDesktop ? 'flex-1' : (isChatPanelVisible ? 'h-1/2' : 'h-full')}`}>
                         {/* Main Header Bar */}
-                        <div className="relative z-[80] overflow-visible flex-shrink-0 flex items-center gap-2 p-2 h-[50px] bg-gray-900/40 backdrop-blur border-b border-gray-700/30 light-theme:bg-white/40 light-theme:border-gray-300/30">
+                        <div className="relative z-[80] overflow-visible flex-shrink-0 flex items-center gap-2 p-2 h-[50px] bg-[#0a0f16] border-b border-white/[0.06] light-theme:bg-white/60 light-theme:border-gray-300/40">
                             <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 md:hidden"><Bars3Icon className="w-6 h-6"/></button>
                             {canGoBack && (
                                 <button 
@@ -16615,6 +16950,7 @@ const AppContent = () => {
                                         isDesktop={isDesktop}
                                         isChatPanelVisible={isChatPanelVisible}
                                         chatPanelWidth={chatPanelWidth}
+                                        isChatResizing={isResizingChat}
                                         keyInfo={{
                                             label: activeKeyStatusLabel,
                                             detail: activeKeyStatusDetail,
@@ -17099,6 +17435,8 @@ const AppContent = () => {
                                         activeFile={activeTextEditorFile} 
                                         onFileSelect={handleOpenFileInEditor}
                                         content={textEditorContent}
+                                        contentTone={textEditorContentTone}
+                                        reference={textEditorReference}
                                         onContentChange={handleTextEditorContentChange}
                                         onSaveChanges={handleSaveChanges}
                                         hasUnsavedChanges={hasUnsavedChanges}
@@ -17311,7 +17649,7 @@ const AppContent = () => {
                     </div>
                     
                     {isChatPanelVisible && activeVisualPanel !== 'cadmanager' && activeVisualPanel !== 'gpsstakeout' && activeVisualPanel !== 'sheetview' && activeVisualPanel !== 'draftstylelib' && activeVisualPanel !== 'linetypemanager' && activeVisualPanel !== 'compliance' && (
-                        <div className={`relative transition-all duration-300 ${isDesktop ? 'flex-shrink-0' : 'h-1/2'}`} style={isDesktop ? { width: `${chatPanelWidth}px` } : {}}>
+                        <div data-chat-panel className={`relative border-white/[0.06] ${isResizingChat ? '' : 'transition-all duration-300'} ${isDesktop ? 'flex-shrink-0 border-l' : 'h-1/2 border-t'}`} style={isDesktop ? { width: `${chatPanelWidth}px` } : {}}>
                             {isDesktop && (
                                 <div
                                     onMouseDown={handleChatResizeMouseDown}

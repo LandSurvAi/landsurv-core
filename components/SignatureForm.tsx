@@ -169,83 +169,141 @@ export const SignatureForm: React.FC<SignatureFormProps> = ({ onSigned, onBack, 
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
-      <div className="px-6 py-5 overflow-y-auto flex-1 min-h-0 space-y-4">
-      <div className="grid sm:grid-cols-2 gap-4">
-        <label className="block">
-          <span className="block text-sm font-semibold text-gray-300 mb-1">Full Name *</span>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-            autoComplete="name"
-            className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-md text-gray-100 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400"
-            placeholder="Jane Smith"
-          />
-        </label>
-        <label className="block">
-          <span className="block text-sm font-semibold text-gray-300 mb-1">Email *</span>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoComplete="email"
-            className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-md text-gray-100 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400"
-            placeholder="jane@example.com"
-          />
-        </label>
-      </div>
-
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <span className="block text-sm font-semibold text-gray-300">Signature *</span>
-          <button
-            type="button"
-            onClick={clearSignature}
-            className="text-xs text-cyan-400 hover:text-cyan-300 underline"
-          >
-            Clear
-          </button>
+      <div className="px-6 py-5 sm:px-8 overflow-y-auto flex-1 min-h-0 space-y-5">
+        {/* Clean Architectural Confirmation Line (No Pill) */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3 text-xs">
+          <div className="flex items-center gap-2 text-emerald-400 font-semibold">
+            <span>✓</span>
+            <span>Terms of Service Reviewed &amp; Acknowledged</span>
+          </div>
+          <span className="font-mono text-[11px] text-slate-400">
+            Agreement ID: <span className="text-slate-200">{LEGAL_AGREEMENT_VERSION}</span>
+          </span>
         </div>
-        <div className="rounded-md border border-gray-700 bg-white overflow-hidden touch-none">
-          <canvas
-            ref={canvasRef}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
-            onPointerLeave={handlePointerUp}
-            className="block w-full h-[150px] sm:h-[200px] cursor-crosshair"
-            style={{ touchAction: 'none' }}
-            aria-label="Draw your signature"
-          />
+
+        <div className="grid sm:grid-cols-2 gap-4">
+          <label className="block">
+            <span className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+              Full Legal Name <span className="text-cyan-400">*</span>
+            </span>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              autoComplete="name"
+              className="w-full px-3.5 py-2.5 bg-slate-900/90 border border-slate-700 rounded-lg text-gray-100 placeholder-slate-500 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400 transition-colors text-sm"
+              placeholder="Jane M. Smith, PLS"
+            />
+          </label>
+          <label className="block">
+            <span className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+              Email Address <span className="text-cyan-400">*</span>
+            </span>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoComplete="email"
+              className="w-full px-3.5 py-2.5 bg-slate-900/90 border border-slate-700 rounded-lg text-gray-100 placeholder-slate-500 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400 transition-colors text-sm"
+              placeholder="jane@smithsurvey.com"
+            />
+          </label>
         </div>
-        <p className="text-xs text-gray-500 mt-1">Draw your signature above using mouse, trackpad, or touch.</p>
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="block text-xs font-bold uppercase tracking-wider text-slate-300">
+              Electronic Signature <span className="text-cyan-400">*</span>
+            </span>
+            <div className="flex items-center gap-3">
+              <span className={`text-[11px] font-mono ${hasDrawn ? 'text-emerald-400' : 'text-slate-500'}`}>
+                {hasDrawn ? '✓ Signature captured' : 'Awaiting signature stroke...'}
+              </span>
+              <span className="text-slate-700" aria-hidden="true">|</span>
+              <button
+                type="button"
+                onClick={clearSignature}
+                className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 underline underline-offset-4"
+              >
+                Clear Pad
+              </button>
+            </div>
+          </div>
+          <div className="relative rounded-lg border border-slate-700 hover:border-cyan-500/40 bg-white overflow-hidden touch-none shadow-inner transition-colors">
+            <canvas
+              ref={canvasRef}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
+              onPointerLeave={handlePointerUp}
+              className="block w-full h-[150px] sm:h-[180px] cursor-crosshair"
+              style={{ touchAction: 'none' }}
+              aria-label="Draw your signature"
+            />
+            {/* Signature baseline guide */}
+            <div className="pointer-events-none absolute inset-x-6 bottom-6 border-b border-dashed border-slate-300 flex items-end justify-between pb-1">
+              <span className="text-xs font-serif italic text-slate-400 select-none">Sign here &times;</span>
+              <span className="text-[10px] font-mono text-slate-400 select-none">ESIGN / UETA Verified</span>
+            </div>
+          </div>
+          <p className="text-xs text-slate-400 mt-1.5">
+            Draw your signature above using your mouse, trackpad, stylus, or touchscreen.
+          </p>
+        </div>
+
+        <p className="text-xs text-slate-400 leading-relaxed border-t border-slate-800/80 pt-3">
+          By executing your electronic signature below, you accept the LandSurv.ai Terms of Service and Professional Practice Disclosures, and agree to receive occasional LandSurv.ai product update emails (unsubscribe anytime with one click).
+        </p>
       </div>
 
-      <p className="text-xs text-gray-400">
-        By signing, you also agree to receive occasional LandSurv.ai product update emails. You can unsubscribe at any time using the link in any email.
-      </p>
-      </div>
-
-      {/* Fixed footer — confirm button is always visible */}
-      <div className="px-6 py-4 border-t border-gray-700 bg-gray-800 flex-shrink-0 flex items-center gap-3">
+      {/* Fixed footer — Next-Level Precision Architectural Submit Button */}
+      <div className="px-6 py-4 sm:px-8 border-t border-slate-800/90 bg-slate-950 flex-shrink-0 flex items-center gap-3">
         {onBack && (
           <button
             type="button"
             onClick={onBack}
-            className="px-4 py-3 text-sm font-semibold text-gray-300 hover:text-white bg-gray-700/60 hover:bg-gray-700 rounded-lg transition-colors"
+            className="px-4 py-3.5 text-xs sm:text-sm font-semibold text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 rounded-lg transition-colors"
           >
-            Back
+            &larr; Back
           </button>
         )}
         <button
           type="submit"
           disabled={!canSubmit}
-          className="flex-1 py-3 px-6 font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors shadow-lg disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
+          className={`group relative flex-1 overflow-hidden rounded-lg transition-all duration-200 focus:outline-none ${
+            canSubmit
+              ? 'bg-slate-900 hover:bg-slate-800/95 text-white border border-cyan-400/50 hover:border-cyan-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.12),0_8px_28px_-6px_rgba(6,182,212,0.3)] cursor-pointer'
+              : 'bg-slate-900/50 text-slate-500 border border-slate-800 cursor-not-allowed'
+          }`}
         >
-          {canSubmit ? 'Sign & Continue to App' : 'Enter name, email, and signature to continue'}
+          <span
+            className={`absolute inset-y-0 left-0 w-1 transition-colors ${
+              canSubmit ? 'bg-cyan-400 group-hover:bg-emerald-400' : 'bg-slate-700'
+            }`}
+            aria-hidden="true"
+          />
+          <div className="flex items-center justify-between px-5 py-3.5">
+            <span className="font-semibold text-sm sm:text-[15px] tracking-tight">
+              {canSubmit ? 'Sign & Continue to App' : 'Enter name, email, and signature to continue'}
+            </span>
+            <div className="flex items-center gap-2">
+              <span
+                className={`font-mono text-xs uppercase tracking-wider ${
+                  canSubmit ? 'text-cyan-300 group-hover:text-white font-semibold' : 'text-slate-600'
+                }`}
+              >
+                {canSubmit ? 'Execute & Launch' : 'Incomplete'}
+              </span>
+              {canSubmit && (
+                <span className="text-cyan-400 transition-transform duration-200 group-hover:translate-x-1" aria-hidden="true">
+                  &rarr;
+                </span>
+              )}
+            </div>
+          </div>
         </button>
       </div>
     </form>

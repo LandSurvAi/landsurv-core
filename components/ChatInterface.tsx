@@ -4,7 +4,7 @@ import { useUIState } from '../contexts/UIStateContext.tsx';
 import { SendIcon, BrainCircuitIcon, StopIcon, LsvzIcon, DxfAnalyzerIcon, LightbulbIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, DocumentDuplicateIcon, ChevronDownIcon, ChevronUpIcon, FolderIcon, DocumentTextIcon, CrosshairsIcon, CameraIcon, ArrowUpTrayIcon, ChevronDoubleRightIcon, GisAgentIcon, SparklesIcon } from './icons.tsx';
 import SuggestedQuestions from './SuggestedQuestions.tsx';
 import { ToolsDrawer } from './ToolsDrawer.tsx';
-import { agentThemeColors } from '../constants/agents.ts';
+import { agentConfig, agentThemeColors } from '../constants/agents.ts';
 import { sanitizeZoningAnswer } from '../utils/zoningRender.ts';
 import { formatChatHtml } from '../utils/chatHtml.ts';
 
@@ -117,6 +117,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading, showSuggestions]);
 
+  // Escape closes the suggested-prompts popover.
+  useEffect(() => {
+    if (!showSuggestions) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setShowSuggestions(false);
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [showSuggestions]);
+
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
 
   const handleCopyConversation = useCallback(async () => {
@@ -175,7 +187,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setTimeout(() => setCopyStatus('idle'), 1800);
   }, [messages, activeAgent]);
 
-  const theme = themeClasses[activeAgent] || { gradient: 'from-gray-500 to-gray-600', accent: 'accent-gray-500' };
+  const agentMeta = agentConfig[activeAgent];
+  const agentLabel = agentMeta?.label || agentLabels[activeAgent] || activeAgent;
+  const AgentIcon = agentMeta?.icon;
+  const accentColor = agentThemeColors[activeAgent] || '#94a3b8';
+  const modelLabel = formatModelDisplay(currentModelName);
   
   // DEBUG: Log tools content
   useEffect(() => {
@@ -193,48 +209,113 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         {toolsContent}
       </ToolsDrawer>
 
-      <div className="flex flex-col h-full bg-gray-800 text-gray-200 light-theme:bg-gray-100 light-theme:text-gray-800">
-        <header className="flex-shrink-0 flex items-center justify-between p-2 h-[50px] border-b border-gray-700/30 bg-gray-900/40 backdrop-blur light-theme:border-gray-300/30 light-theme:bg-white/40">
-          <div className="flex items-center gap-2 min-w-0">
-            {headerControls}
+      <div className="flex flex-col h-full bg-[#0a0f16] text-gray-200 light-theme:bg-gray-100 light-theme:text-gray-800">
+        <header className="flex-shrink-0 border-b border-white/[0.06] bg-[#080d14] light-theme:border-gray-300/40 light-theme:bg-white">
+          <div className="flex h-12 items-center justify-between gap-2 px-2.5">
+            <div className="flex min-w-0 items-center gap-2">
+              {AgentIcon && (
+                <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md border border-white/[0.07] bg-white/[0.03] light-theme:border-gray-300 light-theme:bg-gray-50">
+                  <AgentIcon className="h-[15px] w-[15px]" style={{ color: accentColor }} />
+                </span>
+              )}
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-200 light-theme:text-gray-800">{agentLabel}</span>
+                  {isLoading && (
+                    <span
+                      className="flex items-center gap-1 rounded-full border px-1.5 py-[1px] text-[8px] font-bold uppercase tracking-[0.12em]"
+                      style={{ borderColor: `${accentColor}40`, color: accentColor, backgroundColor: `${accentColor}14` }}
+                    >
+                      <span className="h-1 w-1 animate-pulse rounded-full" style={{ backgroundColor: accentColor }} />
+                      Working
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-slate-500 light-theme:text-gray-500">
+                  <span>Agent</span>
+                  <span className="text-slate-700 light-theme:text-gray-400">/</span>
+                  <span className="truncate text-slate-400 light-theme:text-gray-600">{modelLabel || 'Auto'}</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-shrink-0 items-center gap-0.5">
+              <button
+                  onClick={handleCopyConversation}
+                  disabled={messages.length === 0}
+                  className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40 light-theme:hover:bg-gray-100 light-theme:hover:text-gray-900 ${
+                    copyStatus === 'copied'
+                      ? 'text-emerald-400'
+                      : copyStatus === 'error'
+                        ? 'text-red-400'
+                        : 'text-slate-500 hover:bg-white/[0.06] hover:text-slate-200 light-theme:text-gray-500'
+                  }`}
+                  title={copyStatus === 'copied' ? 'Copied!' : copyStatus === 'error' ? 'Copy failed' : 'Copy conversation (for AI debugging)'}
+              >
+                  <DocumentDuplicateIcon className="h-4 w-4" />
+              </button>
+              <button
+                  onClick={toggleChatPanel}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-200 light-theme:text-gray-500 light-theme:hover:bg-gray-100 light-theme:hover:text-gray-900"
+                  title="Hide Chat"
+              >
+                  <ChevronDownIcon className="h-4 w-4 md:hidden" />
+                  <ChevronDoubleRightIcon className="h-4 w-4 hidden md:block" />
+              </button>
+            </div>
           </div>
-        <div className="flex items-center gap-1">
-          <button
-              onClick={handleCopyConversation}
-              disabled={messages.length === 0}
-              className={`p-2 rounded-full transition-colors light-theme:hover:text-black ${
-                copyStatus === 'copied'
-                  ? 'text-green-400'
-                  : copyStatus === 'error'
-                    ? 'text-red-400'
-                    : 'text-gray-400 hover:text-white light-theme:text-gray-500'
-              } disabled:opacity-40 disabled:cursor-not-allowed`}
-              title={copyStatus === 'copied' ? 'Copied!' : copyStatus === 'error' ? 'Copy failed' : 'Copy conversation (for AI debugging)'}
-          >
-              <DocumentDuplicateIcon className="w-5 h-5" />
-          </button>
-          <button
-              onClick={toggleChatPanel}
-              className="p-2 text-gray-400 hover:text-white rounded-full transition-colors light-theme:text-gray-500 light-theme:hover:text-black"
-              title="Hide Chat"
-          >
-              <ChevronDownIcon className="w-6 h-6 md:hidden" />
-              <ChevronDoubleRightIcon className="w-6 h-6 hidden md:block" />
-          </button>
-        </div>
+          {headerControls && (
+            <div className="scrollbar-hide flex items-center gap-1 overflow-x-auto border-t border-white/[0.04] px-2.5 py-1.5 light-theme:border-gray-200">
+              {headerControls}
+            </div>
+          )}
       </header>
 
       {/* Docked workspace panel (e.g. Boundary Dialog) */}
       {dockedContent && (
-        <div className="flex-shrink-0 border-b border-gray-700/80 bg-gray-900 overflow-hidden flex flex-col shadow-lg transition-all">
+        <div className="flex-shrink-0 border-b border-white/[0.07] bg-[#080d14] overflow-hidden flex flex-col shadow-lg transition-all">
           {dockedContent}
         </div>
       )}
 
-      <div className="flex-grow overflow-y-auto p-4 space-y-6">
+      <div className="flex-grow overflow-y-auto px-3.5 py-4 space-y-4">
+        {messages.length === 0 && !isLoading && (
+          <div className="flex h-full min-h-[320px] flex-col items-center justify-center px-4 text-center">
+            <div
+              className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] light-theme:border-gray-300 light-theme:bg-gray-50"
+              style={{ boxShadow: `inset 0 0 0 1px ${accentColor}18` }}
+            >
+              {AgentIcon ? (
+                <AgentIcon className="h-5 w-5" style={{ color: accentColor }} />
+              ) : (
+                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: accentColor }} />
+              )}
+            </div>
+            <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-slate-500">Agent Workspace</p>
+            <h2 className="mt-1.5 text-[15px] font-semibold text-slate-100 light-theme:text-gray-900">{agentLabel}</h2>
+            <p className="mt-1 max-w-[250px] text-[11px] leading-relaxed text-slate-500 light-theme:text-gray-500">
+              Ready for a task — ask a question, paste notes, or attach a file to begin.
+            </p>
+            {suggestedQuestions.length > 0 && (
+              <div className="mt-5 w-full max-w-[300px] space-y-1.5">
+                {suggestedQuestions.slice(0, 3).map((question) => (
+                  <button
+                    key={question}
+                    onClick={() => onSendMessage(question)}
+                    className="w-full rounded-md border border-white/[0.07] bg-white/[0.02] px-3 py-2 text-left text-[11px] leading-snug text-slate-400 transition-colors hover:border-white/[0.13] hover:bg-white/[0.045] hover:text-slate-200 light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-600 light-theme:hover:bg-gray-100 light-theme:hover:text-gray-900"
+                  >
+                    {question}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {messages.map((msg, index) => (
-          <div key={index} className={`flex min-w-0 items-start gap-3 ${msg.role === MessageRole.USER ? 'justify-end' : 'justify-start'}`}>
-            <div className={`min-w-0 max-w-full md:max-w-xl p-3 rounded-lg overflow-hidden ${msg.role === MessageRole.USER ? 'bg-gray-700/90 text-gray-100 rounded-br-none border border-gray-600/40' : 'bg-gray-800/80 text-gray-200 rounded-bl-none border border-gray-700/30 light-theme:bg-gray-200 light-theme:text-gray-800'}`}>
+          <div key={index} className={`flex min-w-0 flex-col gap-1 ${msg.role === MessageRole.USER ? 'items-end' : 'items-start'}`}>
+            <span className="px-1 text-[9px] font-bold uppercase tracking-[0.16em] text-slate-600 light-theme:text-gray-400">
+              {msg.role === MessageRole.USER ? 'You' : agentLabel}
+            </span>
+            <div className={`min-w-0 max-w-[94%] md:max-w-xl p-3 rounded-lg overflow-hidden ${msg.role === MessageRole.USER ? 'bg-[#1a2431] text-slate-100 rounded-br-none border border-white/[0.08]' : 'bg-[#0f1620] text-slate-200 rounded-bl-none border border-white/[0.07] light-theme:bg-gray-200 light-theme:text-gray-800'}`}>
               {msg.role === MessageRole.MODEL && formatModelDisplay(msg.model || currentModelName) && (
                 <div className="mb-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide bg-purple-900/30 text-purple-300 border border-purple-500/20 light-theme:bg-purple-100 light-theme:text-purple-700 light-theme:border-purple-300">
                     <SparklesIcon className="w-3 h-3 text-purple-400" />
@@ -251,7 +332,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 </div>
               )}
               <div
-                className="text-sm leading-relaxed break-words [overflow-wrap:anywhere] [&>*]:max-w-full [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:break-words [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto"
+                className="text-[13px] leading-relaxed break-words [overflow-wrap:anywhere] [&>*]:max-w-full [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:break-words [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto"
                 dangerouslySetInnerHTML={{ __html: (() => {
                 const raw = msg.result || msg.text || '';
                 if (activeAgent === AgentType.ZONING_AGENT && msg.role === MessageRole.MODEL) {
@@ -329,7 +410,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         ))}
         {isLoading && messages[messages.length - 1]?.role === MessageRole.MODEL && (
           <div className="flex items-start gap-3 justify-start">
-            <div className="max-w-xl p-3 rounded-lg bg-gray-700 text-gray-200 rounded-bl-none light-theme:bg-gray-200 light-theme:text-gray-800">
+            <div className="max-w-xl p-3 rounded-lg bg-[#0f1620] text-slate-200 rounded-bl-none border border-white/[0.07] light-theme:bg-gray-200 light-theme:text-gray-800">
                 <div className="flex items-center gap-2">
                     <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse" style={{ animationDelay: '0s' }}></div>
                     <div className="w-2 h-2 bg-gray-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
@@ -343,7 +424,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="flex-shrink-0 p-3 border-t border-gray-700 bg-gray-900/50 light-theme:border-gray-300 light-theme:bg-white/50">
+      <div className="flex-shrink-0 border-t border-white/[0.06] bg-[#080d14]/80 px-3 py-2.5 light-theme:border-gray-300 light-theme:bg-white/50">
         {/* Accessories / Action Buttons row immediately above chat bar */}
         {chatBarAccessories && (
           <div className="mb-2">
@@ -357,11 +438,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             {toolsContent && (
               <button
                 onClick={() => setIsToolsDrawerOpen(!isToolsDrawerOpen)}
-                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                className={`inline-flex h-6 items-center gap-1.5 rounded border px-2 text-[10px] font-semibold uppercase tracking-[0.1em] transition-colors ${
                   isToolsDrawerOpen
-                    ? 'bg-gray-700/20 border'
-                    : 'bg-gray-700 hover:bg-gray-600 border border-gray-600'
-                }`}
+                    ? 'bg-white/[0.06]'
+                    : 'border-white/[0.08] bg-white/[0.03] hover:border-white/[0.14] hover:bg-white/[0.06]'
+                } light-theme:border-gray-300 light-theme:bg-gray-100`}
                 style={{
                   color: agentThemeColors[activeAgent] || '#94a3b8',
                   borderColor: isToolsDrawerOpen ? agentThemeColors[activeAgent] || '#94a3b8' : undefined,
@@ -378,14 +459,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           </div>
         )}
 
-        <div className={`relative bg-gray-700 rounded-lg p-1 border border-transparent focus-within:border-${theme.accent.split('-')[1]}-500 transition-colors light-theme:bg-gray-200`}>
+        <div className="relative rounded-lg border border-white/[0.06] bg-[#121a23] p-1 transition-colors focus-within:border-white/[0.14] light-theme:bg-gray-200">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Ask a question or give a command..."
             rows={1}
-            className="w-full bg-transparent text-gray-200 resize-none focus:outline-none p-2 pr-24 text-sm light-theme:text-gray-800"
+            className="w-full bg-transparent text-slate-200 resize-none focus:outline-none p-2.5 pr-24 text-[13px] light-theme:text-gray-800"
             style={{ minHeight: '40px' }}
           />
           <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2">
@@ -403,8 +484,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 <StopIcon className="w-5 h-5" />
               </button>
             ) : (
-              <button onClick={handleSend} disabled={!input.trim()} className="p-2 text-white bg-blue-600 rounded-full hover:bg-blue-700 disabled:bg-gray-500" title="Send Message">
-                <SendIcon className="w-5 h-5" />
+              <button
+                onClick={handleSend}
+                disabled={!input.trim()}
+                className="flex h-7 w-7 items-center justify-center rounded-md border transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ backgroundColor: `${accentColor}26`, borderColor: `${accentColor}55`, color: accentColor }}
+                title="Send Message"
+              >
+                <SendIcon className="h-4 w-4" />
               </button>
             )}
           </div>

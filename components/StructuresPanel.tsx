@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { HomeIcon } from './icons.tsx';
+import { StructuresIcon } from './icons.tsx';
 import type { InclusionBoundary } from '../types.ts';
 import type { StructuresFetchResult } from '../services/structuresService.ts';
 import type { RectifyStats } from '../services/buildingRectifier.ts';
@@ -88,7 +88,7 @@ export const StructuresPanel: React.FC<StructuresPanelProps> = ({
     <div className="space-y-4 text-sm">
       {/* Source badge */}
       <div className="flex items-center gap-2 text-xs text-gray-400">
-        <HomeIcon className="w-4 h-4 text-orange-400" />
+        <StructuresIcon className="w-4 h-4 text-orange-400" />
         <span>Sources: FEMA NSI (attributes) + OpenStreetMap (geometry)</span>
       </div>
 

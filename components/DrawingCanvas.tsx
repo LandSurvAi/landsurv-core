@@ -58,6 +58,20 @@ import { StandardsEditor } from './CadManager/StandardsEditor.tsx';
 import type { StandardDefinition } from '../contexts/types/CadManager.types';
 import { convertLinearUnits, getLinearUnitAbbreviation, type LinearUnit } from '../utils/linearUnits.ts';
 import { LayersIcon, RedrawIcon, ZoomExtentsIcon, ScaleIcon, AttributeScaleIcon, DownloadIcon, ZoomToPointIcon, XMarkIcon, EyeIcon, PencilSquareIcon, BreaklineIcon, InclusionLineIcon, ExclusionLineIcon, ScissorsIcon, UndoIcon, RedoIcon, ExtendIcon, PolylineIcon, ListBulletIcon, CircleIcon, CrosshairsIcon, TrashIcon, DocumentDuplicateIcon } from './icons.tsx';
+import {
+    ToolbarZoomIcon,
+    ToolbarAnnotationScaleIcon,
+    ToolbarLayersIcon,
+    ToolbarSurfaceIcon,
+    ToolbarSelectIcon,
+    ToolbarAddPointIcon,
+    ToolbarDrawToolsIcon,
+    ToolbarDimensionIcon,
+    ToolbarStandardsIcon,
+    ToolbarSymbolExclusionIcon,
+    ToolbarPointListIcon,
+    ToolbarShrinkwrapIcon,
+} from './toolbarIcons.tsx';
 import proj4 from 'proj4';
 import { createFloatingOriginContext } from '../utils/floatingOriginContext.ts';
 import { PointAgent } from '../services/PointAgent.ts';
@@ -154,7 +168,8 @@ export interface DrawingCanvasHandles {
   getMapOverlayTiles?: () => Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: WorldQuad; opacity?: number }>;
 }
 
-import { CanvasTerminal } from './CanvasTerminal';
+import { CanvasTerminal, type TerminalTone } from './CanvasTerminal';
+import type { CommandReference } from './CommandHelpView';
 import { ArrayManipulator } from './ArrayManipulator';
 import { PolarArrayManipulator } from './PolarArrayManipulator';
 import { PolygonInputHud } from './PolygonInputHud';
@@ -341,7 +356,7 @@ interface DrawingCanvasProps {
     // Line layer query/edit
     onUpdateLine?: (lineId: string, changes: Partial<SurveyLine>) => void;
     /** Open the app text editor with long command results (terminal links). */
-    onOpenTextEditor?: (content: string) => void;
+    onOpenTextEditor?: (content: string, tone?: TerminalTone, reference?: CommandReference) => void;
     availableLayers?: string[];
     // Active drawing layer — applied to manually drawn polylines (not AI lines)
     activeDrawingLayer?: string;
@@ -408,6 +423,8 @@ interface DrawingCanvasProps {
     isChatPanelVisible?: boolean;
     /** Current width in pixels of the agent chat panel in desktop mode. */
     chatPanelWidth?: number;
+    /** True while the chat panel edge is being dragged — defers expensive canvas reallocation. */
+    isChatResizing?: boolean;
     onRedo?: () => void;
     canRedo?: boolean;
     canUndo?: boolean;
@@ -757,10 +774,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         isDesktop: propIsDesktop,
         isChatPanelVisible: propIsChatPanelVisible,
         chatPanelWidth: propChatPanelWidth,
+        isChatResizing: propIsChatResizing,
     } = props;
     const isDesktop = propIsDesktop ?? (typeof window !== 'undefined' ? window.innerWidth >= 768 : true);
     const isChatPanelVisible = propIsChatPanelVisible ?? true;
     const chatPanelWidth = propChatPanelWidth ?? 450;
+    const isChatResizing = propIsChatResizing ?? false;
     const { addNotification, setSettings } = useAppState();
     const { reportError } = useErrorReporter();
 
@@ -777,6 +796,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     console.log('[DC] render — boundaryFiles:', boundaryFiles ? boundaryFiles.length : 'undef', 'points:', points.length);
     
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const isChatResizingRef = useRef(isChatResizing);
+    isChatResizingRef.current = isChatResizing;
+    const wasChatResizingRef = useRef(false);
     const gpuCanvasRef = useRef<HTMLCanvasElement>(null);
     const gpuBasemapRef = useRef<WebGpuBasemap | null>(null);
     /** Bumped when the user changes a WebGPU preference so the renderer re-initialises. */
@@ -1150,10 +1172,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     });
 
     const toolbarRef = useRef<HTMLDivElement>(null);
-    // Toolbar dragging and docking state - defaults to docked on the right edge just under the north arrow
+    // Toolbar dragging state — the default is the left edge, above the OT widget.
+    // The position key is versioned so the new left-side default is picked up once.
     const [viewToolbarPosition, setViewToolbarPosition] = useState<ViewToolbarPosition | null>(() => {
         try {
-            const saved = localStorage.getItem('landsurv-canvas-toolbar-position');
+            const saved = localStorage.getItem('landsurv-canvas-toolbar-position-v2');
             if (saved) {
                 const parsed = JSON.parse(saved);
                 if (Number.isFinite(parsed.y) && parsed.y > 0) {
@@ -1210,7 +1233,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             latestToolbarPosRef.current = nextPos;
             setViewToolbarPosition(nextPos);
             try {
-                localStorage.setItem('landsurv-canvas-toolbar-position', JSON.stringify(nextPos));
+                localStorage.setItem('landsurv-canvas-toolbar-position-v2', JSON.stringify(nextPos));
             } catch { /* ignore */ }
         }
     }, [isViewToolbarDragging, isDesktop, isChatPanelVisible, chatPanelWidth, toolbarOrientation]);
@@ -9556,6 +9579,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
         applySize();
         const resizeObserver = new ResizeObserver(() => {
+            if (isChatResizingRef.current) {
+                // While the chat edge is being dragged, keep the CSS box in sync
+                // but leave both DPR-scaled backing stores alone. Reallocating
+                // them on every pointer frame was a major part of the drag cost;
+                // the exact bitmap is restored in one go on release.
+                const { width, height } = container.getBoundingClientRect();
+                canvas.style.width = width + 'px';
+                canvas.style.height = height + 'px';
+                return;
+            }
             applySize();
             scheduleDraw();
             pushToolbarOutOfChatIfNeeded();
@@ -9573,6 +9606,30 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             mql.removeEventListener?.('change', onDprChange);
         };
     }, [scheduleDraw, pushToolbarOutOfChatIfNeeded]);
+
+    // Restore the exact backing-store size once a chat-panel drag finishes.
+    useEffect(() => {
+        const wasResizing = wasChatResizingRef.current;
+        wasChatResizingRef.current = isChatResizing;
+        if (!wasResizing || isChatResizing) return;
+
+        const canvas = canvasRef.current;
+        const container = containerRef.current;
+        if (!canvas || !container) return;
+
+        const { width, height } = container.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.round(width * dpr));
+        canvas.height = Math.max(1, Math.round(height * dpr));
+        canvas.style.width = width + 'px';
+        canvas.style.height = height + 'px';
+        const gpuCanvas = gpuCanvasRef.current;
+        if (gpuCanvas) {
+            gpuCanvas.width = canvas.width;
+            gpuCanvas.height = canvas.height;
+        }
+        scheduleDraw();
+    }, [isChatResizing, scheduleDraw]);
 
     useEffect(() => {
         const onPrefsChanged = () => setGpuPrefVersion(v => v + 1);
@@ -10209,6 +10266,43 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const target = e.target as HTMLElement | null;
         const tag = target?.tagName;
         const isTextInput = tag === 'INPUT' || tag === 'TEXTAREA' || !!target?.isContentEditable;
+        // Escape always backs out of an open canvas menu before it cancels any
+        // drawing/tool state. This runs even while a flyout input has focus, so
+        // the menu can always be dismissed with the keyboard.
+        if (e.key === 'Escape') {
+            const hasOpenCanvasMenu =
+                isAttributeFlyoutOpen ||
+                isZoomExtentsOpen ||
+                isZoomToPointOpen ||
+                isFindPointsOpen ||
+                isDrawingToolsMenuOpen ||
+                isAddPointFlyoutOpen ||
+                isDimFlyoutOpen ||
+                isDimSettingsOpen ||
+                isOtPopupOpen ||
+                isPropertiesOpen ||
+                inlineOsnapMenuPos !== null ||
+                dimContextMenu !== null;
+            if (hasOpenCanvasMenu) {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsAttributeFlyoutOpen(false);
+                setIsZoomExtentsOpen(false);
+                setIsZoomToPointOpen(false);
+                setIsFindPointsOpen(false);
+                setIsDrawingToolsMenuOpen(false);
+                setIsAddPointFlyoutOpen(false);
+                setIsDimFlyoutOpen(false);
+                setIsDimSettingsOpen(false);
+                setIsOtPopupOpen(false);
+                setIsPropertiesOpen(false);
+                setInlineOsnapMenuPos(null);
+                setDimContextMenu(null);
+                setFindPointsQuery('');
+                setZoomToPointNumber('');
+                return;
+            }
+        }
         // While a multi-value prompt is open, its boxes and the command line are
         // the only input surfaces; don't let canvas shortcuts edit the drawing.
         if (activeCommandPrompt && !isTextInput && e.key !== 'Escape') {
@@ -10852,7 +10946,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTtrEntity2(null);
             setTtrHoverEntity(null);
         }
-    }, [selectedLineIds, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick]);
+    }, [selectedLineIds, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isAddPointFlyoutOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
 
     const handleKeyUp = useCallback((e: KeyboardEvent) => {
         if (e.key === 'Control' || e.key === 'Meta') {
@@ -10951,7 +11045,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 if (finalPos) {
                     setViewToolbarPosition(finalPos);
                     try {
-                        localStorage.setItem('landsurv-canvas-toolbar-position', JSON.stringify(finalPos));
+                        localStorage.setItem('landsurv-canvas-toolbar-position-v2', JSON.stringify(finalPos));
                     } catch { /* ignore */ }
                 }
             }
@@ -14560,7 +14654,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     return (
         <div 
             ref={containerRef} 
-            className="w-full h-full bg-gray-900 relative light-theme:bg-gray-200" 
+            className="w-full h-full bg-[#0a0f16] relative light-theme:bg-gray-200" 
             onWheel={handleWheel}
             onMouseMove={handleContainerMouseMove}
             onMouseLeave={() => {
@@ -14668,30 +14762,37 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
                 return (
                     <div className="absolute bottom-20 left-3 z-30 select-none">
-                        <div 
+                        <button
+                            type="button"
                             onClick={() => setIsOtPopupOpen(prev => !prev)}
-                            className="p-2 rounded-xl bg-gray-900/90 hover:bg-gray-900 border border-cyan-500/40 hover:border-cyan-400 text-cyan-200 shadow-xl cursor-pointer flex items-center justify-center backdrop-blur-sm transition-all group hover:scale-105"
-                            title="Orientation Tuple (OT / UCS): Click to adjust orientation and pivot origin"
+                            className="group relative flex h-[52px] w-[52px] flex-col items-center justify-center gap-0.5 rounded-lg border border-white/[0.09] bg-[#0b1119]/95 text-cyan-200 shadow-[0_10px_30px_-8px_rgba(0,0,0,0.9)] backdrop-blur-md transition-colors hover:border-cyan-400/40 hover:bg-[#0e1620]"
+                            title={`Orientation Tuple (OT / UCS) — ${curAngleDeg.toFixed(1)}°. Click to adjust orientation and pivot origin.`}
+                            aria-label="Open orientation tuple settings"
                         >
-                            <svg className="w-6 h-6" viewBox="0 0 28 28" fill="none" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                                <g transform={`rotate(${screenAngleDeg} 6 22)`}>
-                                    {/* Origin box */}
-                                    <rect x="3" y="19" width="6" height="6" fill="white" fillOpacity="0.9" stroke="none" />
-                                    {/* X-axis Arrow */}
-                                    <line x1="6" y1="22" x2="25" y2="22" stroke="#34D399" />
-                                    <polyline points="20,18 25,22 20,26" stroke="#34D399" fill="none" />
-                                    <text x="21" y="16" fontSize="6.5" fontWeight="bold" fill="#34D399" stroke="none" fontFamily="sans-serif">X</text>
-                                    {/* Y-axis Arrow */}
-                                    <line x1="6" y1="22" x2="6" y2="3" stroke="#F87171" />
-                                    <polyline points="2,8 6,3 10,8" stroke="#F87171" fill="none" />
-                                    <text x="10" y="8" fontSize="6.5" fontWeight="bold" fill="#F87171" stroke="none" fontFamily="sans-serif">Y</text>
+                            <svg className="h-6 w-6 overflow-visible" viewBox="0 0 32 32" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <g transform={`rotate(${screenAngleDeg} 9 23)`}>
+                                    {/* Fine quadrant reference arc */}
+                                    <path d="M9 6.5A16.5 16.5 0 0 1 25.5 23" stroke="#22d3ee" strokeOpacity="0.22" strokeWidth="0.8" strokeDasharray="1.5 2" />
+                                    {/* X axis */}
+                                    <line x1="9" y1="23" x2="27.4" y2="23" stroke="#34d399" />
+                                    <path d="M27.6 23l-4.1-2.2v4.4z" fill="#34d399" stroke="none" />
+                                    <text x="24.6" y="20.4" fontSize="4.1" fontWeight="700" fill="#34d399" stroke="none" fontFamily="ui-monospace, SFMono-Regular, monospace">X</text>
+                                    {/* Y axis */}
+                                    <line x1="9" y1="23" x2="9" y2="4.6" stroke="#f87171" />
+                                    <path d="M9 4.4L6.8 8.6h4.4z" fill="#f87171" stroke="none" />
+                                    <text x="10.8" y="7.6" fontSize="4.1" fontWeight="700" fill="#f87171" stroke="none" fontFamily="ui-monospace, SFMono-Regular, monospace">Y</text>
+                                    {/* Crisp origin marker */}
+                                    <circle cx="9" cy="23" r="2.4" fill="#0b1119" stroke="#e2e8f0" strokeWidth="1.2" />
+                                    <line x1="7.2" y1="23" x2="10.8" y2="23" stroke="#e2e8f0" strokeWidth="0.9" />
+                                    <line x1="9" y1="21.2" x2="9" y2="24.8" stroke="#e2e8f0" strokeWidth="0.9" />
                                 </g>
                             </svg>
-                        </div>
+                            <span className="font-mono text-[7px] font-bold tracking-[0.18em] text-slate-500 transition-colors group-hover:text-cyan-300">OT</span>
+                        </button>
 
                         {isOtPopupOpen && (
-                            <div className="absolute bottom-full mb-2 left-0 w-72 bg-gray-950/95 border border-cyan-500/50 rounded-xl shadow-2xl p-3.5 text-xs text-gray-200 backdrop-blur-md z-40 animate-fade-in-up">
-                                <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-gray-800">
+                            <div className="absolute bottom-full mb-3 left-0 w-72 rounded-xl border border-white/[0.09] bg-[#0b1119]/97 p-3.5 text-xs text-slate-200 shadow-[0_24px_70px_-16px_rgba(0,0,0,0.9)] backdrop-blur-xl z-40 animate-fade-in-up">
+                                <div className="mb-2.5 flex items-center justify-between border-b border-white/[0.07] pb-2">
                                     <div className="flex items-center gap-1.5">
                                         <span className="font-bold text-cyan-400">Orientation Tuple (OT)</span>
                                         <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 border border-cyan-700/50 font-mono">UCS</span>
@@ -15810,7 +15911,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
                 return (
                     <div className="fixed z-40 bottom-16 left-1/2 -translate-x-1/2 bg-gray-900/96 backdrop-blur-md border border-amber-500/60 rounded-xl shadow-2xl text-xs text-gray-200 flex flex-col gap-2 p-3 min-w-[340px] animate-fade-in-up">
-                        <div className="flex items-center justify-between border-b border-gray-800 pb-1.5">
+                        <div className="flex items-center justify-between border-b border-white/[0.07] pb-1.5">
                             <span className="font-bold text-amber-400 flex items-center gap-1.5">
                                 <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
                                 {typeLabel}
@@ -16016,15 +16117,29 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             )}
             {/* View/Navigation Toolbar — Default Vertical, flippable */}
             {(() => {
-                const isDocked = viewToolbarPosition ? (viewToolbarPosition.isDocked ?? false) : true;
+                const isDocked = viewToolbarPosition ? (viewToolbarPosition.isDocked ?? false) : false;
                 const containerW = containerRef.current?.clientWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 1000);
+                const containerH = containerRef.current?.clientHeight ?? (typeof window !== 'undefined' ? window.innerHeight : 800);
                 const toolbarW = toolbarRef.current?.offsetWidth ?? (toolbarOrientation === 'vertical' ? 50 : 380);
-                const effectiveX = isDocked ? (containerW - toolbarW - 16) : (viewToolbarPosition?.x ?? (containerW - toolbarW - 16));
-                const effectiveY = viewToolbarPosition?.y ?? 104;
+                const toolbarH = toolbarRef.current?.offsetHeight ?? (toolbarOrientation === 'vertical' ? 450 : 50);
+                const effectiveX = isDocked ? (containerW - toolbarW - 16) : (viewToolbarPosition?.x ?? 16);
+                const effectiveY = viewToolbarPosition?.y ?? Math.max(16, containerH - toolbarH - 148);
 
-                const viewDirection = getFlyoutDirection(effectiveX, effectiveY);
-                const shouldFlyoutGoAbove = viewDirection.vertical === 'above';
+                // Placement must be decided in viewport coordinates, not container
+                // coordinates, and the toolbar's real size is part of its center.
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                const viewportX = (containerRect?.left ?? 0) + effectiveX + toolbarW / 2;
+                const viewportY = (containerRect?.top ?? 0) + effectiveY + toolbarH / 2;
+                const viewDirection = getFlyoutDirection(viewportX, viewportY);
                 const isVertical = toolbarOrientation === 'vertical';
+
+                // Pick the side with real room for the flyout, then clamp its max
+                // height to that room. This is what keeps a tall flyout on screen
+                // whether the toolbar is at the top, bottom, or middle.
+                const availableAbove = effectiveY + (isVertical ? toolbarH : 0);
+                const availableBelow = containerH - effectiveY - (isVertical ? 0 : toolbarH);
+                const shouldFlyoutGoAbove = availableBelow < availableAbove;
+                const flyoutMaxHeight = Math.max(220, Math.floor((shouldFlyoutGoAbove ? availableAbove : availableBelow) - 16));
 
                 const handleToolbarPointerDown = (e: React.PointerEvent) => {
                     if ((e.target as HTMLElement).closest('[data-no-drag]')) return;
@@ -16060,8 +16175,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 };
 
                 const flyoutPlacementClass = isVertical
-                    ? (viewDirection.horizontal === 'left' ? 'right-full mr-2 top-0' : 'left-full ml-2 top-0')
-                    : (shouldFlyoutGoAbove ? 'bottom-full mb-2 left-0' : 'top-full mt-2 left-0');
+                    ? `${viewDirection.horizontal === 'left' ? 'right-full mr-2' : 'left-full ml-2'} ${shouldFlyoutGoAbove ? 'bottom-0' : 'top-0'}`
+                    : `${shouldFlyoutGoAbove ? 'bottom-full mb-2' : 'top-full mt-2'} ${viewDirection.horizontal === 'left' ? 'right-0' : 'left-0'}`;
+                const FLYOUT_SHELL = 'max-h-[var(--flyout-max-height)] overflow-y-auto backdrop-blur-xl bg-[#0b1119]/95 border border-white/[0.09] shadow-[0_24px_70px_-16px_rgba(0,0,0,0.9)] text-slate-200';
 
                 const wrapperStyle: React.CSSProperties = isViewToolbarDragging
                     ? { left: `${viewToolbarPosition?.x ?? effectiveX}px`, top: `${viewToolbarPosition?.y ?? effectiveY}px` }
@@ -16075,38 +16191,43 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         style={{
                             ...wrapperStyle,
                             transition: isViewToolbarDragging ? 'none' : 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1), right 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                        }}
+                            '--flyout-max-height': `${flyoutMaxHeight}px`,
+                        } as React.CSSProperties}
                         className="absolute z-20"
                     >
                         {/* Flyouts with orientation-aware placement */}
                             {isAttributeFlyoutOpen && (
-                                <div className={`absolute ${flyoutPlacementClass} p-4 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-64 animate-fade-in-up z-30`}>
-                                    <label htmlFor="attributeScale" className="block text-sm font-medium text-gray-400 mb-1">Point Attribute Scale</label>
+                                <div className={`absolute ${flyoutPlacementClass} rounded-xl p-3.5 w-64 animate-fade-in-up z-30 ${FLYOUT_SHELL}`}>
+                                    <div className="mb-3 flex items-center justify-between border-b border-white/[0.07] pb-2">
+                                        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Display Scales</span>
+                                        <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-cyan-400/70">Live</span>
+                                    </div>
+                                    <label htmlFor="attributeScale" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Point Attribute Scale</label>
                                     <div className="flex items-center gap-4 mb-4">
                                         <input type="range" id="attributeScale" min="0.5" max="5" step="0.1" value={attributeScale} onChange={(e) => setAttributeScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
-                                        <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{attributeScale.toFixed(1)}x</span>
+                                        <span className="min-w-[3.25rem] rounded-md border border-white/[0.08] bg-white/[0.035] px-2 py-1 text-center font-mono text-xs tabular-nums text-cyan-200">{attributeScale.toFixed(1)}x</span>
                                     </div>
-                                    <label htmlFor="lineLabelScale" className="block text-sm font-medium text-gray-400 mb-1">Bearing &amp; Distance Scale</label>
+                                    <label htmlFor="lineLabelScale" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Bearing &amp; Distance Scale</label>
                                     <div className="flex items-center gap-4 mb-4">
                                         <input type="range" id="lineLabelScale" min="0.5" max="20" step="0.1" value={lineLabelScale} onChange={(e) => setLineLabelScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
-                                        <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{lineLabelScale.toFixed(1)}x</span>
+                                        <span className="min-w-[3.25rem] rounded-md border border-white/[0.08] bg-white/[0.035] px-2 py-1 text-center font-mono text-xs tabular-nums text-cyan-200">{lineLabelScale.toFixed(1)}x</span>
                                     </div>
-                                    <label htmlFor="dimensionScale_above" className="block text-sm font-medium text-gray-400 mb-1">Dimension Scale</label>
+                                    <label htmlFor="dimensionScale_above" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Dimension Scale</label>
                                     <div className="flex items-center gap-4 mb-4">
                                         <input type="range" id="dimensionScale_above" min="0.5" max="5" step="0.1" value={dimensionScale} onChange={(e) => setDimensionScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
-                                        <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{dimensionScale.toFixed(1)}x</span>
+                                        <span className="min-w-[3.25rem] rounded-md border border-white/[0.08] bg-white/[0.035] px-2 py-1 text-center font-mono text-xs tabular-nums text-cyan-200">{dimensionScale.toFixed(1)}x</span>
                                     </div>
-                                    <label htmlFor="symbolScale_above" className="block text-sm font-medium text-gray-400 mb-1">Symbol Scale (global)</label>
+                                    <label htmlFor="symbolScale_above" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Symbol Scale (global)</label>
                                     <div className="flex items-center gap-4 mb-4">
                                         <input type="range" id="symbolScale_above" min="0.25" max="5" step="0.05" value={symbolScale} onChange={(e) => setSymbolScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
-                                        <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{symbolScale.toFixed(2)}x</span>
+                                        <span className="min-w-[3.25rem] rounded-md border border-white/[0.08] bg-white/[0.035] px-2 py-1 text-center font-mono text-xs tabular-nums text-cyan-200">{symbolScale.toFixed(2)}x</span>
                                     </div>
-                                    <label className="block text-sm font-medium text-gray-400 mb-1">Point Attribute Text</label>
+                                    <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Point Attribute Text</label>
                                     <div className="flex items-center gap-2 mb-2">
                                         <button
                                             type="button"
                                             onClick={() => setSettings(prev => ({ ...prev, pointAttributeScaling: 'screen' }))}
-                                            className={`flex-1 py-1 px-2 rounded text-xs font-semibold border transition-colors ${settings.pointAttributeScaling === 'screen' ? 'bg-cyan-600 border-cyan-400 text-white' : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'}`}
+                                            className={`flex-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors ${settings.pointAttributeScaling === 'screen' ? 'border-cyan-400/50 bg-cyan-400/15 text-cyan-200' : 'border-white/[0.08] bg-white/[0.03] text-slate-400 hover:bg-white/[0.06] hover:text-slate-200'}`}
                                             title="Constant screen pixel size (locked - avoids lag with thousands of points)"
                                         >
                                             Locked (Fast)
@@ -16114,7 +16235,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                         <button
                                             type="button"
                                             onClick={() => setSettings(prev => ({ ...prev, pointAttributeScaling: 'world' }))}
-                                            className={`flex-1 py-1 px-2 rounded text-xs font-semibold border transition-colors ${settings.pointAttributeScaling === 'world' ? 'bg-cyan-600 border-cyan-400 text-white' : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'}`}
+                                            className={`flex-1 rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors ${settings.pointAttributeScaling === 'world' ? 'border-cyan-400/50 bg-cyan-400/15 text-cyan-200' : 'border-white/[0.08] bg-white/[0.03] text-slate-400 hover:bg-white/[0.06] hover:text-slate-200'}`}
                                             title="Scale with zoom in world units"
                                         >
                                             Zoom with Map
@@ -16125,7 +16246,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             <label htmlFor="annotationScale_above" className="block text-sm font-medium text-gray-400 mb-1 mt-3">Annotation Scale (global)</label>
                                             <div className="flex items-center gap-4">
                                                 <input type="range" id="annotationScale_above" min="0.25" max="5" step="0.05" value={annotationScale} onChange={(e) => setAnnotationScale(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
-                                                <span className="font-mono bg-gray-700 text-gray-200 px-3 py-1 rounded-md text-sm">{annotationScale.toFixed(2)}x</span>
+                                                <span className="min-w-[3.25rem] rounded-md border border-white/[0.08] bg-white/[0.035] px-2 py-1 text-center font-mono text-xs tabular-nums text-cyan-200">{annotationScale.toFixed(2)}x</span>
                                             </div>
                                         </>
                                     )}
@@ -16133,25 +16254,25 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             )}
                             
                             {isZoomExtentsOpen && (
-                                <div className={`absolute ${flyoutPlacementClass} p-2 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up z-30`}>
+                                <div className={`absolute ${flyoutPlacementClass} rounded-xl p-1.5 animate-fade-in-up z-30 ${FLYOUT_SHELL}`}>
                                     <div className="space-y-1">
-                                        <button onClick={() => { zoomExtents(); setIsZoomExtentsOpen(false); }} className="w-full p-2 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-700" title="Zoom Extents"><ZoomExtentsIcon className="w-5 h-5"/> Zoom Extents</button>
+                                        <button onClick={() => { zoomExtents(); setIsZoomExtentsOpen(false); }} className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-[13px] text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white" title="Zoom Extents"><ZoomExtentsIcon className="w-5 h-5"/> Zoom Extents</button>
                                         <button onClick={() => {
                                             setIsZoomExtentsOpen(false);
                                             setIsZoomToPointOpen(true);
-                                        }} className="w-full p-2 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-700" title="Zoom to Point"><ZoomToPointIcon className="w-5 h-5"/> Zoom to Point</button>
+                                        }} className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-[13px] text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white" title="Zoom to Point"><ZoomToPointIcon className="w-5 h-5"/> Zoom to Point</button>
                                         <button onClick={() => {
                                             setIsZoomExtentsOpen(false);
                                             setIsFindPointsOpen(true);
-                                        }} className="w-full p-2 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-700" title="Find Points by Description"><ListBulletIcon className="w-5 h-5"/> Find Points</button>
+                                        }} className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-[13px] text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white" title="Find Points by Description"><ListBulletIcon className="w-5 h-5"/> Find Points</button>
                                     </div>
                                 </div>
                             )}
                             
                             {isZoomToPointOpen && (
-                                <div className={`absolute ${flyoutPlacementClass} p-3 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-56 animate-fade-in-up z-30`}>
+                                <div className={`absolute ${flyoutPlacementClass} rounded-xl p-3 w-60 animate-fade-in-up z-30 ${FLYOUT_SHELL}`}>
                                     <form onSubmit={handleZoomToPointSubmit} className="flex items-center gap-2 mb-3">
-                                        <input type="text" value={zoomToPointNumber} onChange={(e) => setZoomToPointNumber(e.target.value)} placeholder="Point Number" className="flex-1 p-1.5 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500" autoFocus />
+                                        <input type="text" value={zoomToPointNumber} onChange={(e) => setZoomToPointNumber(e.target.value)} placeholder="Point Number" className="flex-1 p-1.5 text-sm border border-white/[0.08] bg-white/[0.035] text-slate-100 placeholder:text-slate-600 focus:border-cyan-400/50 focus:outline-none focus:ring-2 focus:ring-cyan-400/15" autoFocus />
                                         <button type="submit" className="px-3 py-1.5 text-sm font-semibold bg-cyan-600 text-white rounded-md hover:bg-cyan-700">Go</button>
                                     </form>
                                     {points.length > 0 && (
@@ -16159,7 +16280,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             <h5 className="text-xs font-bold text-gray-400 uppercase mb-2">Points</h5>
                                             <div className="space-y-1">
                                                 {points.map(point => (
-                                                    <button key={point.pointNumber} onClick={() => { onZoomToPoint(point); setZoomToPointNumber(''); setIsZoomToPointOpen(false); }} className="w-full text-left p-1.5 rounded-md text-xs bg-gray-700 hover:bg-gray-600 transition-colors truncate">{point.pointNumber}</button>
+                                                    <button key={point.pointNumber} onClick={() => { onZoomToPoint(point); setZoomToPointNumber(''); setIsZoomToPointOpen(false); }} className="w-full truncate rounded-md bg-white/[0.04] p-1.5 text-left text-xs text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white">{point.pointNumber}</button>
                                                 ))}
                                             </div>
                                         </div>
@@ -16168,12 +16289,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             )}
 
                             {isFindPointsOpen && (
-                                <div className={`absolute ${flyoutPlacementClass} p-3 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg w-72 animate-fade-in-up z-30`}>
+                                <div className={`absolute ${flyoutPlacementClass} rounded-xl p-3 w-72 animate-fade-in-up z-30 ${FLYOUT_SHELL}`}>
                                     <div className="flex items-center justify-between mb-2">
                                         <h5 className="text-xs font-bold text-gray-300 uppercase">Find Points</h5>
                                         <button onClick={() => { setIsFindPointsOpen(false); setFindPointsQuery(''); }} className="text-gray-400 hover:text-white" title="Close"><XMarkIcon className="w-4 h-4"/></button>
                                     </div>
-                                    <input type="text" value={findPointsQuery} onChange={(e) => setFindPointsQuery(e.target.value)} placeholder='e.g. "show me sign points"' className="w-full p-1.5 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500 mb-2" autoFocus />
+                                    <input type="text" value={findPointsQuery} onChange={(e) => setFindPointsQuery(e.target.value)} placeholder='e.g. "show me sign points"' className="w-full p-1.5 text-sm border border-white/[0.08] bg-white/[0.035] text-slate-100 placeholder:text-slate-600 focus:border-cyan-400/50 focus:outline-none focus:ring-2 focus:ring-cyan-400/15 mb-2" autoFocus />
                                     <div className="max-h-64 overflow-y-auto pr-1">
                                         {findPointsQuery.trim() === '' ? (
                                             <p className="text-xs text-gray-400 italic px-1">Type a description to filter the {points.length} loaded point{points.length !== 1 ? 's' : ''}.</p>
@@ -16184,7 +16305,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 <p className="text-[10px] text-gray-500 uppercase mb-1 px-1">{findPointsMatches.length} match{findPointsMatches.length !== 1 ? 'es' : ''}{findPointsMatches.length >= 200 ? ' (capped)' : ''}</p>
                                                 <div className="space-y-1">
                                                     {findPointsMatches.map(point => (
-                                                        <button key={point.pointNumber} onClick={() => onZoomToPoint(point)} className="w-full text-left p-1.5 rounded-md text-xs bg-gray-700 hover:bg-gray-600 transition-colors flex items-center gap-2" title="Zoom to this point">
+                                                        <button key={point.pointNumber} onClick={() => onZoomToPoint(point)} className="flex w-full items-center gap-2 rounded-md bg-white/[0.04] p-1.5 text-left text-xs text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white" title="Zoom to this point">
                                                             <span className="font-mono text-cyan-300 flex-shrink-0">{point.pointNumber}</span>
                                                             <span className="text-gray-300 truncate">{point.description || '(no description)'}</span>
                                                         </button>
@@ -16197,8 +16318,19 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             )}
 
                             {isDrawingToolsMenuOpen && (
-                                <div className={`absolute ${flyoutPlacementClass} p-2 bg-gray-900/90 backdrop-blur-md rounded-lg border border-gray-700/50 shadow-lg animate-fade-in-up w-56 max-h-[70vh] overflow-y-auto z-30`}>
-                                    <div className="space-y-2">
+                                <div className={`absolute ${flyoutPlacementClass} rounded-xl p-1.5 animate-fade-in-up w-60 z-30 ${FLYOUT_SHELL}`}>
+                                    <div className="mb-1.5 flex items-center justify-between border-b border-white/[0.07] px-1.5 pb-1.5">
+                                        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Draw &amp; Edit</span>
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsDrawingToolsMenuOpen(false)}
+                                            className="rounded p-0.5 text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-white"
+                                            title="Close"
+                                        >
+                                            <XMarkIcon className="h-3.5 w-3.5" />
+                                        </button>
+                                    </div>
+                                    <div className="space-y-1.5">
                                         <button onClick={() => { 
                                             if (drawingMode === 'polylines') {
                                                 finishDrawing();
@@ -16211,7 +16343,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setExtendFromLine(null);
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'polylines' ? 'bg-yellow-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Polylines (L)"><PolylineIcon className="w-5 h-5"/> Draw Polylines (L)</button>
+                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${drawingMode === 'polylines' ? 'bg-yellow-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Draw Polylines (L)"><PolylineIcon className="w-5 h-5"/> Draw Polylines (L)</button>
                                         
                                         <button onClick={() => { 
                                             if (drawingMode === 'circle') {
@@ -16233,7 +16365,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setExtendFromLine(null);
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'circle' ? 'bg-sky-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Circle (C: Center/Radius, T: Tangent-Tangent-Radius)"><CircleIcon className="w-5 h-5"/> Draw Circle (C)</button>
+                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${drawingMode === 'circle' ? 'bg-sky-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Draw Circle (C: Center/Radius, T: Tangent-Tangent-Radius)"><CircleIcon className="w-5 h-5"/> Draw Circle (C)</button>
                                         
                                         <button onClick={() => { 
                                             if (drawingMode === 'breaklines') {
@@ -16247,7 +16379,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setExtendFromLine(null);
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'breaklines' ? 'bg-pink-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Breaklines"><BreaklineIcon className="w-5 h-5"/> Draw Breaklines</button>
+                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${drawingMode === 'breaklines' ? 'bg-pink-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Draw Breaklines"><BreaklineIcon className="w-5 h-5"/> Draw Breaklines</button>
                                         
                                         <button onClick={() => { 
                                             if (drawingMode === 'inclusion') {
@@ -16261,7 +16393,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setExtendFromLine(null);
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'inclusion' ? 'bg-green-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Inclusion Lines (I)"><InclusionLineIcon className="w-5 h-5"/> Draw Inclusion Lines (I)</button>
+                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${drawingMode === 'inclusion' ? 'bg-green-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Draw Inclusion Lines (I)"><InclusionLineIcon className="w-5 h-5"/> Draw Inclusion Lines (I)</button>
                                         
                                         <button onClick={() => { 
                                             if (drawingMode === 'exclusion') {
@@ -16275,7 +16407,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setExtendFromLine(null);
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'exclusion' ? 'bg-red-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Exclusion Lines"><ExclusionLineIcon className="w-5 h-5"/> Draw Exclusion Lines</button>
+                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${drawingMode === 'exclusion' ? 'bg-red-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Draw Exclusion Lines"><ExclusionLineIcon className="w-5 h-5"/> Draw Exclusion Lines</button>
 
                                         <button onClick={() => {
                                             if (drawingMode === 'boundary-line') {
@@ -16291,12 +16423,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 resetBoundaryLineMode();
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${drawingMode === 'boundary-line' ? 'bg-amber-600 text-white' : 'hover:bg-gray-700'}`} title="Draw Boundary Line (click point, enter bearing + distance)">
+                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${drawingMode === 'boundary-line' ? 'bg-amber-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Draw Boundary Line (click point, enter bearing + distance)">
                                             <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 21l18-18M6 18l3-3M15 9l3-3"/><circle cx="3" cy="21" r="1.5" fill="currentColor"/><circle cx="21" cy="3" r="1.5" fill="currentColor"/></svg>
                                             Draw Boundary Line
                                         </button>
                                         
-                                        <div className="border-t border-gray-700"></div>
+                                        <div className="border-t border-white/[0.07]"></div>
 
                                         <button onClick={() => {
                                             if (isCopyingSelection) {
@@ -16311,7 +16443,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 startCopyMode();
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${isCopyingSelection ? 'bg-cyan-600 text-white' : 'hover:bg-gray-700'}`} title="Copy Selected Entities (CP)">
+                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${isCopyingSelection ? 'bg-cyan-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Copy Selected Entities (CP)">
                                             <DocumentDuplicateIcon className="w-5 h-5"/> Copy Selected (CP)
                                         </button>
 
@@ -16326,7 +16458,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 startOffsetMode();
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${isOffsetMode ? 'bg-cyan-600 text-white' : 'hover:bg-gray-700'}`} title="Offset Lines, Polylines, Arcs or Circles (OS)">
+                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${isOffsetMode ? 'bg-cyan-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Offset Lines, Polylines, Arcs or Circles (OS)">
                                             <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                                                 <path d="M4 18 16 6M10 20 20 10" />
                                                 <path d="M12 12 16 8" strokeDasharray="2 2" />
@@ -16345,7 +16477,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setIsExtendingLines(false);
                                                 setExtendFromLine(null);
                                             }
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${isTrimmingLines ? 'bg-orange-600 text-white' : 'hover:bg-gray-700'}`} title="Trim Lines (T)"><ScissorsIcon className="w-5 h-5"/> Trim Lines (T)</button>
+                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${isTrimmingLines ? 'bg-orange-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Trim Lines (T)"><ScissorsIcon className="w-5 h-5"/> Trim Lines (T)</button>
                                         
                                         <button onClick={() => {
                                             if (isExtendingLines) {
@@ -16358,17 +16490,17 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setIsTrimmingLines(false);
                                                 setTrimPoint(null);
                                             }
-                                        }} className={`w-full p-2 rounded-lg text-sm flex items-center gap-2 ${isExtendingLines ? 'bg-blue-600 text-white' : 'hover:bg-gray-700'}`} title="Extend Lines"><ExtendIcon className="w-5 h-5"/> Extend Lines</button>
+                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${isExtendingLines ? 'bg-blue-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Extend Lines"><ExtendIcon className="w-5 h-5"/> Extend Lines</button>
 
                                         {selectedLineIds.size > 0 && onConvertSelectionToBoundary && (
                                             <>
-                                                <div className="border-t border-gray-700"></div>
+                                                <div className="border-t border-white/[0.07]"></div>
                                                 <button onClick={() => {
                                                     const selected = lines.filter(l => selectedLineIds.has(l.id || `${l.from}-${l.to}`));
                                                     onConvertSelectionToBoundary(selected);
                                                     setSelectedLineIds(new Set());
                                                     setIsDrawingToolsMenuOpen(false);
-                                                }} className="w-full p-2 rounded-lg text-sm flex items-center gap-2 bg-amber-700 hover:bg-amber-600 text-white" title="Convert selected lines to a Boundary object in the Boundary Editor">
+                                                }} className="flex w-full items-center gap-2 rounded-lg bg-amber-400/15 px-2 py-1.5 text-[13px] font-medium text-amber-200 ring-1 ring-inset ring-amber-400/30 transition-colors hover:bg-amber-400/25" title="Convert selected lines to a Boundary object in the Boundary Editor">
                                                     <svg viewBox="0 0 24 24" className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 21l18-18M6 18l3-3M15 9l3-3"/><circle cx="3" cy="21" r="1.5" fill="currentColor"/><circle cx="21" cy="3" r="1.5" fill="currentColor"/></svg>
                                                     Convert to Boundary ({selectedLineIds.size})
                                                 </button>
@@ -16380,8 +16512,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
                             {/* Add Point Flyout */}
                             {isAddPointFlyoutOpen && (
-                                <div className={`absolute ${flyoutPlacementClass} p-3 bg-gray-900/95 backdrop-blur-md rounded-xl border border-gray-700/60 shadow-2xl w-72 animate-fade-in-up z-30 space-y-2.5`}>
-                                    <div className="flex items-center justify-between border-b border-gray-800 pb-1.5">
+                                <div className={`absolute ${flyoutPlacementClass} rounded-xl p-3 w-72 animate-fade-in-up z-30 space-y-2.5 ${FLYOUT_SHELL}`}>
+                                    <div className="flex items-center justify-between border-b border-white/[0.07] pb-1.5">
                                         <div className="flex items-center gap-1.5">
                                             <CrosshairsIcon className="w-4 h-4 text-emerald-400" />
                                             <span className="text-xs font-bold text-emerald-400 uppercase tracking-wide">
@@ -16538,8 +16670,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
                             {/* Dimension flyout */}
                             {isDimFlyoutOpen && (
-                                <div className={`absolute ${flyoutPlacementClass} p-3 bg-gray-900/95 backdrop-blur-md rounded-xl border border-gray-700/60 shadow-2xl w-64 max-h-[85vh] overflow-y-auto space-y-3 animate-fade-in-up z-30`}>
-                                    <div className="flex items-center justify-between border-b border-gray-800 pb-1.5">
+                                <div className={`absolute ${flyoutPlacementClass} rounded-xl p-3 w-72 space-y-3 animate-fade-in-up z-30 ${FLYOUT_SHELL}`}>
+                                    <div className="flex items-center justify-between border-b border-white/[0.07] pb-1.5">
                                         <span className="text-xs font-bold text-cyan-400 uppercase tracking-wide flex items-center gap-1.5">
                                             <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.5">
                                                 <line x1="3" y1="19" x2="21" y2="19"/>
@@ -16774,7 +16906,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             <div
                                 onPointerDown={handleToolbarPointerDown}
                                 style={{ touchAction: 'none' }}
-                                className={`p-1 bg-gray-900/50 backdrop-blur-sm rounded-xl border border-gray-700/50 shadow-lg flex ${isVertical ? 'flex-col items-center' : 'flex-row items-center'} gap-1`}
+                                className={`p-1 bg-[#0a0f16]/90 backdrop-blur-md rounded-lg border border-white/[0.08] shadow-[0_10px_30px_rgba(0,0,0,0.45)] text-slate-300 flex ${isVertical ? 'flex-col items-center' : 'flex-row items-center'} gap-1`}
                             >
                                 {/* Drag handle + Flip button */}
                                 <div className={`flex ${isVertical ? 'flex-col py-1' : 'flex-row px-1'} items-center gap-1 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300`}>
@@ -16827,7 +16959,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     className={`p-2.5 rounded-lg transition-colors ${isZoomExtentsOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
                                     title="Zoom Options (ZE)"
                                 >
-                                    <ZoomExtentsIcon className="w-5 h-5"/>
+                                    <ToolbarZoomIcon className="w-5 h-5"/>
                                 </button>
                                 
                                 <button
@@ -16846,7 +16978,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     className={`p-2.5 rounded-lg transition-colors ${isAttributeFlyoutOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
                                     title="Annotation Scale"
                                 >
-                                    <AttributeScaleIcon className="w-5 h-5"/>
+                                    <ToolbarAnnotationScaleIcon className="w-5 h-5"/>
                                 </button>
 
                                 <button
@@ -16865,7 +16997,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     className={`p-2.5 rounded-lg transition-colors ${isLayerPanelOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
                                     title="Data Visibility"
                                 >
-                                    <LayersIcon className="w-5 h-5"/>
+                                    <ToolbarLayersIcon className="w-5 h-5"/>
                                 </button>
 
                                 <button
@@ -16874,7 +17006,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     className={`p-2.5 rounded-lg transition-colors ${isTinShadingEnabled ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
                                     title={isTinShadingEnabled ? 'TIN Shading: ON' : 'TIN Shading: OFF'}
                                 >
-                                    <EyeIcon className="w-5 h-5"/>
+                                    <ToolbarSurfaceIcon className="w-5 h-5"/>
                                 </button>
 
                                 <button
@@ -16906,9 +17038,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     className={`p-2.5 rounded-lg transition-colors ${isSelectionMode ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
                                     title="Selection Mode (S) — click lines, press D to delete, then Convert to Boundary"
                                 >
-                                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
-                                        <path d="M5 3 L5 18 L9 14 L11.5 20 L13.5 19.2 L11 13.2 L17 13 Z" fill="currentColor"/>
-                                    </svg>
+                                    <ToolbarSelectIcon className="w-5 h-5"/>
                                 </button>
 
                                 {/* Add Point button */}
@@ -16933,11 +17063,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     className={`p-2.5 rounded-lg transition-colors ${isAddPointFlyoutOpen || drawingMode === 'add-point' ? 'bg-emerald-600 text-white' : 'hover:bg-gray-800 text-emerald-400'}`}
                                     title="Add Point (P) — Pick on canvas or enter coordinates"
                                 >
-                                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.8">
-                                        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
-                                        <circle cx="12" cy="9" r="2.5" />
-                                        <path d="M19 5v4m-2-2h4" strokeWidth="2" strokeLinecap="round" />
-                                    </svg>
+                                    <ToolbarAddPointIcon className="w-5 h-5"/>
                                 </button>
 
                                 <button
@@ -16958,7 +17084,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     className={`p-2.5 rounded-lg transition-colors ${isDrawingToolsMenuOpen || drawingMode !== 'none' || isTrimmingLines || isExtendingLines || isDeletingLines || isCopyingSelection || isOffsetMode ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
                                     title="Drawing Tools (L, C, T, I)"
                                 >
-                                    <PencilSquareIcon className="w-5 h-5"/>
+                                    <ToolbarDrawToolsIcon className="w-5 h-5"/>
                                 </button>
 
                                 <button
@@ -16977,13 +17103,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     className={`p-2.5 rounded-lg transition-colors ${isDimFlyoutOpen || isDimensionDrawingMode(drawingMode) ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
                                     title="Dimension Tools"
                                 >
-                                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                        <line x1="3" y1="19" x2="21" y2="19"/>
-                                        <line x1="3" y1="14" x2="3" y2="24" strokeWidth="1.8"/><line x1="21" y1="14" x2="21" y2="24" strokeWidth="1.8"/>
-                                        <line x1="3" y1="8" x2="21" y2="8" strokeDasharray="3,2"/>
-                                        <line x1="6" y1="19" x2="6" y2="8" strokeOpacity="0.45"/>
-                                        <line x1="18" y1="19" x2="18" y2="8" strokeOpacity="0.45"/>
-                                    </svg>
+                                    <ToolbarDimensionIcon className="w-5 h-5"/>
                                 </button>
 
                                 {/* CAD Standards spreadsheet editor (quick open) */}
@@ -16994,13 +17114,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     className={`p-2.5 rounded-lg transition-colors flex items-center ${cadStandard ? 'hover:bg-gray-800' : 'opacity-40 cursor-not-allowed'}`}
                                     title={cadStandard ? `Open CAD Standards editor (${cadStandard.codes.length} codes)` : 'Load a CAD standard to edit codes'}
                                 >
-                                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                        <rect x="3" y="4" width="18" height="16" rx="2"/>
-                                        <line x1="3" y1="9" x2="21" y2="9"/>
-                                        <line x1="3" y1="14" x2="21" y2="14"/>
-                                        <line x1="9" y1="4" x2="9" y2="20"/>
-                                        <line x1="15" y1="4" x2="15" y2="20"/>
-                                    </svg>
+                                    <ToolbarStandardsIcon className="w-5 h-5"/>
                                 </button>
 
                                 {/* Symbol exclusion mode — click points to hide their symbols */}
@@ -17012,10 +17126,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                         ? `Exit symbol exclusion mode (${excludedSymbolDescriptions.size} hidden)`
                                         : 'Exclude point symbols by description'}
                                 >
-                                    <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                        <circle cx="12" cy="12" r="8"/>
-                                        <line x1="6" y1="6" x2="18" y2="18"/>
-                                    </svg>
+                                    <ToolbarSymbolExclusionIcon className="w-5 h-5"/>
                                 </button>
 
                                 {/* Floating Point List Panel toggle */}
@@ -17026,7 +17137,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                         className={`p-2.5 rounded-lg transition-colors ${props.isPointListPanelOpen ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-800'} ${props.isPointListButtonPulsing && !props.isPointListPanelOpen ? 'animate-pulse-pink-cta' : ''}`}
                                         title="Point List Panel"
                                     >
-                                        <ListBulletIcon className="w-5 h-5"/>
+                                        <ToolbarPointListIcon className="w-5 h-5"/>
                                     </button>
                                 )}
 
@@ -17049,11 +17160,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                         className={`p-2.5 rounded-lg transition-colors ${props.isShrinkwrapOpen ? 'bg-violet-600 hover:bg-violet-700' : 'hover:bg-gray-800'}`}
                                         title="Shrinkwrap visible survey points"
                                     >
-                                        <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.8">
-                                            <path d="M5 7.5 9 4l6 1 4 4-1 7-5 4-7-2-2-5z" strokeDasharray="3 2" />
-                                            <circle cx="9" cy="9" r="1" fill="currentColor" />
-                                            <circle cx="15" cy="14" r="1" fill="currentColor" />
-                                        </svg>
+                                        <ToolbarShrinkwrapIcon className="w-5 h-5"/>
                                     </button>
                                 )}
                             </div>

@@ -106,13 +106,20 @@ export class PointAgent {
   private registerHandlers() {
     this.interAgentComm.onCommand('deed_loaded', async (message) => {
       this.onDeedLoaded(message.data);
+      return {
+        requestId: message.id,
+        from: AgentType.DEED_READER,
+        success: true,
+        timestamp: Date.now(),
+        data: { accepted: true, parcelId: message.data.parcelId },
+      };
     });
 
     this.interAgentComm.onCommand('get_deed_points', async (message) => {
       const deedPoints = await this.getDeedAssociatedPoints(message.data);
       return {
         requestId: message.id,
-        from: AgentType.POINT_EDITOR,
+        from: AgentType.DEED_READER,
         success: true,
         timestamp: Date.now(),
         data: {

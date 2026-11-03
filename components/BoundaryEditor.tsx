@@ -34,6 +34,8 @@ export interface BoundaryEditorProps {
     onUpdateCall: (fileId: string, callId: string, patch: Partial<BoundaryFileCall>) => void;
     /** Append a new blank call at the end of the traverse. */
     onAddCall: (fileId: string) => void;
+    /** Pulse the Add Call Row button as the next step for a manual boundary. */
+    isAddCallRowPulsing?: boolean;
     /** Remove a call (also removes the matching SurveyLine). */
     onRemoveCall: (fileId: string, callId: string) => void;
     /** Run a closure report on the selected boundary file. */
@@ -219,6 +221,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
     pointMap,
     onUpdateCall,
     onAddCall,
+    isAddCallRowPulsing = false,
     onRemoveCall,
     onGenerateClosureReport,
     onInvestigateClosure,
@@ -1392,7 +1395,8 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                     </span>
                                     <button
                                         onClick={() => onAddCall(selectedFile.id)}
-                                        className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-cyan-950 hover:bg-cyan-900 text-cyan-200 hover:text-white border border-cyan-500/70 shadow-sm transition-all active:scale-95"
+                                        title={isAddCallRowPulsing ? 'Start here — add your first call row' : undefined}
+                                        className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-cyan-950 hover:bg-cyan-900 text-cyan-200 hover:text-white border border-cyan-500/70 shadow-sm transition-all active:scale-95 ${isAddCallRowPulsing ? 'animate-add-call-row-pulse' : ''}`}
                                     >
                                         <PlusIcon className="w-3.5 h-3.5" />
                                         <span>Add Call Row</span>

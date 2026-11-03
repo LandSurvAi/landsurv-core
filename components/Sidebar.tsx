@@ -8,8 +8,8 @@ import { AgentType, JobInfo, useAgent, useUI } from '../types.ts';
 import { 
     BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, BookOpenIcon, 
     MapIcon, CutSheetIcon, DownloadIcon, ArrowUpTrayIcon, EraserIcon, XMarkIcon, 
-    QuestionMarkCircleIcon, DocumentDuplicateIcon, CpuChipIcon, ClipboardDocumentListIcon, CurrencyDollarIcon, CogIcon, SparklesIcon,
-    LsvzIcon, DxfAnalyzerIcon, AdjustmentsHorizontalIcon, FolderIcon, DocumentTextIcon, CrosshairsIcon, ScaleIcon, CameraIcon, GlobeAltIcon, BugAntIcon,
+    QuestionMarkCircleIcon, DocumentDuplicateIcon, CpuChipIcon, ClipboardDocumentListIcon, CurrencyDollarIcon, CogIcon,
+    LsvzIcon, DxfAnalyzerIcon, AdjustmentsHorizontalIcon, FolderIcon, DocumentTextIcon, CrosshairsIcon, CogoIcon, ScaleIcon, CameraIcon, GlobeAltIcon, BugAntIcon,
     FileIcon,
     GisAgentIcon,
     PencilSquareIcon,
@@ -24,10 +24,30 @@ import {
     CivilDrafterIcon,
     FloodIcon,
     HomeIcon,
+    StructuresIcon,
     SoilsIcon,
     SlopeIcon,
     SheetViewIcon,
+    ChevronDoubleRightIcon,
 } from './icons.tsx';
+import {
+    AutoRouteIcon,
+    C3DLinkIcon,
+    ViewCanvasIcon,
+    StyleLibraryIcon,
+    LinetypeManagerIcon,
+    FileManagerIcon,
+    SymbolManagerIcon,
+    AnnotateManagerIcon,
+    TextEditorToolIcon,
+    WmsManagerIcon,
+    FieldBookToolIcon,
+    ClosureReportIcon,
+    PdfReviewerIcon,
+    ToolbarLayersIcon,
+    ToolbarStandardsIcon,
+    ToolbarDrawToolsIcon,
+} from './toolbarIcons.tsx';
 import { getRetiredAgents } from '../utils/retiredAgents.ts';
 import { getGlobalSettings, subscribeGlobalSettings } from '../utils/globalSettings.ts';
 
@@ -61,6 +81,11 @@ interface SidebarProps {
     onShowClaudeSettings?: () => void;
 }
 
+const SIDEBAR_DEFAULT_WIDTH = 264;
+const SIDEBAR_MIN_WIDTH = 208;
+const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_WIDTH_STORAGE_KEY = 'landsurv-agent-sidebar-width';
+
 const AUTO_SELECTOR_OPTION = 'auto';
 const getSelectorModelValue = (modelName: string): string => modelName;
 const getSelectorModelLabel = (modelName: string): string => (
@@ -90,7 +115,7 @@ const agentConfig = {
     [AgentType.CONTOURING_AGENT]: { icon: ContourIcon, label: 'Contouring', color: 'amber' },
     [AgentType.STEEP_SLOPE_AGENT]: { icon: SlopeIcon, label: 'Steep Slope', color: 'red' },
     [AgentType.PROFILE_AGENT]: { icon: ProfileIcon, label: 'Profile & XS', color: 'sky' },
-    [AgentType.COGO_AGENT]: { icon: CrosshairsIcon, label: 'COGO', color: 'violet' },
+    [AgentType.COGO_AGENT]: { icon: CogoIcon, label: 'COGO', color: 'violet' },
     [AgentType.IMAGE_ANALYZER]: { icon: CameraIcon, label: 'Image Analyzer', color: 'red' },
     [AgentType.GNSS_AGENT]: { icon: SatelliteIcon, label: 'RINEX', color: 'lime' },
     [AgentType.AR_AGENT]: { icon: ARIcon, label: 'AR View', color: 'rose' },
@@ -99,7 +124,7 @@ const agentConfig = {
     [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSVZ Meta-Agent', color: 'slate' },
     [AgentType.CAD_MANAGER]: { icon: CadManagerIcon, label: 'CAD Manager', color: 'indigo' },
     [AgentType.FLOOD_AGENT]: { icon: FloodIcon, label: 'Flood Zone', color: 'cyan' },
-    [AgentType.STRUCTURES_AGENT]: { icon: HomeIcon, label: 'Structures', color: 'orange' },
+    [AgentType.STRUCTURES_AGENT]: { icon: StructuresIcon, label: 'Structures', color: 'orange' },
     [AgentType.SOILS_AGENT]: { icon: SoilsIcon, label: 'Soils Agent', color: 'stone' },
 };
 
@@ -144,10 +169,111 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     const { activeVisualPanel, showView, showDoc, showTech, showInvestorForm, showReleaseLog, showSettings, showAbout } = useUI();
     const [isInfoOpen, setIsInfoOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<'agents' | 'views'>('agents');
+    const [isCollapsed, setIsCollapsed] = useState(false);
+    const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+        try {
+            const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+            if (Number.isFinite(saved) && saved >= SIDEBAR_MIN_WIDTH) {
+                return Math.min(saved, SIDEBAR_MAX_WIDTH);
+            }
+        } catch { /* ignore */ }
+        return SIDEBAR_DEFAULT_WIDTH;
+    });
+    const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+    const sidebarRef = useRef<HTMLElement | null>(null);
+    const sidebarResizeState = useRef<{ startX: number; startWidth: number; latestWidth: number } | null>(null);
+    const sidebarResizeFrame = useRef<number | null>(null);
     const [retiredAgents, setRetiredAgents] = useState<AgentType[]>([]);
     const [agentOrderSidebar, setAgentOrderSidebar] = useState<string[] | null>(() => getGlobalSettings().agentOrderSidebar ?? null);
     const modelSelectorRef = useRef<HTMLDivElement>(null);
+
+    // Resize the agent panel directly on the DOM during the drag so the rest of
+    // the app does not re-render at pointer rate. State is committed on release.
+    useEffect(() => {
+        if (!isResizingSidebar) return;
+
+        const handleMove = (event: MouseEvent) => {
+            const drag = sidebarResizeState.current;
+            if (!drag) return;
+            const maxWidth = Math.min(
+                SIDEBAR_MAX_WIDTH,
+                Math.max(SIDEBAR_MIN_WIDTH, window.innerWidth * 0.42)
+            );
+            const nextWidth = Math.max(
+                SIDEBAR_MIN_WIDTH,
+                Math.min(maxWidth, drag.startWidth + event.clientX - drag.startX)
+            );
+            drag.latestWidth = nextWidth;
+
+            if (sidebarResizeFrame.current !== null) {
+                cancelAnimationFrame(sidebarResizeFrame.current);
+            }
+            sidebarResizeFrame.current = requestAnimationFrame(() => {
+                sidebarResizeFrame.current = null;
+                sidebarRef.current?.style.setProperty('--sidebar-width', `${nextWidth}px`);
+            });
+        };
+
+        const finishResize = () => {
+            if (sidebarResizeFrame.current !== null) {
+                cancelAnimationFrame(sidebarResizeFrame.current);
+                sidebarResizeFrame.current = null;
+            }
+            const drag = sidebarResizeState.current;
+            if (drag) {
+                sidebarRef.current?.style.setProperty('--sidebar-width', `${drag.latestWidth}px`);
+                setSidebarWidth(drag.latestWidth);
+                try {
+                    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(drag.latestWidth));
+                } catch { /* ignore */ }
+            }
+            sidebarResizeState.current = null;
+            setIsResizingSidebar(false);
+        };
+
+        const previousCursor = document.body.style.cursor;
+        const previousUserSelect = document.body.style.userSelect;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', finishResize);
+        window.addEventListener('blur', finishResize);
+        return () => {
+            document.body.style.cursor = previousCursor;
+            document.body.style.userSelect = previousUserSelect;
+            window.removeEventListener('mousemove', handleMove);
+            window.removeEventListener('mouseup', finishResize);
+            window.removeEventListener('blur', finishResize);
+        };
+    }, [isResizingSidebar]);
+
+    const handleSidebarResizeMouseDown = (event: React.MouseEvent) => {
+        if (!props.isDesktop) return;
+        event.preventDefault();
+        event.stopPropagation();
+        sidebarResizeState.current = {
+            startX: event.clientX,
+            startWidth: sidebarWidth,
+            latestWidth: sidebarWidth,
+        };
+        setIsResizingSidebar(true);
+    };
     
+    // Escape closes the sidebar's menus, including the model selector.
+    useEffect(() => {
+        if (!isInfoOpen && !props.showQuickModelSelector) return;
+
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            setIsInfoOpen(false);
+            props.setShowQuickModelSelector?.(false);
+        };
+
+        window.addEventListener('keydown', handleEscape);
+        return () => window.removeEventListener('keydown', handleEscape);
+    }, [isInfoOpen, props.showQuickModelSelector, props.setShowQuickModelSelector]);
+
     // Close model selector when clicking outside
     useEffect(() => {
         if (!props.showQuickModelSelector) return;
@@ -192,29 +318,48 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
         const config = agentConfig[agent];
         const isActive = activeAgent === agent;
         const isThinking = isActive && props.isLoading;
-        const color = config.color;
 
         const hexColor = agentThemeColors[agent] || '#94a3b8'; // slate-400 fallback
         const rgbColor = hexToRgb(hexColor);
-
-        const baseClasses = `flex items-center gap-4 p-3 my-1 rounded-lg transition-all duration-200 relative`;
-        const activeClasses = `bg-gray-700/30 border border-${color}-500 text-white`;
-        const inactiveClasses = `bg-transparent border border-transparent text-gray-400 hover:bg-gray-800/50 hover:border-${color}-500/50 light-theme:text-gray-500 light-theme:hover:bg-gray-200 light-theme:hover:text-gray-900`;
-        const animationClass = isThinking ? 'animate-pulse-thinking' : '';
-        const indicatorClasses = `bg-${color}-400`;
         const Icon = config.icon;
 
         return (
             <div className="relative has-tooltip">
                 <button
                     onClick={() => onAgentChange(agent)}
-                    className={`${baseClasses} ${isDesktop ? 'w-full justify-center md:justify-start' : 'px-4'} ${isActive ? activeClasses : inactiveClasses} ${animationClass}`}
-                    style={{ '--pulse-color': rgbColor } as React.CSSProperties}
+                    className={`group relative flex w-full items-center gap-1.5 rounded-md border px-1.5 py-[6px] text-left transition-colors duration-150 lg:gap-2.5 lg:px-2.5 ${
+                        isDesktop ? 'justify-center lg:justify-start' : ''
+                    } ${
+                        isActive
+                            ? 'border-transparent text-white'
+                            : 'border-transparent text-slate-400 hover:bg-white/[0.045] hover:text-slate-100 light-theme:text-gray-600 light-theme:hover:bg-black/[0.04] light-theme:hover:text-gray-900'
+                    } ${isThinking ? 'animate-pulse-thinking' : ''}`}
+                    style={{
+                        ...(isActive ? {
+                            background: `linear-gradient(90deg, rgba(${rgbColor},0.16), rgba(${rgbColor},0.03))`,
+                            boxShadow: `inset 0 0 0 1px rgba(${rgbColor},0.24)`,
+                        } : {}),
+                        '--pulse-color': rgbColor,
+                    } as React.CSSProperties}
                     {...rest}
                 >
-                    <Icon className="w-6 h-6 flex-shrink-0" style={{ color: hexColor }} />
-                    <span className={`font-semibold ${isDesktop ? 'md:hidden lg:inline' : ''}`}>{config.label}</span>
-                    {isActive && isDesktop && <div className={`absolute left-0 top-1/2 -translate-y-1/2 h-6 w-1 rounded-r-full ${indicatorClasses}`}></div>}
+                    {isActive && (
+                        <span
+                            className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full"
+                            style={{ backgroundColor: hexColor }}
+                        />
+                    )}
+                    <Icon
+                        className="h-[18px] w-[18px] flex-shrink-0"
+                        style={{ color: isActive ? hexColor : `rgba(${rgbColor},0.82)` }}
+                    />
+                    <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''}`}>{config.label}</span>
+                    {isActive && (
+                        <span
+                            className="ml-auto hidden h-1.5 w-1.5 flex-shrink-0 rounded-full lg:block"
+                            style={{ backgroundColor: hexColor, boxShadow: `0 0 8px rgba(${rgbColor},0.75)` }}
+                        />
+                    )}
                 </button>
                  <div className={`tooltip ${isDesktop ? 'invisible absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-gray-900 text-white text-sm rounded-md shadow-lg opacity-0 transform -translate-x-2 transition-all duration-200 md:inline lg:hidden' : 'hidden'} light-theme:bg-gray-700 light-theme:text-gray-100`}>
                     {config.label}
@@ -223,16 +368,23 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
         );
     };
     
-    // FUTURE GEMINI: This is the standard button for a View or Action in the sidebar. Do not change its styling.
+    // Standard View / Action row. Same grid and accent system as the agent rows.
     const NavButton = ({ label, icon: Icon, onClick, isActive, isDesktop }: { label: string, icon: React.FC<any>, onClick: () => void, isActive?: boolean, isDesktop: boolean }) => {
-         const color = agentConfig[activeAgent]?.color || 'slate';
-         const activeClasses = `bg-${color}-500 text-white`;
-         const inactiveClasses = `text-gray-400 hover:bg-gray-800/50 hover:border-${color}-500/50 light-theme:text-gray-500 light-theme:hover:bg-gray-200 light-theme:hover:text-gray-900`;
         return (
             <div className="relative has-tooltip">
-                <button onClick={onClick} className={`flex items-center gap-4 p-3 my-1 rounded-lg transition-colors duration-200 ${isDesktop ? 'w-full justify-center md:justify-start' : 'px-4'} ${isActive ? activeClasses : inactiveClasses}`}>
-                    <Icon className="w-6 h-6 flex-shrink-0" />
-                    <span className={`font-semibold ${isDesktop ? 'md:hidden lg:inline' : ''}`}>{label}</span>
+                <button
+                    onClick={onClick}
+                    className={`group relative flex w-full items-center gap-1.5 rounded-md border px-1.5 py-[6px] text-left transition-colors duration-150 lg:gap-2.5 lg:px-2.5 ${
+                        isDesktop ? 'justify-center lg:justify-start' : ''
+                    } ${
+                        isActive
+                            ? 'border-cyan-400/25 bg-cyan-400/[0.10] text-white'
+                            : 'border-transparent text-slate-400 hover:bg-white/[0.045] hover:text-slate-100 light-theme:text-gray-600 light-theme:hover:bg-black/[0.04] light-theme:hover:text-gray-900'
+                    }`}
+                >
+                    {isActive && <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full bg-cyan-300" />}
+                    <Icon className="h-[18px] w-[18px] flex-shrink-0" style={{ color: isActive ? '#67e8f9' : 'rgba(148,163,184,0.8)' }} />
+                    <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''}`}>{label}</span>
                 </button>
                  <div className={`tooltip ${isDesktop ? 'invisible absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-gray-900 text-white text-sm rounded-md shadow-lg opacity-0 transform -translate-x-2 transition-all duration-200 md:inline lg:hidden' : 'hidden'} light-theme:bg-gray-700 light-theme:text-gray-100`}>
                     {label}
@@ -246,10 +398,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
         const label = isConnected 
             ? (version ? `C3D v${version}` : 'C3D Connected') 
             : (hasToken ? 'C3D Ready' : 'Connect C3D');
-        const dotColor = isConnected ? 'bg-green-500' : (hasToken ? 'bg-yellow-500' : 'bg-red-500');
-        const pulseColor = isConnected ? 'bg-green-400' : (hasToken ? 'bg-yellow-400' : 'bg-red-400');
-        const textColor = isConnected ? 'text-green-400' : (hasToken ? 'text-yellow-400' : 'text-gray-400');
-        const hoverBg = isConnected ? 'hover:bg-green-900/30' : 'hover:bg-gray-800/50';
+        const statusColor = isConnected ? '#34d399' : (hasToken ? '#fbbf24' : '#f87171');
         
         const handleClick = () => {
             if (isConnected && onDebugClick) {
@@ -265,18 +414,19 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
             <div className="relative has-tooltip">
                 <button 
                     onClick={handleClick} 
-                    className={`flex items-center gap-4 p-3 my-1 rounded-lg transition-colors duration-200 ${isDesktop ? 'w-full justify-center md:justify-start' : 'px-4'} ${textColor} ${hoverBg} light-theme:hover:bg-gray-200`}
+                    className={`group flex w-full items-center gap-1.5 rounded-md border border-transparent px-1.5 py-[6px] text-left text-slate-400 transition-colors duration-150 hover:bg-white/[0.045] hover:text-slate-100 lg:gap-2.5 lg:px-2.5 ${isDesktop ? 'justify-center lg:justify-start' : ''} light-theme:text-gray-600 light-theme:hover:bg-black/[0.04]`}
                 >
-                    {/* Icon with status dot */}
-                    <div className="relative flex-shrink-0">
-                        <CpuChipIcon className={`w-6 h-6 ${isConnected ? 'text-green-400' : (hasToken ? 'text-yellow-400' : 'text-gray-500')}`} />
-                        {/* Pulsing status dot */}
-                        <span className="absolute -top-1 -right-1 flex h-3 w-3">
-                            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${pulseColor} opacity-75`}></span>
-                            <span className={`relative inline-flex rounded-full h-3 w-3 ${dotColor}`}></span>
+                    <span className="relative flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center">
+                        <C3DLinkIcon className="h-[18px] w-[18px]" style={{ color: isConnected ? '#34d399' : (hasToken ? '#fbbf24' : '#94a3b8') }} />
+                        <span className="absolute -right-0.5 -top-0.5 flex h-2 w-2">
+                            {!isConnected && (
+                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ backgroundColor: statusColor }} />
+                            )}
+                            <span className="relative inline-flex h-2 w-2 rounded-full ring-2 ring-[#0a0f16] light-theme:ring-gray-50" style={{ backgroundColor: statusColor }} />
                         </span>
-                    </div>
-                    <span className={`font-semibold ${isDesktop ? 'md:hidden lg:inline' : ''}`}>{label}</span>
+                    </span>
+                    <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''}`} style={{ color: isConnected ? '#6ee7b7' : (hasToken ? '#fcd34d' : undefined) }}>{label}</span>
+                    {isConnected && <span className="ml-auto hidden text-[8px] font-bold uppercase tracking-[0.16em] text-emerald-400/80 lg:inline">Live</span>}
                 </button>
                 <div className={`tooltip ${isDesktop ? 'invisible absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-gray-900 text-white text-sm rounded-md shadow-lg opacity-0 transform -translate-x-2 transition-all duration-200 md:inline lg:hidden' : 'hidden'} light-theme:bg-gray-700 light-theme:text-gray-100`}>
                     {isConnected ? (version ? `Connected: v${version}` : 'Click for connection info') : (hasToken ? 'Token ready - waiting for C3D' : 'Click to connect Civil 3D')}
@@ -293,27 +443,27 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     // FUTURE GEMINI: This is the Info/Help dropdown menu. Its contents and structure are important for user guidance.
     // Preserve the links and their respective actions.
     const InfoMenu = () => (
-        <div className={`absolute w-64 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl p-2 z-50 ${props.isDesktop ? 'left-full bottom-2 ml-2' : 'bottom-16 left-4'} light-theme:bg-white light-theme:border-gray-300`}>
-            <button onClick={() => handleInfoMenuClick(showAbout)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-gray-700 transition-colors light-theme:hover:bg-gray-200"><BrainCircuitIcon className="w-5 h-5 text-purple-400"/> About</button>
-            <button onClick={() => handleInfoMenuClick(showDoc)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-gray-700 transition-colors light-theme:hover:bg-gray-200"><DocumentDuplicateIcon className="w-5 h-5 text-cyan-400"/> .lsvz Format</button>
-            <hr className="border-gray-600 my-1"/>
-            <button onClick={() => handleInfoMenuClick(showReleaseLog)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-gray-700 transition-colors light-theme:hover:bg-gray-200"><ClipboardDocumentListIcon className="w-5 h-5 text-blue-400"/> Release Log</button>
-            <button onClick={() => handleInfoMenuClick(showTech)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-gray-700 transition-colors light-theme:hover:bg-gray-200"><CpuChipIcon className="w-5 h-5 text-gray-400"/> Technologies</button>
-            <hr className="border-gray-600 my-1"/>
-            <a href="https://civil3d.landsurv.ai" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-gray-700 transition-colors light-theme:hover:bg-gray-200"><CpuChipIcon className="w-5 h-5 text-blue-400"/> Civil 3D Plugin</a>
-            <a href="https://www.youtube.com/@LandSurvAI" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-start gap-3 p-2 rounded-md hover:bg-gray-700 transition-colors light-theme:hover:bg-gray-200">
+        <div className={`absolute z-50 w-64 rounded-lg border border-white/10 bg-[#0b1119]/95 p-1.5 text-[12px] text-slate-300 shadow-2xl backdrop-blur-md ${props.isDesktop ? 'left-full bottom-2 ml-2' : 'bottom-16 left-4'} light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-700`}>
+            <button onClick={() => handleInfoMenuClick(showAbout)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><BrainCircuitIcon className="w-5 h-5 text-purple-400"/> About</button>
+            <button onClick={() => handleInfoMenuClick(showDoc)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><DocumentDuplicateIcon className="w-5 h-5 text-cyan-400"/> .lsvz Format</button>
+            <hr className="border-white/[0.07] my-1"/>
+            <button onClick={() => handleInfoMenuClick(showReleaseLog)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><ClipboardDocumentListIcon className="w-5 h-5 text-blue-400"/> Release Log</button>
+            <button onClick={() => handleInfoMenuClick(showTech)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><CpuChipIcon className="w-5 h-5 text-gray-400"/> Technologies</button>
+            <hr className="border-white/[0.07] my-1"/>
+            <a href="https://civil3d.landsurv.ai" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><CpuChipIcon className="w-5 h-5 text-blue-400"/> Civil 3D Plugin</a>
+            <a href="https://www.youtube.com/@LandSurvAI" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-start gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200">
                 <svg className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
                 <span className="flex flex-col leading-tight">
                     <span>YouTube Tutorials</span>
                     <span className="text-[10px] text-gray-400 font-normal">Learn the app — walkthroughs & tips</span>
                 </span>
             </a>
-            <hr className="border-gray-600 my-1"/>
-            <button onClick={() => handleInfoMenuClick(showInvestorForm)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-gray-700 transition-colors light-theme:hover:bg-gray-200"><CurrencyDollarIcon className="w-5 h-5 text-emerald-400"/> Investor Inquiry</button>
-            <a href="https://github.com/msersen/Landsurv.ai_Public-/issues" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-gray-700 transition-colors light-theme:hover:bg-gray-200">
+            <hr className="border-white/[0.07] my-1"/>
+            <button onClick={() => handleInfoMenuClick(showInvestorForm)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><CurrencyDollarIcon className="w-5 h-5 text-emerald-400"/> Investor Inquiry</button>
+            <a href="https://github.com/msersen/Landsurv.ai_Public-/issues" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200">
                 <BugAntIcon className="w-5 h-5 text-yellow-400"/> Report a Bug
             </a>
-            <a href="https://github.com/LandSurvAi/landsurv-core" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-gray-700 transition-colors light-theme:hover:bg-gray-200">
+            <a href="https://github.com/LandSurvAi/landsurv-core" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200">
                 <CpuChipIcon className="w-5 h-5 text-emerald-400"/> View Source (Open Source)
             </a>
         </div>
@@ -333,50 +483,65 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     const sidebarContent = (
         <>
             <div className="flex-shrink-0">
-                <div className={`p-2 h-10 flex items-center justify-between ${props.isDesktop ? 'md:justify-center lg:justify-center' : ''}`}>
-                    <h1 className="text-2xl font-extrabold leading-none tracking-tight text-gray-200 light-theme:text-gray-800">
-                        <span className={`bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-green-400 hidden ${props.isDesktop ? 'md:inline lg:hidden' : 'hidden'}`}>
-                            LS
+                <div className={`flex h-14 items-center px-3 ${props.isDesktop ? 'justify-center lg:justify-start' : 'justify-between'}`}>
+                    <div className="flex min-w-0 items-center gap-2">
+                        <span className={`h-7 w-7 flex-shrink-0 items-center justify-center rounded-md border border-cyan-400/25 bg-cyan-400/[0.08] ${props.isDesktop ? 'hidden md:flex lg:hidden' : 'flex'}`}>
+                            <span className="font-mono text-[10px] font-extrabold tracking-tight text-cyan-300">LS</span>
                         </span>
-                        <span className={`${props.isDesktop ? 'md:hidden lg:inline' : 'inline'}`}>
-                            Land<span className="text-cyan-400">Surv</span><span className="text-green-400">.ai</span><sup>™</sup>
-                        </span>
-                    </h1>
-                    <div className="flex items-center gap-2">
-                        <button onClick={() => props.setIsMobileMenuOpen(false)} className="p-1 md:hidden flex-shrink-0">
-                            <XMarkIcon className="w-6 h-6"/>
+                        <h1 className="text-[19px] font-bold leading-none tracking-tight text-slate-100 light-theme:text-gray-800">
+                            <span className={`${props.isDesktop ? 'hidden lg:inline' : 'inline'}`}>
+                                Land<span className="text-cyan-400">Surv</span><span className="text-emerald-400">.ai</span><sup className="ml-0.5 align-super text-[8px] font-semibold text-slate-500">™</sup>
+                            </span>
+                        </h1>
+                        <button onClick={() => props.setIsMobileMenuOpen(false)} className="ml-auto rounded p-1 text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-200 md:hidden">
+                            <XMarkIcon className="h-5 w-5"/>
                         </button>
                     </div>
+                    {props.isDesktop && (
+                        <button
+                            type="button"
+                            onClick={() => setIsCollapsed(true)}
+                            className="ml-auto hidden h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-cyan-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04] lg:flex"
+                            title="Hide agent panel"
+                            aria-label="Hide agent panel"
+                        >
+                            <ChevronDoubleRightIcon className="h-4 w-4 rotate-180" />
+                        </button>
+                    )}
                 </div>
-                
-                <div className="px-2 pt-2">
-                    <div className="flex border-b border-gray-700 light-theme:border-gray-300">
+
+                <div className="px-2 pb-2.5">
+                    <div className="flex items-center gap-0.5 rounded-md border border-white/[0.06] bg-black/25 p-0.5 light-theme:border-gray-300 light-theme:bg-white">
                         <button
                             onClick={() => setActiveTab('agents')}
-                            className={`flex-1 py-2 text-sm font-semibold transition-colors border-b-2 ${
+                            className={`flex flex-1 items-center justify-center gap-1.5 rounded-[5px] px-1.5 py-[5px] text-[10px] font-bold uppercase tracking-[0.14em] transition-colors ${
                                 activeTab === 'agents'
-                                    ? `text-${agentConfig[activeAgent]?.color || 'cyan'}-400 border-${agentConfig[activeAgent]?.color || 'cyan'}-400`
-                                    : 'text-gray-400 border-transparent hover:bg-gray-700/50 light-theme:hover:bg-gray-200'
+                                    ? 'bg-white/[0.08] text-cyan-200 ring-1 ring-inset ring-cyan-400/25 light-theme:bg-gray-100 light-theme:text-cyan-700'
+                                    : 'text-slate-500 hover:text-slate-300 light-theme:text-gray-500 light-theme:hover:text-gray-800'
                             }`}
                         >
-                            Agents
+                            <LayersIcon className="h-3 w-3" />
+                            <span className="hidden lg:inline">Agents</span>
                         </button>
                         <button
                             onClick={() => setActiveTab('views')}
-                            className={`flex-1 py-2 text-sm font-semibold transition-colors border-b-2 ${
+                            className={`flex flex-1 items-center justify-center gap-1.5 rounded-[5px] px-1.5 py-[5px] text-[10px] font-bold uppercase tracking-[0.14em] transition-colors ${
                                 activeTab === 'views'
-                                    ? `text-${agentConfig[activeAgent]?.color || 'cyan'}-400 border-${agentConfig[activeAgent]?.color || 'cyan'}-400`
-                                    : 'text-gray-400 border-transparent hover:bg-gray-700/50 light-theme:hover:bg-gray-200'
+                                    ? 'bg-white/[0.08] text-cyan-200 ring-1 ring-inset ring-cyan-400/25 light-theme:bg-gray-100 light-theme:text-cyan-700'
+                                    : 'text-slate-500 hover:text-slate-300 light-theme:text-gray-500 light-theme:hover:text-gray-800'
                             }`}
                         >
-                            Views
+                            <ToolbarDrawToolsIcon className="h-3 w-3" />
+                            <span className="hidden lg:inline">Tools</span>
                         </button>
                     </div>
                 </div>
             </div>
 
-            <nav className="flex-grow p-2 overflow-y-auto min-h-0 scrollbar-hide">
+            <nav className="min-h-0 flex-grow overflow-y-auto px-2 pb-2 scrollbar-hide">
                 {activeTab === 'agents' && (
+                    <>
+                    <div className="hidden px-2 pb-1 pt-1 text-[9px] font-bold uppercase tracking-[0.2em] text-slate-500 lg:block">Agent Workspaces</div>
                     <div className={!props.isDesktop ? 'flex flex-wrap justify-center gap-2' : ''}>
                         {(() => {
                             const keys = Object.keys(agentConfig);
@@ -408,44 +573,70 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                             });
                         })()}
                     </div>
+                    </>
                 )}
-                
+
                 {activeTab === 'views' && isSessionActive && (
+                    <>
+                    <div className="hidden px-2 pb-1 pt-1 text-[9px] font-bold uppercase tracking-[0.2em] text-slate-500 lg:block">Tools &amp; Panels</div>
                     <div className={!props.isDesktop ? 'flex flex-wrap justify-center gap-2' : ''}>
-                        <NavButton label="Canvas" icon={MapIcon} onClick={() => showView('canvas')} isActive={activeVisualPanel === 'canvas'} isDesktop={props.isDesktop} />
-                        <NavButton label="CAD Standards" icon={CadManagerIcon} onClick={() => showView('cadstandards')} isActive={activeVisualPanel === 'cadstandards' || activeVisualPanel === 'cadmanager'} isDesktop={props.isDesktop} />
-                        <NavButton label="Drafting Style Library" icon={CadManagerIcon} onClick={() => showView('draftstylelib')} isActive={activeVisualPanel === 'draftstylelib'} isDesktop={props.isDesktop} />
-                        <NavButton label="Linetype Manager" icon={CadManagerIcon} onClick={() => showView('linetypemanager')} isActive={activeVisualPanel === 'linetypemanager'} isDesktop={props.isDesktop} />
+                        <NavButton label="Canvas" icon={ViewCanvasIcon} onClick={() => showView('canvas')} isActive={activeVisualPanel === 'canvas'} isDesktop={props.isDesktop} />
+                        <NavButton label="CAD Standards" icon={ToolbarStandardsIcon} onClick={() => showView('cadstandards')} isActive={activeVisualPanel === 'cadstandards' || activeVisualPanel === 'cadmanager'} isDesktop={props.isDesktop} />
+                        <NavButton label="Drafting Style Library" icon={StyleLibraryIcon} onClick={() => showView('draftstylelib')} isActive={activeVisualPanel === 'draftstylelib'} isDesktop={props.isDesktop} />
+                        <NavButton label="Linetype Manager" icon={LinetypeManagerIcon} onClick={() => showView('linetypemanager')} isActive={activeVisualPanel === 'linetypemanager'} isDesktop={props.isDesktop} />
                         <NavButton label="Sheet View" icon={SheetViewIcon} onClick={() => showView('sheetview')} isActive={activeVisualPanel === 'sheetview'} isDesktop={props.isDesktop} />
                         <NavButton label="AR View" icon={ARIcon} onClick={() => showView('ar')} isActive={activeVisualPanel === 'ar'} isDesktop={props.isDesktop} />
-                        <NavButton label="File Manager" icon={FolderIcon} onClick={() => showView('filemanager')} isActive={activeVisualPanel === 'filemanager'} isDesktop={props.isDesktop} />
-                        <NavButton label="Symbol Manager" icon={PencilSquareIcon} onClick={() => showView('symbolmanager')} isActive={activeVisualPanel === 'symbolmanager'} isDesktop={props.isDesktop} />
-                        <NavButton label="Annotate Manager" icon={PencilSquareIcon} onClick={() => showView('annotatemanager')} isActive={activeVisualPanel === 'annotatemanager'} isDesktop={props.isDesktop} />
-                        <NavButton label="Data Visibility" icon={LayersIcon} onClick={() => showView('layermanager')} isActive={activeVisualPanel === 'layermanager'} isDesktop={props.isDesktop} />
-                        <NavButton label="Text Editor" icon={DocumentTextIcon} onClick={() => showView('texteditor')} isActive={activeVisualPanel === 'texteditor'} isDesktop={props.isDesktop} />
-                        <NavButton label="WMS Manager" icon={GlobeAltIcon} onClick={() => showView('wms')} isActive={activeVisualPanel === 'wms'} isDesktop={props.isDesktop} />
-                        <NavButton label="Field Book" icon={BookOpenIcon} onClick={() => showView('fieldbook')} isActive={activeVisualPanel === 'fieldbook'} isDesktop={props.isDesktop} />
+                        <NavButton label="File Manager" icon={FileManagerIcon} onClick={() => showView('filemanager')} isActive={activeVisualPanel === 'filemanager'} isDesktop={props.isDesktop} />
+                        <NavButton label="Symbol Manager" icon={SymbolManagerIcon} onClick={() => showView('symbolmanager')} isActive={activeVisualPanel === 'symbolmanager'} isDesktop={props.isDesktop} />
+                        <NavButton label="Annotate Manager" icon={AnnotateManagerIcon} onClick={() => showView('annotatemanager')} isActive={activeVisualPanel === 'annotatemanager'} isDesktop={props.isDesktop} />
+                        <NavButton label="Data Visibility" icon={ToolbarLayersIcon} onClick={() => showView('layermanager')} isActive={activeVisualPanel === 'layermanager'} isDesktop={props.isDesktop} />
+                        <NavButton label="Text Editor" icon={TextEditorToolIcon} onClick={() => showView('texteditor')} isActive={activeVisualPanel === 'texteditor'} isDesktop={props.isDesktop} />
+                        <NavButton label="WMS Manager" icon={WmsManagerIcon} onClick={() => showView('wms')} isActive={activeVisualPanel === 'wms'} isDesktop={props.isDesktop} />
+                        <NavButton label="Field Book" icon={FieldBookToolIcon} onClick={() => showView('fieldbook')} isActive={activeVisualPanel === 'fieldbook'} isDesktop={props.isDesktop} />
                         <NavButton label="Cut Sheet" icon={CutSheetIcon} onClick={() => showView('cutsheet')} isActive={activeVisualPanel === 'cutsheet'} isDesktop={props.isDesktop} />
-                        <NavButton label="Closure Reports" icon={ClipboardDocumentListIcon} onClick={() => showView('closurereport')} isActive={activeVisualPanel === 'closurereport'} isDesktop={props.isDesktop} />
+                        <NavButton label="Closure Reports" icon={ClosureReportIcon} onClick={() => showView('closurereport')} isActive={activeVisualPanel === 'closurereport'} isDesktop={props.isDesktop} />
                         {/* Image Analyzer is a Gemini-capable agent and therefore not shown in Views */}
                         {props.hasPdfFiles && (
-                            <NavButton label="PDF Reviewer" icon={FileIcon} onClick={() => showView('pdfviewer')} isActive={activeVisualPanel === 'pdfviewer'} isDesktop={props.isDesktop} />
+                            <NavButton label="PDF Reviewer" icon={PdfReviewerIcon} onClick={() => showView('pdfviewer')} isActive={activeVisualPanel === 'pdfviewer'} isDesktop={props.isDesktop} />
                         )}
                     </div>
+                    </>
                 )}
             </nav>
-            <div className="flex-shrink-0 p-2 border-t border-gray-700 relative light-theme:border-gray-300">
-                <div className={`grid gap-2 ${props.isDesktop ? 'md:grid-cols-1 lg:grid-cols-2' : 'grid-cols-2'}`}>
-                    <button onClick={props.onSaveSession} disabled={!isSessionActive} className="flex items-center justify-center gap-2 p-2 rounded-md bg-green-600/20 text-green-300 hover:bg-green-600/40 disabled:opacity-50 disabled:cursor-not-allowed">
-                        <DownloadIcon className="w-5 h-5" />
-                        <span className={`font-semibold text-sm ${props.isDesktop ? 'md:hidden lg:inline' : 'inline'}`}>Save</span>
+            <div className="relative flex-shrink-0 border-t border-white/[0.07] bg-black/20 p-2 light-theme:border-gray-300 light-theme:bg-gray-50">
+                <div className="mb-1.5 hidden px-1 text-[8px] font-bold uppercase tracking-[0.2em] text-slate-500 lg:block">Session</div>
+                <div className={`grid gap-1.5 ${props.isDesktop ? 'md:grid-cols-1 lg:grid-cols-2' : 'grid-cols-2'}`}>
+                    <button
+                        onClick={props.onSaveSession}
+                        disabled={!isSessionActive}
+                        title="Save session"
+                        className="group relative flex h-10 items-center justify-center gap-2 overflow-hidden rounded-md border border-emerald-400/20 bg-gradient-to-b from-emerald-400/[0.10] to-emerald-400/[0.02] px-2 text-left transition-colors hover:border-emerald-400/45 disabled:cursor-not-allowed disabled:opacity-40 lg:justify-start light-theme:border-emerald-300/60 light-theme:from-emerald-50 light-theme:to-white"
+                    >
+                        <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 transition-colors group-hover:border-emerald-400/50 light-theme:border-emerald-300 light-theme:bg-emerald-100 light-theme:text-emerald-700">
+                            <DownloadIcon className="h-3.5 w-3.5" />
+                        </span>
+                        <span className={`flex min-w-0 flex-col leading-none ${props.isDesktop ? 'hidden lg:flex' : 'flex'}`}>
+                            <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-200 light-theme:text-emerald-700">Save</span>
+                            <span className="mt-1 text-[8px] font-semibold uppercase tracking-[0.16em] text-emerald-400/60 light-theme:text-emerald-600">Session</span>
+                        </span>
+                        <span aria-hidden="true" className="pointer-events-none absolute inset-x-2 bottom-0 h-px bg-gradient-to-r from-transparent via-emerald-400/60 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
                     </button>
-                    <button onClick={props.onLoadSession} className="flex items-center justify-center gap-2 p-2 rounded-md bg-blue-600/20 text-blue-300 hover:bg-blue-600/40">
-                        <ArrowUpTrayIcon className="w-5 h-5" />
-                        <span className={`font-semibold text-sm ${props.isDesktop ? 'md:hidden lg:inline' : 'inline'}`}>Load</span>
+                    <button
+                        onClick={props.onLoadSession}
+                        title="Load session"
+                        className="group relative flex h-10 items-center justify-center gap-2 overflow-hidden rounded-md border border-sky-400/20 bg-gradient-to-b from-sky-400/[0.10] to-sky-400/[0.02] px-2 text-left transition-colors hover:border-sky-400/45 lg:justify-start light-theme:border-sky-300/60 light-theme:from-sky-50 light-theme:to-white"
+                    >
+                        <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded border border-sky-400/25 bg-sky-400/10 text-sky-300 transition-colors group-hover:border-sky-400/50 light-theme:border-sky-300 light-theme:bg-sky-100 light-theme:text-sky-700">
+                            <ArrowUpTrayIcon className="h-3.5 w-3.5" />
+                        </span>
+                        <span className={`flex min-w-0 flex-col leading-none ${props.isDesktop ? 'hidden lg:flex' : 'flex'}`}>
+                            <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-sky-200 light-theme:text-sky-700">Load</span>
+                            <span className="mt-1 text-[8px] font-semibold uppercase tracking-[0.16em] text-sky-400/60 light-theme:text-sky-600">Session</span>
+                        </span>
+                        <span aria-hidden="true" className="pointer-events-none absolute inset-x-2 bottom-0 h-px bg-gradient-to-r from-transparent via-sky-400/60 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
                     </button>
                 </div>
-                <div className="mt-2">
+                <div className="mt-1.5">
                     {props.onConnectC3D && (
                         <C3DConnectionButton 
                             onClick={props.onConnectC3D} 
@@ -471,10 +662,10 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                         <div className="relative has-tooltip flex items-center gap-1">
                             <button 
                                 onClick={() => props.setShowQuickModelSelector?.(!props.showQuickModelSelector)}
-                                className={`flex min-w-0 flex-1 items-center gap-4 p-3 my-1 rounded-lg transition-colors duration-200 ${props.isDesktop ? 'justify-center md:justify-start' : 'px-4'} text-gray-400 hover:bg-gray-800/50 light-theme:text-gray-500 light-theme:hover:bg-gray-200`}
+                                className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-transparent px-1.5 py-[6px] text-left text-slate-400 transition-colors duration-150 hover:bg-white/[0.045] hover:text-slate-100 lg:gap-2.5 lg:px-2.5 light-theme:text-gray-600 light-theme:hover:bg-black/[0.04] ${props.isDesktop ? 'justify-center lg:justify-start' : ''}`}
                             >
-                                <SparklesIcon className="h-6 w-6 text-purple-400 flex-shrink-0" />
-                                <span className={`font-semibold tracking-normal whitespace-nowrap ${props.isDesktop ? 'md:hidden lg:inline' : ''}`}>
+                                <AutoRouteIcon className="h-[18px] w-[18px] flex-shrink-0 text-violet-300" />
+                                <span className={`truncate text-[12.5px] font-medium leading-none ${props.isDesktop ? 'hidden lg:inline' : ''}`}>
                                     {selectedModelLabel}
                                 </span>
                             </button>
@@ -484,7 +675,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                                     props.setShowQuickModelSelector?.(false);
                                     props.onModelClick?.();
                                 }}
-                                className={`my-1 flex-shrink-0 rounded-lg p-3 text-gray-500 transition-colors hover:bg-gray-800/50 hover:text-purple-300 light-theme:text-gray-500 light-theme:hover:bg-gray-200 ${
+                                className={`flex h-[30px] w-[30px] flex-shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-violet-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04] ${
                                     props.isDesktop ? 'md:hidden lg:inline-flex' : 'inline-flex'
                                 }`}
                                 title={`${selectedModelLabel} settings`}
@@ -577,10 +768,51 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
         </>
     );
 
-    // FIX: Added the main return statement for the component to fix the "must return a value" error.
+    // Desktop: a collapsed rail keeps the hide/show affordance reachable.
     if (props.isDesktop) {
+        if (isCollapsed) {
+            return (
+                <aside className="relative flex w-9 flex-shrink-0 flex-col items-center gap-3 border-r border-white/[0.07] bg-[#0a0f16] py-2 light-theme:border-gray-300 light-theme:bg-gray-100">
+                    <button
+                        type="button"
+                        onClick={() => setIsCollapsed(false)}
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-cyan-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04]"
+                        title="Show agent panel"
+                        aria-label="Show agent panel"
+                    >
+                        <ChevronDoubleRightIcon className="h-4 w-4" />
+                    </button>
+                    <span aria-hidden="true" className="h-8 w-px bg-gradient-to-b from-cyan-400/50 to-transparent" />
+                    <span
+                        aria-hidden="true"
+                        className="mt-auto font-mono text-[8px] font-bold tracking-[0.2em] text-slate-600"
+                        style={{ writingMode: 'vertical-rl' }}
+                    >
+                        AGENTS
+                    </span>
+                </aside>
+            );
+        }
         return (
-            <aside className="flex flex-col w-20 lg:w-64 bg-gray-900 border-r border-gray-700 flex-shrink-0 relative light-theme:bg-gray-100 light-theme:border-gray-300">
+            <aside
+                ref={sidebarRef}
+                style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}
+                className="relative flex w-20 flex-shrink-0 flex-col border-r border-white/[0.07] bg-[#0a0f16] lg:w-[var(--sidebar-width)] light-theme:border-gray-300 light-theme:bg-gray-100"
+            >
+                <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize agent panel"
+                    title="Drag to resize agent panel"
+                    onMouseDown={handleSidebarResizeMouseDown}
+                    className="group absolute -right-[3px] top-0 z-30 hidden h-full w-[7px] cursor-col-resize lg:block"
+                >
+                    <span
+                        className={`absolute left-1/2 top-0 h-full w-px -translate-x-1/2 transition-colors ${
+                            isResizingSidebar ? 'bg-cyan-400/80' : 'bg-transparent group-hover:bg-cyan-400/50'
+                        }`}
+                    />
+                </div>
                 {sidebarContent}
             </aside>
         );
@@ -590,7 +822,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     return (
         <div className={`fixed inset-0 z-40 transform transition-transform duration-300 md:hidden ${props.isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
             <div className="absolute inset-0 bg-gray-900/50" onClick={() => props.setIsMobileMenuOpen(false)}></div>
-            <aside className="relative w-64 h-full bg-gray-900 border-r border-gray-700 flex flex-col light-theme:bg-gray-100 light-theme:border-gray-300">
+            <aside className="relative flex h-full w-[264px] flex-col border-r border-white/[0.07] bg-[#0a0f16] light-theme:border-gray-300 light-theme:bg-gray-100">
                 {sidebarContent}
             </aside>
         </div>

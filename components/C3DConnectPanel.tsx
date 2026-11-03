@@ -8,6 +8,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAppState } from '../contexts/AppStateContext.tsx';
+import { DownloadIcon, ExclamationTriangleIcon, PlugIcon } from './icons.tsx';
 
 // Icons inline to avoid dependencies
 const CopyIcon = () => (
@@ -291,38 +292,73 @@ export const C3DConnectPanel: React.FC<C3DConnectPanelProps> = ({
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Escape dismisses the dialog like every other menu surface.
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="bg-gray-900 rounded-xl shadow-2xl max-w-md w-full border border-gray-700 overflow-hidden">
-        
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-[#02060c]/80 p-4 backdrop-blur-md animate-fade-in"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="c3d-connect-title"
+        className="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-[20px] border border-white/[0.10] bg-[#0a0f16] shadow-[0_40px_120px_-30px_rgba(0,0,0,0.95)] animate-fade-in-up"
+        style={{ backgroundImage: 'radial-gradient(70% 55% at 0% 0%, rgba(34, 211, 238, 0.055), transparent 65%), radial-gradient(65% 55% at 100% 100%, rgba(139, 92, 246, 0.07), transparent 65%), radial-gradient(45% 35% at 100% 0%, rgba(52, 211, 153, 0.035), transparent 65%)' }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="h-px w-full flex-shrink-0" style={{ backgroundImage: 'linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.65), rgba(139, 92, 246, 0.55), rgba(52, 211, 153, 0.4), transparent)' }} />
+
         {/* Header */}
-        <div className="bg-gradient-to-r from-cyan-600 to-blue-600 p-5 relative">
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <span className="text-2xl">🔗</span>
-            Connect {getConnectorLabel(connectorType)}
-          </h2>
-          <p className="text-cyan-100 text-sm mt-1">
-            Link your {getConnectorLabel(connectorType)} plugin to this session
-          </p>
-          <button
-            onClick={onClose}
-            className="absolute right-4 top-4 text-white/80 hover:text-white transition"
-            aria-label="Close"
-          >
-            <CloseIcon />
-          </button>
-        </div>
+        <header className="relative flex-shrink-0 overflow-hidden border-b border-white/[0.07] px-5 pb-4 pt-5">
+          <div className="pointer-events-none absolute inset-0" style={{ backgroundImage: 'radial-gradient(120% 170% at 16% -30%, rgba(34, 211, 238, 0.16), transparent 58%), radial-gradient(75% 100% at 100% 0%, rgba(139, 92, 246, 0.13), transparent 65%)' }} />
+          <div className="relative flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-dashed border-cyan-300/30 bg-gradient-to-br from-cyan-400/20 via-sky-400/10 to-violet-400/20 text-cyan-200 shadow-[0_0_24px_-10px_rgba(34,211,238,0.6)]">
+              <PlugIcon className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-cyan-300/80">Integration</span>
+                <span className="h-1 w-1 rounded-full bg-violet-400/80" />
+                <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-violet-300/60">Plugin Bridge</span>
+              </div>
+              <h2 id="c3d-connect-title" className="mt-1 text-[19px] font-semibold tracking-tight text-slate-100">
+                Connect {getConnectorLabel(connectorType)}
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                Link your {getConnectorLabel(connectorType)} plugin to this session
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-slate-500 transition-colors hover:border-white/10 hover:bg-white/[0.05] hover:text-slate-200"
+              aria-label="Close"
+            >
+              <CloseIcon />
+            </button>
+          </div>
+        </header>
 
         {/* Content */}
-        <div className="p-5 space-y-5">
-        {/* Loading State */}
-        {loading && (
-
-            <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-10 w-10 border-2 border-cyan-500 border-t-transparent"></div>
-              <span className="ml-3 text-gray-300">Generating session...</span>
+        <div className="flex-1 space-y-4 overflow-y-auto p-5 scrollbar-hide">
+        {/* Loading State */}          {loading && (
+            <div className="flex items-center justify-center gap-3 py-10">
+              <div className="h-8 w-8 animate-spin rounded-full border border-cyan-400/20 border-t-cyan-300" />
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-slate-500">Generating session</span>
             </div>
           )}
 
@@ -330,33 +366,41 @@ export const C3DConnectPanel: React.FC<C3DConnectPanelProps> = ({
           {sessionData && !loading && (
             <>
               {/* Token Box */}
-              <div className="bg-gray-800 border border-gray-600 rounded-lg p-4">
-                <label className="text-xs text-gray-400 uppercase tracking-wide mb-2 block">
-                  Your Session Token
-                </label>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 text-2xl font-mono font-bold text-cyan-400 tracking-wider select-all">
+              <div className="relative overflow-hidden rounded-xl border border-dashed border-cyan-300/25 bg-[#0e1620] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_18px_50px_-30px_rgba(139,92,246,0.5)]">
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-px" style={{ backgroundImage: 'linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.55), rgba(139, 92, 246, 0.45), transparent)' }} />
+                <div className="flex items-center justify-between gap-3">
+                  <label htmlFor="c3d-session-token" className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-cyan-300/70">
+                    Session token
+                  </label>
+                  <span className="inline-flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-emerald-400/80">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
+                    Ready
+                  </span>
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <code id="c3d-session-token" className="min-w-0 flex-1 truncate select-all font-mono text-[21px] font-semibold tracking-[0.08em] text-cyan-200">
                     {sessionData.sessionToken}
                   </code>
                   <button
                     onClick={copyToken}
-                    className={`p-2 rounded-lg transition ${
-                      copied 
-                        ? 'bg-green-600 text-white' 
-                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                      copied
+                        ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                        : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-cyan-400/30 hover:bg-cyan-400/[0.06] hover:text-cyan-300'
                     }`}
                     title={copied ? 'Copied!' : 'Copy to clipboard'}
+                    aria-label={copied ? 'Token copied' : 'Copy session token'}
                   >
                     {copied ? <CheckIcon /> : <CopyIcon />}
                   </button>
                 </div>
-                
-                {/* Expiry */}
-                <div className="mt-3 flex items-center justify-between text-xs text-gray-500">
-                  <span>Valid for: {formatCountdown(countdown)}</span>
+                <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/[0.06] pt-2.5">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                    Valid for {formatCountdown(countdown)}
+                  </span>
                   <button
                     onClick={createSession}
-                    className="flex items-center gap-1 text-gray-400 hover:text-gray-300"
+                    className="inline-flex items-center gap-1.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-500 transition-colors hover:text-violet-300"
                     title="Generate new token"
                   >
                     <RefreshIcon />
@@ -366,38 +410,54 @@ export const C3DConnectPanel: React.FC<C3DConnectPanelProps> = ({
               </div>
 
               {/* Instructions */}
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold text-gray-300">
-                  How to connect:
-                </h3>
-                <ol className="text-sm text-gray-400 space-y-1 list-decimal list-inside">
-                  <li>Open {getConnectorLabel(connectorType)}</li>
-                  <li>Type <span className="bg-gray-800 px-1.5 py-0.5 rounded text-cyan-400">LANDSURVAI</span> command</li>
-                  <li>Click "Configure" or "Settings"</li>
-                  <li>Paste the session token above</li>
-                  <li>Click "Connect"</li>
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-[11px] font-semibold tracking-wide text-slate-300">
+                    How to connect
+                  </h3>
+                  <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-violet-300/60">05 steps</span>
+                </div>
+                <ol className="space-y-1.5 text-[12px] leading-relaxed text-slate-400">
+                  {[
+                    <>Open {getConnectorLabel(connectorType)}</>,
+                    <>Type <span className="rounded border border-sky-400/25 bg-sky-400/[0.08] px-1.5 py-0.5 font-mono text-[10px] text-sky-300">LANDSURVAI</span> command</>,
+                    <>Click &ldquo;Configure&rdquo; or &ldquo;Settings&rdquo;</>,
+                    <>Paste the session token above</>,
+                    <>Click &ldquo;Connect&rdquo;</>,
+                  ].map((step, index) => (
+                    <li key={index} className="flex items-start gap-2.5">
+                      <span className="mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-cyan-400/20 bg-gradient-to-br from-cyan-400/[0.09] to-violet-400/[0.09] font-mono text-[8px] font-semibold text-cyan-200/80">
+                        {String(index + 1).padStart(2, '0')}
+                      </span>
+                      <span>{step}</span>
+                    </li>
+                  ))}
                 </ol>
               </div>
 
               {/* Status Badges */}
               <div className="flex flex-wrap gap-2">
-                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] ${
                   isTrialActive || hasApiKey
-                    ? 'bg-green-900/50 text-green-400 border border-green-500/30'
-                    : 'bg-yellow-900/50 text-yellow-400 border border-yellow-500/30'
+                    ? 'border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-300'
+                    : 'border-rose-400/25 bg-rose-400/[0.06] text-rose-300'
                 }`}>
-                  {hasApiKey ? '🔑 API Key Active' : '⚠️ No API Key'}
+                  <span className={`h-1.5 w-1.5 rounded-full ${isTrialActive || hasApiKey ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                  {hasApiKey ? 'API Key Active' : 'No API Key'}
                 </span>
-                <span className="px-3 py-1 rounded-full text-xs font-medium bg-blue-900/50 text-blue-400 border border-blue-500/30">
+                <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] ${hasApiKey ? 'border-sky-400/25 bg-sky-400/[0.06] text-sky-300' : 'border-violet-400/25 bg-violet-400/[0.06] text-violet-300'}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${hasApiKey ? 'bg-sky-400' : 'bg-violet-400'}`} />
                   {hasApiKey ? 'Pro Tier' : 'Free Tier'}
                 </span>
               </div>
 
               {/* Notice */}
               {!hasApiKey && (
-                <div className="p-3 bg-yellow-900/20 border border-yellow-500/30 rounded-lg text-xs text-yellow-300">
-                  <strong>Note:</strong> When your trial pauses, the Civil 3D connection will also pause.
-                  Enter your own API key to maintain continuous access.
+                <div className="flex items-start gap-2.5 rounded-lg border border-violet-400/20 border-l-2 border-l-violet-400/70 bg-violet-400/[0.045] p-3 text-[11px] leading-relaxed text-violet-200/85">
+                  <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-300" />
+                  <p>
+                    <strong className="font-semibold text-violet-200">Note:</strong> When your trial pauses, the Civil 3D connection will also pause. Enter your own API key to maintain continuous access.
+                  </p>
                 </div>
               )}
             </>
@@ -405,22 +465,28 @@ export const C3DConnectPanel: React.FC<C3DConnectPanelProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="bg-gray-800/50 border-t border-gray-700 px-5 py-3 flex justify-between items-center">
-          <a 
+        <footer className="flex flex-shrink-0 flex-col gap-2 border-t border-white/[0.07] bg-black/25 px-3.5 py-3 sm:flex-row sm:items-center">
+          <a
             href="https://connector-download.landsurv.ai/"
-            className="text-sm text-cyan-400 hover:text-cyan-300 underline"
+            className="group relative flex w-full flex-1 items-center justify-center gap-2 overflow-hidden rounded-lg border border-dashed border-cyan-100/50 bg-gradient-to-r from-cyan-400 via-sky-400 to-violet-400 px-4 py-2.5 text-[11px] font-extrabold uppercase tracking-[0.14em] text-[#021019] shadow-[0_0_28px_-12px_rgba(34,211,238,0.8)] transition-all duration-300 hover:-translate-y-px hover:from-cyan-300 hover:via-sky-300 hover:to-violet-300 hover:shadow-[0_0_38px_-10px_rgba(34,211,238,0.9)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300"
             target="_blank"
             rel="noopener noreferrer"
+            aria-label={`Download the ${getConnectorLabel(connectorType)} plugin`}
           >
-            Download {getConnectorLabel(connectorType)} Plugin
+            <span className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/60" />
+            <DownloadIcon className="h-4 w-4 transition-transform duration-300 group-hover:-translate-y-0.5" />
+            <span>Download {getConnectorLabel(connectorType)} Plugin</span>
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5 transition-transform duration-300 group-hover:translate-x-0.5">
+              <path d="M5 12h14M13 6l6 6-6 6" />
+            </svg>
           </a>
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition"
+            className="h-9 w-full shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-4 text-[11px] font-semibold text-slate-400 transition-colors hover:border-white/20 hover:bg-white/[0.06] hover:text-white sm:w-auto"
           >
             Close
           </button>
-        </div>
+        </footer>
       </div>
     </div>
   );

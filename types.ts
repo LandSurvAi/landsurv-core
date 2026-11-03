@@ -1503,6 +1503,7 @@ export interface SessionState {
     rinexChatHistory: ChatMessage[];
     zoningChatHistory: ChatMessage[];
     soilsChatHistory?: ChatMessage[];
+    structuresChatHistory?: ChatMessage[];
     standardsComplianceChatHistory?: ChatMessage[];
     /** @deprecated use standardsComplianceControlFiles — kept for loading older saved sessions. */
     standardsComplianceControlFile?: SessionFile | null;
@@ -1547,6 +1548,15 @@ export interface SessionState {
      * Persisted in the .lsvz bundle so styles travel with the project.
      */
     draftingStyleLibrary?: DraftingStyleEntry[];
+
+    /**
+     * CAD Manager state — loaded CAD standard definition + user-confirmed field-to-finish
+     * code aliases, persisted inside manifest.json so project standards travel in the .lsvz.
+     */
+    cadManagerState?: {
+        standard: import('./contexts/types/CadManager.types').StandardDefinition | null;
+        confirmedAliases: import('./contexts/types/CadManager.types').CodeAlias[];
+    };
 
     /** Soils Agent — persisted SSURGO map units. */
     soilMapUnits?: SoilMapUnit[];

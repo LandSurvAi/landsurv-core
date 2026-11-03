@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { CrosshairsIcon } from '../icons';
+import { CogoIcon } from '../icons';
 
 export const CogoAgentContent: React.FC = () => {
     useEffect(() => {
@@ -34,7 +34,7 @@ export const CogoAgentContent: React.FC = () => {
     return (
         <div className="space-y-4">
             <div className="flex items-center gap-4 p-4 bg-gray-900/50 rounded-lg border border-gray-700">
-                <CrosshairsIcon className="w-16 h-16 text-violet-400 flex-shrink-0" />
+                <CogoIcon className="w-16 h-16 text-violet-400 flex-shrink-0" />
                 <div>
                     <h3 className="text-2xl font-bold text-violet-400">COGO Agent</h3>
                     <p className="text-gray-300">A surveyor-grade coordinate geometry workbench — 30+ skills exposed over CACP.</p>

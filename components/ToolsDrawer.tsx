@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { XMarkIcon } from './icons.tsx';
 
 interface ToolsDrawerProps {
@@ -16,6 +16,17 @@ export const ToolsDrawer: React.FC<ToolsDrawerProps> = ({
   children,
   icon
 }) => {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onToggle();
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onToggle]);
+
   return (
     <>
       {/* Overlay - Slides in from bottom/side */}

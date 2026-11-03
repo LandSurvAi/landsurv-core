@@ -14,6 +14,9 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { type SessionFile, type PointList } from '../types';
+import { CommandHelpView, type CommandReference } from './CommandHelpView';
+
+export type TextEditorTone = 'normal' | 'ok' | 'error' | 'info' | 'warn';
 
 interface TextEditorPanelProps {
   files: (SessionFile | null)[];
@@ -22,6 +25,10 @@ interface TextEditorPanelProps {
   activeFile: string | null;
   onFileSelect: (fileName: string) => void;
   content: string;
+  /** Terminal tone carried over when a command result is opened here. */
+  contentTone?: TextEditorTone;
+  /** Formatted HELP reference opened from the command line; renders as cards. */
+  reference?: CommandReference | null;
   onContentChange: (newContent: string) => void;
   onSaveChanges: () => void;
   hasUnsavedChanges: boolean;
@@ -31,6 +38,15 @@ const LINE_HEIGHT = 22;
 const MIN_FONT_SIZE = 11;
 const MAX_FONT_SIZE = 20;
 
+/** Mirrors the command line's tone colors (emerald ok, sky info, amber warn, red error). */
+const EDITOR_TONES: Record<TextEditorTone, { text: string; chip: string; label: string }> = {
+  normal: { text: 'text-gray-200', chip: 'border-gray-700 bg-gray-800/40 text-gray-400', label: '' },
+  ok: { text: 'text-emerald-300', chip: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300', label: 'SUCCESS' },
+  error: { text: 'text-red-300', chip: 'border-red-500/40 bg-red-500/10 text-red-300', label: 'ERROR' },
+  info: { text: 'text-sky-300', chip: 'border-sky-500/40 bg-sky-500/10 text-sky-300', label: 'INFO' },
+  warn: { text: 'text-amber-300', chip: 'border-amber-500/40 bg-amber-500/10 text-amber-300', label: 'WARNING' },
+};
+
 const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
   files,
   generatedFiles,
@@ -38,6 +54,8 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
   activeFile,
   onFileSelect,
   content,
+  contentTone = 'normal',
+  reference = null,
   onContentChange,
   onSaveChanges,
   hasUnsavedChanges,
@@ -54,6 +72,7 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
   const [selectionLength, setSelectionLength] = useState(0);
   const [goToLine, setGoToLine] = useState('');
   const [copied, setCopied] = useState(false);
+  const [view, setView] = useState<'reference' | 'source'>('source');
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const gutterRef = useRef<HTMLDivElement | null>(null);
@@ -70,6 +89,10 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
     [lineCount],
   );
   const eolLabel = content.includes('\r\n') ? 'CRLF' : 'LF';
+  const tone = EDITOR_TONES[contentTone] ?? EDITOR_TONES.normal;
+  const toneLabel = contentTone === 'normal' ? null : tone.label;
+  // Editing the plain text leaves the formatted reference out of date.
+  const isReferenceStale = Boolean(reference?.text) && content !== reference?.text;
 
   const matches = useMemo(() => {
     if (!query) return [] as number[];
@@ -101,6 +124,12 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
     }
   }, [activeFile]);
 
+  // A command result opened with a formatted reference lands on the reference
+  // view; the plain text stays one click away under SOURCE.
+  useEffect(() => {
+    setView(reference?.groups.length ? 'reference' : 'source');
+  }, [reference]);
+
   const syncCaret = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -125,6 +154,8 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
   }, [matches, query, content, syncCaret]);
 
   const openFind = (withReplace: boolean) => {
+    // Find and replace act on the editable text, so jump to SOURCE first.
+    if (view === 'reference') setView('source');
     setIsFindOpen(true);
     setShowReplace(withReplace);
     window.setTimeout(() => {
@@ -217,22 +248,27 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
   };
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden rounded-md bg-gray-950 light-theme:bg-white">
-      <header className="flex flex-shrink-0 flex-wrap items-center justify-between gap-3 border-b border-gray-700/50 bg-gray-900/80 px-4 py-2.5 backdrop-blur light-theme:border-gray-300 light-theme:bg-gray-50">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border border-cyan-500/30 bg-cyan-500/10 text-cyan-300">
-            <FileText className="h-4 w-4" />
-          </div>
+    <div className="flex h-full w-full flex-col overflow-hidden rounded-md border border-cyan-500/25 bg-[#080d14] font-mono">
+      <header className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-cyan-500/25 bg-[#080d14] px-3 py-1.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 select-none text-xs font-bold leading-none text-cyan-400">CAD</span>
+          <span className="shrink-0 select-none text-xs font-bold leading-none text-gray-600">::</span>
+          <FileText className="h-3.5 w-3.5 shrink-0 text-cyan-400" />
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-lg font-semibold leading-tight text-gray-100 light-theme:text-gray-800">Text Editor</h3>
+            <div className="flex items-center gap-1.5">
+              <h3 className="text-[10px] font-extrabold uppercase leading-none tracking-[0.18em] text-gray-200">Text Editor</h3>
               {hasUnsavedChanges ? (
-                <span className="flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                  <AlertCircle className="h-3 w-3" /> Unsaved
+                <span className="flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none tracking-[0.1em] text-amber-300">
+                  <AlertCircle className="h-2.5 w-2.5" /> Unsaved
                 </span>
               ) : (
-                <span className="flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
-                  <Check className="h-3 w-3" /> Saved
+                <span className="flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none tracking-[0.1em] text-emerald-300">
+                  <Check className="h-2.5 w-2.5" /> Saved
+                </span>
+              )}
+              {toneLabel && (
+                <span className={`flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none tracking-[0.1em] ${tone.chip}`}>
+                  {toneLabel}
                 </span>
               )}
             </div>
@@ -241,7 +277,7 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
                 value={activeFile || ''}
                 onChange={(event) => onFileSelect(event.target.value)}
                 aria-label="File"
-                className="max-w-[280px] rounded-md border border-gray-600 bg-gray-800 px-2 py-1 font-mono text-xs text-gray-100 outline-none focus:border-cyan-500 light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-900"
+                className="max-w-[280px] rounded border border-gray-800 bg-[#0b1220] px-1.5 py-0.5 font-mono text-[10px] text-gray-200 outline-none transition-colors focus:border-cyan-500/60"
               >
                 <option value="" disabled>Select a file or point list to edit…</option>
                 {uniqueOptions.map(file => (
@@ -249,7 +285,7 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
                 ))}
               </select>
               {activeFile && (
-                <span className="hidden text-[10px] text-gray-500 sm:inline">
+                <span className="hidden text-[9px] text-gray-500 sm:inline">
                   {lineCount.toLocaleString()} lines · {eolLabel} · UTF-8
                 </span>
               )}
@@ -257,73 +293,96 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
           </div>
         </div>
 
-        <div className="flex flex-shrink-0 items-center gap-1.5">
+        <div className="flex flex-shrink-0 items-center gap-1">
+          {reference?.groups.length ? (
+            <div className="mr-1 flex items-center overflow-hidden rounded border border-gray-800 bg-[#0b1220]">
+              <button
+                type="button"
+                onClick={() => setView('reference')}
+                disabled={isReferenceStale}
+                className={`px-1.5 py-1 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors ${view === 'reference' ? 'bg-cyan-500/20 text-cyan-300' : 'text-gray-400 hover:bg-gray-800 hover:text-cyan-300'} disabled:cursor-not-allowed disabled:text-gray-600`}
+                title={isReferenceStale ? 'The source text was edited — the formatted reference is out of date' : 'Formatted command reference'}
+                aria-pressed={view === 'reference'}
+              >
+                Reference
+              </button>
+              <button
+                type="button"
+                onClick={() => setView('source')}
+                className={`px-1.5 py-1 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors ${view === 'source' ? 'bg-cyan-500/20 text-cyan-300' : 'text-gray-400 hover:bg-gray-800 hover:text-cyan-300'}`}
+                title="Plain text (editable)"
+                aria-pressed={view === 'source'}
+              >
+                Source
+              </button>
+            </div>
+          ) : null}
           <button
             type="button"
             onClick={() => setWordWrap(previous => !previous)}
-            className={`rounded-md border p-1.5 transition-colors ${wordWrap ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-300' : 'border-gray-700 text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`}
+            className={`rounded border p-1 transition-colors ${wordWrap ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-300' : 'border-gray-800 bg-[#0b1220] text-gray-400 hover:border-cyan-500/40 hover:text-cyan-300'}`}
             title={wordWrap ? 'Word wrap on' : 'Word wrap off'}
             aria-label="Toggle word wrap"
             aria-pressed={wordWrap}
           >
-            <WrapText className="h-4 w-4" />
+            <WrapText className="h-3.5 w-3.5" />
           </button>
           <button
             type="button"
             onClick={() => openFind(false)}
-            className={`rounded-md border p-1.5 transition-colors ${isFindOpen ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-300' : 'border-gray-700 text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`}
+            className={`rounded border p-1 transition-colors ${isFindOpen ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-300' : 'border-gray-800 bg-[#0b1220] text-gray-400 hover:border-cyan-500/40 hover:text-cyan-300'}`}
             title="Find (Ctrl+F)"
             aria-label="Find"
           >
-            <Search className="h-4 w-4" />
+            <Search className="h-3.5 w-3.5" />
           </button>
-          <div className="flex items-center overflow-hidden rounded-md border border-gray-700">
+          <div className="flex items-center overflow-hidden rounded border border-gray-800 bg-[#0b1220]">
             <button
               type="button"
               onClick={() => setFontSize(size => Math.max(MIN_FONT_SIZE, size - 1))}
-              className="p-1.5 text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-200 disabled:opacity-40"
+              className="p-1 text-gray-400 transition-colors hover:bg-gray-800 hover:text-cyan-300 disabled:opacity-40"
               disabled={fontSize <= MIN_FONT_SIZE}
               title="Decrease font size"
               aria-label="Decrease font size"
             >
-              <ZoomOut className="h-4 w-4" />
+              <ZoomOut className="h-3.5 w-3.5" />
             </button>
-            <span className="w-8 text-center text-[10px] tabular-nums text-gray-500">{fontSize}</span>
+            <span className="w-6 text-center text-[9px] tabular-nums text-gray-500">{fontSize}</span>
             <button
               type="button"
               onClick={() => setFontSize(size => Math.min(MAX_FONT_SIZE, size + 1))}
-              className="p-1.5 text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-200 disabled:opacity-40"
+              className="p-1 text-gray-400 transition-colors hover:bg-gray-800 hover:text-cyan-300 disabled:opacity-40"
               disabled={fontSize >= MAX_FONT_SIZE}
               title="Increase font size"
               aria-label="Increase font size"
             >
-              <ZoomIn className="h-4 w-4" />
+              <ZoomIn className="h-3.5 w-3.5" />
             </button>
           </div>
           <button
             type="button"
             onClick={copyAll}
-            className="rounded-md border border-gray-700 p-1.5 text-gray-400 transition-colors hover:bg-gray-800 hover:text-gray-200"
+            className="rounded border border-gray-800 bg-[#0b1220] p-1 text-gray-400 transition-colors hover:border-cyan-500/40 hover:text-cyan-300"
             title="Copy the whole file"
             aria-label="Copy all"
           >
-            {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <FileText className="h-4 w-4" />}
+            {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <FileText className="h-3.5 w-3.5" />}
           </button>
           <button
             type="button"
             onClick={onSaveChanges}
             disabled={!hasUnsavedChanges}
-            className="ml-1 flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-400"
+            className="ml-1 inline-flex items-center gap-1.5 rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-emerald-300 transition-colors hover:border-emerald-400 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-gray-800 disabled:bg-transparent disabled:text-gray-600"
             title="Save changes (Ctrl+S)"
           >
-            <Save className="h-4 w-4" />
+            <Save className="h-3 w-3" />
             Save
           </button>
         </div>
       </header>
 
       {isFindOpen && (
-        <div className="flex flex-shrink-0 flex-col gap-1.5 border-b border-gray-700/60 bg-gray-900/95 px-4 py-2 light-theme:border-gray-300 light-theme:bg-gray-100">
+        <div className="flex flex-shrink-0 flex-col gap-1.5 border-b border-gray-800/80 bg-[#05080d] px-3 py-1.5">
           <div className="flex items-center gap-2">
             <Search className="h-3.5 w-3.5 flex-shrink-0 text-cyan-400" />
             <input
@@ -342,35 +401,35 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
               placeholder="Find in file"
               aria-label="Find in file"
               spellCheck={false}
-              className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-800 px-2 py-1 font-mono text-xs text-gray-100 outline-none placeholder-gray-500 focus:border-cyan-500"
+              className="min-w-0 flex-1 rounded border border-gray-800 bg-[#0b1220] px-1.5 py-0.5 font-mono text-[10px] text-gray-200 outline-none placeholder-gray-600 focus:border-cyan-500/60"
             />
-            <span className="w-20 flex-shrink-0 text-right text-[10px] tabular-nums text-gray-400">
+            <span className="w-20 flex-shrink-0 text-right text-[9px] tabular-nums text-gray-500">
               {query ? (matches.length > 0 ? `${activeMatch + 1} / ${matches.length}` : 'No matches') : ''}
             </span>
             <button
               type="button"
               onClick={() => selectMatch(activeMatch - 1)}
               disabled={matches.length === 0}
-              className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white disabled:opacity-40"
+              className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-cyan-200 disabled:opacity-40"
               title="Previous match (Shift+Enter)"
               aria-label="Previous match"
             >
-              <ChevronUp className="h-4 w-4" />
+              <ChevronUp className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
               onClick={() => selectMatch(activeMatch + 1)}
               disabled={matches.length === 0}
-              className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white disabled:opacity-40"
+              className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-cyan-200 disabled:opacity-40"
               title="Next match (Enter)"
               aria-label="Next match"
             >
-              <ChevronDown className="h-4 w-4" />
+              <ChevronDown className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
               onClick={() => setMatchCase(previous => !previous)}
-              className={`rounded px-1.5 py-1 text-[10px] font-semibold transition-colors ${matchCase ? 'bg-cyan-500/20 text-cyan-300' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
+              className={`rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors ${matchCase ? 'bg-cyan-500/20 text-cyan-300' : 'text-gray-400 hover:bg-gray-800 hover:text-cyan-200'}`}
               title="Match case"
               aria-label="Match case"
               aria-pressed={matchCase}
@@ -380,21 +439,21 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
             <button
               type="button"
               onClick={() => setShowReplace(previous => !previous)}
-              className={`rounded p-1 transition-colors ${showReplace ? 'bg-cyan-500/20 text-cyan-300' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
+              className={`rounded p-1 transition-colors ${showReplace ? 'bg-cyan-500/20 text-cyan-300' : 'text-gray-400 hover:bg-gray-800 hover:text-cyan-200'}`}
               title="Toggle replace"
               aria-label="Toggle replace"
               aria-pressed={showReplace}
             >
-              <Replace className="h-4 w-4" />
+              <Replace className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
               onClick={() => setIsFindOpen(false)}
-              className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white"
+              className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-cyan-200"
               title="Close find"
               aria-label="Close find"
             >
-              <X className="h-4 w-4" />
+              <X className="h-3.5 w-3.5" />
             </button>
           </div>
 
@@ -408,13 +467,13 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
                 placeholder="Replace with"
                 aria-label="Replace with"
                 spellCheck={false}
-                className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-800 px-2 py-1 font-mono text-xs text-gray-100 outline-none placeholder-gray-500 focus:border-cyan-500"
+                className="min-w-0 flex-1 rounded border border-gray-800 bg-[#0b1220] px-1.5 py-0.5 font-mono text-[10px] text-gray-200 outline-none placeholder-gray-600 focus:border-cyan-500/60"
               />
               <button
                 type="button"
                 onClick={replaceCurrent}
                 disabled={matches.length === 0}
-                className="rounded border border-gray-600 px-2 py-1 text-[10px] font-medium text-gray-200 hover:bg-gray-800 disabled:opacity-40"
+                className="rounded border border-gray-800 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-gray-300 hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-40"
               >
                 Replace
               </button>
@@ -422,7 +481,7 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
                 type="button"
                 onClick={replaceAll}
                 disabled={matches.length === 0}
-                className="rounded border border-cyan-600/60 bg-cyan-500/10 px-2 py-1 text-[10px] font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40"
+                className="rounded border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-cyan-300 hover:border-cyan-400 hover:bg-cyan-500/20 disabled:opacity-40"
               >
                 Replace all
               </button>
@@ -432,16 +491,33 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
       )}
 
       <div className="flex min-h-0 flex-1">
-        {activeFile ? (
-          <div className="flex min-h-0 flex-1 bg-[#0b1220] light-theme:bg-gray-50">
+        {activeFile && reference?.groups.length && view === 'reference' ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[#05080d] px-4 py-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2 font-mono text-[10px] text-gray-500">
+              <span className="font-extrabold uppercase tracking-[0.18em] text-gray-300">Commands:</span>
+              <span className="text-gray-600">·</span>
+              <span className="italic">grouped reference — switch to SOURCE to edit the plain text</span>
+              <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-cyan-300">
+                  {reference.groups.length} groups
+                </span>
+                <span className="rounded border border-gray-700 bg-gray-800/30 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-gray-400">
+                  {reference.groups.reduce((total, group) => total + group.entries.length, 0)} commands
+                </span>
+              </span>
+            </div>
+            <CommandHelpView groups={reference.groups} notes={reference.notes} />
+          </div>
+        ) : activeFile ? (
+          <div className="flex min-h-0 flex-1 bg-[#05080d]">
             <div
               ref={gutterRef}
-              className="flex-shrink-0 select-none overflow-hidden border-r border-gray-800/80 bg-gray-950/60 py-4 text-right light-theme:border-gray-300 light-theme:bg-gray-100"
+              className="flex-shrink-0 select-none overflow-hidden border-r border-gray-800/80 bg-[#080d14] py-3 text-right"
               style={{ width: `${Math.max(3, String(lineCount).length) + 1}ch`, minWidth: 48 }}
               aria-hidden="true"
             >
               <pre
-                className="m-0 pr-3 text-gray-600"
+                className="m-0 pr-2.5 text-gray-600"
                 style={{
                   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
                   fontSize: fontSize - 1,
@@ -466,19 +542,19 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
               autoCorrect="off"
               autoCapitalize="off"
               aria-label="Text content"
-              className="h-full w-full flex-1 resize-none overflow-auto bg-transparent px-3 py-4 font-mono text-gray-100 caret-cyan-400 outline-none placeholder-gray-600 light-theme:text-gray-900"
+              className={`h-full w-full flex-1 resize-none overflow-auto bg-transparent px-3 py-3 font-mono caret-cyan-400 outline-none selection:bg-cyan-500/30 placeholder-gray-600 ${tone.text}`}
               style={{ fontSize, lineHeight: `${LINE_HEIGHT}px` }}
               placeholder={`Content of ${activeFile}…`}
             />
           </div>
         ) : (
           <div className="flex flex-1 items-center justify-center p-6">
-            <div className="max-w-sm rounded-xl border border-gray-800 bg-gray-900/60 p-6 text-center light-theme:border-gray-300 light-theme:bg-gray-100">
-              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-cyan-500/30 bg-cyan-500/10 text-cyan-300">
-                <FileText className="h-6 w-6" />
+            <div className="max-w-sm rounded border border-cyan-500/25 bg-[#080d14] p-5 text-center">
+              <div className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded border border-cyan-500/30 bg-cyan-500/10 text-cyan-300">
+                <FileText className="h-4 w-4" />
               </div>
-              <p className="text-sm font-medium text-gray-200 light-theme:text-gray-800">No file open</p>
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-gray-300">No file open</p>
+              <p className="mt-1 text-[10px] leading-relaxed text-gray-500">
                 Choose a file or point list above, or open one from the File Manager to begin editing.
               </p>
             </div>
@@ -486,7 +562,7 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
         )}
       </div>
 
-      <footer className="flex flex-shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-gray-800 bg-gray-900/80 px-4 py-1.5 text-[10px] text-gray-500 light-theme:border-gray-300 light-theme:bg-gray-100">
+      <footer className="flex flex-shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-gray-800/80 bg-[#080d14] px-3 py-1 text-[9px] text-gray-500">
         <span className="tabular-nums">Ln {caret.line}, Col {caret.col}</span>
         {selectionLength > 0 && <span className="tabular-nums text-cyan-400">{selectionLength.toLocaleString()} selected</span>}
         <span className="tabular-nums">{lineCount.toLocaleString()} lines</span>
@@ -506,7 +582,7 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
                 jumpToLine();
               }
             }}
-            className="w-14 rounded border border-gray-700 bg-gray-800 px-1.5 py-0.5 text-center font-mono text-[10px] text-gray-200 outline-none placeholder-gray-600 focus:border-cyan-500"
+            className="w-14 rounded border border-gray-800 bg-[#0b1220] px-1.5 py-0.5 text-center font-mono text-[9px] text-gray-200 outline-none placeholder-gray-600 focus:border-cyan-500/60"
             placeholder="1"
             aria-label="Go to line"
           />

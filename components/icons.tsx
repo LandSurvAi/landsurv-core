@@ -1,14 +1,28 @@
 import React from 'react';
 
+// Precision CAD Upload / Load Session Glyph
 export const UploadIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+    {/* Bracketed CAD staging tray with graduation ticks */}
+    <polyline points="3,14.5 3,20.5 21,20.5 21,14.5" strokeWidth="1.6" strokeLinecap="square" strokeLinejoin="miter" />
+    <line x1="6.5" y1="20.5" x2="6.5" y2="18.8" strokeWidth="1.1" opacity="0.75" />
+    <line x1="12" y1="20.5" x2="12" y2="18.8" strokeWidth="1.1" opacity="0.75" />
+    <line x1="17.5" y1="20.5" x2="17.5" y2="18.8" strokeWidth="1.1" opacity="0.75" />
+    {/* Sharp upward vector shaft & chevron head */}
+    <line x1="12" y1="16" x2="12" y2="3.5" strokeWidth="1.7" strokeLinecap="square" />
+    <polyline points="7.2,8.2 12,3.2 16.8,8.2" strokeWidth="1.7" strokeLinecap="square" strokeLinejoin="miter" />
+    {/* Top target fiducial */}
+    <rect x="3" y="3" width="2" height="2" fill="currentColor" stroke="none" opacity="0.65" />
+    <rect x="19" y="3" width="2" height="2" fill="currentColor" stroke="none" opacity="0.65" />
   </svg>
 );
 
+// Precision Technical Dispatch / Contact Glyph
 export const EnvelopeIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+  <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+    <rect x="2.6" y="4.6" width="18.8" height="14.8" rx="1.2" strokeWidth="2" strokeLinejoin="round" />
+    <path d="M3.4 6.6L12 13.6l8.6-7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <line x1="6.4" y1="16.6" x2="17.6" y2="16.6" strokeWidth="0.85" strokeLinecap="round" opacity="0.28" />
   </svg>
 );
 
@@ -37,31 +51,68 @@ export const FolderIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     </svg>
 );
 
+// RAW File Crawler Agent Glyph — Robotic Total Station Theodolite on Tripod Emitting EDM Laser Vectors to a Survey Prism
 export const BrainCircuitIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.898 20.572L16.5 21.75l-.398-1.178a3.375 3.375 0 00-2.456-2.456L12.5 18l1.178-.398a3.375 3.375 0 002.456-2.456L16.5 14.25l.398 1.178a3.375 3.375 0 002.456 2.456L20.5 18l-1.178.398a3.375 3.375 0 00-2.424 2.424z" />
+        {/* Total station alidade yoke & leveling tribrach base */}
+        <polyline points="4.5,14 4.5,6.5 11.5,6.5 11.5,14" strokeWidth="1.4" strokeLinejoin="miter" />
+        <rect x="3.5" y="14" width="9" height="1.8" strokeWidth="1.4" fill="currentColor" fillOpacity="0.2" />
+        {/* Optical EDM telescope barrel & objective lens */}
+        <rect x="5.8" y="8.2" width="4.4" height="3.6" strokeWidth="1.4" fill="currentColor" fillOpacity="0.15" />
+        <circle cx="8" cy="10" r="1" fill="currentColor" stroke="none" />
+        {/* Top GPS/radio telemetry handle */}
+        <polyline points="6,6.5 6,4.5 10,4.5 10,6.5" strokeWidth="1.2" strokeLinejoin="miter" />
+        {/* Heavy survey tripod legs */}
+        <line x1="5.2" y1="15.8" x2="2.5" y2="21.5" strokeWidth="1.5" strokeLinecap="square" />
+        <line x1="8" y1="15.8" x2="8" y2="21.5" strokeWidth="1.4" strokeLinecap="square" />
+        <line x1="10.8" y1="15.8" x2="13.5" y2="21.5" strokeWidth="1.5" strokeLinecap="square" />
+        {/* EDM laser measurement fan rays to target prism */}
+        <line x1="10.2" y1="9.2" x2="18.2" y2="5.2" strokeWidth="1.15" strokeDasharray="1.8 1.2" />
+        <line x1="10.2" y1="10" x2="18.2" y2="10" strokeWidth="1.2" />
+        <line x1="10.2" y1="10.8" x2="18.2" y2="15.5" strokeWidth="1.15" strokeDasharray="1.8 1.2" />
+        {/* Retro-reflective target prism & raw data nodes on right */}
+        <polygon points="19.5,2.5 22,5 19.5,7.5 17,5" strokeWidth="1.4" fill="currentColor" fillOpacity="0.22" strokeLinejoin="miter" />
+        <rect x="18.3" y="8.8" width="2.4" height="2.4" strokeWidth="1.3" />
+        <polygon points="19.5,13.5 21.8,17.2 17.2,17.2" strokeWidth="1.3" strokeLinejoin="miter" />
+        <line x1="19.5" y1="17.2" x2="19.5" y2="21.5" strokeWidth="1.2" />
     </svg>
 );
 
-// Civil Drafter icon - road/corridor style representing parallel linework
+// Civil Drafter Agent Glyph — Precision Drafting Dividers Compass Arching Over a 45° Engineer's Triangle & Cul-de-Sac Plat
 export const CivilDrafterIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        {/* Two parallel lines representing road edges */}
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M4 18h16" />
-        {/* Dashed centerline */}
-        <path strokeLinecap="round" strokeLinejoin="round" strokeDasharray="3 3" d="M4 12h16" />
-        {/* Survey points along the road */}
-        <circle cx="8" cy="6" r="1" fill="currentColor" />
-        <circle cx="16" cy="6" r="1" fill="currentColor" />
-        <circle cx="8" cy="18" r="1" fill="currentColor" />
-        <circle cx="16" cy="18" r="1" fill="currentColor" />
+        {/* Background 45-degree engineer's drafting set-square triangle */}
+        <polygon points="2.5,21 21.5,21 2.5,5.5" strokeWidth="1.2" strokeLinejoin="miter" opacity="0.65" />
+        {/* Inner cutout of drafting triangle */}
+        <polygon points="5,18.5 13.5,18.5 5,11.5" strokeWidth="0.9" strokeLinejoin="miter" opacity="0.45" />
+        {/* Bottom ruler scale graduation ticks along triangle base */}
+        <line x1="6" y1="21" x2="6" y2="19.6" strokeWidth="1" />
+        <line x1="9.5" y1="21" x2="9.5" y2="19.6" strokeWidth="1" />
+        <line x1="13" y1="21" x2="13" y2="19.6" strokeWidth="1" />
+        <line x1="16.5" y1="21" x2="16.5" y2="19.6" strokeWidth="1" />
+        {/* Precision drafting compass / dividers in foreground */}
+        <line x1="14" y1="2" x2="14" y2="4.2" strokeWidth="1.6" strokeLinecap="square" />
+        <circle cx="14" cy="5.8" r="1.8" strokeWidth="1.5" fill="currentColor" fillOpacity="0.2" />
+        {/* Left & right machined compass legs */}
+        <line x1="12.8" y1="7.2" x2="7.5" y2="21.5" strokeWidth="1.7" strokeLinecap="square" />
+        <line x1="15.2" y1="7.2" x2="20.5" y2="21.5" strokeWidth="1.7" strokeLinecap="square" />
+        {/* Threaded adjustment crossbar & thumbwheel */}
+        <line x1="9.6" y1="14.5" x2="18.4" y2="14.5" strokeWidth="1.2" />
+        <rect x="13.2" y="13.3" width="1.6" height="2.4" fill="currentColor" stroke="none" />
+        {/* Swept CAD tangent curve arc & vertex nodes */}
+        <path strokeLinecap="square" strokeWidth="1.2" strokeDasharray="2 1.3" d="M6.5 18C10.5 15.5 16.5 15.5 21.5 18" />
+        <circle cx="7.5" cy="21.5" r="1" fill="currentColor" stroke="none" />
+        <circle cx="20.5" cy="21.5" r="1" fill="currentColor" stroke="none" />
     </svg>
 );
 
+// Precision CAD Install / Download Glyph
 export const DownloadIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+  <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+    <path d="M3.6 15.2v5.4h16.8v-5.4" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M12 2.8v11.6" strokeWidth="2.2" strokeLinecap="round" />
+    <path d="M7.4 9.9L12 14.6l4.6-4.7" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    <line x1="6" y1="18.4" x2="18" y2="18.4" strokeWidth="0.9" strokeLinecap="round" opacity="0.35" />
   </svg>
 );
 
@@ -71,10 +122,35 @@ export const DxfIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   </svg>
 );
 
+// DXF Agent Glyph — Precision CAD Vector Workspace with UCS Origin Triad, Dimensioned Polyline & Tangent Arc Grips
 export const DxfAnalyzerIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M3 8h18M8 3v18" />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M6 6h4v4H6z" />
+    {/* Outer CAD viewport frame with corner snap markers */}
+    <rect x="2" y="2" width="20" height="20" strokeWidth="1.4" strokeLinejoin="miter" />
+    <line x1="2" y1="5.2" x2="22" y2="5.2" strokeWidth="1" />
+    <rect x="3.5" y="3.1" width="1.2" height="1.2" fill="currentColor" stroke="none" />
+    <rect x="6" y="3.1" width="1.2" height="1.2" fill="currentColor" stroke="none" />
+    {/* Top linear dimension leader with extension lines & arrows */}
+    <line x1="8" y1="6.8" x2="8" y2="10.2" strokeWidth="0.9" opacity="0.75" />
+    <line x1="18.5" y1="6.8" x2="18.5" y2="10.2" strokeWidth="0.9" opacity="0.75" />
+    <line x1="8" y1="7.8" x2="18.5" y2="7.8" strokeWidth="1" />
+    <polygon points="8,7.8 9.6,7.1 9.6,8.5" fill="currentColor" stroke="none" />
+    <polygon points="18.5,7.8 16.9,7.1 16.9,8.5" fill="currentColor" stroke="none" />
+    {/* UCS X/Y origin triad at bottom-left */}
+    <path strokeLinecap="square" strokeWidth="1.4" d="M4.2 14.2V19.8H9.8" />
+    <polygon points="4.2,13 3.3,14.6 5.1,14.6" fill="currentColor" stroke="none" />
+    <polygon points="11,19.8 9.4,18.9 9.4,20.7" fill="currentColor" stroke="none" />
+    {/* Surveyed CAD polyline + tangent curve arc */}
+    <polyline points="8,16.5 11.8,10.8 16.2,12.5" strokeWidth="1.6" strokeLinecap="square" strokeLinejoin="miter" />
+    <path strokeLinecap="square" strokeWidth="1.6" d="M16.2 12.5A4.2 4.2 0 0 1 19.5 17.5" />
+    {/* Radial center-mark cross for the arc */}
+    <line x1="14.5" y1="16.8" x2="16.5" y2="16.8" strokeWidth="0.9" opacity="0.75" />
+    <line x1="15.5" y1="15.8" x2="15.5" y2="17.8" strokeWidth="0.9" opacity="0.75" />
+    {/* CAD grip vertex handles */}
+    <rect x="6.9" y="15.4" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+    <rect x="10.7" y="9.7" width="2.2" height="2.2" strokeWidth="1.2" fill="none" />
+    <rect x="15.1" y="11.4" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+    <rect x="18.4" y="16.4" width="2.2" height="2.2" fill="currentColor" stroke="none" />
   </svg>
 );
 
@@ -97,9 +173,29 @@ export const HomeIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     </svg>
 );
 
+// Boundary Agent Glyph — Classical Courthouse Colonnade & Pediment Framed by a Surveyed Metes-and-Bounds Parcel Traverse
 export const CourthouseIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 9l9-6 9 6m-1.5 12V10.332A48.36 48.36 0 0012 9.75c-2.551 0-5.056.2-7.5.582V21M3 21h18M12 6.75h.008v.008H12V6.75z" />
+    {/* Outer surveyed parcel boundary traverse with corner monuments & curve call */}
+    <path strokeWidth="1.2" strokeDasharray="2.5 1.3" opacity="0.8" d="M3 4.2L19.8 2.5L21.5 19.5L2.5 21Z" />
+    <rect x="1.8" y="3.1" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+    <rect x="18.7" y="1.4" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+    <rect x="20.4" y="18.4" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+    <rect x="1.4" y="19.9" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+    {/* Classical courthouse pediment with inner cornice & compass oculus */}
+    <polygon points="4.2,9.6 12,4.2 19.8,9.6" strokeWidth="1.6" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.16" />
+    <polygon points="6.6,8.8 12,5.3 17.4,8.8" strokeWidth="0.9" strokeLinejoin="miter" opacity="0.65" />
+    <circle cx="12" cy="7.4" r="0.9" fill="currentColor" stroke="none" />
+    {/* Architrave frieze beam */}
+    <rect x="4.6" y="9.6" width="14.8" height="1.6" strokeWidth="1.2" />
+    {/* Four fluted Ionic columns with capitals & bases */}
+    <line x1="6.4" y1="11.2" x2="6.4" y2="17.4" strokeWidth="1.6" />
+    <line x1="10.1" y1="11.2" x2="10.1" y2="17.4" strokeWidth="1.6" />
+    <line x1="13.9" y1="11.2" x2="13.9" y2="17.4" strokeWidth="1.6" />
+    <line x1="17.6" y1="11.2" x2="17.6" y2="17.4" strokeWidth="1.6" />
+    {/* Stepped stereobate base plinth */}
+    <line x1="4.4" y1="17.4" x2="19.6" y2="17.4" strokeWidth="1.4" />
+    <line x1="3.6" y1="19" x2="20.4" y2="19" strokeWidth="1.6" />
   </svg>
 );
 
@@ -135,13 +231,28 @@ export const ZoomToPointIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) 
   </svg>
 );
 
+// Point Editor Agent Glyph — Machined Hexagonal Brass Plumb Bob Suspended Over a Survey Control Monument & N/E Grid
 export const PlumbBobIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 2v7" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12L12 20L9 12" />
-      <ellipse cx="12" cy="21" rx="6" ry="2" />
-      <ellipse cx="12" cy="21" rx="3" ry="1" />
+      {/* Gammon reel suspension cord & knurled brass cap */}
+      <line x1="12" y1="1.8" x2="12" y2="4.4" strokeWidth="1.5" strokeLinecap="square" />
+      <rect x="10" y="4.4" width="4" height="1.6" strokeWidth="1.3" fill="currentColor" fillOpacity="0.25" />
+      {/* Faceted hexagonal brass plumb bob body tapering to hardened steel point */}
+      <polygon points="7.8,6 16.2,6 17.2,9.2 12,17.8 6.8,9.2" strokeWidth="1.5" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.14" />
+      {/* Machined shoulder ring & vertical facet bevels */}
+      <line x1="6.8" y1="9.2" x2="17.2" y2="9.2" strokeWidth="1.2" />
+      <line x1="10" y1="6" x2="9.4" y2="9.2" strokeWidth="1" opacity="0.75" />
+      <line x1="14" y1="6" x2="14.6" y2="9.2" strokeWidth="1" opacity="0.75" />
+      <line x1="9.4" y1="9.2" x2="12" y2="17.8" strokeWidth="1" opacity="0.75" />
+      <line x1="14.6" y1="9.2" x2="12" y2="17.8" strokeWidth="1" opacity="0.75" />
+      {/* Isometric N/E coordinate datum plane & target monument below tip */}
+      <polygon points="12,16.8 21.8,19.4 12,22 2.2,19.4" strokeWidth="1.3" strokeLinejoin="miter" />
+      <line x1="7.1" y1="18.1" x2="16.9" y2="20.7" strokeWidth="0.9" opacity="0.7" />
+      <line x1="16.9" y1="18.1" x2="7.1" y2="20.7" strokeWidth="0.9" opacity="0.7" />
+      <circle cx="12" cy="19.4" r="1.2" fill="currentColor" stroke="none" />
+      {/* Flanking PNEZD point tick marks */}
+      <rect x="3" y="13.5" width="1.6" height="1.6" fill="currentColor" stroke="none" />
+      <rect x="19.4" y="13.5" width="1.6" height="1.6" fill="currentColor" stroke="none" />
     </svg>
 );
 
@@ -227,9 +338,30 @@ export const ChevronDoubleRightIcon: React.FC<React.SVGProps<SVGSVGElement>> = (
 );
 
 
+// Civil Plan Expert Agent Glyph — Multi-Sheet Engineering Plan Set with Cul-de-Sac Site Layout, North Rose & Titleblock
 export const DocumentDuplicateIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m9.375 2.25c.621 0 1.125.504 1.125 1.125v3.375m-13.5-3.375V21a1.125 1.125 0 001.125 1.125h9.75" />
+        {/* Stacked rear plan sheets */}
+        <polyline points="6.5,4.2 6.5,2 22,2 22,16.5 19.5,16.5" strokeWidth="1.15" opacity="0.6" strokeLinejoin="miter" />
+        <polyline points="4.2,5.8 4.2,3.5 20.8,3.5 20.8,18.2 19,18.2" strokeWidth="1.15" opacity="0.8" strokeLinejoin="miter" />
+        {/* Front primary 24x36 civil plan sheet */}
+        <rect x="2" y="5.5" width="17" height="16.5" strokeWidth="1.5" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.06" />
+        {/* Right-hand titleblock strip & revision compartments */}
+        <line x1="14.5" y1="5.5" x2="14.5" y2="22" strokeWidth="1.15" />
+        <line x1="2" y1="18.8" x2="19" y2="18.8" strokeWidth="1.15" />
+        <line x1="14.5" y1="9.2" x2="19" y2="9.2" strokeWidth="0.9" opacity="0.75" />
+        <line x1="14.5" y1="12.8" x2="19" y2="12.8" strokeWidth="0.9" opacity="0.75" />
+        <line x1="14.5" y1="15.8" x2="19" y2="15.8" strokeWidth="0.9" opacity="0.75" />
+        <line x1="8.2" y1="18.8" x2="8.2" y2="22" strokeWidth="0.9" opacity="0.75" />
+        {/* Precision North Arrow star in top-left */}
+        <polygon points="4.8,7.2 5.8,10.4 4.8,9.6 3.8,10.4" fill="currentColor" stroke="none" />
+        <line x1="3.8" y1="8.8" x2="5.8" y2="8.8" strokeWidth="0.8" />
+        {/* Subdivision roadway & cul-de-sac bulb alignment inside plan viewport */}
+        <path strokeWidth="1.3" strokeLinecap="square" d="M3.8 16.5L8.2 13.2L10.5 13.2" />
+        <circle cx="11.6" cy="13.2" r="1.5" strokeWidth="1.2" fill="currentColor" fillOpacity="0.2" />
+        {/* Lot lines radiating from cul-de-sac */}
+        <line x1="8.2" y1="13.2" x2="7.5" y2="9.5" strokeWidth="0.9" strokeDasharray="1.4 1" opacity="0.8" />
+        <line x1="11.6" y1="11.7" x2="12.5" y2="8" strokeWidth="0.9" strokeDasharray="1.4 1" opacity="0.8" />
     </svg>
 );
 
@@ -241,35 +373,60 @@ export const CpuChipIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     </svg>
 );
 
+// Job Info / Fieldbook Clipboard Glyph — Bold Clipboard with Rule Lines
 export const ClipboardDocumentListIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 8.25V6a2.25 2.25 0 00-2.25-2.25H6A2.25 2.25 0 003.75 6v8.25A2.25 2.25 0 006 16.5h2.25m8.25-8.25H18a2.25 2.25 0 012.25 2.25v8.25A2.25 2.25 0 0118 21.75H6.75A2.25 2.25 0 014.5 19.5V9.75A2.25 2.25 0 016.75 7.5h7.5m-1.5-1.5l-1.5-1.5-1.5 1.5-1.5-1.5-1.5 1.5-1.5-1.5-1.5 1.5" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12.75 12.75h4.5m-4.5 3h4.5m-7.5-3h.008v.008H9.75v-.008zm0 3h.008v.008H9.75v-.008z" />
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <path d="M9 4.4H5.2V21.4H18.8V4.4H15" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        <rect x="9" y="2.2" width="6" height="3.6" rx="0.8" strokeWidth="1.9" />
+        <circle cx="10.7" cy="4" r="0.55" fill="currentColor" stroke="none" opacity="0.6" />
+        <circle cx="13.3" cy="4" r="0.55" fill="currentColor" stroke="none" opacity="0.6" />
+        <line x1="6.9" y1="9.6" x2="6.9" y2="19.4" strokeWidth="0.9" strokeLinecap="round" opacity="0.35" />
+        <line x1="8.6" y1="10.6" x2="15.6" y2="10.6" strokeWidth="2.1" strokeLinecap="round" />
+        <line x1="8.6" y1="14.4" x2="15.6" y2="14.4" strokeWidth="2.1" strokeLinecap="round" />
+        <line x1="8.6" y1="18.2" x2="12.6" y2="18.2" strokeWidth="1.5" strokeLinecap="round" opacity="0.75" />
     </svg>
 );
 
-// Release-log icon: small clock face above bold "LOG" text — instantly readable as
-// "release log / changelog over time".
+// Release Log Glyph — Bold Chronometer for Version History / What's New
 export const LogClockIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-        {/* clock face */}
-        <circle cx="12" cy="8" r="5" strokeWidth={1.6} />
-        {/* hour + minute hands (pointing to ~10 o'clock) */}
-        <path d="M12 5.2V8l-2.2 1.6" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
-        {/* LOG text */}
-        <text x="12" y="22" textAnchor="middle" fontFamily="system-ui, -apple-system, sans-serif" fontSize="7.5" fontWeight="800" fill="currentColor" stroke="none" letterSpacing="0.3">LOG</text>
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+        <circle cx="12" cy="12" r="8.8" strokeWidth="2.1" />
+        <line x1="12" y1="4.3" x2="12" y2="6.1" strokeWidth="1.05" strokeLinecap="round" opacity="0.5" />
+        <line x1="12" y1="17.9" x2="12" y2="19.7" strokeWidth="1.05" strokeLinecap="round" opacity="0.5" />
+        <line x1="4.3" y1="12" x2="6.1" y2="12" strokeWidth="1.05" strokeLinecap="round" opacity="0.5" />
+        <line x1="17.9" y1="12" x2="19.7" y2="12" strokeWidth="1.05" strokeLinecap="round" opacity="0.5" />
+        <polyline points="12,6.8 12,12 16,14.4" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
     </svg>
 );
 
+// Upgrade / Compute Credits Glyph — Bold Dollar Mark, No Enclosing Badge
 export const CurrencyDollarIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <path d="M16.6 7.4H9.8a2.7 2.7 0 0 0 0 5.4h4.4a2.7 2.7 0 0 1 0 5.4H7.4" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+        <line x1="12" y1="4.4" x2="12" y2="19.6" strokeWidth="2.2" strokeLinecap="round" />
+        <line x1="9.9" y1="3.2" x2="14.1" y2="3.2" strokeWidth="1.05" strokeLinecap="round" opacity="0.6" />
+        <line x1="9.9" y1="20.8" x2="14.1" y2="20.8" strokeWidth="1.05" strokeLinecap="round" opacity="0.6" />
     </svg>
 );
 
+// LSVZ Meta-Agent Glyph — Isometric Tesseract Container with Internal Cryptographic Lattice
 export const LsvzIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M21 7.5l-2.25-1.313M21 7.5v2.25m0-2.25l-2.25 1.313M3 7.5l2.25-1.313M3 7.5l2.25 1.313M3 7.5v2.25m9 3l2.25-1.313M12 12.75l-2.25-1.313M12 12.75V15m0 6.75l-2.25-1.313M12 21.75V19.5m0 2.25l2.25-1.313m-4.5 0l2.25-1.313m-2.25 0l-2.25 1.313M12 9l-2.25-1.313M12 9l2.25-1.313M12 9V6.75m-4.5 6l-2.25-1.313M7.5 12.75l-2.25 1.313M7.5 12.75V15m-3 0l2.25-1.313M4.5 15l2.25 1.313M4.5 15V12.75m15-3l-2.25-1.313m2.25 0l-2.25 1.313M19.5 9.75V12m0 3l2.25-1.313m-2.25 0l2.25 1.313m0-2.25V15m-3 0l-2.25 1.313m0 0l-2.25-1.313m2.25 0V12.75" />
+        {/* Outer isometric hexagonal cube */}
+        <polygon points="12,2 21,7 21,17 12,22 3,17 3,7" strokeWidth="1.5" strokeLinejoin="miter" />
+        {/* Inner nested tesseract core */}
+        <polygon points="12,6.8 16.5,9.4 16.5,14.6 12,17.2 7.5,14.6 7.5,9.4" strokeWidth="1.2" fill="currentColor" fillOpacity="0.14" strokeLinejoin="miter" />
+        {/* Isometric axis struts connecting inner and outer vertices */}
+        <line x1="12" y1="2" x2="12" y2="6.8" strokeWidth="1.1" />
+        <line x1="21" y1="7" x2="16.5" y2="9.4" strokeWidth="1.1" />
+        <line x1="21" y1="17" x2="16.5" y2="14.6" strokeWidth="1.1" />
+        <line x1="12" y1="22" x2="12" y2="17.2" strokeWidth="1.1" />
+        <line x1="3" y1="17" x2="7.5" y2="14.6" strokeWidth="1.1" />
+        <line x1="3" y1="7" x2="7.5" y2="9.4" strokeWidth="1.1" />
+        {/* Internal cube edges */}
+        <path strokeWidth="1.1" opacity="0.8" d="M7.5 9.4L12 12L16.5 9.4M12 12V17.2" />
+        <circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none" />
     </svg>
 );
 
@@ -327,39 +484,54 @@ export const SheetViewIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) =>
     </svg>
 );
 
-// CAD Manager Icon - Gear with "M" behind it
+// CAD Manager Agent Glyph — Stacked Isometric CAD Layer Planes Interlocked with a 12-Tooth Vernier Gear & Descriptor Table
 export const CadManagerIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        {/* "M" letter in background */}
-        <text x="3" y="20" fontSize="10" fontWeight="bold" fill="currentColor" opacity="0.4">M</text>
-        {/* Gear icon */}
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        {/* Top isometric CAD layer plane with internal coordinate cross */}
+        <polygon points="2,7.2 10.8,2.5 17.5,6 8.7,10.7" strokeWidth="1.4" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.16" />
+        <line x1="6.4" y1="4.8" x2="13.1" y2="8.3" strokeWidth="0.85" opacity="0.7" />
+        <line x1="5.3" y1="8.9" x2="14.1" y2="4.2" strokeWidth="0.85" opacity="0.7" />
+        {/* Middle & lower stacked CAD layer planes */}
+        <polyline points="2,10.8 8.7,14.3 12.2,12.4" strokeWidth="1.3" strokeLinecap="square" strokeLinejoin="miter" />
+        <polyline points="2,14.4 8.7,17.9 10.8,16.8" strokeWidth="1.3" strokeLinecap="square" strokeLinejoin="miter" />
+        <polyline points="2,18 8.7,21.5 11.2,20.2" strokeWidth="1.3" strokeLinecap="square" strokeLinejoin="miter" />
+        {/* Precision machined vernier gear at bottom-right */}
+        <circle cx="16.5" cy="15.5" r="3.5" strokeWidth="1.5" fill="currentColor" fillOpacity="0.12" />
+        <circle cx="16.5" cy="15.5" r="1.4" strokeWidth="1.2" />
+        <path strokeLinecap="square" strokeWidth="1.6" d="M16.5 10.2v1.5M16.5 19.3v1.5M11.2 15.5h1.5M20.3 15.5h1.5M12.7 11.7l1.1 1.1M19.2 18.2l1.1 1.1M20.3 11.7l-1.1 1.1M13.8 18.2l-1.1 1.1" />
+        {/* Field-to-finish descriptor code key rows at top-right */}
+        <rect x="18.2" y="2.4" width="1.3" height="1.3" fill="currentColor" stroke="none" />
+        <line x1="20.2" y1="3.05" x2="22" y2="3.05" strokeWidth="1.2" strokeLinecap="square" />
+        <rect x="18.2" y="5" width="1.3" height="1.3" fill="currentColor" stroke="none" />
+        <line x1="20.2" y1="5.65" x2="22" y2="5.65" strokeWidth="1.2" strokeLinecap="square" />
+        <rect x="18.2" y="7.6" width="1.3" height="1.3" fill="currentColor" stroke="none" />
+        <line x1="20.2" y1="8.25" x2="22" y2="8.25" strokeWidth="1.2" strokeLinecap="square" />
     </svg>
 );
 
-// Standards Compliance Icon: CAD letters with a check mark above.
+// Standards Compliance Agent Glyph — Audited Engineering Sheet with North Star, Scale Bar & Precision Verification Shield
 export const StandardsComplianceIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-        <path
-            d="M4.5 8.4l3.3 3.2 8.1-8.2"
-            strokeWidth={2.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-        />
-        <text
-            x="12"
-            y="20.5"
-            textAnchor="middle"
-            fontFamily="system-ui, -apple-system, sans-serif"
-            fontSize="10.5"
-            fontWeight="900"
-            letterSpacing="0.3"
-            fill="currentColor"
-            stroke="none"
-        >
-            CAD
-        </text>
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+        {/* Engineering plan sheet frame with top title strip */}
+        <path strokeLinecap="square" strokeLinejoin="miter" strokeWidth="1.5" d="M12.5 21H2.2V2.2H19.5V10.5" />
+        <line x1="2.2" y1="5.6" x2="19.5" y2="5.6" strokeWidth="1.1" />
+        <line x1="14" y1="2.2" x2="14" y2="5.6" strokeWidth="1" />
+        {/* North star rose inside sheet top-right */}
+        <polygon points="16.5,6.8 17.3,9.6 16.5,8.9 15.7,9.6" fill="currentColor" stroke="none" />
+        {/* Audited checklist rows with verified checkboxes */}
+        <rect x="4" y="7.6" width="1.8" height="1.8" strokeWidth="1.1" fill="currentColor" fillOpacity="0.25" />
+        <line x1="7" y1="8.5" x2="13.5" y2="8.5" strokeWidth="1.2" strokeLinecap="square" />
+        <rect x="4" y="11.2" width="1.8" height="1.8" strokeWidth="1.1" fill="currentColor" fillOpacity="0.25" />
+        <line x1="7" y1="12.1" x2="12" y2="12.1" strokeWidth="1.2" strokeLinecap="square" />
+        <rect x="4" y="14.8" width="1.8" height="1.8" strokeWidth="1.1" fill="currentColor" fillOpacity="0.25" />
+        <line x1="7" y1="15.7" x2="11" y2="15.7" strokeWidth="1.2" strokeLinecap="square" />
+        {/* Graphic bar scale at bottom-left of sheet */}
+        <rect x="4" y="18.2" width="6.5" height="1.2" strokeWidth="0.9" />
+        <line x1="6.2" y1="18.2" x2="6.2" y2="19.4" strokeWidth="0.9" />
+        <line x1="8.4" y1="18.2" x2="8.4" y2="19.4" strokeWidth="0.9" />
+        {/* Double-beveled verification shield & bold check mark at bottom-right */}
+        <polygon points="17.2,10.8 22,12.6 22,17.4 17.2,22 12.4,17.4 12.4,12.6" strokeWidth="1.5" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.18" />
+        <polyline points="14.7,16.3 16.6,18.2 19.9,14.2" strokeWidth="1.8" strokeLinecap="square" strokeLinejoin="miter" />
     </svg>
 );
 
@@ -375,9 +547,27 @@ export const ZoomExtentsIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) 
     </svg>
 );
 
+// Stationing & Centerline Agent Glyph — Horizontal Highway Corridor Curve with Tangent PI Monument, PC/PT Nodes & Station/Offset Callouts
 export const ScaleIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v18m-6-12h12m-6 6h6m-3-12h.008v.008H12V3zm-3 6h.008v.008H9v-.008zm-3 0h.008v.008H6v-.008zm12 0h.008v.008h-.008V9zm-3 6h.008v.008H15v-.008z" />
+        {/* Back & forward tangent lines intersecting at PI */}
+        <polyline points="3.5,20 6,5.2 20.5,4.2" strokeWidth="1.05" strokeDasharray="2 1.4" opacity="0.75" />
+        {/* Point of Intersection (PI) monument triangle with center dot */}
+        <polygon points="6,2.4 8.6,6.6 3.4,6.6" strokeWidth="1.3" fill="currentColor" fillOpacity="0.22" strokeLinejoin="miter" />
+        <circle cx="6" cy="5.2" r="0.7" fill="currentColor" stroke="none" />
+        {/* Parallel corridor right-of-way edges & primary centerline curve */}
+        <path strokeLinecap="square" strokeWidth="0.95" opacity="0.65" d="M2,19.5C3,9.8 10.5,3.2 20.2,2.6" />
+        <path strokeLinecap="square" strokeWidth="1.8" d="M4,20.2C5,11.5 11.5,5.5 20.5,4.8" />
+        <path strokeLinecap="square" strokeWidth="0.95" opacity="0.65" d="M6.2,21C7,13.4 12.8,7.8 20.8,7" />
+        {/* Perpendicular station tick marks along alignment */}
+        <line x1="2.2" y1="16.2" x2="6.8" y2="17" strokeWidth="1.3" strokeLinecap="square" />
+        <line x1="4.8" y1="10.5" x2="8.8" y2="13.2" strokeWidth="1.3" strokeLinecap="square" />
+        <line x1="9.6" y1="5.8" x2="12.4" y2="9.6" strokeWidth="1.3" strokeLinecap="square" />
+        <line x1="16" y1="3.1" x2="16.8" y2="7.6" strokeWidth="1.3" strokeLinecap="square" />
+        {/* Perpendicular offset callout vector & staked monument */}
+        <line x1="11" y1="7.7" x2="17.8" y2="17.2" strokeWidth="1.15" strokeDasharray="1.6 1.2" />
+        <rect x="16.4" y="15.8" width="3.8" height="3.8" strokeWidth="1.4" fill="currentColor" fillOpacity="0.18" />
+        <circle cx="18.3" cy="17.7" r="0.9" fill="currentColor" stroke="none" />
     </svg>
 );
 
@@ -421,9 +611,13 @@ export const ChatBubbleIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) =
     </svg>
 );
 
+// Precision CAD Load / Upload Tray Glyph
 export const ArrowUpTrayIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <path d="M3.6 15.2v5.4h16.8v-5.4" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M12 15.8V4.2" strokeWidth="2.2" strokeLinecap="round" />
+        <path d="M7.4 8.7L12 4l4.6 4.7" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+        <line x1="6" y1="18.4" x2="18" y2="18.4" strokeWidth="0.9" strokeLinecap="round" opacity="0.35" />
     </svg>
 );
 
@@ -433,17 +627,60 @@ export const Bars3Icon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     </svg>
 );
 
+// GPS Rover Agent Glyph — RTK GNSS Rover Receiver Dome on Range Pole with Bullseye Level Vial & Stakeout Target Reticle
 export const CrosshairsIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12a3 3 0 116 0 3 3 0 01-6 0z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m-8-9H3m18 0h-1" />
+        {/* Corner stakeout guidance brackets */}
+        <path strokeLinecap="square" strokeLinejoin="miter" strokeWidth="1.3" d="M2 5.5V2h3.5M18.5 2H22v3.5M22 18.5V22h-3.5M5.5 22H2v-3.5" />
+        {/* Outer precision stakeout bullseye ring & inner tolerance ring */}
+        <circle cx="12" cy="12" r="8" strokeWidth="1.5" />
+        <circle cx="12" cy="12" r="4.8" strokeWidth="1.1" strokeDasharray="2.2 1.3" opacity="0.85" />
+        {/* Cardinal & intercardinal stadia graduation ticks */}
+        <line x1="12" y1="2" x2="12" y2="6.8" strokeWidth="1.5" strokeLinecap="square" />
+        <line x1="12" y1="17.2" x2="12" y2="22" strokeWidth="1.5" strokeLinecap="square" />
+        <line x1="2" y1="12" x2="6.8" y2="12" strokeWidth="1.5" strokeLinecap="square" />
+        <line x1="17.2" y1="12" x2="22" y2="12" strokeWidth="1.5" strokeLinecap="square" />
+        <line x1="5.8" y1="5.8" x2="7.5" y2="7.5" strokeWidth="1" opacity="0.7" />
+        <line x1="18.2" y1="5.8" x2="16.5" y2="7.5" strokeWidth="1" opacity="0.7" />
+        <line x1="5.8" y1="18.2" x2="7.5" y2="16.5" strokeWidth="1" opacity="0.7" />
+        <line x1="18.2" y1="18.2" x2="16.5" y2="16.5" strokeWidth="1" opacity="0.7" />
+        {/* Central survey monument diamond & pinpoint */}
+        <polygon points="12,9.4 14.6,12 12,14.6 9.4,12" strokeWidth="1.2" fill="currentColor" fillOpacity="0.22" strokeLinejoin="miter" />
+        <circle cx="12" cy="12" r="0.9" fill="currentColor" stroke="none" />
     </svg>
 );
 
-export const DocumentTextIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+// COGO Agent Glyph — Bearing-Bearing & Bearing-Distance Intersection Network with Tangent Circle, Subtended Angles & Control Monuments
+export const CogoIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+        {/* Distance-distance resection circle (dashed) */}
+        <circle cx="13.5" cy="9.5" r="6.2" strokeWidth="1" strokeDasharray="2 1.3" opacity="0.75" />
+        {/* Primary COGO closed traverse polygon */}
+        <polygon points="3,19.5 19.8,19.5 13.5,3.5" strokeWidth="1.5" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.1" />
+        {/* Internal inverse & perpendicular offset drop-line */}
+        <line x1="13.5" y1="3.5" x2="10.2" y2="19.5" strokeWidth="1.15" strokeDasharray="2 1.2" />
+        <line x1="3" y1="19.5" x2="16.8" y2="11.8" strokeWidth="1.1" opacity="0.85" />
+        {/* Right-angle perpendicularity square at baseline */}
+        <polyline points="10.2,17.3 12.4,17.3 12.4,19.5" strokeWidth="1" opacity="0.85" />
+        {/* Subtended interior horizontal angle arc at left control station */}
+        <path strokeLinecap="square" strokeWidth="1.3" d="M8.4 19.5A5.4 5.4 0 0 0 6.2 14.6" />
+        {/* Survey control monument squares & intersection point */}
+        <rect x="1.8" y="18.3" width="2.4" height="2.4" fill="currentColor" stroke="none" />
+        <rect x="18.6" y="18.3" width="2.4" height="2.4" fill="currentColor" stroke="none" />
+        <rect x="12.3" y="2.3" width="2.4" height="2.4" fill="currentColor" stroke="none" />
+        <circle cx="11.4" cy="14.8" r="1.3" fill="currentColor" stroke="none" />
+    </svg>
+);
+
+// Technical Specification / .lsvz Document Glyph
+export const DocumentTextIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <path d="M5 2.6h8.2L19 8.4v13H5V2.6z" strokeWidth="2" strokeLinejoin="round" />
+        <path d="M13.2 2.6v5.8H19" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        <line x1="8.2" y1="12.2" x2="15.8" y2="12.2" strokeWidth="2" strokeLinecap="round" />
+        <line x1="8.2" y1="16.2" x2="13.4" y2="16.2" strokeWidth="2" strokeLinecap="round" />
+        <line x1="8.2" y1="19.2" x2="11.4" y2="19.2" strokeWidth="1.1" strokeLinecap="round" opacity="0.55" />
+        <rect x="16.3" y="17.8" width="1.2" height="1.2" fill="currentColor" stroke="none" opacity="0.35" />
     </svg>
 );
 
@@ -483,35 +720,83 @@ export const MinusIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     </svg>
 );
 
+// Information / About Glyph — Bold 'i' in a Clean Circular Bezel (No Polygon)
 export const InfoIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <circle cx="12" cy="12" r="9.2" strokeWidth="2" />
+        <line x1="9.3" y1="19" x2="14.7" y2="19" strokeWidth="0.9" strokeLinecap="round" opacity="0.35" />
+        <line x1="12" y1="10.8" x2="12" y2="17.2" strokeWidth="2.4" strokeLinecap="round" />
+        <rect x="10.75" y="5.95" width="2.5" height="2.5" transform="rotate(45 12 7.2)" fill="currentColor" stroke="none" />
     </svg>
 );
 
+// Image Analyzer Agent Glyph — Machine-Vision Camera Chassis, Multi-Blade Iris Diaphragm & AI Feature Detection Reticle
 export const CameraIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.776 48.776 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z" />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z" />
+    {/* Machined camera body, shutter release button & pentaprism housing */}
+    <rect x="3.5" y="5.2" width="2.5" height="1.8" strokeWidth="1.2" />
+    <polygon points="2,7 6.8,7 8.4,4 15.6,4 17.2,7 22,7 22,20.5 2,20.5" strokeWidth="1.5" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.06" />
+    {/* Right-hand grip texture line & top hot-shoe flash mount */}
+    <line x1="5.2" y1="7" x2="5.2" y2="20.5" strokeWidth="0.9" opacity="0.55" />
+    <line x1="10.2" y1="2.5" x2="13.8" y2="2.5" strokeWidth="1.4" strokeLinecap="square" />
+    {/* Outer knurled lens barrel & inner optical element */}
+    <circle cx="13" cy="13.8" r="5" strokeWidth="1.5" />
+    <circle cx="13" cy="13.8" r="3.1" strokeWidth="1" opacity="0.85" fill="currentColor" fillOpacity="0.16" />
+    {/* Tangential iris aperture blades */}
+    <line x1="13" y1="8.8" x2="15.2" y2="11.2" strokeWidth="0.9" opacity="0.75" />
+    <line x1="18" y1="13.8" x2="15.6" y2="16" strokeWidth="0.9" opacity="0.75" />
+    <line x1="13" y1="18.8" x2="10.8" y2="16.4" strokeWidth="0.9" opacity="0.75" />
+    <line x1="8" y1="13.8" x2="10.4" y2="11.6" strokeWidth="0.9" opacity="0.75" />
+    <circle cx="13" cy="13.8" r="1" fill="currentColor" stroke="none" />
+    {/* AI bounding-box corner brackets inside frame */}
+    <path strokeLinecap="square" strokeWidth="1.15" d="M6.8 9.8V8.5h1.3M19.2 9.8V8.5h-1.3M6.8 17.8v1.3h1.3M19.2 17.8v1.3h-1.3" />
   </svg>
 );
 
+// Drone Agent Glyph — Quadcopter Photogrammetry UAV with Spinning Rotor Arcs, Nadir Gimbal & Ground Control Swath Grid
 export const DroneIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <circle cx="12" cy="12" r="2.25" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M10.41 10.41 7.84 7.84m5.75 2.57 2.57-2.57m-5.75 5.75-2.57 2.57m5.75-2.57 2.57 2.57" />
-        <circle cx="6.25" cy="6.25" r="2.25" />
-        <circle cx="17.75" cy="6.25" r="2.25" />
-        <circle cx="6.25" cy="17.75" r="2.25" />
-        <circle cx="17.75" cy="17.75" r="2.25" />
+        {/* Diagonal carbon-fiber airframe booms */}
+        <line x1="5" y1="5" x2="19" y2="13.5" strokeWidth="1.5" strokeLinecap="square" />
+        <line x1="19" y1="5" x2="5" y2="13.5" strokeWidth="1.5" strokeLinecap="square" />
+        {/* Four rotor guard rings & propeller blades */}
+        <circle cx="4.8" cy="4.8" r="2.5" strokeWidth="1.4" />
+        <circle cx="19.2" cy="4.8" r="2.5" strokeWidth="1.4" />
+        <circle cx="4.8" cy="13.5" r="2.2" strokeWidth="1.3" />
+        <circle cx="19.2" cy="13.5" r="2.2" strokeWidth="1.3" />
+        <line x1="3.2" y1="4.8" x2="6.4" y2="4.8" strokeWidth="1.1" />
+        <line x1="17.6" y1="4.8" x2="20.8" y2="4.8" strokeWidth="1.1" />
+        {/* Central RTK fuselage & nadir photogrammetry camera lens */}
+        <polygon points="9.8,6.8 14.2,6.8 15.2,11.6 8.8,11.6" strokeWidth="1.5" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.22" />
+        <circle cx="12" cy="9.2" r="1.1" fill="currentColor" stroke="none" />
+        {/* Downward photogrammetry stereo-overlap frustum rays */}
+        <line x1="10.2" y1="11.6" x2="5.5" y2="20.5" strokeWidth="1.1" strokeDasharray="1.6 1.1" />
+        <line x1="13.8" y1="11.6" x2="18.5" y2="20.5" strokeWidth="1.1" strokeDasharray="1.6 1.1" />
+        <line x1="12" y1="11.6" x2="12" y2="21.5" strokeWidth="0.9" opacity="0.7" />
+        {/* Orthomosaic ground swath grid with GCP target */}
+        <polygon points="4.5,21.5 19.5,21.5 17,18.2 7,18.2" strokeWidth="1.3" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.14" />
+        <line x1="5.8" y1="19.8" x2="18.2" y2="19.8" strokeWidth="0.85" opacity="0.7" />
     </svg>
 );
 
+// GIS Agent Glyph — Geodesic Graticule Globe with Projected Spatial Parcel Layer, Attribute Table & Coordinate Pin
 export const GlobeAltIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3c-3.866 0-7 4.03-7 9s3.134 9 7 9c3.866 0 7-4.03 7-9s-3.134-9-7-9z" />
+      {/* Geodesic sphere perimeter & graticule meridians/parallels */}
+      <circle cx="10.5" cy="12.5" r="8.2" strokeWidth="1.5" />
+      <ellipse cx="10.5" cy="12.5" rx="4" ry="8.2" strokeWidth="1.05" opacity="0.75" />
+      <line x1="2.3" y1="12.5" x2="18.7" y2="12.5" strokeWidth="1.05" opacity="0.75" />
+      <path strokeWidth="0.95" opacity="0.65" d="M3.6 8C7.5 9.2 13.5 9.2 17.4 8" />
+      <path strokeWidth="0.95" opacity="0.65" d="M3.6 17C7.5 15.8 13.5 15.8 17.4 17" />
+      {/* Projected vector GIS parcel polygon layer breaking out to top-right */}
+      <polygon points="11.8,5.8 21.5,3 20.2,12.2 13,10.8" strokeWidth="1.6" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.24" />
+      {/* Internal parcel subdivision line inside GIS layer */}
+      <line x1="16.6" y1="4.4" x2="16.6" y2="11.5" strokeWidth="1" opacity="0.8" />
+      {/* GIS vertex nodes */}
+      <rect x="10.8" y="4.8" width="1.9" height="1.9" fill="currentColor" stroke="none" />
+      <rect x="20.5" y="2" width="1.9" height="1.9" fill="currentColor" stroke="none" />
+      <rect x="19.2" y="11.2" width="1.9" height="1.9" fill="currentColor" stroke="none" />
+      <rect x="12" y="9.8" width="1.9" height="1.9" fill="currentColor" stroke="none" />
     </svg>
 );
 
@@ -556,17 +841,48 @@ export const RotateCcwIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) =>
   </svg>
 );
 
+// Contouring Agent Glyph — Topographic Saddle & Summit Isolines Intertwined with a Delaunay TIN Mesh & Spot Benchmark
 export const ContourIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 6.75Q9 2.25 12 6.75T21 6.75" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 12Q9 7.5 12 12T21 12" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 17.25Q9 12.75 12 17.25T21 17.25" />
+        {/* Corner map graticule ticks */}
+        <path strokeLinecap="square" strokeWidth="1.3" d="M2 5V2h3M19 2h3v3M22 19v3h-3M5 22H2v-3" />
+        {/* Outer index contour ring (bold) */}
+        <path strokeWidth="1.6" d="M2.5 15.8C2.8 8.2 7.5 3.2 14.2 3.8C19.8 4.3 21.6 9.2 21 15C20.4 19.8 15.6 21.4 9.6 20.8C4.8 20.3 2.2 19.2 2.5 15.8Z" />
+        {/* Intermediate contour rings */}
+        <path strokeWidth="1.15" opacity="0.88" d="M5.4 14.8C5.8 9.8 9.2 6.2 13.8 6.6C17.8 7 18.8 10.4 18.3 14.2C17.8 17.4 14.4 18.5 10.4 18C7 17.6 5.1 17.2 5.4 14.8Z" />
+        <path strokeWidth="1.1" opacity="0.8" d="M8.4 13.8C8.6 11 10.6 9 13.4 9.3C15.6 9.5 16.2 11.4 15.9 13.5C15.6 15.2 13.6 15.8 11.2 15.5C9.3 15.2 8.2 15 8.4 13.8Z" />
+        {/* Delaunay TIN triangulation facets radiating from summit */}
+        <polyline points="4.2,17.8 12.6,12.4 19.6,7.8" strokeWidth="0.85" strokeDasharray="1.4 1.1" opacity="0.7" />
+        <polyline points="8.2,4.8 12.6,12.4 16.2,19.6" strokeWidth="0.85" strokeDasharray="1.4 1.1" opacity="0.7" />
+        {/* Summit benchmark triangle monument */}
+        <polygon points="12.6,10.8 14.1,13.4 11.1,13.4" fill="currentColor" stroke="none" />
     </svg>
 );
 
+// Profile & Cross Section Agent Glyph — Engineering Profile Grid with Existing Terrain, Vertical Curve Tangent, PVI Triangle & Cut/Fill Ordinates
 export const ProfileIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 18h18M3 14.5h18M4 6l4 4 4-2 4 4 4-2" />
+        {/* Profile graph frame & bottom station/elevation title band */}
+        <rect x="2" y="2.5" width="20" height="19" strokeWidth="1.5" strokeLinejoin="miter" />
+        <line x1="2" y1="17.5" x2="22" y2="17.5" strokeWidth="1.2" />
+        {/* Left-edge elevation ruler ticks */}
+        <line x1="2" y1="6.2" x2="3.6" y2="6.2" strokeWidth="1" />
+        <line x1="2" y1="10" x2="3.6" y2="10" strokeWidth="1" />
+        <line x1="2" y1="13.8" x2="3.6" y2="13.8" strokeWidth="1" />
+        {/* Vertical ordinate station gridlines */}
+        <line x1="7" y1="2.5" x2="7" y2="17.5" strokeWidth="0.8" strokeDasharray="1.4 1.4" opacity="0.55" />
+        <line x1="12" y1="2.5" x2="12" y2="17.5" strokeWidth="0.8" strokeDasharray="1.4 1.4" opacity="0.55" />
+        <line x1="17" y1="2.5" x2="17" y2="17.5" strokeWidth="0.8" strokeDasharray="1.4 1.4" opacity="0.55" />
+        {/* Existing ground (EG) dashed terrain profile */}
+        <path strokeWidth="1.2" strokeDasharray="2.2 1.3" opacity="0.85" d="M2 14.8C4.8 13.8 6.5 7.5 9.5 8.8C12.5 10.1 14.5 5.2 17.5 6.4C19.5 7.2 20.8 5.5 22 4.8" />
+        {/* Proposed finished grade (FG) bold alignment with PVI nodes */}
+        <polyline points="2,16.2 8.5,10.5 15.5,11.2 22,5.8" strokeWidth="1.7" strokeLinecap="square" strokeLinejoin="miter" />
+        <polygon points="8.5,8.8 10,11.4 7,11.4" fill="currentColor" stroke="none" />
+        <rect x="14.5" y="10.2" width="2" height="2" fill="currentColor" stroke="none" />
+        {/* Bottom datum band station ticks */}
+        <line x1="7" y1="17.5" x2="7" y2="21.5" strokeWidth="1" />
+        <line x1="12" y1="17.5" x2="12" y2="21.5" strokeWidth="1" />
+        <line x1="17" y1="17.5" x2="17" y2="21.5" strokeWidth="1" />
     </svg>
 );
 
@@ -588,12 +904,26 @@ export const InclusionLineIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props
     </svg>
 );
 
+// Steep Slope Agent Glyph — Rugged Mountain Escarpment with CAD Slope Hachures (Tadpoles) & Steep Grade Callout
 export const SlopeIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 18.75L21 5.25" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9.5 7.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M17.5 14.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12.5 12.5L14.5 10.5" />
+        {/* Distant secondary ridge peak for topographic depth */}
+        <polyline points="2,16.5 6.5,9.5 11,13.5" strokeWidth="1.1" opacity="0.55" strokeLinejoin="miter" />
+        {/* Primary steep mountain ridge & cliff escarpment face */}
+        <polygon points="2,21 15.5,3.5 21.5,11 21.5,21" strokeWidth="1.6" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.14" />
+        {/* Internal TIN facet ridges descending from peak */}
+        <polyline points="15.5,3.5 12.5,13.5 21.5,15.5" strokeWidth="1.1" strokeLinejoin="miter" opacity="0.8" />
+        <polyline points="8.5,12.5 12.5,13.5 9.5,21" strokeWidth="1.1" strokeLinejoin="miter" opacity="0.8" />
+        <line x1="12.5" y1="13.5" x2="16.5" y2="21" strokeWidth="1" opacity="0.7" />
+        {/* Traditional surveying slope hachure ticks along the upper ridge */}
+        <line x1="13.2" y1="6.5" x2="15.2" y2="8.2" strokeWidth="1.1" />
+        <line x1="10.8" y1="9.6" x2="13.2" y2="11.6" strokeWidth="1.1" />
+        <line x1="6.2" y1="15.6" x2="8.6" y2="17.6" strokeWidth="1.1" />
+        {/* Steep fall-line grade vector arrow running parallel to the slope */}
+        <line x1="11.5" y1="4" x2="4" y2="13.8" strokeWidth="1.4" strokeLinecap="square" />
+        <polyline points="4,10.5 4,13.8 7.3,13.8" strokeWidth="1.4" strokeLinecap="square" strokeLinejoin="miter" />
+        {/* Toe-of-slope angle arc */}
+        <path strokeWidth="1.2" d="M6.8 21A4.8 4.8 0 0 0 5 17.2" />
     </svg>
 );
 
@@ -654,32 +984,27 @@ export const PolylineIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => 
     </svg>
 );
 
+// RINEX / GNSS Agent Glyph — Orbital GNSS Satellite with Multi-Cell Solar Wings, L1/L2/L5 Carrier Wavefronts & CORS Base Monument
 export const SatelliteIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        {/* Main satellite body/core */}
-        <rect x="10.5" y="9" width="3" height="6" rx="0.5" fill="currentColor" strokeLinecap="round" strokeLinejoin="round" />
-        
-        {/* Top antenna/solar panel array */}
-        <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 9L8 5" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 9L16 5" />
-        
-        {/* Left solar panel */}
-        <rect x="4" y="9" width="2.5" height="3" rx="0.5" fill="currentColor" opacity="0.7" strokeLinecap="round" strokeLinejoin="round" />
-        <line x1="4.5" y1="9.5" x2="4.5" y2="11.5" strokeLinecap="round" opacity="0.5" />
-        <line x1="5.5" y1="9.5" x2="5.5" y2="11.5" strokeLinecap="round" opacity="0.5" />
-        
-        {/* Right solar panel */}
-        <rect x="17.5" y="9" width="2.5" height="3" rx="0.5" fill="currentColor" opacity="0.7" strokeLinecap="round" strokeLinejoin="round" />
-        <line x1="18" y1="9.5" x2="18" y2="11.5" strokeLinecap="round" opacity="0.5" />
-        <line x1="19" y1="9.5" x2="19" y2="11.5" strokeLinecap="round" opacity="0.5" />
-        
-        {/* Bottom antennas */}
-        <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 15L8 19" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 15L16 19" />
-        
-        {/* Signal transmission waves */}
-        <circle cx="12" cy="12" r="4.5" fill="none" strokeLinecap="round" opacity="0.6" />
-        <circle cx="12" cy="12" r="7" fill="none" strokeLinecap="round" opacity="0.3" />
+        {/* Central octagonal satellite bus & L-band antenna array */}
+        <polygon points="12.5,5 15.8,8.3 12.5,11.6 9.2,8.3" strokeWidth="1.5" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.24" />
+        <circle cx="12.5" cy="8.3" r="0.9" fill="currentColor" stroke="none" />
+        {/* Left & right multi-cell solar array wings */}
+        <polygon points="4.2,4.2 8.2,8.2 10.6,5.8 6.6,1.8" strokeWidth="1.35" strokeLinejoin="miter" />
+        <polygon points="14.4,10.8 18.4,14.8 20.8,12.4 16.8,8.4" strokeWidth="1.35" strokeLinejoin="miter" />
+        <line x1="5.4" y1="3" x2="9.4" y2="7" strokeWidth="0.9" opacity="0.75" />
+        <line x1="6.2" y1="6.2" x2="8.6" y2="3.8" strokeWidth="0.9" opacity="0.75" />
+        <line x1="15.6" y1="9.6" x2="19.6" y2="13.6" strokeWidth="0.9" opacity="0.75" />
+        <line x1="16.4" y1="12.8" x2="18.8" y2="10.4" strokeWidth="0.9" opacity="0.75" />
+        {/* L1 / L2 / L5 carrier-phase wavefront arcs propagating to ground */}
+        <path strokeLinecap="square" strokeWidth="1.25" d="M7.5 11.8A4.8 4.8 0 0 0 11.8 13.8" />
+        <path strokeLinecap="square" strokeWidth="1.2" opacity="0.85" d="M5.5 13.8A7.6 7.6 0 0 0 12.2 16.4" />
+        <line x1="10.8" y1="10" x2="6.2" y2="17.2" strokeWidth="0.95" strokeDasharray="1.4 1.1" opacity="0.75" />
+        {/* Ground CORS reference station monument & choke-ring dome at bottom-left */}
+        <line x1="3" y1="17.2" x2="8" y2="17.2" strokeWidth="1.5" strokeLinecap="square" />
+        <polygon points="5.5,17.2 8.5,21.8 2.5,21.8" strokeWidth="1.4" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.2" />
+        <circle cx="5.5" cy="20.2" r="0.8" fill="currentColor" stroke="none" />
     </svg>
 );
 
@@ -690,65 +1015,112 @@ export const MonitorIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     </svg>
 );
 
+// AR Visualization Agent Glyph — Mixed-Reality Spatial Visor Projecting a 3D Holographic Terrain Cube & X/Y/Z Survey Axes
 export const ARIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        {/* Left lens */}
-        <circle cx="8.5" cy="12" r="3.5" fill="currentColor" opacity="0.1" strokeLinecap="round" strokeLinejoin="round" />
-        
-        {/* Right lens */}
-        <circle cx="15.5" cy="12" r="3.5" fill="currentColor" opacity="0.1" strokeLinecap="round" strokeLinejoin="round" />
-        
-        {/* Left lens outline */}
-        <circle cx="8.5" cy="12" r="3.5" strokeLinecap="round" strokeLinejoin="round" />
-        
-        {/* Right lens outline */}
-        <circle cx="15.5" cy="12" r="3.5" strokeLinecap="round" strokeLinejoin="round" />
-        
-        {/* Bridge connecting lenses */}
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 12H12" />
-        <line x1="11" y1="12" x2="13" y2="12" strokeLinecap="round" strokeWidth={1.5} />
-        
-        {/* Left lens shine/reflection */}
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6.5 10C6.8 9.5 7.5 9.2 8.5 9.2" opacity="0.6" />
-        
-        {/* Right lens shine/reflection */}
-        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 10C13.8 9.5 14.5 9.2 15.5 9.2" opacity="0.6" />
-        
-        {/* Left arm */}
-        <path strokeLinecap="round" strokeLinejoin="round" d="M5 11L3 10" />
-        
-        {/* Right arm */}
-        <path strokeLinecap="round" strokeLinejoin="round" d="M19 11L21 10" />
+        {/* Mixed-reality headset visor & temple arms at top */}
+        <polyline points="2,6.2 3.5,3.5 20.5,3.5 22,6.2" strokeWidth="1.2" strokeLinejoin="miter" />
+        <polygon points="3.2,3.5 20.8,3.5 19.4,9.2 14,9.2 12,7.5 10,9.2 4.6,9.2" strokeWidth="1.5" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.16" />
+        {/* Dual optical tracking sensors on visor */}
+        <rect x="6" y="5.2" width="2.8" height="1.6" strokeWidth="1.1" />
+        <rect x="15.2" y="5.2" width="2.8" height="1.6" strokeWidth="1.1" />
+        {/* Holographic frustum projection beams */}
+        <line x1="6.5" y1="9.2" x2="6.5" y2="14.2" strokeWidth="1" strokeDasharray="1.4 1.1" opacity="0.75" />
+        <line x1="17.5" y1="9.2" x2="17.5" y2="14.2" strokeWidth="1" strokeDasharray="1.4 1.1" opacity="0.75" />
+        {/* Projected 3D isometric terrain cube with internal Z-axis */}
+        <polygon points="12,11.2 17.8,14.2 17.8,19.2 12,22 6.2,19.2 6.2,14.2" strokeWidth="1.5" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.1" />
+        <path strokeWidth="1.15" d="M6.2 14.2L12 17L17.8 14.2M12 17V22" />
+        <circle cx="12" cy="17" r="1.1" fill="currentColor" stroke="none" />
     </svg>
 );
 
+// Zoning Agent Glyph — Municipal Zoning District Map with Setback Building Envelope, Hatching & Dimensional Arrows
 export const ZoningIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        {/* Open book pages */}
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+        {/* Outer municipal zoning map boundary with corner monuments */}
+        <rect x="2.2" y="2.2" width="19.6" height="19.6" strokeWidth="1.5" strokeLinejoin="miter" />
+        <rect x="1.4" y="1.4" width="1.8" height="1.8" fill="currentColor" stroke="none" />
+        <rect x="20.8" y="1.4" width="1.8" height="1.8" fill="currentColor" stroke="none" />
+        <rect x="1.4" y="20.8" width="1.8" height="1.8" fill="currentColor" stroke="none" />
+        <rect x="20.8" y="20.8" width="1.8" height="1.8" fill="currentColor" stroke="none" />
+        {/* Zoning district boundary splits */}
+        <line x1="13.6" y1="2.2" x2="13.6" y2="21.8" strokeWidth="1.4" />
+        <line x1="13.6" y1="12" x2="21.8" y2="12" strokeWidth="1.4" />
+        {/* Buildable setback envelope (dashed) & front/side yard setback arrows */}
+        <rect x="5" y="5.5" width="6" height="13" strokeWidth="1.2" strokeDasharray="2 1.2" fill="currentColor" fillOpacity="0.18" />
+        <line x1="2.2" y1="12" x2="5" y2="12" strokeWidth="1" />
+        <line x1="8" y1="2.2" x2="8" y2="5.5" strokeWidth="1" />
+        {/* Diagonal commercial/overlay district hatching in top-right quadrant */}
+        <line x1="15" y1="3.8" x2="20.2" y2="9" strokeWidth="1" opacity="0.8" />
+        <line x1="17.6" y1="3.4" x2="20.6" y2="6.4" strokeWidth="1" opacity="0.8" />
+        <line x1="14.6" y1="6.4" x2="17.6" y2="9.4" strokeWidth="1" opacity="0.8" />
+        {/* Cross-hatched industrial/open-space zone in bottom-right quadrant */}
+        <line x1="15.4" y1="14.8" x2="19.8" y2="14.8" strokeWidth="1.2" strokeLinecap="square" />
+        <line x1="15.4" y1="17.4" x2="19.8" y2="17.4" strokeWidth="1.2" strokeLinecap="square" />
+        <line x1="15.4" y1="19.8" x2="18.2" y2="19.8" strokeWidth="1.2" strokeLinecap="square" />
     </svg>
 );
 
+// C3D Connector Plug Glyph — Bold Connector That Inherits Its Button Colour
 export const PlugIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5}>
-        {/* Power plug connector - top prongs in blue/cyan */}
-        <path strokeLinecap="round" strokeLinejoin="round" stroke="#22d3ee" d="M10 5V2m4 3V2" />
-        {/* Plug body in white/gray */}
-        <path strokeLinecap="round" strokeLinejoin="round" stroke="#e5e7eb" d="M8 6h8v4H8z" />
-        {/* Connection cable in green */}
-        <path strokeLinecap="round" strokeLinejoin="round" stroke="#34d399" d="M9 10v3a3 3 0 006 0v-3" />
-        {/* Bottom cables in blue gradient */}
-        <path strokeLinecap="round" strokeLinejoin="round" stroke="#3b82f6" d="M10 13v6M14 13v6" />
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <line x1="9.2" y1="2.6" x2="9.2" y2="6.8" strokeWidth="2.2" strokeLinecap="round" />
+        <line x1="14.8" y1="2.6" x2="14.8" y2="6.8" strokeWidth="2.2" strokeLinecap="round" />
+        <path d="M6.2 6.8h11.6v3.6a5.8 5.8 0 0 1-11.6 0V6.8z" strokeWidth="2.1" strokeLinejoin="round" />
+        <line x1="6.9" y1="8.8" x2="17.1" y2="8.8" strokeWidth="0.9" opacity="0.35" />
+        <circle cx="12" cy="8.8" r="0.8" fill="currentColor" stroke="none" opacity="0.7" />
+        <line x1="12" y1="16.2" x2="12" y2="21.4" strokeWidth="2.2" strokeLinecap="round" />
     </svg>
 );
 
+// Legal & Compliance Balance Beam Glyph — Bold Scales of Justice on a Stepped Pedestal
+export const LegalScaleIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <circle cx="12" cy="3.4" r="1.4" fill="currentColor" stroke="none" />
+        <line x1="12" y1="4.6" x2="12" y2="19.4" strokeWidth="2.2" strokeLinecap="round" />
+        <line x1="3.8" y1="6.6" x2="20.2" y2="6.6" strokeWidth="2.2" strokeLinecap="round" />
+        <rect x="10.9" y="5.5" width="2.2" height="2.2" transform="rotate(45 12 6.6)" fill="currentColor" stroke="none" opacity="0.85" />
+        <line x1="4" y1="6.9" x2="4" y2="8.6" strokeWidth="0.9" strokeLinecap="round" opacity="0.55" />
+        <line x1="20" y1="6.9" x2="20" y2="8.6" strokeWidth="0.9" strokeLinecap="round" opacity="0.55" />
+        <path d="M6.3 8.6H1.7l2.3 5.2z" strokeWidth="1.9" strokeLinejoin="round" fill="currentColor" fillOpacity="0.25" />
+        <path d="M17.7 8.6h4.6l-2.3 5.2z" strokeWidth="1.9" strokeLinejoin="round" fill="currentColor" fillOpacity="0.25" />
+        <line x1="7.6" y1="19.4" x2="16.4" y2="19.4" strokeWidth="2.2" strokeLinecap="round" />
+        <line x1="5.6" y1="21.6" x2="18.4" y2="21.6" strokeWidth="2.2" strokeLinecap="round" />
+    </svg>
+);
+
+// Geodetic Projection Ellipsoid Glyph — Bold State Plane / EPSG Graticule Globe
+export const ProjectionGlobeIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <circle cx="12" cy="12" r="8.6" strokeWidth="2.1" />
+        <ellipse cx="12" cy="12" rx="4.2" ry="8.6" strokeWidth="1.7" />
+        <line x1="3.4" y1="12" x2="20.6" y2="12" strokeWidth="1.9" />
+        <path strokeWidth="1.7" d="M5.2 7.4c4.3 1.5 9.3 1.5 13.6 0M5.2 16.6c4.3-1.5 9.3-1.5 13.6 0" />
+        <line x1="12" y1="1.4" x2="12" y2="3.4" strokeWidth="1" strokeLinecap="round" opacity="0.5" />
+        <line x1="12" y1="20.6" x2="12" y2="22.6" strokeWidth="1" strokeLinecap="round" opacity="0.5" />
+        <line x1="1.4" y1="12" x2="3.4" y2="12" strokeWidth="1" strokeLinecap="round" opacity="0.5" />
+        <line x1="20.6" y1="12" x2="22.6" y2="12" strokeWidth="1" strokeLinecap="round" opacity="0.5" />
+    </svg>
+);
+
+// Title Search Agent Glyph — Historical Deed Folios, Chain-of-Title Node Graph, Recorder Seal & Optical Loupe
 export const TitleSearchIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        {/* Stacked documents with magnifying glass */}
-        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-        {/* Magnifying glass overlay */}
-        <circle cx="17" cy="17" r="3" strokeLinecap="round" strokeLinejoin="round" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 19.5l1.5 1.5" />
+        {/* Stacked historical deed book folios */}
+        <polyline points="5.5,4.2 5.5,2 19,2 19,10.5" strokeWidth="1.2" opacity="0.65" strokeLinejoin="miter" />
+        <path strokeLinecap="square" strokeLinejoin="miter" strokeWidth="1.5" d="M11.2 20.5H2.5V4.2h14v7" />
+        {/* Chain-of-title conveyance linkage graph on primary deed */}
+        <polyline points="5.5,7.8 9.8,7.8 9.8,11.8 5.5,11.8 5.5,15.8 9.2,15.8" strokeWidth="1.25" strokeLinecap="square" strokeLinejoin="miter" />
+        <rect x="4.4" y="6.7" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+        <rect x="8.7" y="10.7" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+        <rect x="4.4" y="14.7" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+        {/* County Recorder official ribbon seal on top-right of deed */}
+        <circle cx="13.2" cy="7.5" r="1.3" strokeWidth="1.1" fill="currentColor" fillOpacity="0.25" />
+        {/* Precision optical magnifier reticle at bottom-right */}
+        <circle cx="16.2" cy="16.2" r="3.8" strokeWidth="1.5" fill="currentColor" fillOpacity="0.14" />
+        <line x1="18.9" y1="18.9" x2="22" y2="22" strokeWidth="1.9" strokeLinecap="square" />
+        <line x1="14.6" y1="16.2" x2="17.8" y2="16.2" strokeWidth="0.9" opacity="0.8" />
+        <line x1="16.2" y1="14.6" x2="16.2" y2="17.8" strokeWidth="0.9" opacity="0.8" />
     </svg>
 );
 
@@ -759,45 +1131,104 @@ export const SparklesIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => 
     </svg>
 );
 
-// Key icon for API Key
+// Cryptographic API Key Glyph — Bold Key with Solid Bow and Bitted Blade
 export const KeyIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <circle cx="7.4" cy="12" r="4.6" strokeWidth="2.2" />
+        <circle cx="7.4" cy="12" r="3" strokeWidth="0.85" opacity="0.4" />
+        <circle cx="7.4" cy="12" r="1.5" fill="currentColor" stroke="none" />
+        <line x1="13.6" y1="9.8" x2="13.6" y2="14.2" strokeWidth="1.05" strokeLinecap="round" opacity="0.6" />
+        <line x1="12" y1="12" x2="21.2" y2="12" strokeWidth="2.2" strokeLinecap="round" />
+        <line x1="16.2" y1="12" x2="16.2" y2="16.6" strokeWidth="2.2" strokeLinecap="round" />
+        <line x1="20" y1="12" x2="20" y2="15.4" strokeWidth="2.2" strokeLinecap="round" />
     </svg>
 );
 
-// Cog/Settings icon
+// Precision Machined Settings Gear Glyph — Bold Ring, Hub and Eight Teeth
 export const CogIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <circle cx="12" cy="12" r="6.2" strokeWidth="2" />
+        <circle cx="12" cy="12" r="2.4" strokeWidth="2" />
+        <circle cx="12" cy="12" r="0.55" fill="currentColor" stroke="none" opacity="0.5" />
+        <path strokeWidth="2.2" strokeLinecap="butt" d="M12 1.6v4.2M12 18.2v4.2M1.6 12h4.2M18.2 12h4.2M4.6 4.6l3 3M16.4 16.4l3 3M19.4 4.6l-3 3M7.6 16.4l-3 3" />
     </svg>
 );
+
+// Flood Zone Agent Glyph — Rising Floodwater Waves Inundating a Structure with Staff Gauge & BFE Datum Line
 export const FloodIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 12c1.5-1.5 3-1.5 4.5 0s3 1.5 4.5 0 3-1.5 4.5 0 3 1.5 4.5 0" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 17c1.5-1.5 3-1.5 4.5 0s3 1.5 4.5 0 3-1.5 4.5 0 3 1.5 4.5 0" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l3 4.5h-2v3h-2v-3H9L12 3z" />
+        {/* Left-side vertical hydrological staff gauge ruler */}
+        <line x1="3.5" y1="2.5" x2="3.5" y2="13.5" strokeWidth="1.5" strokeLinecap="square" />
+        <line x1="3.5" y1="3.5" x2="5.5" y2="3.5" strokeWidth="1.2" />
+        <line x1="3.5" y1="6.2" x2="5" y2="6.2" strokeWidth="1.1" />
+        <line x1="3.5" y1="9" x2="5.5" y2="9" strokeWidth="1.2" />
+        <line x1="3.5" y1="11.8" x2="5" y2="11.8" strokeWidth="1.1" />
+        {/* Base Flood Elevation (BFE) datum line & water-surface triangle */}
+        <line x1="6" y1="9" x2="21.5" y2="9" strokeWidth="1.1" strokeDasharray="2.2 1.4" opacity="0.85" />
+        <polygon points="8.5,9 10,6.2 7,6.2" strokeWidth="1.1" fill="currentColor" fillOpacity="0.3" strokeLinejoin="miter" />
+        {/* Partially inundated structure / house on right bank */}
+        <polygon points="11.5,7.5 16.5,3 21.5,7.5" strokeWidth="1.5" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.18" />
+        <polyline points="12.8,7.5 12.8,14 20.2,14 20.2,7.5" strokeWidth="1.4" strokeLinejoin="miter" />
+        <rect x="15.3" y="9.2" width="2.4" height="2.4" strokeWidth="1.1" />
+        {/* Three full-width surging floodwater wave crests at bottom */}
+        <path strokeLinecap="square" strokeWidth="1.6" d="M2 14.5C4.5 12.6 6.5 16.4 9 14.5C11.5 12.6 13.5 16.4 16 14.5C18.5 12.6 20 16.4 22 14.5" />
+        <path strokeLinecap="square" strokeWidth="1.5" opacity="0.9" d="M2 18C4.5 16.1 6.5 19.9 9 18C11.5 16.1 13.5 19.9 16 18C18.5 16.1 20 19.9 22 18" />
+        <path strokeLinecap="square" strokeWidth="1.3" opacity="0.7" d="M2 21.2C4.5 19.6 6.5 22.8 9 21.2C11.5 19.6 13.5 22.8 16 21.2C18.5 19.6 20 22.8 22 21.2" />
     </svg>
 );
 
-/** Soils Agent icon — horizontal soil horizon strata (A / B / C layers). */
+// Structures Agent Glyph — Detailed Architectural House with Gable Roof, Chimney, Dormer & Surveyed Footprint Corners
+export const StructuresIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        {/* Surveyed building footprint base & setback ticks */}
+        <line x1="2" y1="20" x2="22" y2="20" strokeWidth="1.5" strokeLinecap="square" />
+        <line x1="4.5" y1="22" x2="19.5" y2="22" strokeWidth="1" strokeDasharray="2 1.4" opacity="0.75" />
+        {/* Chimney stack on right roof slope */}
+        <polyline points="16.2,6.8 16.2,3.2 18.8,3.2 18.8,9.2" strokeWidth="1.4" strokeLinejoin="miter" />
+        {/* Sharp overhanging pitched gable roof */}
+        <polygon points="2,11 12,2.5 22,11 19.8,11 12,4.4 4.2,11" strokeWidth="1.4" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.2" />
+        {/* Attic gable louver / dormer window */}
+        <polygon points="10.2,8.8 12,7.2 13.8,8.8" strokeWidth="1.1" strokeLinejoin="miter" />
+        {/* Main house walls */}
+        <rect x="4.5" y="11" width="15" height="9" strokeWidth="1.5" strokeLinejoin="miter" fill="currentColor" fillOpacity="0.08" />
+        {/* Front entrance door & transom */}
+        <rect x="10.3" y="14.2" width="3.4" height="5.8" strokeWidth="1.3" />
+        {/* Left & right multi-pane windows */}
+        <rect x="6.2" y="13" width="2.6" height="2.8" strokeWidth="1.1" />
+        <rect x="15.2" y="13" width="2.6" height="2.8" strokeWidth="1.1" />
+        {/* Rectified BLDG survey monument nodes at structure corners */}
+        <rect x="3.4" y="18.9" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+        <rect x="18.4" y="18.9" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+        <rect x="10.9" y="1.4" width="2.2" height="2.2" fill="currentColor" stroke="none" />
+    </svg>
+);
+
+/** Soils Agent Glyph — Geotechnical Soil Core Pit with O/A/B/C/R Horizons, Prismatic Clay Peds, Bedrock Fractures & Auger T-Handle */
 export const SoilsIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        {/* A-horizon (topsoil) */}
-        <rect x="2" y="4" width="20" height="4" rx="1" fill="currentColor" opacity="0.25" strokeWidth="0" />
-        <line x1="2" y1="8" x2="22" y2="8" strokeLinecap="round" />
-        {/* B-horizon (subsoil) */}
-        <rect x="2" y="8" width="20" height="5" rx="0" fill="currentColor" opacity="0.14" strokeWidth="0" />
-        <line x1="2" y1="13" x2="22" y2="13" strokeLinecap="round" />
-        {/* C-horizon (parent material) */}
-        <rect x="2" y="13" width="20" height="7" rx="0" fill="currentColor" opacity="0.07" strokeWidth="0" />
-        {/* Outer border */}
-        <rect x="2" y="4" width="20" height="16" rx="1" />
-        {/* Tick marks suggesting soil texture */}
-        <line x1="6" y1="9.5" x2="8" y2="9.5" strokeLinecap="round" strokeWidth="1" />
-        <line x1="11" y1="9.5" x2="13" y2="9.5" strokeLinecap="round" strokeWidth="1" />
-        <line x1="16" y1="9.5" x2="18" y2="9.5" strokeLinecap="round" strokeWidth="1" />
+        {/* Top soil auger T-handle & surface grass/organic O-horizon */}
+        <line x1="15.5" y1="2.2" x2="21.5" y2="2.2" strokeWidth="1.5" strokeLinecap="square" />
+        <line x1="18.5" y1="2.2" x2="18.5" y2="17" strokeWidth="1.3" strokeDasharray="2 1" />
+        {/* Outer SSURGO soil profile pit frame */}
+        <rect x="2.2" y="4.5" width="19.6" height="17" strokeWidth="1.5" strokeLinejoin="miter" />
+        {/* A-horizon (topsoil) undulating boundary & granular loam texture */}
+        <path strokeWidth="1.3" d="M2.2 8.8C7 8 11 9.5 15.5 8.5C18.5 7.9 20.2 8.8 21.8 8.6" />
+        <circle cx="6.2" cy="6.6" r="0.7" fill="currentColor" stroke="none" />
+        <circle cx="10.2" cy="6.9" r="0.7" fill="currentColor" stroke="none" />
+        <circle cx="14.2" cy="6.4" r="0.7" fill="currentColor" stroke="none" />
+        {/* B-horizon (subsoil) blocky prismatic clay peds */}
+        <path strokeWidth="1.3" d="M2.2 15C8 15.6 14 14.2 21.8 15" />
+        <line x1="7.5" y1="8.7" x2="7.5" y2="15.2" strokeWidth="1" opacity="0.75" />
+        <line x1="12.5" y1="8.8" x2="12.5" y2="14.7" strokeWidth="1" opacity="0.75" />
+        <line x1="7.5" y1="11.8" x2="12.5" y2="11.8" strokeWidth="0.9" opacity="0.65" />
+        {/* C/R-horizon (weathered substratum cobbles & bedrock fractures) */}
+        <polygon points="5.5,17.2 8.2,16.6 8.8,19.2 5.8,19.8" strokeWidth="1" fill="currentColor" fillOpacity="0.2" />
+        <line x1="10.8" y1="16.4" x2="14.8" y2="20.2" strokeWidth="1.1" opacity="0.85" />
+        <line x1="14.8" y1="16.4" x2="18.8" y2="20.2" strokeWidth="1.1" opacity="0.85" />
+        {/* Left-edge pedological depth scale ticks */}
+        <line x1="2.2" y1="6.6" x2="4" y2="6.6" strokeWidth="1.1" />
+        <line x1="2.2" y1="11.8" x2="4" y2="11.8" strokeWidth="1.1" />
+        <line x1="2.2" y1="18.2" x2="4" y2="18.2" strokeWidth="1.1" />
     </svg>
 );
 

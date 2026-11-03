@@ -19,6 +19,7 @@ import {
   ScaleIcon,
   PlumbBobIcon,
   CrosshairsIcon,
+  CogoIcon,
   CameraIcon,
   DroneIcon,
   LsvzIcon,
@@ -33,6 +34,7 @@ import {
   CadManagerIcon,
   FloodIcon,
   HomeIcon,
+  StructuresIcon,
   SoilsIcon,
   SlopeIcon,
 } from '../components/icons.tsx';
@@ -63,7 +65,7 @@ export const agentConfig: { [key in AgentType]?: AgentConfig } = {
   [AgentType.IMAGE_ANALYZER]: { icon: CameraIcon, label: 'Image Analyzer', color: 'red' },
   [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSVZ Meta-Agent', color: 'slate' },
   [AgentType.PROFILE_AGENT]: { icon: ProfileIcon, label: 'Profile & XS', color: 'sky' },
-  [AgentType.COGO_AGENT]: { icon: LsvzIcon, label: 'COGO', color: 'violet' },
+  [AgentType.COGO_AGENT]: { icon: CogoIcon, label: 'COGO', color: 'violet' },
   [AgentType.GNSS_AGENT]: { icon: SatelliteIcon, label: 'RINEX', color: 'lime' },
   [AgentType.DRONE_AGENT]: { icon: DroneIcon, label: 'Drone', color: 'amber' },
   [AgentType.AR_AGENT]: { icon: ARIcon, label: 'AR View', color: 'rose' },
@@ -72,7 +74,7 @@ export const agentConfig: { [key in AgentType]?: AgentConfig } = {
   [AgentType.CAD_MANAGER]: { icon: CadManagerIcon, label: 'CAD Manager', color: 'indigo' },
   [AgentType.STANDARDS_COMPLIANCE]: { icon: StandardsComplianceIcon, label: 'Standards Compliance', color: 'violet' },
   [AgentType.FLOOD_AGENT]: { icon: FloodIcon, label: 'Flood Zone', color: 'cyan' },
-  [AgentType.STRUCTURES_AGENT]: { icon: HomeIcon, label: 'Structures', color: 'orange' },
+  [AgentType.STRUCTURES_AGENT]: { icon: StructuresIcon, label: 'Structures', color: 'orange' },
   [AgentType.SOILS_AGENT]: { icon: SoilsIcon, label: 'Soils Agent', color: 'stone' },
 };
 
@@ -130,7 +132,7 @@ export const agentIcons: { [key in AgentType]?: React.FC<any> } = {
   [AgentType.CONTOURING_AGENT]: ContourIcon,
   [AgentType.STEEP_SLOPE_AGENT]: SlopeIcon,
   [AgentType.PROFILE_AGENT]: ProfileIcon,
-  [AgentType.COGO_AGENT]: LsvzIcon,
+  [AgentType.COGO_AGENT]: CogoIcon,
   [AgentType.GNSS_AGENT]: SatelliteIcon,
   [AgentType.DRONE_AGENT]: DroneIcon,
   [AgentType.AR_AGENT]: ARIcon,
@@ -139,7 +141,7 @@ export const agentIcons: { [key in AgentType]?: React.FC<any> } = {
   [AgentType.CAD_MANAGER]: CadManagerIcon,
   [AgentType.STANDARDS_COMPLIANCE]: StandardsComplianceIcon,
   [AgentType.FLOOD_AGENT]: FloodIcon,
-  [AgentType.STRUCTURES_AGENT]: HomeIcon,
+  [AgentType.STRUCTURES_AGENT]: StructuresIcon,
   [AgentType.SOILS_AGENT]: SoilsIcon,
 };
 

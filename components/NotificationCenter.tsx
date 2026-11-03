@@ -46,6 +46,19 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ notifications, 
         });
     }, [open]);
 
+    // Escape closes the notification popover.
+    useEffect(() => {
+        if (!open) return;
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            event.stopPropagation();
+            setOpen(false);
+        };
+        window.addEventListener('keydown', handleEscape);
+        return () => window.removeEventListener('keydown', handleEscape);
+    }, [open]);
+
     // Close on outside click (button + popover are both "inside").
     useEffect(() => {
         if (!open) return;

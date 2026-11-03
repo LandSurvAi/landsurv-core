@@ -334,17 +334,27 @@ const baseInstruction = `You are LandSurvAI, a specialized AI assistant for land
 // delegate to them autonomously (e.g. Boundary Agent asking the Zoning
 // Agent for setbacks instead of guessing or refusing).
 // ---------------------------------------------------------------------------
-const buildPeerManifestText = (selfAgent: AgentType, settings?: Settings): string => {
+export const buildPeerManifestText = (selfAgent: AgentType, settings?: Settings): string => {
     try {
-        const all = agentRegistry.listCacpEnabled().filter(m => m.agent !== selfAgent);
-        if (all.length === 0) return '';
+        const enabled = agentRegistry.listCacpEnabled();
+        if (enabled.length === 0) return '';
 
-        const peerSections = all.map(m => {
-            const skills = m.skills.map(s => {
+        const selfManifest = enabled.find(m => m.agent === selfAgent);
+        const peers = enabled.filter(m => m.agent !== selfAgent);
+
+        const formatSkills = (skills: typeof enabled[number]['skills']) =>
+            skills.map(s => {
                 const inputs = Object.entries(s.inputs || {}).map(([k, v]) => `${k}${v.required ? '*' : ''}:${v.type}`).join(', ') || '(none)';
-                return `  - **${s.id}** — ${s.description} (inputs: ${inputs})`;
+                const kindTag = s.type === 'action' ? '[ACTION]' : '[QUERY]';
+                return `  - **${s.id}** ${kindTag} — ${s.description} (inputs: ${inputs})`;
             }).join('\n');
-            return `### ${m.displayName} (${m.agent})\n${skills}`;
+
+        const selfSection = selfManifest && selfManifest.skills.length > 0
+            ? `### Your Own Deterministic Skills (${selfManifest.displayName} — invoke via \`askPeer\` to execute deterministically instead of computing/mutating in prose)\n${formatSkills(selfManifest.skills)}\n\n`
+            : '';
+
+        const peerSections = peers.map(m => {
+            return `### ${m.displayName} (${m.agent})\n${formatSkills(m.skills)}`;
         }).join('\n\n');
 
         // Include any recently-cached peer answers so an agent can reuse them
@@ -378,11 +388,11 @@ const buildPeerManifestText = (selfAgent: AgentType, settings?: Settings): strin
 
 ---
 
-## CACP — Available Peer Agents (you can delegate to these)
+## CACP — Self & Peer Agent Skill Catalog (delegate via \`askPeer\`)
 
-You are part of LandSurvAI's Cross-Agent Communications Protocol (CACP). When the user asks you for something **outside your own expertise** but inside the expertise of a peer below, you MUST delegate instead of guessing or refusing.
+You are part of LandSurvAI's Cross-Agent Communications Protocol (CACP). When the user asks you for something that can be executed by **one of your own deterministic skills** or is **inside the expertise of a peer below**, you MUST emit an \`askPeer\` tool call instead of guessing, doing math in prose, or refusing.
 
-${peerSections}${cacheBlock}
+${selfSection}${peerSections}${cacheBlock}
 
 **HOW TO DELEGATE — emit a JSON tool call in your RESULT section:**
 \`\`\`json

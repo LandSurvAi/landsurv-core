@@ -47,7 +47,9 @@ export interface LsvzProjectData {
  */
 export class LsvzPersistence {
   private static readonly STORAGE_PREFIX = 'lsvz_project_';
+  private static readonly KEYFRAME_STORAGE_KEY = 'lsvz_keyframe_cache_v1';
   private static readonly FORMAT_VERSION = '1.0';
+  private static keyframeMemoryCache: Array<{ event_id: string; timestamp: string; data_url: string }> = [];
 
   /**
    * Save project to .lsvz file (or localStorage)
@@ -268,8 +270,20 @@ export class LsvzPersistence {
         return;
       }
 
-      // In production, would append to SessionState.keyframeCache
-      // For now, log to console
+      const entry = {
+        event_id: eventId,
+        timestamp: new Date().toISOString(),
+        data_url: dataUrl,
+      };
+      this.keyframeMemoryCache = [
+        ...this.keyframeMemoryCache.filter(k => k.event_id !== eventId),
+        entry,
+      ].slice(-50);
+      try {
+        localStorage.setItem(this.KEYFRAME_STORAGE_KEY, JSON.stringify(this.keyframeMemoryCache));
+      } catch {
+        /* localStorage quota fallback — keep in-memory cache */
+      }
       console.log(`[LsvzPersistence] Cached keyframe for event ${eventId}`);
       console.log(`[LsvzPersistence] Data size: ${dataUrl.length} bytes`);
     } catch (error) {
@@ -283,13 +297,21 @@ export class LsvzPersistence {
    * Retrieve cached keyframes for a given CACP Event ID.
    * Used for visual verification in CAD UI.
    * 
-   * @param _eventId UUID of the CACP Event
+   * @param eventId UUID of the CACP Event
    * @returns base64 PNG data URL, or null if not cached
    */
-  static async getKeyframe(_eventId: string): Promise<string | null> {
+  static async getKeyframe(eventId: string): Promise<string | null> {
     try {
-      // In production, would query SessionState.keyframeCache[eventId]
-      // For now, return null (not cached)
+      const memHit = this.keyframeMemoryCache.find(k => k.event_id === eventId);
+      if (memHit) return memHit.data_url;
+      const raw = localStorage.getItem(this.KEYFRAME_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Array<{ event_id: string; timestamp: string; data_url: string }>;
+        if (Array.isArray(parsed)) {
+          this.keyframeMemoryCache = parsed;
+          return parsed.find(k => k.event_id === eventId)?.data_url ?? null;
+        }
+      }
       return null;
     } catch (error) {
       console.error('[LsvzPersistence] Keyframe retrieval error:', error);
@@ -303,12 +325,33 @@ export class LsvzPersistence {
    */
   static async listCachedKeyframes(): Promise<Array<{ event_id: string; timestamp: string }>> {
     try {
-      // In production, would enumerate SessionState.keyframeCache
-      // For now, return empty array
-      return [];
+      if (this.keyframeMemoryCache.length === 0) {
+        const raw = localStorage.getItem(this.KEYFRAME_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) this.keyframeMemoryCache = parsed;
+        }
+      }
+      return this.keyframeMemoryCache.map(({ event_id, timestamp }) => ({ event_id, timestamp }));
     } catch (error) {
       console.error('[LsvzPersistence] List keyframes error:', error);
       return [];
+    }
+  }
+
+  /** Export full keyframe cache entries for .lsvz SessionState serialization. */
+  static exportKeyframes(): Array<{ event_id: string; timestamp: string; data_url: string }> {
+    return [...this.keyframeMemoryCache];
+  }
+
+  /** Restore keyframe cache entries from a loaded .lsvz SessionState. */
+  static importKeyframes(entries: Array<{ event_id: string; timestamp: string; data_url: string }> | undefined): void {
+    if (!Array.isArray(entries)) return;
+    this.keyframeMemoryCache = entries.slice(-50);
+    try {
+      localStorage.setItem(this.KEYFRAME_STORAGE_KEY, JSON.stringify(this.keyframeMemoryCache));
+    } catch {
+      /* ignore quota */
     }
   }
 }

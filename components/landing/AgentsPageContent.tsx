@@ -9,6 +9,7 @@ import {
   ScaleIcon,
   PlumbBobIcon,
   CrosshairsIcon,
+  CogoIcon,
   CameraIcon,
   LsvzIcon,
   ContourIcon,
@@ -137,7 +138,7 @@ export const AgentsPageContent: React.FC = () => {
       type: AgentType.COGO_AGENT,
       host: 'cogo',
       name: 'COGO Agent',
-      icon: LsvzIcon,
+      icon: CogoIcon,
       color: 'violet',
       description: 'Coordinate geometry calculations.',
       details:

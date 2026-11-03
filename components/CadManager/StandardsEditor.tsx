@@ -872,7 +872,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
   }, [autoAssignResults, codes, saveToUndo]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-gray-900 flex flex-col">
+    <div className="fixed inset-0 z-[100] bg-gray-900 flex flex-col">
       {/* Header */}
       <div className="flex-shrink-0 bg-gray-800 border-b border-gray-700 px-4 py-3">
         <div className="flex items-center justify-between">

@@ -19,7 +19,7 @@ import { ARAgentContent } from './landing/ARAgentContent.tsx';
 import { CadManagerContent } from './landing/CadManagerContent.tsx';
 import { CivilDrafterContent } from './landing/CivilDrafterContent.tsx';
 import { StandardsComplianceContent } from './landing/StandardsComplianceContent.tsx';
-import { BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, DocumentDuplicateIcon, DxfAnalyzerIcon, LsvzIcon, CurrencyDollarIcon, CrosshairsIcon, FolderIcon, DocumentTextIcon, ArrowUpTrayIcon, DownloadIcon, ScaleIcon, MapPinIcon, CameraIcon, DroneIcon, ClipboardDocumentListIcon, LogClockIcon, BugAntIcon, CpuChipIcon, GisAgentIcon, ContourIcon, ProfileIcon, SatelliteIcon, ARIcon, ZoningIcon, TitleSearchIcon, PlugIcon, LayersIcon, CadManagerIcon, CivilDrafterIcon, KeyIcon, CogIcon, FloodIcon, HomeIcon, SoilsIcon, SlopeIcon, StandardsComplianceIcon } from './icons.tsx';
+import { BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, DocumentDuplicateIcon, DxfAnalyzerIcon, LsvzIcon, CurrencyDollarIcon, CrosshairsIcon, CogoIcon, FolderIcon, DocumentTextIcon, ArrowUpTrayIcon, DownloadIcon, ScaleIcon, MapPinIcon, CameraIcon, DroneIcon, ClipboardDocumentListIcon, LogClockIcon, BugAntIcon, CpuChipIcon, GisAgentIcon, ContourIcon, ProfileIcon, SatelliteIcon, ARIcon, ZoningIcon, TitleSearchIcon, PlugIcon, LayersIcon, CadManagerIcon, CivilDrafterIcon, KeyIcon, CogIcon, FloodIcon, HomeIcon, StructuresIcon, SoilsIcon, SlopeIcon, StandardsComplianceIcon, EnvelopeIcon, InfoIcon, LegalScaleIcon, ProjectionGlobeIcon } from './icons.tsx';
 import { getRetiredAgents, type HomepageAgentType } from '../utils/retiredAgents.ts';
 import { getGlobalSettings, subscribeGlobalSettings } from '../utils/globalSettings.ts';
 import PublicConciergeChat from './PublicConciergeChat.tsx';
@@ -249,6 +249,8 @@ interface InitialAgentSelectionProps {
   onLoadPoints?: () => void;
   /** When the user clicks the pulsing green "Boundary Editor" CTA on the Boundary Agent card. Starts a blank manual-entry boundary session, skipping the deed-paste step. */
   onOpenBoundaryEditor?: () => void;
+  /** When the user clicks the "GIS" link on the Boundary Agent card. Opens the county-parcel GIS panel on the canvas. */
+  onOpenBoundaryGis?: () => void;
   /** When the user clicks the pulsing lavender "New Standards" CTA on the CAD Manager card. Starts a blank CAD standards session, bypassing the upload screen. */
   onOpenCadStandards?: () => void;
   /** Whether the CAD Manager already has a loaded standard available for immediate use. */
@@ -443,7 +445,7 @@ export const homepageAgentCards = [
         type: AgentType.COGO_AGENT, 
         title: 'COGO', 
         description: 'Perform coordinate geometry calculations including inverse and intersection computations.',
-        icon: CrosshairsIcon,
+        icon: CogoIcon,
         color: 'violet',
         actionType: 'agent' as const,
         releaseStage: 'pre-alpha' as ReleaseStage
@@ -497,7 +499,7 @@ export const homepageAgentCards = [
         type: AgentType.STRUCTURES_AGENT,
         title: 'Structures Agent',
         description: 'Overlay FEMA National Structure Inventory (NSI) buildings over your project area, compare against survey BLDG points, and synthesize rectified building footprints onto the canvas.',
-        icon: HomeIcon,
+        icon: StructuresIcon,
         color: 'orange',
         actionType: 'agent' as const,
         releaseStage: 'pre-alpha' as ReleaseStage
@@ -513,7 +515,9 @@ export const homepageAgentCards = [
     },
 ] satisfies readonly AgentCard[];
 
-const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean, onShowReleaseStages?: () => void, onInfoClick?: () => void, pulseDelay?: number, onCacpClick?: (agent: AgentType) => void, onLoadPoints?: () => void, onOpenBoundaryEditor?: () => void, onOpenCadStandards?: () => void, onOpenGpsStakeout?: () => void, onOpenGpsCollect?: () => void, onOpenContouringFromGis?: () => void, onOpenContouringFromTin?: () => void, cadStandardsLoaded?: boolean }> = ({ card, onClick, isC3DConnected = false, onShowReleaseStages, onInfoClick, pulseDelay = 0, onCacpClick, onLoadPoints, onOpenBoundaryEditor, onOpenCadStandards, onOpenGpsStakeout, onOpenGpsCollect, onOpenContouringFromGis, onOpenContouringFromTin, cadStandardsLoaded = false }) => {
+const QUICK_CHIP_CLASS = 'agent-quick-chip relative inline-flex items-center gap-1 rounded-[5px] border border-slate-600/70 bg-slate-800/40 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-gray-300 transition-colors hover:border-slate-400 hover:bg-slate-700/60 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-400 light-theme:border-gray-300 light-theme:bg-white/70 light-theme:text-gray-600 light-theme:hover:text-gray-900';
+
+const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean, onShowReleaseStages?: () => void, onInfoClick?: () => void, pulseDelay?: number, onCacpClick?: (agent: AgentType) => void, onLoadPoints?: () => void, onOpenBoundaryEditor?: () => void, onOpenBoundaryGis?: () => void, onOpenCadStandards?: () => void, onOpenGpsStakeout?: () => void, onOpenGpsCollect?: () => void, onOpenContouringFromGis?: () => void, onOpenContouringFromTin?: () => void, cadStandardsLoaded?: boolean }> = ({ card, onClick, isC3DConnected = false, onShowReleaseStages, onInfoClick, pulseDelay = 0, onCacpClick, onLoadPoints, onOpenBoundaryEditor, onOpenBoundaryGis, onOpenCadStandards, onOpenGpsStakeout, onOpenGpsCollect, onOpenContouringFromGis, onOpenContouringFromTin, cadStandardsLoaded = false }) => {
     const Icon = card.icon;
 
     // Hex color mapping for fade animation
@@ -581,73 +585,33 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
             onClick();
           }
         }}
-          className={`thanksgiving-card relative px-6 pt-6 pb-12 text-left bg-gray-900/50 rounded-lg transition-all duration-300 border-2 focus:outline-none focus:ring-2 flex flex-col items-start h-full light-theme:bg-gray-100/50`}
+          className="thanksgiving-card agent-card group relative flex h-full flex-col items-start rounded-lg border-2 border-slate-700/70 bg-gray-900/50 px-5 pb-12 pt-6 text-left transition-colors duration-200 hover:border-[color:var(--color-start)] hover:bg-gray-800/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-start)] light-theme:border-gray-300 light-theme:bg-gray-100/60 light-theme:hover:bg-white"
             style={{
-                borderColor: '#374151',
                 '--color-start': startColor,
                 '--color-end': endColor
             } as React.CSSProperties & { '--color-start': string; '--color-end': string; }}
-            onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = startColor;
-                e.currentTarget.style.backgroundColor = '#1f2937';
-            }}
-            onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = '#374151';
-                e.currentTarget.style.backgroundColor = 'rgba(17, 24, 39, 0.5)';
-            }}
         >
-            {/* Info Icon - Opens in-app SPA dialog */}
-            {onInfoClick && (
-                <div 
-                    className="absolute top-1/2 -translate-y-1/2 right-2 group"
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        onInfoClick();
-                    }}
-                >
-                    <div className="flex items-center justify-center w-5 h-5 rounded-full border border-gray-500 text-gray-400 text-xs font-bold cursor-pointer hover:border-white hover:text-white hover:scale-110 transition-all">
-                        i
-                    </div>
-                    <div className="absolute -top-8 right-0 bg-gray-800 text-white text-xs rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                        Learn more
-                    </div>
-                </div>
-            )}
-            
-            {/* C3D Status Indicator */}
+            {/* Persistent accent rail — gives the grid rhythm at rest, brightens on hover. */}
+            <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-[3px] top-[3px] h-[2px] rounded-full opacity-50 transition-opacity duration-200 group-hover:opacity-100"
+                style={{ backgroundColor: startColor }}
+            />
+            {/* Civil 3D capability — neutral when idle, green only when a session is connected. */}
             {card.c3dEnabled && (
-                <div className="absolute top-2 right-2 group">
-                    <div className="relative flex items-center justify-center">
-                        <span className={`inline-flex rounded-full h-2.5 w-2.5 ${isC3DConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                    </div>
-                    <div className="absolute -top-8 right-0 bg-gray-800 text-white text-xs rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                        C3D Enabled App
-                    </div>
-                </div>
-            )}
-            
-            {/* Release Stage Badge */}
-            {releaseStage && (
-                <div 
-                    className="absolute bottom-2 right-2 group"
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        onShowReleaseStages?.();
-                    }}
+                <div
+                    className="absolute right-3 top-2 flex items-center gap-1"
+                    title={isC3DConnected ? 'Civil 3D connected' : 'Civil 3D not connected'}
                 >
-                    <div className={`flex items-center justify-center w-5 h-5 rounded-full border border-white/60 text-[10px] font-bold text-white cursor-pointer hover:scale-110 transition-all ${releaseStage.hoverColor} ${releaseStage.hoverBorder}`}>
-                        {releaseStage.short}
-                    </div>
-                    <div className="absolute -top-8 right-0 bg-gray-800 text-white text-xs rounded px-2 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                        {releaseStage.full} - Click for details
-                    </div>
+                    <span className={`h-1.5 w-1.5 rounded-full ${isC3DConnected ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+                    <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500 light-theme:text-gray-500">C3D</span>
                 </div>
             )}
-            
-            <div className="flex items-center gap-3 mb-3">
-                <Icon className="w-8 h-8" style={{ color: startColor }} />
-                <h3 
-                    className="font-bold text-lg title-pulse"
+
+            <div className="mb-2.5 flex w-full items-center gap-3">
+                <Icon className="h-9 w-9 shrink-0" style={{ color: startColor }} />
+                <h3
+                    className="title-pulse min-w-0 flex-1 text-[15px] font-bold leading-snug"
                     style={{
                         '--pulse-color': startColor,
                         '--pulse-delay': `${pulseDelay}s`,
@@ -655,31 +619,69 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                 >
                     {card.title}
                 </h3>
+                {onInfoClick && (
+                    <button
+                        type="button"
+                        aria-label={`About ${card.title}`}
+                        title={`About ${card.title}`}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onInfoClick();
+                        }}
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-slate-600/70 text-[10px] font-bold text-slate-400 opacity-60 transition hover:border-[color:var(--color-start)] hover:text-white hover:opacity-100 focus:outline-none focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-[color:var(--color-start)] light-theme:border-gray-300 light-theme:text-gray-500 light-theme:hover:text-gray-900"
+                    >
+                        i
+                    </button>
+                )}
             </div>
-            <p className="text-sm text-gray-400 flex-grow pr-6 light-theme:text-gray-500">{card.description}</p>
+            <p className="line-clamp-2 flex-grow pr-1 text-[13px] leading-relaxed text-gray-400 light-theme:text-gray-600" title={card.description}>{card.description}</p>
             {/* Load Points CTA — instant client-side point upload, no sign-in required. */}
             {card.actionType === 'agent' && card.type === AgentType.POINT_EDITOR && onLoadPoints && (
                 <button
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onLoadPoints(); }}
                     title="Upload a point file (.csv / .txt) and view it instantly — no sign-in required"
-                    className="shimmer-yellow-cta animate-pulse-yellow-cta relative mt-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-gray-900 bg-gradient-to-br from-yellow-300 via-yellow-400 to-amber-500 border border-yellow-200/70 hover:from-yellow-200 hover:via-yellow-300 hover:to-amber-400 focus:outline-none focus:ring-1 focus:ring-yellow-200/70"
+                    className={QUICK_CHIP_CLASS}
                 >
                     <ArrowUpTrayIcon className="w-3 h-3" />
                     Load Points
                 </button>
             )}
-            {/* Boundary Editor CTA — jump straight into manual bearing/distance entry, skipping the deed-paste step. */}
-            {card.actionType === 'agent' && card.type === AgentType.DEED_READER && onOpenBoundaryEditor && (
-                <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); onOpenBoundaryEditor(); }}
-                    title="Start a blank boundary and key in bearings & distances by hand — no deed required"
-                    className="shimmer-green-cta animate-pulse-green-cta relative mt-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-green-500 via-emerald-600 to-green-700 border border-green-400/60 hover:from-green-400 hover:via-emerald-500 hover:to-green-600 focus:outline-none focus:ring-1 focus:ring-green-300/70"
-                >
-                    <CourthouseIcon className="w-3 h-3" />
-                    Boundary Editor
-                </button>
+            {/* Boundary Agent routes — agentic deed drafting, hand-keyed boundary, or county GIS parcels. */}
+            {card.actionType === 'agent' && card.type === AgentType.DEED_READER && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                    <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); onClick(); }}
+                        title="Paste or upload a deed and let the AI draft the boundary"
+                        className={QUICK_CHIP_CLASS}
+                    >
+                        <BrainCircuitIcon className="w-3 h-3" />
+                        Agentic
+                    </button>
+                    {onOpenBoundaryEditor && (
+                        <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); onOpenBoundaryEditor(); }}
+                            title="Start a blank boundary and key in bearings & distances by hand — no deed required"
+                            className={QUICK_CHIP_CLASS}
+                        >
+                            <CourthouseIcon className="w-3 h-3" />
+                            Manual
+                        </button>
+                    )}
+                    {onOpenBoundaryGis && (
+                        <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); onOpenBoundaryGis(); }}
+                            title="Pull public county tax-parcel boundaries from the GIS parcel panel"
+                            className={QUICK_CHIP_CLASS}
+                        >
+                            <GisAgentIcon className="w-3 h-3" />
+                            GIS
+                        </button>
+                    )}
+                </div>
             )}
             {/* New Standards CTA — bypass the upload screen and drop straight into the CAD Standards interface. */}
             {card.actionType === 'agent' && card.type === AgentType.CAD_MANAGER && onOpenCadStandards && (
@@ -687,7 +689,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onOpenCadStandards(); }}
                     title="Start a blank CAD standards session and open the editor — skip the upload screen"
-                    className="shimmer-indigo-cta animate-pulse-indigo-cta relative mt-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-indigo-400 via-indigo-500 to-indigo-700 border border-indigo-300/60 hover:from-indigo-300 hover:via-indigo-400 hover:to-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-200/70"
+                    className={QUICK_CHIP_CLASS}
                 >
                     <CadManagerIcon className="w-3 h-3" />
                     New Standards
@@ -701,7 +703,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                             type="button"
                             onClick={(e) => { e.stopPropagation(); onOpenGpsStakeout(); }}
                             title="Open GPS Rover on the Stakeout tab"
-                            className="relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-blue-400 via-blue-500 to-blue-700 border border-blue-300/60 hover:from-blue-300 hover:via-blue-400 hover:to-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-200/70"
+                            className={QUICK_CHIP_CLASS}
                         >
                             <CrosshairsIcon className="w-3 h-3" />
                             Stakeout
@@ -712,7 +714,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                             type="button"
                             onClick={(e) => { e.stopPropagation(); onOpenGpsCollect(); }}
                             title="Open GPS Rover on the Collect tab"
-                            className="relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-blue-400 via-blue-500 to-blue-700 border border-blue-300/60 hover:from-blue-300 hover:via-blue-400 hover:to-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-200/70"
+                            className={QUICK_CHIP_CLASS}
                         >
                             <MapPinIcon className="w-3 h-3" />
                             Collect
@@ -726,7 +728,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onClick(); }}
                     title="Gather zoning maps, districts, and municipal regulations for your area"
-                    className="relative mt-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-emerald-400 via-emerald-500 to-emerald-700 border border-emerald-300/60 hover:from-emerald-300 hover:via-emerald-400 hover:to-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-200/70"
+                    className={QUICK_CHIP_CLASS}
                 >
                     <ZoningIcon className="w-3 h-3" />
                     Gather Zoning
@@ -738,9 +740,9 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onClick(); }}
                     title="Open the COGO panel — inverse, intersection, and shrinkwrap (boundary hull) tools"
-                    className="relative mt-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-violet-400 via-violet-500 to-violet-700 border border-violet-300/60 hover:from-violet-300 hover:via-violet-400 hover:to-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-200/70"
+                    className={QUICK_CHIP_CLASS}
                 >
-                    <CrosshairsIcon className="w-3 h-3" />
+                    <CogoIcon className="w-3 h-3" />
                     Calc
                 </button>
             )}
@@ -750,7 +752,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onClick(); }}
                     title="Download FEMA NFHL flood-hazard linework for your project area"
-                    className="relative mt-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-cyan-400 via-cyan-500 to-cyan-700 border border-cyan-300/60 hover:from-cyan-300 hover:via-cyan-400 hover:to-cyan-600 focus:outline-none focus:ring-1 focus:ring-cyan-200/70"
+                    className={QUICK_CHIP_CLASS}
                 >
                     <FloodIcon className="w-3 h-3" />
                     Flood Area
@@ -762,9 +764,9 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onClick(); }}
                     title="Overlay FEMA NSI structures and synthesize building footprints"
-                    className="relative mt-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-orange-400 via-orange-500 to-amber-700 border border-orange-300/60 hover:from-orange-300 hover:via-orange-400 hover:to-amber-600 focus:outline-none focus:ring-1 focus:ring-orange-200/70"
+                    className={QUICK_CHIP_CLASS}
                 >
-                    <HomeIcon className="w-3 h-3" />
+                    <StructuresIcon className="w-3 h-3" />
                     Overlay Structures
                 </button>
             )}
@@ -774,7 +776,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onClick(); }}
                     title="Overlay USDA NRCS SSURGO soil survey map-unit polygons"
-                    className="relative mt-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-stone-400 via-stone-500 to-amber-700 border border-stone-300/60 hover:from-stone-300 hover:via-stone-400 hover:to-amber-600 focus:outline-none focus:ring-1 focus:ring-stone-200/70"
+                    className={QUICK_CHIP_CLASS}
                 >
                     <SoilsIcon className="w-3 h-3" />
                     Overlay Soils
@@ -787,7 +789,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                         type="button"
                         onClick={(e) => { e.stopPropagation(); onClick(); }}
                         title="Open Contouring Agent and contour from your loaded survey points"
-                        className="relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-amber-400 via-amber-500 to-amber-700 border border-amber-300/60 hover:from-amber-300 hover:via-amber-400 hover:to-amber-600 focus:outline-none focus:ring-1 focus:ring-amber-200/70"
+                        className={QUICK_CHIP_CLASS}
                     >
                         <ContourIcon className="w-3 h-3" />
                         From Survey
@@ -797,7 +799,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                             type="button"
                             onClick={(e) => { e.stopPropagation(); onOpenContouringFromGis(); }}
                             title="Open Contouring Agent and pull contours from a public ESRI / GIS service"
-                            className="relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-teal-400 via-teal-500 to-teal-700 border border-teal-300/60 hover:from-teal-300 hover:via-teal-400 hover:to-teal-600 focus:outline-none focus:ring-1 focus:ring-teal-200/70"
+                            className={QUICK_CHIP_CLASS}
                         >
                             <GisAgentIcon className="w-3 h-3" />
                             From GIS
@@ -808,7 +810,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                             type="button"
                             onClick={(e) => { e.stopPropagation(); onOpenContouringFromTin(); }}
                             title="Import a .tin or LandXML surface and use its vertices for contour generation"
-                            className="relative inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-indigo-400 via-indigo-500 to-indigo-700 border border-indigo-300/60 hover:from-indigo-300 hover:via-indigo-400 hover:to-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-200/70"
+                            className={QUICK_CHIP_CLASS}
                           >
                             <ArrowUpTrayIcon className="w-3 h-3" />
                             From TIN
@@ -822,7 +824,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onClick(); }}
                     title="Open Civil Drafter and let the AI extract linework from your plan"
-                    className="shimmer-fuchsia-cta animate-pulse-fuchsia-cta relative mt-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-fuchsia-400 via-fuchsia-500 to-pink-600 border border-fuchsia-300/60 hover:from-fuchsia-300 hover:via-fuchsia-400 hover:to-pink-500 focus:outline-none focus:ring-1 focus:ring-fuchsia-200/70"
+                    className={QUICK_CHIP_CLASS}
                 >
                     <CivilDrafterIcon className="w-3 h-3" />
                     AI Draw
@@ -834,10 +836,23 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onClick(); }}
                     title="Open the Profile & Cross Section workspace"
-                    className="shimmer-sky-cta animate-pulse-sky-cta relative mt-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-br from-sky-400 via-sky-500 to-blue-600 border border-sky-300/60 hover:from-sky-300 hover:via-sky-400 hover:to-blue-500 focus:outline-none focus:ring-1 focus:ring-sky-200/70"
+                    className={QUICK_CHIP_CLASS}
                 >
                     <ProfileIcon className="w-3 h-3" />
                     New Profile
+                </button>
+            )}
+            {releaseStage && (
+                <button
+                    type="button"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onShowReleaseStages?.();
+                    }}
+                    title={`${releaseStage.full} — click for details`}
+                    className="absolute bottom-2 right-2 inline-flex h-[18px] items-center rounded-full border border-slate-600/70 px-1.5 text-[9px] font-bold uppercase leading-none tracking-[0.1em] text-gray-400 transition-colors hover:border-[color:var(--color-start)] hover:text-white light-theme:border-gray-300 light-theme:text-gray-500 light-theme:hover:text-gray-900"
+                >
+                    {releaseStage.full}
                 </button>
             )}
             {/* Bottom-left status pills */}
@@ -847,16 +862,12 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                   <span
                     title="Standards Loaded"
                     aria-label="Standards Loaded"
-                    className="group inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-cyan-700/25 text-cyan-300 border border-cyan-500/40 light-theme:bg-cyan-100 light-theme:text-cyan-800 light-theme:border-cyan-400 overflow-hidden w-[38px] hover:w-[136px] focus-visible:w-[136px] transition-[width,background-color,color] duration-200 ease-out"
+                    className="inline-flex h-[18px] items-center gap-1 rounded-full border border-cyan-500/40 bg-cyan-700/25 px-1.5 text-[9px] font-bold uppercase leading-none tracking-[0.1em] text-cyan-300 light-theme:border-cyan-400 light-theme:bg-cyan-100 light-theme:text-cyan-800"
                   >
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border border-cyan-300/70 bg-cyan-400/15">
-                      <svg className="h-3 w-3 text-cyan-200" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                        <path d="M3.5 8.25 6.5 11 12.5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wide whitespace-nowrap max-w-0 opacity-0 group-hover:max-w-[92px] group-hover:opacity-100 group-focus-visible:max-w-[92px] group-focus-visible:opacity-100 transition-all duration-200 ease-out">
-                      Standards Loaded
-                    </span>
+                    <svg className="h-2.5 w-2.5 shrink-0" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M3.5 8.25 6.5 11 12.5 5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    Loaded
                   </span>
                 )}
                 {onCacpClick && agentRegistry.isCacpEnabled(card.type as AgentType) && (
@@ -969,32 +980,12 @@ const ProjectionMenuButton: React.FC<{
     <div ref={ref} className="relative flex-1 min-w-[calc(20%-0.5rem)]">
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full h-full py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-emerald-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-emerald-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+        className="group w-full h-full py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2.5 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-emerald-400/50 text-gray-200 hover:text-emerald-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg hover:shadow-emerald-950/30 active:translate-y-0"
         type="button"
         title="Select Coordinate System (US State Plane or Worldwide EPSG)"
       >
-        {label ? (
-          <>
-            <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18zM3.6 9h16.8M3.6 15h16.8M12 3a13.5 13.5 0 010 18M12 3a13.5 13.5 0 000 18" />
-            </svg>
-            <span className="truncate">{label}</span>
-          </>
-        ) : (
-          // Smooth horizontal marquee — duplicate the icon+phrase so the loop is seamless.
-          <div className="lsa-marquee-mask flex-1 min-w-0">
-            <div className="lsa-marquee">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <span key={i} className="lsa-marquee-item inline-flex items-center gap-2">
-                  <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18zM3.6 9h16.8M3.6 15h16.8M12 3a13.5 13.5 0 010 18M12 3a13.5 13.5 0 000 18" />
-                  </svg>
-                  <span>Set Projection</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
+        <ProjectionGlobeIcon className="w-[18px] h-[18px] text-emerald-400 flex-shrink-0 transition-transform duration-200 group-hover:scale-105" />
+        <span className="truncate">{label || 'Set Projection'}</span>
       </button>
       {open && (
         <div className="absolute right-0 mt-1 w-80 max-h-96 overflow-y-auto rounded-lg bg-gray-900/95 border border-gray-700 shadow-2xl backdrop-blur-md z-50">
@@ -1162,6 +1153,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
     onShowLegal,
     onLoadPoints,
     onOpenBoundaryEditor,
+    onOpenBoundaryGis,
     onOpenCadStandards,
     onOpenGpsStakeout,
     onOpenGpsCollect,
@@ -1876,113 +1868,98 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
       <div className="flex-1 overflow-y-auto scrollbar-hide relative z-20 aesthetic-grid" onScroll={() => setShowScrollIndicator(false)}>
         <div className="pt-36 pb-8 px-4 md:px-8">
           {/* Menu bar - scrolls with content */}
-          <div className="thanksgiving-chrome w-full max-w-5xl mx-auto mb-3 flex flex-wrap items-stretch gap-2">
+          <div className="thanksgiving-chrome w-full max-w-5xl mx-auto mb-2.5 flex flex-wrap items-stretch gap-2">
             {onShowC3DConnect && (
               <button
                 onClick={onShowC3DConnect}
-                className={`flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm ${
+                className={`group relative flex-1 min-w-[calc(20%-0.5rem)] py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2 text-sm font-semibold tracking-tight shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0 ${
                   isC3DConnected
-                    ? 'bg-gradient-to-b from-green-900/60 to-green-950/60 hover:from-green-800/70 hover:to-green-900/70 border-green-500/40 hover:border-green-400/60 text-green-400 hover:shadow-green-500/10'
-                    : 'bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-cyan-400 hover:shadow-cyan-500/5'
+                    ? 'bg-emerald-950/60 hover:bg-emerald-900/70 border-emerald-500/45 hover:border-emerald-400/70 text-emerald-300'
+                    : 'bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-red-400/50 text-red-400 hover:text-red-300'
                 }`}
                 type="button"
               >
-                <div className="relative flex-shrink-0">
-                  <PlugIcon className={`w-4 h-4 ${isC3DConnected ? 'text-green-400' : 'text-gray-400'}`} />
-                  <span className="absolute -top-1 -right-1 flex h-2 w-2">
-                    <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${isC3DConnected ? 'bg-green-400' : 'bg-red-400'}`}></span>
-                    <span className={`relative inline-flex rounded-full h-2 w-2 ${isC3DConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                  </span>
-                </div>
-                C3D
+                <PlugIcon className={`w-[18px] h-[18px] flex-shrink-0 transition-transform duration-200 group-hover:scale-105 ${isC3DConnected ? 'text-emerald-400' : 'text-red-400'}`} />
+                <span>C3D</span>
               </button>
             )}
             <button
               onClick={onShowApiKeySettings}
-              className={`flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 ${hasApiKey ? 'hover:text-emerald-400 hover:shadow-emerald-500/5' : 'hover:text-red-400 hover:shadow-red-500/5'} shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm`}
+              className={`group relative flex-1 min-w-[calc(20%-0.5rem)] py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 ${hasApiKey ? 'text-emerald-400 hover:border-emerald-400/50 hover:text-emerald-300' : 'text-red-400 hover:border-red-400/50 hover:text-red-300'} shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0`}
               type="button"
             >
-              <div className="relative flex-shrink-0">
-                <KeyIcon className={`w-4 h-4 transition-colors ${hasApiKey ? 'text-emerald-400' : 'text-red-400'}`} />
-                <span className="absolute -top-1 -right-1 flex h-2 w-2">
-                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${hasApiKey ? 'bg-emerald-400' : 'bg-red-400'}`}></span>
-                  <span className={`relative inline-flex rounded-full h-2 w-2 ${hasApiKey ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
-                </span>
-              </div>
-              Key
+              <KeyIcon className={`w-[18px] h-[18px] flex-shrink-0 transition-transform duration-200 group-hover:scale-105 ${hasApiKey ? 'text-emerald-400' : 'text-red-400'}`} />
+              <span>Key</span>
             </button>
             <button
               onClick={onShowUpgrade}
-              className="flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-1.5 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-emerald-500/40 text-emerald-400 hover:text-emerald-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-emerald-500/10 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className="group flex-1 min-w-[calc(20%-0.5rem)] py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-emerald-400/50 text-emerald-400 hover:text-emerald-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0"
               type="button"
               title="Purchase service access or hosted compute credits"
             >
-              <svg className="w-5 h-5 text-emerald-400 hover:text-emerald-300 transition-colors flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <line x1="12" y1="2" x2="12" y2="22" />
-                <path d="M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-              </svg>
+              <CurrencyDollarIcon className="w-[18px] h-[18px] text-emerald-400 flex-shrink-0 transition-transform duration-200 group-hover:scale-105" />
               <span>Upgrade</span>
             </button>
             <button
               onClick={openCallUsMachine}
-              className="flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-cyan-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-cyan-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className="group flex-1 min-w-[calc(20%-0.5rem)] py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-cyan-400/50 text-gray-200 hover:text-cyan-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0"
               type="button"
             >
-              <svg className="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25H4.5a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5H4.5a2.25 2.25 0 00-2.25 2.25m19.5 0l-9.75 6.75L2.25 6.75" /></svg>
-              Contact
+              <EnvelopeIcon className="w-[18px] h-[18px] text-cyan-400 flex-shrink-0 transition-transform duration-200 group-hover:scale-105" />
+              <span>Contact</span>
             </button>
             <button
               onClick={() => window.dispatchEvent(new Event('landsurv:request-install'))}
-              className="group flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-emerald-400/40 text-gray-300 hover:text-emerald-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-emerald-500/10 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className="group flex-1 min-w-[calc(20%-0.5rem)] py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-emerald-400/50 text-gray-200 hover:text-emerald-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0"
               type="button"
               title="Optional Install"
               aria-label="Optional Install LandSurv.ai"
             >
-              <DownloadIcon className="w-4 h-4 text-emerald-400" />
+              <DownloadIcon className="w-[18px] h-[18px] text-emerald-400 flex-shrink-0 transition-transform duration-200 group-hover:scale-105" />
               <span className="group-hover:hidden">Install</span>
               <span className="hidden group-hover:inline">Optional</span>
             </button>
             <button
               onClick={onLoadSession}
-              className="flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-blue-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-blue-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className="group flex-1 min-w-[calc(20%-0.5rem)] py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-blue-400/50 text-gray-200 hover:text-blue-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0"
               type="button"
             >
-              <ArrowUpTrayIcon className="w-4 h-4 text-blue-400" />
-              Load
+              <ArrowUpTrayIcon className="w-[18px] h-[18px] text-blue-400 flex-shrink-0 transition-transform duration-200 group-hover:scale-105" />
+              <span>Load</span>
             </button>
             <button
               onClick={onShowAbout}
-              className="flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-green-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-green-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className="group flex-1 min-w-[calc(20%-0.5rem)] py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-green-400/50 text-gray-200 hover:text-green-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0"
               type="button"
             >
-              <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" /></svg>
-              About
+              <InfoIcon className="w-[18px] h-[18px] text-green-400 flex-shrink-0 transition-transform duration-200 group-hover:scale-105" />
+              <span>About</span>
             </button>
             <button
               onClick={onShowLegal}
-              className="flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-amber-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-amber-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className="group flex-1 min-w-[calc(20%-0.5rem)] py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-amber-400/50 text-gray-200 hover:text-amber-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0"
               type="button"
               title="Legal & Compliance — LandSurv.ai is a software tool, not a licensed professional practice"
             >
-              <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" /></svg>
-              Legal
+              <LegalScaleIcon className="w-[18px] h-[18px] text-amber-400 flex-shrink-0 transition-transform duration-200 group-hover:scale-105" />
+              <span>Legal</span>
             </button>
             <button
               onClick={onShowDoc}
-              className="flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-cyan-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-cyan-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className="group flex-1 min-w-[calc(20%-0.5rem)] py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-cyan-400/50 text-gray-200 hover:text-cyan-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0"
               type="button"
             >
-              <svg className="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /></svg>
-              .lsvz
+              <DocumentTextIcon className="w-[18px] h-[18px] text-cyan-400 flex-shrink-0 transition-transform duration-200 group-hover:scale-105" />
+              <span>.lsvz</span>
             </button>
             <button
               onClick={onShowReleaseLog}
-              className="flex-1 min-w-[calc(20%-0.5rem)] py-2 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-purple-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-purple-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className="group flex-1 min-w-[calc(20%-0.5rem)] py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-purple-400/50 text-gray-200 hover:text-purple-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0"
               type="button"
               title="What's New / Release Log"
             >
-              <LogClockIcon className="w-4 h-4 text-purple-400" />
-              Log
+              <LogClockIcon className="w-[18px] h-[18px] text-purple-400 flex-shrink-0 transition-transform duration-200 group-hover:scale-105" />
+              <span>Log</span>
             </button>
           </div>
           {/* Project-context row: equal thirds for Job Info / Set Projection / Settings.
@@ -1991,23 +1968,23 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
           <div className="thanksgiving-chrome w-full max-w-5xl mx-auto mb-3 grid grid-cols-3 gap-2">
             <button
               onClick={() => setIsJobInfoOpen(true)}
-              className="py-3 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-teal-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-teal-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className="group py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2.5 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-teal-400/50 text-gray-200 hover:text-teal-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0"
               type="button"
               title="Edit shared project info — available to all agents"
             >
-              <ClipboardDocumentListIcon className="w-4 h-4 text-teal-400" />
-              Job Info
+              <ClipboardDocumentListIcon className="w-[18px] h-[18px] text-teal-400 flex-shrink-0 transition-transform duration-200 group-hover:scale-105" />
+              <span>Job Info</span>
             </button>
             <div className="flex">
               <ProjectionMenuButton currentEpsg={currentProjectionEpsg ?? null} onSelect={onProjectionSelect} />
             </div>
             <button
               onClick={onShowSettings}
-              className="py-3 rounded-lg backdrop-blur-sm border transition-all duration-200 flex items-center justify-center gap-2 text-sm font-semibold bg-gradient-to-b from-gray-800/80 to-gray-900/80 hover:from-gray-700/90 hover:to-gray-800/90 border-white/[0.06] hover:border-white/[0.12] text-gray-300 hover:text-purple-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:shadow-purple-500/5 hover:-translate-y-px hover:shadow-lg active:translate-y-0 active:shadow-sm"
+              className="group py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2.5 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-purple-400/50 text-gray-200 hover:text-purple-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg active:translate-y-0"
               type="button"
             >
-              <CogIcon className="w-4 h-4 text-purple-400" />
-              Settings
+              <CogIcon className="w-[18px] h-[18px] text-purple-400 flex-shrink-0 transition-transform duration-200 group-hover:scale-105" />
+              <span>Settings</span>
             </button>
           </div>
           {/* Public LSVZ Lite concierge chat — now rendered as a compact pulsing
@@ -2064,6 +2041,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
                   onCacpClick={setCacpManifestAgent}
                   onLoadPoints={onLoadPoints}
                   onOpenBoundaryEditor={onOpenBoundaryEditor}
+                  onOpenBoundaryGis={onOpenBoundaryGis}
                   onOpenCadStandards={onOpenCadStandards}
                   onOpenGpsStakeout={onOpenGpsStakeout}
                   onOpenGpsCollect={onOpenGpsCollect}

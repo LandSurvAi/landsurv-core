@@ -3,8 +3,8 @@ import { agentRegistry } from '../services/AgentRegistry';
 
 // CACP protocol version — bump on backwards-incompatible envelope/skill-schema
 // changes and update CACP_SPEC_RELEASE to the publication date (ISO 8601).
-export const CACP_SPEC_VERSION = '1.2';
-export const CACP_SPEC_RELEASE = '2026-08-21';
+export const CACP_SPEC_VERSION = '1.3';
+export const CACP_SPEC_RELEASE = '2026-11-03';
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
 
@@ -434,18 +434,18 @@ export function CacpSubdomainPage({ onClose }: { onClose?: () => void }) {
             },
             {
               icon: BroadcastIcon,
-              title: 'The askPeer Pattern',
-              body: 'An LLM-powered agent signals a peer delegation by emitting a JSON fragment in its response. The app intercepts it, routes the message, and feeds the result back before the user sees a reply.',
+              title: 'Self & Peer Delegation (askPeer)',
+              body: 'Every CACP-enabled agent sees both its own deterministic skills and all peer agent skills in its system prompt. Emitting an askPeer JSON fragment executes the handler deterministically (action skills bypass cache; query skills cache for 10 min) and injects the result.',
             },
             {
               icon: CpuIcon,
-              title: 'LSVZ Orchestrator Hub',
-              body: 'A special hub agent owns lsvz_dispatch (route by skillId to any agent) and kb_query / kb_record (the Project Knowledge Base — structured facts shared across agents in a session).',
+              title: 'LSVZ Orchestrator & Live Memory',
+              body: 'The LSVZ hub owns lsvz_dispatch and kb_query / kb_record. On every chat turn, the host injects live Project Knowledge Base facts and recent CACP cached results so newly learned session facts are immediately visible to all initialized agents.',
             },
             {
               icon: BroadcastIcon,
-              title: 'Voice Agent Pilot',
-              body: 'The Voice Agent listens to browser speech input, proposes active drawing layers, and surfaces executable askPeer tasks for buildings, roads, utilities, boundaries, and topo workflows without mutating state until the user confirms.',
+              title: 'Intent Router & cacp:offer',
+              body: 'Before an agent acts on a user turn, cacpIntentRouter scores the request against all 26 agent capability profiles and broadcasts a cacp:offer event so mismatched domain requests are logged and can be claimed or handed off.',
             },
             {
               icon: NetworkIcon,

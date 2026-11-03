@@ -22,8 +22,8 @@ import type { SessionState } from '../types';
 // changes, and update LSVZ_SPEC_RELEASE to the publication date (ISO 8601).
 // Additive fields under existing groups DO NOT require a bump because the
 // schema is compile-time-checked against SessionState and rendered live.
-export const LSVZ_SPEC_VERSION = '1.1';
-export const LSVZ_SPEC_RELEASE = '2026-08-21';
+export const LSVZ_SPEC_VERSION = '1.2';
+export const LSVZ_SPEC_RELEASE = '2026-11-03';
 
 // Fields that are saved for restore-on-load but aren't part of the publicly
 // documented .lsvz schema (chat histories listed separately to keep the
@@ -44,9 +44,9 @@ export type LsvzGroupId =
   | 'chat'
   | 'ui';
 
-export interface LsvzField {
+export interface LsvzField<K extends keyof SessionState = keyof SessionState> {
   /** Key of SessionState. */
-  key: keyof SessionState;
+  key: K;
   /** One-line human description. */
   description: string;
   /** Example value string shown in the example manifest. */
@@ -57,13 +57,13 @@ export interface LsvzGroup {
   id: LsvzGroupId;
   title: string;
   description: string;
-  fields: LsvzField[];
+  fields: readonly LsvzField[];
 }
 
 // ----------------------------------------------------------------------------
 // THE SCHEMA  (edit this when SessionState changes)
 // ----------------------------------------------------------------------------
-export const LSVZ_SCHEMA: LsvzGroup[] = [
+export const LSVZ_SCHEMA = [
   {
     id: 'top',
     title: 'Top-level metadata',
@@ -73,6 +73,8 @@ export const LSVZ_SCHEMA: LsvzGroup[] = [
         example: '"26.05.17.20"' },
       { key: 'savedAt',  description: 'ISO timestamp of when the .lsvz was packaged.',
         example: '"2026-05-17T20:00:00.000Z"' },
+      { key: 'sessionMetadata', description: 'Optional save provenance metadata: author, note, exportFileName, exportedByAgent, and filename segment toggles.',
+        example: '{ "author": "Jane Doe", "note": "60% QA package", "exportFileName": "landsurvai_session.lsvz" }' },
     ],
   },
   {
@@ -102,6 +104,9 @@ export const LSVZ_SCHEMA: LsvzGroup[] = [
       { key: 'generatedFiles',  description: 'Anything an agent produced (DXF export, report, etc.).', example: '[ ... ]' },
       { key: 'floodFirmette',   description: 'Cached FEMA FIRMETTE image for the last flood query area. Stores the NFHL MapServer export URL, WGS84 bbox, fetch timestamp, and optionally a base64 PNG data URL for offline use.',
         example: '{ "url":"https://hazards.fema.gov/.../export?bbox=...", "bbox":"-80.1,25.4,-80.0,25.5", "fetchedAt":"2026-05-19T...", "imageDataUrl":"data:image/png;base64,..." }' },
+      { key: 'standardsComplianceControlFile',  description: 'Primary control/reference standard PDF for Standards Compliance auditing (legacy single-file field).', example: '{ "name":"cad_standards.pdf", "content":"..." }' },
+      { key: 'standardsComplianceControlFiles', description: 'Array of reference/control standard PDFs used by the Standards Compliance Agent.', example: '[ { "name":"cad_standards.pdf", "content":"..." } ]' },
+      { key: 'standardsComplianceSubjectFile',  description: 'Subject drawing/plan PDF audited by the Standards Compliance Agent.', example: '{ "name":"sheet_c101.pdf", "content":"..." }' },
     ],
   },
   {
@@ -130,6 +135,8 @@ export const LSVZ_SCHEMA: LsvzGroup[] = [
         example: '[ { "id":"roads", "label":"Roads", "scale":1.0, "color":"#60a5fa", "fontFamily":"Arial", "bold":true, "italic":false, "visible":true, "existingItalic":true, "existingScale":0.25 } ]' },
       { key: 'draftingStyleLibrary', description: 'Drafting Style Library — user-trained Civil Drafter conventions, one entry per feature type (roads, buildings, utilities, …). Each stores a free-text convention description (verbatim-injected into the Civil Drafter system prompt), optional example DXF content with extracted layers, per-layer annotations, and reference images.',
         example: '[ { "id":"dsl-1", "name":"Roads & Pavement", "featureType":"road", "userDescription":"...", "dxfFileName":"example.dxf", "dxfLayers":[...], "createdAt":"...", "updatedAt":"..." } ]' },
+      { key: 'cadManagerState',   description: 'CAD Manager state — loaded CAD standard definition (codes, layers, linetypes, symbols) and user-confirmed field-to-finish code aliases persisted with the session.',
+        example: '{ "standard": { "name":"Survey Standard", "version":"1.0", "codes":[...] }, "confirmedAliases": [ ... ] }' },
       { key: 'inclusionBoundaries', description: 'Named inclusion-polyline groups managed by the Inclusion Boundary Manager. Each binds a user-facing name to a unique polylineId that every constituent SurveyLine carries; agents (Contour, Flood) use these to narrow `type:"inclusion"` lines to one boundary.', example: '[ { "id":"shrinkwrap_1700000000000_ab12c", "name":"Shrinkwrap 1", "polylineId":"shrinkwrap_1700000000000_ab12c" } ]' },
       { key: 'activeInclusionBoundaryId', description: 'Id of the currently-active inclusion boundary (the default boundary peer agents consume).', example: '"shrinkwrap_1700000000000_ab12c"' },
       { key: 'dimensions',        description: 'Annotation dimensions placed on the canvas.',                                  example: '[ ... ]' },
@@ -164,10 +171,13 @@ export const LSVZ_SCHEMA: LsvzGroup[] = [
   },
   {
     id: 'pdf',
-    title: 'PDF annotations',
-    description: 'Highlights and markup placed on viewer PDFs.',
+    title: 'PDF annotations & standards compliance',
+    description: 'Highlights and markup placed on viewer PDFs plus Standards Compliance audit configuration and reports.',
     fields: [
       { key: 'pdfHighlights', description: 'Persistent highlights on pdfViewerFiles (pageIndex, rects, color, note).', example: '[ ... ]' },
+      { key: 'standardsComplianceSourceMode', description: 'Selected source mode for Standards Compliance audits ("ask-each-run" | "cad-manager" | "control-pdf" | "combined").', example: '"combined"' },
+      { key: 'standardsComplianceChecks', description: 'Active checklist toggles for Standards Compliance auditing (layer naming, title block, north arrow, scale bar, closure, etc.).', example: '{ "layerNaming": true, "titleBlock": true }' },
+      { key: 'standardsComplianceLastReport', description: 'Most recent structured StandardsComplianceReport generated in the session.', example: '{ "reportId":"...", "passed":true, "summary":"...", "issues":[] }' },
     ],
   },
   {
@@ -211,6 +221,8 @@ export const LSVZ_SCHEMA: LsvzGroup[] = [
       { key: 'contouringChatHistory',    description: 'Contouring Agent conversation.',          example: '[ ... ]' },
       { key: 'steepSlopeChatHistory',    description: 'Steep Slope Agent conversation.',         example: '[ ... ]' },
       { key: 'soilsChatHistory',         description: 'Soils Agent conversation.',               example: '[ ... ]' },
+      { key: 'structuresChatHistory',    description: 'Structures Agent conversation.',          example: '[ ... ]' },
+      { key: 'standardsComplianceChatHistory', description: 'Standards Compliance Agent conversation.', example: '[ ... ]' },
       { key: 'profileChatHistory',       description: 'Profile & Cross Section conversation.',   example: '[ ... ]' },
       { key: 'cogoChatHistory',          description: 'COGO conversation.',                      example: '[ ... ]' },
       { key: 'rinexChatHistory',         description: 'RINEX / GNSS conversation.',              example: '[ ... ]' },
@@ -227,7 +239,7 @@ export const LSVZ_SCHEMA: LsvzGroup[] = [
         example: '{ "activeAgent":"...", "activeModel":"gemini-3.7-flash", "activeVisualPanel":"...", "isChatPanelVisible":true, "attributeScale":1, "lineLabelScale":1, "dimensionScale":1, "symbolScale":1, "pointLayers":{ "pointNumber":{"visible":true,"color":"#fff"}, "description":{"visible":true,"color":"#fff"}, "elevation":{"visible":true,"color":"#fff"} }, "activeTextEditorFile":null, "linesVisible":true, "centerlinesVisible":true, "activeBoundaryFileId":"bf-tract-2", "showRotatedBearings":false, "parcelLabelFormatter":{ ... }, "canvasTransform":{ "scale":1.5, "offsetX":200, "offsetY":-150 } }' },
     ],
   },
-];
+] as const satisfies readonly LsvzGroup[];
 
 // ----------------------------------------------------------------------------
 // COMPILE-TIME EXHAUSTIVENESS CHECK

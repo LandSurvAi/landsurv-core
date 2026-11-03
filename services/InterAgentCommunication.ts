@@ -589,17 +589,24 @@ export class InterAgentCommunicationService {
    * The handler returns true if it wants the job. Used by agents that can take
    * over a mismatched request (e.g. Civil Drafter claiming "draw a road").
    */
-  public onOfferClaim(handler: (offer: { from: AgentType; request: string; data: Record<string, unknown> }) => boolean | Promise<boolean>): () => void {
+  public onOfferClaim(
+    handler: (offer: { from: AgentType; request: string; data: Record<string, unknown> }) => boolean | Promise<boolean>,
+    claimingAgent?: AgentType,
+  ): () => void {
     return this.onCommand('cacp:offer', async (message) => {
       const request = typeof message.data?.request === 'string' ? message.data.request : '';
       if (!request) return;
       const wants = await handler({ from: message.from, request, data: message.data });
       if (wants) {
+        const resolvedAgent =
+          claimingAgent ??
+          (this as unknown as { _selfAgent?: AgentType })._selfAgent ??
+          AgentType.LSVZ_AGENT;
         return {
           requestId: message.id,
-          from: (this as unknown as { _selfAgent?: AgentType })._selfAgent ?? message.to as AgentType,
+          from: resolvedAgent,
           success: true,
-          data: { claims: true, request },
+          data: { claims: true, request, claimedBy: resolvedAgent },
           timestamp: Date.now(),
         };
       }

@@ -13,6 +13,7 @@ import { AgentType } from '../types';
 import { HISTORY_SKILLS } from './historySkillSchemas';
 import { COGO_EXTENDED_SKILLS } from './cogoSkillSchemas';
 import { GEO_AI_SKILLS } from './geoSkillSchemas';
+import { CL_SKILLS } from './clSkillSchemas';
 
 /** A loose JSON-Schema-ish descriptor. Kept narrow on purpose. */
 export interface SkillFieldSchema {
@@ -188,6 +189,7 @@ agentRegistry.register({
     {
       id: 'reserve_point_numbers',
       name: 'Reserve Point Numbers',
+      type: 'action' as const,
       description:
         'Atomically reserves a block of N point numbers so subsequent callers skip past them. Used when an agent will write the points later.',
       inputs: {
@@ -202,6 +204,7 @@ agentRegistry.register({
     {
       id: 'release_reservation',
       name: 'Release Reservation',
+      type: 'action' as const,
       description: 'Frees a previously reserved block (e.g. user cancelled).',
       inputs:  { reservationId: { type: 'string', required: true } },
       outputs: { released: { type: 'boolean', required: true } },
@@ -363,11 +366,12 @@ agentRegistry.register({
   agent: AgentType.CENTERLINE_STATIONING,
   displayName: 'Stationing & Centerline',
   cacpEnabled: true,
-  version: '1.0.0',
+  version: '1.1.0',
   skills: [
     {
       id: 'place_station_offset_point',
       name: 'Place Station/Offset Point',
+      type: 'action' as const,
       description:
         'Places a single point at a station/offset on the active centerline. Point number is requested from POINT_EDITOR — station goes in the description, NOT in the point number.',
       inputs: {
@@ -384,6 +388,7 @@ agentRegistry.register({
     {
       id: 'generate_stationed_points',
       name: 'Generate Stationed Points',
+      type: 'action' as const,
       description: 'Generates points along a centerline at a regular interval. Each point gets a fresh PN from POINT_EDITOR; station is recorded in description only.',
       inputs: {
         startStation: { type: 'string',  required: true },
@@ -394,6 +399,7 @@ agentRegistry.register({
       },
       outputs: { points: { type: 'array', items: { type: 'object' }, required: true } },
     },
+    ...CL_SKILLS,
   ],
 });
 
@@ -448,6 +454,7 @@ agentRegistry.register({
     {
       id: 'gps_set_target_point',
       name: 'Set Stakeout Target',
+      type: 'action' as const,
       description:
         'Sets the GPS Rover\'s active stakeout target by point number. The point must exist in the current project point set or the call fails.',
       inputs: {
@@ -548,6 +555,7 @@ agentRegistry.register({
     {
       id: 'kb_record',
       name: 'Record Knowledge Base Fact',
+      type: 'action' as const,
       description:
         'Write one fact (or a list of facts) to the Project Knowledge Base so other agents can reuse it. Most agents do NOT need to call this directly — auto-extractors handle the common cases.',
       inputs: {
@@ -607,6 +615,7 @@ agentRegistry.register({
     {
       id: 'civil_plan_expert_set_draw_mode',
       name: 'Set Draw Mode',
+      type: 'action' as const,
       description: 'Switches the agent draw mode used for the next extraction (Points + Lines / Points only / Lines only).',
       inputs: {
         mode: { type: 'string', enum: ['points_lines', 'points_only', 'lines_only'], required: true },
@@ -764,6 +773,7 @@ agentRegistry.register({
     {
       id: 'cad_auto_apply_symbols',
       name: 'Auto-Apply Symbols to Points',
+      type: 'action' as const,
       description:
         'Batch operation: for each provided point, resolves the matching CustomSymbol (via the same logic as ' +
         'cad_resolve_symbol_for_code) and emits the symbol assignments the caller should apply. Does NOT mutate ' +
@@ -796,6 +806,7 @@ agentRegistry.register({
     {
       id: 'cad_create_layer',
       name: 'Create / Author CAD Layer',
+      type: 'action' as const,
       description:
         'Author a new code + layer triple (code, pointLayer, lineLayer, lineType) into the loaded CAD ' +
         'standard. If no standard is loaded, a minimal one is seeded automatically. Existing codes are ' +
@@ -843,6 +854,7 @@ agentRegistry.register({
     {
       id: 'cad_ensure_default_layers',
       name: 'Ensure Default Boundary Layers',
+      type: 'action' as const,
       description:
         'Idempotently seed the four boundary-special codes (DEED → L-DEED-BOUNDARY, INCL → L-INCLUSION, ' +
         'EXCL → L-EXCLUSION, BRKL → L-BREAKLINE) into the loaded standard if missing. Used internally by ' +
@@ -937,11 +949,33 @@ agentRegistry.register({
   agent: AgentType.CONTOURING_AGENT,
   displayName: 'Contouring Agent',
   cacpEnabled: true,
-  version: '0.1.0',
+  version: '1.0.0',
   skills: [
+    {
+      id: 'generate_contours',
+      name: 'Generate Survey Point Contours',
+      type: 'action' as const,
+      description:
+        'Generates topographic contour IsoPaths and SurveyLines from the loaded project survey points using the active or supplied contour interval, major interval, and smoothing settings.',
+      inputs: {
+        contourInterval: { type: 'number', description: 'Vertical interval between minor contour lines (default uses current contourSettings).' },
+        majorInterval:   { type: 'number', description: 'Vertical interval for major/index contours.' },
+        smoothing:       { type: 'integer', description: 'Optional smoothing level from 0-4.' },
+        showLabels:      { type: 'boolean', description: 'Whether major contours should receive labels.' },
+      },
+      outputs: {
+        generationId: { type: 'string', required: true },
+        pathCount:    { type: 'integer', required: true },
+        lineCount:    { type: 'integer', required: true },
+      },
+      examples: [
+        'Generate 1ft contours with 5ft index contours from current survey points',
+      ],
+    },
     {
       id: 'generate_loaded_tin_contours',
       name: 'Generate Loaded TIN Contours',
+      type: 'action' as const,
       description:
         'Extracts contour polylines directly from a loaded TIN surface already in the session. ' +
         'Use this when the user wants contours from an imported .tin or LandXML surface rather than from survey points.',
@@ -985,6 +1019,7 @@ agentRegistry.register({
     {
       id: 'fetch_esri_rest_contours',
       name: 'Fetch ESRI REST Contours',
+      type: 'action' as const,
       description:
         'Fetches georeferenced contour polyline or elevation data from a provided ESRI REST Feature ' +
         'Service or Map Service URL (e.g. PASDA, county GIS portals, state DEP services). ' +
@@ -1087,24 +1122,23 @@ agentRegistry.register({
   agent: AgentType.STEEP_SLOPE_AGENT,
   displayName: 'Steep Slope Agent',
   cacpEnabled: true,
-  version: '0.1.0',
+  version: '1.0.0',
   skills: [
     {
       id: 'run_steep_slope_analysis',
       name: 'Run Steep Slope Analysis',
+      type: 'action' as const,
       description:
         'Analyzes a TIN surface by slope-percent bands, groups connected steep triangles, and filters out ' +
         'components whose elevation span is below a minimum threshold.',
       inputs: {
         tinId: {
           type: 'string',
-          required: true,
-          description: 'Session TIN surface id to analyze.',
+          description: 'Session TIN surface id to analyze. Defaults to the active survey points TIN when omitted.',
         },
         minComponentVerticalSpan: {
           type: 'number',
-          required: true,
-          description: 'Minimum vertical span (project units) for a connected steep component to be kept.',
+          description: 'Minimum vertical span (project units) for a connected steep component to be kept (default 6).',
         },
         bands: {
           type: 'array',
@@ -1133,6 +1167,7 @@ agentRegistry.register({
     {
       id: 'publish_steep_slope_layers',
       name: 'Publish Steep Slope Layers',
+      type: 'action' as const,
       description:
         'Creates or updates CAD layers for each configured slope band so the analysis output maps to CAD standards.',
       inputs: {
@@ -1250,6 +1285,7 @@ agentRegistry.register({
     {
       id: 'fetch_flood_zones',
       name: 'Fetch FEMA Flood Zones',
+      type: 'action' as const,
       description:
         'Fetches FEMA National Flood Hazard Layer (NFHL, MapServer/28 — S_FLD_HAZ_AR) ' +
         'polygons for a project area and drops them onto the canvas as SurveyLines ' +
@@ -1290,6 +1326,7 @@ agentRegistry.register({
     {
       id: 'clear_flood_zones',
       name: 'Clear FEMA Flood Linework',
+      type: 'action' as const,
       description:
         'Removes every SurveyLine whose layer starts with "FEMA-FLOOD-" from the canvas. ' +
         'Use before re-fetching a different area, or to hide flood overlay without ' +
@@ -1320,6 +1357,7 @@ agentRegistry.register({
     {
       id: 'fetch_soils',
       name: 'Fetch USDA NRCS SSURGO Soil Map Units',
+      type: 'action' as const,
       description:
         'Fetches USDA NRCS SSURGO soil map-unit polygons (USA Soils Map Units 2 hosted feature service) ' +
         'for a project area and drops them onto the canvas as SurveyLines ' +
@@ -1369,8 +1407,7 @@ agentRegistry.register({
         mukeys: {
           type: 'array',
           items: { type: 'string' },
-          required: true,
-          description: 'Array of SSURGO MUKEY strings to retrieve tabular data for.',
+          description: 'Array of SSURGO MUKEY strings to retrieve tabular data for. Omit to query all currently loaded soil map units.',
         },
       },
       outputs: {
@@ -1387,6 +1424,7 @@ agentRegistry.register({
     {
       id: 'clear_soils',
       name: 'Clear Soil Linework',
+      type: 'action' as const,
       description:
         'Removes every SurveyLine whose layer starts with "SOILS-" from the canvas. ' +
         'Use before re-fetching a different area, or to hide soil overlay without ' +
@@ -1487,6 +1525,7 @@ agentRegistry.register({
     {
       id: 'structures_fetch_nsi',
       name: 'Fetch Structures (FEMA NSI + OSM)',
+      type: 'action' as const,
       description:
         'Fetches FEMA National Structure Inventory (NSI) building centroids AND OpenStreetMap ' +
         '`building=*` polygons for the current project extent or a supplied bounding box. ' +
@@ -1524,6 +1563,7 @@ agentRegistry.register({
     {
       id: 'structures_rectify_footprints',
       name: 'Rectify Building Footprints',
+      type: 'action' as const,
       description:
         'THIS IS THE CANONICAL HANDLER for any user request to draw, rectify, or finalize building ' +
         'footprints. Trigger phrases include: "draw the buildings", "draw structures", "plot ' +
@@ -1581,6 +1621,7 @@ agentRegistry.register({
     {
       id: 'structures_draw_footprints',
       name: 'Draw Building Footprints (alias → rectify)',
+      type: 'action' as const,
       description:
         'BACKWARD-COMPAT ALIAS. Delegates to structures_rectify_footprints. Kept so that older ' +
         'CACP plans and Gemini prompts referencing the old skill id still route to the new ' +
@@ -1598,6 +1639,7 @@ agentRegistry.register({
     {
       id: 'structures_synthesize_single',
       name: 'Synthesize Single Building Footprint',
+      type: 'action' as const,
       description:
         'Generates a single rectangular building footprint for one NSI centroid, optionally anchored ' +
         'to a set of survey BLDG corner shots. Useful when the user points to a specific building. ' +
@@ -1626,6 +1668,7 @@ agentRegistry.register({
     {
       id: 'structures_clear',
       name: 'Clear Building Footprints',
+      type: 'action' as const,
       description: 'Removes all SurveyLine entries on layer "STRUCTURES" plus cached OSM footprints, and optionally the FEMA-NSI centroids.',
       inputs: {
         clearNsi: { type: 'boolean', default: false, description: 'Also remove FEMA-NSI centroid points.' },
@@ -1709,3 +1752,124 @@ agentRegistry.register({
     ...COGO_EXTENDED_SKILLS,
   ],
 });
+
+// ---------------------------------------------------------------------------
+// Additional Survey & Geospatial Agents — CACP-enabled for peer delegation
+// ---------------------------------------------------------------------------
+agentRegistry.register({
+  agent: AgentType.RAW_CRAWLER,
+  displayName: 'RAW Crawler',
+  cacpEnabled: true,
+  version: '1.0.0',
+  skills: [
+    {
+      id: 'raw_get_summary',
+      name: 'Get RAW File Summary',
+      description: 'Returns metadata and summary statistics for the currently loaded surveyor .raw observation file.',
+      inputs: {},
+      outputs: {
+        loaded:     { type: 'boolean', required: true },
+        fileName:   { type: 'string' },
+        lineCount:  { type: 'integer' },
+        pointCount: { type: 'integer' },
+      },
+    },
+  ],
+});
+
+agentRegistry.register({
+  agent: AgentType.GIS_AGENT,
+  displayName: 'GIS Agent',
+  cacpEnabled: true,
+  version: '1.0.0',
+  skills: [
+    {
+      id: 'gis_get_features_summary',
+      name: 'Get Loaded GIS Features Summary',
+      description: 'Returns a summary of loaded GeoJSON / shapefile GIS features and active WMS layers in the current session.',
+      inputs: {},
+      outputs: {
+        featureCount:   { type: 'integer', required: true },
+        activeWmsCount: { type: 'integer', required: true },
+        summary:        { type: 'string',  required: true },
+      },
+    },
+  ],
+});
+
+agentRegistry.register({
+  agent: AgentType.IMAGE_ANALYZER,
+  displayName: 'Image Analyzer',
+  cacpEnabled: true,
+  version: '1.0.0',
+  skills: [
+    {
+      id: 'image_list_session_photos',
+      name: 'List Session Site Photos',
+      description: 'Returns the list of site photos uploaded to the session along with their tags and metadata.',
+      inputs: {},
+      outputs: {
+        photos: { type: 'array', items: { type: 'object' }, required: true },
+        count:  { type: 'integer', required: true },
+      },
+    },
+  ],
+});
+
+agentRegistry.register({
+  agent: AgentType.GNSS_AGENT,
+  displayName: 'RINEX / GNSS Agent',
+  cacpEnabled: true,
+  version: '1.0.0',
+  skills: [
+    {
+      id: 'gnss_get_status',
+      name: 'Get GNSS / RINEX Session Status',
+      description: 'Returns the current RINEX / GNSS post-processing status and active projection EPSG.',
+      inputs: {},
+      outputs: {
+        ready: { type: 'boolean', required: true },
+        epsg:  { type: 'integer' },
+      },
+    },
+  ],
+});
+
+agentRegistry.register({
+  agent: AgentType.DRONE_AGENT,
+  displayName: 'Drone Agent',
+  cacpEnabled: true,
+  version: '1.0.0',
+  skills: [
+    {
+      id: 'drone_get_status',
+      name: 'Get Drone Photogrammetry Status',
+      description: 'Returns the status of the Drone / UAS photogrammetry and point-cloud workspace.',
+      inputs: {},
+      outputs: {
+        ready: { type: 'boolean', required: true },
+      },
+    },
+  ],
+});
+
+agentRegistry.register({
+  agent: AgentType.TITLE_SEARCH,
+  displayName: 'Title Search Agent',
+  cacpEnabled: true,
+  version: '1.0.0',
+  skills: [
+    {
+      id: 'title_get_deed_chain',
+      name: 'Get Title / Deed Chain Facts',
+      description: 'Returns recorded deed metadata and chain-of-title facts from the loaded deed and Project Knowledge Base.',
+      inputs: {},
+      outputs: {
+        deedLoaded: { type: 'boolean', required: true },
+        deedName:   { type: 'string' },
+        facts:      { type: 'array', items: { type: 'object' }, required: true },
+      },
+    },
+  ],
+});
+

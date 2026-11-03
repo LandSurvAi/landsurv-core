@@ -9,6 +9,7 @@ export const CL_SKILLS: SkillSchema[] = [
   {
     id: 'cl_create_from_description',
     name: 'Create Centerline / Baseline from Description',
+    type: 'action',
     description:
       'Builds a horizontal alignment (centerline or baseline) from an ordered sequence of ' +
       'tangent and curve legs. Each tangent leg specifies a bearing and distance; each curve ' +

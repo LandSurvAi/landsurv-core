@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { 
   XMarkIcon, 
   YouTubeIcon, 
@@ -27,9 +27,6 @@ export interface WelcomeScreenProps {
   initialMode?: WelcomeMode;
 }
 
-// The community invite cycles through these words, then settles on the links.
-const COMMUNITY_WORDS = ['Tutorials', 'Workflows', 'Updates'] as const;
-
 const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ 
   onClose, 
   version,
@@ -45,20 +42,6 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
 }) => {
   const [mode, setMode] = useState<WelcomeMode>(initialMode);
   const [zelleRevealed, setZelleRevealed] = useState(false);
-  const [communityStep, setCommunityStep] = useState(() => {
-    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-      return COMMUNITY_WORDS.length;
-    }
-    return 0;
-  });
-
-  const communityLinksShown = communityStep >= COMMUNITY_WORDS.length;
-
-  useEffect(() => {
-    if (communityLinksShown) return;
-    const timer = window.setTimeout(() => setCommunityStep(step => step + 1), 1200);
-    return () => window.clearTimeout(timer);
-  }, [communityStep, communityLinksShown]);
 
   // Check for holiday theme
   const holidayTheme = getHolidayTheme();
@@ -100,35 +83,56 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
       {/* Modal Dialog Card */}
       <div 
         onClick={e => e.stopPropagation()}
-        className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl max-w-3xl w-full flex flex-col my-auto max-h-[92vh] animate-modal-panel-fade-in-down light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-800 text-gray-200 relative overflow-hidden antialiased"
+        className="bg-slate-950 border border-slate-700/80 rounded-xl shadow-[0_24px_70px_rgba(0,0,0,0.85)] max-w-3xl w-full flex flex-col my-auto max-h-[92vh] animate-modal-panel-fade-in-down light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-800 text-gray-200 relative overflow-hidden antialiased"
         style={{ fontFamily: "'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" }}
       >
+        {/* Subtle 2px Top Specular Line */}
+        <div className="h-[2px] w-full bg-cyan-500/70 shrink-0" />
+
+        {/* Subtle Architectural CAD Reticle Watermark */}
+        <svg
+          className="pointer-events-none absolute -right-12 -top-12 h-56 w-56 text-cyan-400/[0.04] light-theme:text-cyan-700/[0.04]"
+          viewBox="0 0 100 100"
+          fill="none"
+          aria-hidden="true"
+        >
+          <circle cx="50" cy="50" r="42" stroke="currentColor" strokeWidth="0.6" strokeDasharray="3 2" />
+          <circle cx="50" cy="50" r="28" stroke="currentColor" strokeWidth="0.6" />
+          <circle cx="50" cy="50" r="14" stroke="currentColor" strokeWidth="0.6" />
+          <line x1="0" y1="50" x2="100" y2="50" stroke="currentColor" strokeWidth="0.5" />
+          <line x1="50" y1="0" x2="50" y2="100" stroke="currentColor" strokeWidth="0.5" />
+        </svg>
+
         {/* Top Header */}
-        <header className="flex items-center justify-between px-4 py-3 sm:px-6 sm:py-4 border-b border-gray-800 shrink-0 light-theme:border-gray-200">
-          <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+        <header className="relative flex items-center justify-between px-5 py-4 sm:px-7 sm:py-4 border-b border-slate-800/90 bg-slate-950 shrink-0 light-theme:bg-gray-50/80 light-theme:border-gray-200">
+          <div className="flex items-center gap-3 flex-1 min-w-0">
             {mode !== 'main' && (
               <button
                 type="button"
                 onClick={() => setMode('main')}
-                className="flex items-center px-2.5 py-1.5 rounded-lg text-xs font-semibold text-gray-300 bg-gray-800 hover:bg-gray-700 hover:text-white border border-gray-700 transition light-theme:bg-gray-200 light-theme:text-gray-700 light-theme:hover:bg-gray-300"
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-gray-300 bg-slate-900 hover:bg-slate-800 hover:text-white border border-slate-700 transition light-theme:bg-gray-200 light-theme:text-gray-700 light-theme:hover:bg-gray-300"
                 title="Back to Welcome Destinations"
               >
-                <span>Back</span>
+                <span>&larr; Back</span>
               </button>
             )}
 
-            <div className="flex items-baseline gap-2 min-w-0 truncate">
+            <div className="flex items-baseline gap-3 min-w-0 truncate">
               <h1 className="text-xl sm:text-2xl font-extrabold tracking-tighter text-white light-theme:text-gray-900 truncate">
                 Land<span className="text-cyan-400">Surv</span><span className="text-green-400">.ai</span>
-                <sup className="text-xs font-normal text-gray-400">™</sup>
+                <sup className="text-xs font-normal text-gray-500">™</sup>
               </h1>
+              <span className="hidden sm:inline-block text-slate-700 select-none" aria-hidden="true">/</span>
+              <span className="hidden sm:inline-block text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 light-theme:text-gray-500 truncate">
+                AI Surveying &amp; Civil Agentic CAD Suite
+              </span>
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
             <button 
               onClick={onClose} 
-              className="p-1.5 sm:p-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 light-theme:hover:bg-gray-200 light-theme:hover:text-gray-900 transition" 
+              className="p-1.5 sm:p-2 rounded-lg text-gray-400 hover:text-white hover:bg-slate-800 light-theme:hover:bg-gray-200 light-theme:hover:text-gray-900 transition" 
               aria-label="Close Welcome Screen"
             >
               <XMarkIcon className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -137,25 +141,30 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         </header>
 
         {/* Content Body */}
-        <main className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-6">
+        <main className="relative flex-1 p-5 sm:p-7 overflow-y-auto space-y-5">
           {/* ============================================================== */}
           {/* MODE 1: MAIN NAVIGATION HUB                                     */}
           {/* ============================================================== */}
           {mode === 'main' && (
-            <div className="space-y-6">
+            <div className="space-y-5">
               {/* PRIMARY FEATURE CARD: Agentic CAD */}
               <div 
                 onClick={handleAgenticCadClick}
-                className="group relative overflow-hidden rounded-lg border border-l-0 border-dashed border-cyan-500/60 hover:border-cyan-400 bg-gray-800/50 p-5 sm:p-6 transition-colors duration-150 cursor-pointer light-theme:bg-gray-50 light-theme:border-cyan-500 light-theme:hover:border-cyan-600"
+                className="group relative overflow-hidden rounded-lg border border-slate-800 hover:border-cyan-500/50 bg-slate-900/60 hover:bg-slate-900/90 p-5 sm:p-6 transition-all duration-200 cursor-pointer light-theme:bg-gray-50 light-theme:border-cyan-500 light-theme:hover:border-cyan-600"
               >
-                <span className="absolute inset-y-0 left-0 w-1 bg-cyan-500" aria-hidden="true" />
+                <span className="absolute inset-y-0 left-0 w-1 bg-cyan-400" aria-hidden="true" />
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-5 pl-2">
                   <div className="space-y-1.5">
-                    <h3 className="text-lg font-semibold text-white light-theme:text-gray-900 tracking-tight">
-                      Agentic CAD
-                    </h3>
-                    <p className="text-sm text-gray-400 light-theme:text-gray-600 leading-relaxed max-w-lg">
-                      Open the CAD environment with AI-assisted and manual drafting tools. Starts with a clean workspace.
+                    <div className="flex items-baseline gap-3">
+                      <h3 className="text-lg sm:text-xl font-bold text-white light-theme:text-gray-900 tracking-tight group-hover:text-cyan-300 light-theme:group-hover:text-cyan-700 transition-colors">
+                        Agentic CAD
+                      </h3>
+                      <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-400/90 light-theme:text-cyan-700">
+                        Primary Workspace
+                      </span>
+                    </div>
+                    <p className="text-sm text-slate-300 light-theme:text-gray-600 leading-relaxed max-w-lg">
+                      Open the full CAD environment with AI-assisted and manual drafting tools, COGO solvers, layer management, and Civil 3D sync. Starts with a clean workspace.
                     </p>
                   </div>
 
@@ -166,9 +175,10 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                         e.stopPropagation();
                         handleAgenticCadClick();
                       }}
-                      className="px-5 py-2.5 rounded-md font-semibold text-sm text-white bg-blue-600 hover:bg-blue-500 shadow-md shadow-blue-900/40 transition-colors"
+                      className="group/btn relative overflow-hidden px-5 py-2.5 rounded-lg font-semibold text-sm text-white bg-slate-950 hover:bg-slate-900 border border-cyan-400/60 hover:border-cyan-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.12),0_6px_22px_-4px_rgba(6,182,212,0.3)] transition-all flex items-center justify-center gap-2.5 light-theme:bg-slate-900 light-theme:text-white"
                     >
-                      Open CAD Environment
+                      <span>Open CAD Environment</span>
+                      <span className="text-cyan-400 transition-transform duration-200 group-hover/btn:translate-x-1" aria-hidden="true">&rarr;</span>
                     </button>
                     {hasExistingPoints && (
                       <button
@@ -177,9 +187,9 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                           e.stopPropagation();
                           onLaunchAgenticCad?.('existing');
                         }}
-                        className="text-xs text-gray-400 hover:text-cyan-300 underline-offset-2 hover:underline transition-colors light-theme:text-gray-600"
+                        className="text-xs font-medium text-cyan-300/90 hover:text-cyan-200 underline-offset-4 hover:underline transition-colors light-theme:text-cyan-700"
                       >
-                        Continue with {existingPointCount} existing point{existingPointCount !== 1 ? 's' : ''}
+                        Continue with {existingPointCount} existing point{existingPointCount !== 1 ? 's' : ''} &rarr;
                       </button>
                     )}
                   </div>
@@ -191,43 +201,46 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 {/* Home Destination */}
                 <div 
                   onClick={handleHomeClick}
-                  className="group relative overflow-hidden rounded-lg border border-l-0 border-dashed border-red-500/60 hover:border-red-400 bg-gray-800/40 p-4 sm:p-5 transition-colors duration-150 cursor-pointer light-theme:bg-gray-50 light-theme:border-red-400 light-theme:hover:border-red-600"
+                  className="group relative overflow-hidden rounded-lg border border-slate-800 hover:border-red-500/50 bg-slate-900/45 hover:bg-slate-900/80 p-4 sm:p-5 transition-all duration-150 cursor-pointer light-theme:bg-gray-50 light-theme:border-red-300 light-theme:hover:border-red-500 flex flex-col justify-between"
                 >
                   <span className="absolute inset-y-0 left-0 w-1 bg-red-500" aria-hidden="true" />
-                  <div className="space-y-1 pl-2">
-                    <h4 className="text-base font-semibold text-white light-theme:text-gray-900">
+                  <div className="space-y-1.5 pl-2">
+                    <h4 className="text-base font-bold text-white light-theme:text-gray-900 group-hover:text-red-300 light-theme:group-hover:text-red-700 transition-colors">
                       Home
                     </h4>
-                    <p className="text-sm text-gray-400 light-theme:text-gray-600 leading-relaxed">
-                      Browse the full suite of specialized survey and drafting agents.
+                    <p className="text-sm text-slate-400 light-theme:text-gray-600 leading-relaxed">
+                      Browse the full suite of 24 specialized survey, GIS, GNSS, and civil drafting agents.
                     </p>
                   </div>
+                  <p className="pl-2 pt-3 text-xs font-semibold text-red-400 group-hover:text-red-300 light-theme:text-red-700">
+                    Explore Agent Directory &rarr;
+                  </p>
                 </div>
 
                 {/* Draft Deed Destination */}
                 <div 
                   onClick={handleDeedDraftClick}
-                  className="group relative overflow-hidden rounded-lg border border-l-0 border-dashed border-green-500/60 hover:border-green-400 bg-gray-800/40 p-4 sm:p-5 transition-colors duration-150 cursor-pointer light-theme:bg-gray-50 light-theme:border-green-500 light-theme:hover:border-green-600"
+                  className="group relative overflow-hidden rounded-lg border border-slate-800 hover:border-emerald-500/50 bg-slate-900/45 hover:bg-slate-900/80 p-4 sm:p-5 transition-all duration-150 cursor-pointer light-theme:bg-gray-50 light-theme:border-emerald-400 light-theme:hover:border-emerald-600 flex flex-col justify-between"
                 >
-                  <span className="absolute inset-y-0 left-0 w-1 bg-green-500" aria-hidden="true" />
-                  <div className="space-y-1 pl-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="text-base font-semibold text-white light-theme:text-gray-900">
+                  <span className="absolute inset-y-0 left-0 w-1 bg-emerald-500" aria-hidden="true" />
+                  <div className="space-y-1.5 pl-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="text-base font-bold text-white light-theme:text-gray-900 group-hover:text-emerald-300 light-theme:group-hover:text-emerald-700 transition-colors">
                         Draft Deed
                       </h4>
                       {!freeDeedsUnlimited && (
                         <span
-                          className={`rounded px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider border ${
+                          className={`text-[10px] font-mono font-bold uppercase tracking-wider ${
                             (freeDeedsRemaining ?? freeDeedsLimit) > 0
-                              ? 'bg-green-400/20 text-green-300 border-green-400/40 light-theme:text-green-800 light-theme:bg-green-100'
-                              : 'bg-amber-400/20 text-amber-200 border-amber-400/40 light-theme:text-amber-800 light-theme:bg-amber-100'
+                              ? 'text-emerald-400 light-theme:text-green-800'
+                              : 'text-amber-300 light-theme:text-amber-800'
                           }`}
                         >
                           {`🎁 ${freeDeedsLimit} free deeds`}
                         </span>
                       )}
                     </div>
-                    <p className="text-sm text-gray-400 light-theme:text-gray-600 leading-relaxed">
+                    <p className="text-sm text-slate-400 light-theme:text-gray-600 leading-relaxed">
                       Upload a deed PDF or paste a legal description and have the Boundary Agent draft the parcel.
                     </p>
                     {!freeDeedsUnlimited && (
@@ -259,7 +272,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                                 : 'Free deeds used — add a key to continue'}
                           </p>
                         </div>
-                        <p className="pt-1 text-xs font-extrabold text-green-300 group-hover:text-green-200 light-theme:text-green-700 light-theme:group-hover:text-green-800">
+                        <p className="pt-1 text-xs font-semibold text-emerald-400 group-hover:text-emerald-300 light-theme:text-green-700 light-theme:group-hover:text-green-800">
                           {freeDeedsRemaining === 0 ? 'Unlock unlimited →' : 'Start free →'}
                         </p>
                       </>
@@ -270,62 +283,50 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 {/* Free Code Destination */}
                 <div 
                   onClick={() => setMode('free-code')}
-                  className="group relative overflow-hidden rounded-lg border border-l-0 border-dashed border-yellow-500/60 hover:border-yellow-400 bg-gray-800/40 p-4 sm:p-5 transition-colors duration-150 cursor-pointer light-theme:bg-gray-50 light-theme:border-yellow-500 light-theme:hover:border-yellow-600"
+                  className="group relative overflow-hidden rounded-lg border border-slate-800 hover:border-amber-500/50 bg-slate-900/45 hover:bg-slate-900/80 p-4 sm:p-5 transition-all duration-150 cursor-pointer light-theme:bg-gray-50 light-theme:border-amber-400 light-theme:hover:border-amber-600 flex flex-col justify-between"
                 >
-                  <span className="absolute inset-y-0 left-0 w-1 bg-yellow-500" aria-hidden="true" />
-                  <div className="space-y-1 pl-2">
-                    <h4 className="text-base font-semibold text-white light-theme:text-gray-900 flex items-center gap-2">
-                      Free Software
-                    </h4>
-                    <p className="text-sm text-gray-400 light-theme:text-gray-600 leading-relaxed">
+                  <span className="absolute inset-y-0 left-0 w-1 bg-amber-500" aria-hidden="true" />
+                  <div className="space-y-1.5 pl-2">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <h4 className="text-base font-bold text-white light-theme:text-gray-900 group-hover:text-amber-300 light-theme:group-hover:text-amber-700 transition-colors">
+                        Free Software
+                      </h4>
+                      <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-amber-400/90 light-theme:text-amber-800">
+                        Apache-2.0
+                      </span>
+                    </div>
+                    <p className="text-sm text-slate-400 light-theme:text-gray-600 leading-relaxed">
                       Open-source software you can use, study, and build on, plus ways to support the project.
                     </p>
                   </div>
+                  <p className="pl-2 pt-3 text-xs font-semibold text-amber-400 group-hover:text-amber-300 light-theme:text-amber-700">
+                    View Open Source &amp; Support &rarr;
+                  </p>
                 </div>
               </div>
 
-              {/* COMMUNITY LINKS — one slot: the invite cycles through the phrase and settles on the links */}
-              <div className="flex items-center justify-center pt-5 border-t border-gray-800 light-theme:border-gray-200">
-                <div className="relative flex h-9 w-full items-center justify-center">
-                  <p
-                    className={`absolute inset-0 flex items-center justify-center text-sm font-medium text-pink-400 light-theme:text-pink-600 transition-opacity duration-300 ${
-                      communityLinksShown ? 'opacity-0' : 'opacity-100'
-                    }`}
-                  >
-                    <span key={communityStep} className="animate-fade-in inline-block">
-                      {COMMUNITY_WORDS[Math.min(communityStep, COMMUNITY_WORDS.length - 1)]}
-                    </span>
-                  </p>
-                  <div
-                    className={`flex items-center justify-center gap-6 transition-opacity duration-500 ${
-                      communityLinksShown ? 'opacity-100' : 'opacity-0 pointer-events-none'
-                    }`}
-                    aria-hidden={!communityLinksShown}
-                  >
-                    <a
-                      href="https://www.youtube.com/@LandSurvAI"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      tabIndex={communityLinksShown ? 0 : -1}
-                      className="text-red-500 hover:text-red-400 hover:scale-110 transition-all"
-                      title="Watch tutorials on YouTube"
-                      aria-label="LandSurv.ai on YouTube"
-                    >
-                      <YouTubeIcon className="w-7 h-7" />
-                    </a>
-                    <a
-                      href="https://www.facebook.com/profile.php?id=61583326114422"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      tabIndex={communityLinksShown ? 0 : -1}
-                      className="text-[#1877F2] hover:text-[#4a9bff] hover:scale-110 transition-all"
-                      title="Join our Facebook community"
-                      aria-label="LandSurv.ai on Facebook"
-                    >
-                      <FacebookIcon className="w-7 h-7" />
-                    </a>
-                  </div>
-                </div>
+              {/* COMMUNITY LINKS */}
+              <div className="flex items-center justify-center gap-6 pt-5 border-t border-gray-800 light-theme:border-gray-200">
+                <a
+                  href="https://www.youtube.com/@LandSurvAI"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-red-500 hover:text-red-400 hover:scale-110 transition-all"
+                  title="Watch tutorials on YouTube"
+                  aria-label="LandSurv.ai on YouTube"
+                >
+                  <YouTubeIcon className="w-7 h-7" />
+                </a>
+                <a
+                  href="https://www.facebook.com/profile.php?id=61583326114422"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#1877F2] hover:text-[#4a9bff] hover:scale-110 transition-all"
+                  title="Join our Facebook community"
+                  aria-label="LandSurv.ai on Facebook"
+                >
+                  <FacebookIcon className="w-7 h-7" />
+                </a>
               </div>
             </div>
           )}

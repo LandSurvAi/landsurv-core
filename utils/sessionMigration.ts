@@ -207,8 +207,10 @@ export const normalizeLoadedSession = (rawSession: Partial<SessionState>): Sessi
     rinexChatHistory: rawSession.rinexChatHistory || [],
     zoningChatHistory: rawSession.zoningChatHistory || [],
     soilsChatHistory: rawSession.soilsChatHistory || [],
+    structuresChatHistory: rawSession.structuresChatHistory || [],
     standardsComplianceChatHistory: rawSession.standardsComplianceChatHistory || [],
     standardsComplianceControlFile: rawSession.standardsComplianceControlFile || null,
+    standardsComplianceControlFiles: rawSession.standardsComplianceControlFiles || (rawSession.standardsComplianceControlFile ? [rawSession.standardsComplianceControlFile] : []),
     standardsComplianceSubjectFile: rawSession.standardsComplianceSubjectFile || null,
     standardsComplianceSourceMode: rawSession.standardsComplianceSourceMode,
     standardsComplianceChecks: rawSession.standardsComplianceChecks,
@@ -229,7 +231,10 @@ export const normalizeLoadedSession = (rawSession: Partial<SessionState>): Sessi
     cacpReservations: rawSession.cacpReservations || [],
     knowledgeFacts: rawSession.knowledgeFacts || [],
     draftingStyleLibrary: rawSession.draftingStyleLibrary || [],
+    cadManagerState: rawSession.cadManagerState,
     soilMapUnits: rawSession.soilMapUnits || [],
+    descriptionKeys: rawSession.descriptionKeys,
+    keyframeCache: rawSession.keyframeCache || [],
     uiState: mergedUiState,
   };
 };

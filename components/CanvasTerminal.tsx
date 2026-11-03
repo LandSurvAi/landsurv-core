@@ -1,17 +1,20 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { parseCanvasCommand, executeCanvasCommand, describeCommand, type CommandContext, type CommandResult, type HelpGroup } from '../utils/canvasCommands';
+import { CommandHelpView, type CommandReference } from './CommandHelpView';
 
 export interface TerminalLink {
   label: string;
   onClick: () => void;
 }
 
+export type TerminalTone = 'normal' | 'ok' | 'error' | 'info' | 'warn' | 'command';
+
 export interface TerminalEntry {
   id: string;
   type: 'input' | 'output' | 'hint' | 'status';
   text: string;
   timestamp: number;
-  tone?: 'normal' | 'ok' | 'error' | 'info' | 'warn' | 'command';
+  tone?: TerminalTone;
   /** Inline actions rendered after the message (open in editor, copy, …). */
   links?: TerminalLink[];
   /** Formatted help sections (HELP); when present they replace the plain text. */
@@ -42,8 +45,9 @@ interface CanvasTerminalProps {
   incomingMessage?: { text: string; tone?: 'normal' | 'ok' | 'error' | 'info' } | null;
   /** Open the selection Properties dialog (the PROP command does the same). */
   onOpenProperties?: () => void;
-  /** Hand a command result to the app's full text editor. */
-  onOpenTextEditor?: (content: string) => void;
+  /** Hand a command result to the app's full text editor, keeping its tone color
+   *  and its formatted reference (HELP) so the editor renders the same cards. */
+  onOpenTextEditor?: (content: string, tone?: TerminalTone, reference?: CommandReference) => void;
   /** Snaps and ortho status display */
   statusBadges?: {
     runningOsnaps?: string;
@@ -51,67 +55,6 @@ interface CanvasTerminalProps {
     isOrthoEnabled?: boolean;
   };
 }
-
-const HELP_ACCENTS: Record<string, { text: string; dot: string; rule: string; chip: string }> = {
-  cyan: { text: 'text-cyan-300', dot: 'bg-cyan-400', rule: 'border-cyan-500/40', chip: 'bg-cyan-500/10' },
-  emerald: { text: 'text-emerald-300', dot: 'bg-emerald-400', rule: 'border-emerald-500/40', chip: 'bg-emerald-500/10' },
-  amber: { text: 'text-amber-300', dot: 'bg-amber-400', rule: 'border-amber-500/40', chip: 'bg-amber-500/10' },
-  sky: { text: 'text-sky-300', dot: 'bg-sky-400', rule: 'border-sky-500/40', chip: 'bg-sky-500/10' },
-  violet: { text: 'text-violet-300', dot: 'bg-violet-400', rule: 'border-violet-500/40', chip: 'bg-violet-500/10' },
-  rose: { text: 'text-rose-300', dot: 'bg-rose-400', rule: 'border-rose-500/40', chip: 'bg-rose-500/10' },
-};
-
-/** Formatted HELP reference: colored group headers, command chips, italic notes. */
-const CommandHelpView: React.FC<{ groups: HelpGroup[]; notes?: string[] }> = ({ groups, notes }) => (
-  <div className="mt-1 space-y-2">
-    <div className="flex items-center gap-2 font-mono text-[10px] text-gray-500">
-      <span className="font-extrabold uppercase tracking-[0.18em] text-gray-300">Commands:</span>
-      <span className="text-gray-600">·</span>
-      <span className="italic">grouped reference — links below open it in the editor</span>
-    </div>
-    <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
-      {groups.map(group => {
-        const accent = HELP_ACCENTS[group.accent] ?? HELP_ACCENTS.cyan;
-        return (
-          <div key={group.title} className={`overflow-hidden rounded-md border bg-gray-950/50 ${accent.rule}`}>
-            <div className={`flex items-center gap-2 border-b border-gray-800/80 px-2 py-1 ${accent.chip}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${accent.dot}`} />
-              <span className={`font-mono text-[10px] font-extrabold uppercase tracking-[0.16em] underline decoration-2 underline-offset-4 ${accent.text}`}>
-                {group.title}
-              </span>
-              <span className="ml-auto font-mono text-[9px] font-medium italic text-gray-500">
-                {group.entries.length} {group.entries.length === 1 ? 'command' : 'commands'}
-              </span>
-            </div>
-            <div className="divide-y divide-gray-800/50">
-              {group.entries.map(entry => (
-                <div key={entry.command} className="flex items-baseline gap-2 px-2 py-[3px]">
-                  <span className={`w-[108px] shrink-0 truncate font-mono text-[11px] font-bold underline decoration-dotted underline-offset-2 ${accent.text}`} title={entry.command}>
-                    {entry.command}
-                  </span>
-                  <span className="min-w-0 flex-1 font-mono text-[10px] leading-snug text-gray-300">
-                    {entry.description}
-                    {entry.note ? <span className="ml-1 font-mono text-[9px] italic text-gray-500">{entry.note}</span> : null}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-    {notes?.length ? (
-      <div className="rounded-md border border-gray-800 bg-gray-950/40 px-2 py-1.5">
-        {notes.map(note => (
-          <div key={note} className="flex gap-2 py-[1px] font-mono text-[9px] italic leading-snug text-gray-500">
-            <span className="text-cyan-500">›</span>
-            <span>{note}</span>
-          </div>
-        ))}
-      </div>
-    ) : null}
-  </div>
-);
 
 export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   activePrompt,
@@ -227,9 +170,18 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
 
   const resultLinks = (result: CommandResult): TerminalLink[] => {
     const links: TerminalLink[] = [];
+    const resultTone: TerminalTone = result.status === 'error' ? 'error' : result.status === 'ok' ? 'ok' : 'info';
     for (const link of result.links ?? []) {
       if (link.action === 'open-text-editor' && onOpenTextEditor) {
-        links.push({ label: link.label ?? 'Open in Text Editor', onClick: () => onOpenTextEditor(link.payload ?? result.message) });
+        const content = link.payload ?? result.message;
+        links.push({
+          label: link.label ?? 'Open in Text Editor',
+          onClick: () => onOpenTextEditor(
+            content,
+            resultTone,
+            result.helpGroups?.length ? { groups: result.helpGroups, notes: result.helpNotes, text: content } : undefined,
+          ),
+        });
       } else if (link.action === 'open-properties' && commandContext.onOpenProperties) {
         links.push({ label: link.label ?? 'Open Properties', onClick: () => commandContext.onOpenProperties?.() });
       } else if (link.action === 'select-all' && commandContext.onSelectAll) {
@@ -504,7 +456,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                     </span>
                     <div className="min-w-0 flex-1">
                       {item.helpGroups?.length ? (
-                        <CommandHelpView groups={item.helpGroups} notes={item.helpNotes} />
+                        <CommandHelpView groups={item.helpGroups} notes={item.helpNotes} showCaption className="mt-1" />
                       ) : (
                         <span className={`break-words ${toneColor}`}>{item.text}</span>
                       )}
