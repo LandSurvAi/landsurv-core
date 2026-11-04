@@ -89,7 +89,8 @@ const CacpManifestModal: React.FC<CacpManifestModalProps> = ({ agent, onClose })
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
+      className="fixed inset-0 z-[9990] flex items-center justify-center bg-black/70 p-4"
+      style={{ zIndex: 9990 }}
       onClick={onClose}
       role="dialog"
       aria-modal="true"

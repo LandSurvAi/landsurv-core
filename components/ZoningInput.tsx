@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { MapPin, Building2, ArrowLeft, Search, AlertCircle, Loader2, LocateFixed, Sparkles } from 'lucide-react';
-import { reverseGeocodeViaCensus, getBrowserPosition } from '../utils/reverseGeocode';
+import { reverseGeocodeUs, getBrowserPosition } from '../utils/reverseGeocode';
 import { loadCountiesForState, loadMunicipalitiesForState, useJurisdictionList, useMunicipalitiesForCounty } from '../utils/usJurisdictions';
 import { knowledgeBase } from '../services/KnowledgeBase';
 import { useAppState } from '../contexts/AppStateContext.tsx';
+import { A2UIEmbeddedContext } from './UploadShell.tsx';
 
 interface ZoningInputProps {
   onZoningSearch: (searchData: ZoningSearchData) => void;
@@ -122,7 +123,7 @@ const ZoningInput: React.FC<ZoningInputProps> = ({ onZoningSearch, onGoBack, bac
     setPrefilling(true);
     try {
       const pos = await getBrowserPosition();
-      const r = await reverseGeocodeViaCensus(pos.coords.latitude, pos.coords.longitude);
+      const r = await reverseGeocodeUs(pos.coords.latitude, pos.coords.longitude);
       if (!r.state && !r.county && !r.place) throw new Error('No US-jurisdiction match for this location.');
       if (r.state) setState(r.state);
       if (r.county) setCounty(r.county);
@@ -182,25 +183,37 @@ const ZoningInput: React.FC<ZoningInputProps> = ({ onZoningSearch, onGoBack, bac
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canAutoStart, countyList.loading, muniList.loading, prefilling]);
 
+  const isEmbedded = useContext(A2UIEmbeddedContext);
+
   return (
-    <div className="h-full flex flex-col bg-gray-900">
+    <div className={isEmbedded ? 'flex flex-col rounded-xl border border-emerald-500/25 bg-[#0b131e]/95 p-3.5 shadow-lg' : 'h-full flex flex-col bg-[#0a0f16]'}>
       {/* Header */}
-      <div className="px-6 py-5 border-b border-gray-700/60 flex-shrink-0">
-        <div className="flex items-center gap-3 mb-1">
+      <div className={isEmbedded ? 'mb-3 flex items-center justify-between border-b border-white/[0.08] pb-2' : 'flex-shrink-0 border-b border-white/[0.06] bg-[#0b1119]/60 px-6 py-5'}>
+        <div className="mx-auto w-full max-w-3xl">
+        <div className="flex items-center gap-2.5 mb-0.5">
           <div className="relative">
-            <MapPin className="w-6 h-6 text-emerald-400" />
-            <Building2 className="w-3.5 h-3.5 text-emerald-300 absolute -right-1 -bottom-1" />
+            <MapPin className={isEmbedded ? 'w-4 h-4 text-emerald-400' : 'w-6 h-6 text-emerald-400'} />
+            <Building2 className={isEmbedded ? 'w-2.5 h-2.5 text-emerald-300 absolute -right-1 -bottom-1' : 'w-3.5 h-3.5 text-emerald-300 absolute -right-1 -bottom-1'} />
           </div>
-          <h2 className="text-xl font-bold text-gray-100 tracking-tight">Zoning Agent</h2>
-          <span className="ml-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-900/40 text-emerald-400 border border-emerald-700/40 uppercase tracking-wider">CACP</span>
+          <h2 className={isEmbedded ? 'text-xs font-bold text-gray-100 tracking-tight' : 'text-xl font-bold text-gray-100 tracking-tight'}>Zoning Agent</h2>
+          <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-900/40 text-emerald-400 border border-emerald-700/40 uppercase tracking-wider">CACP</span>
+          {isEmbedded && (
+            <span className="px-1.5 py-0.5 rounded text-[8.5px] font-mono font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-400/35 uppercase tracking-[0.14em]">
+              A2UI
+            </span>
+          )}
         </div>
-        <p className="text-sm text-gray-400 ml-9">
-          Research zoning requirements using live Google Search grounding.
-        </p>
+        {!isEmbedded && (
+          <p className="text-sm text-gray-400 ml-9">
+            Research zoning requirements using live Google Search grounding.
+          </p>
+        )}
+        </div>
       </div>
 
       {/* Form */}
-      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+      <div className={isEmbedded ? 'overflow-y-auto' : 'flex-1 overflow-y-auto px-6 py-6'}>
+        <div className={isEmbedded ? 'w-full space-y-3.5' : 'mx-auto w-full max-w-3xl space-y-5'}>
 
         {/* Autofill row */}
         <div className="flex items-center gap-2">
@@ -394,18 +407,9 @@ const ZoningInput: React.FC<ZoningInputProps> = ({ onZoningSearch, onGoBack, bac
             Results are AI-synthesized from live web search and are for <strong>preliminary research only</strong>. Always verify with the official municipal ordinance and consult a licensed professional before making decisions.
           </p>
         </div>
+        </div>
       </div>
 
-      {/* Footer */}
-      <div className="px-6 py-3 border-t border-gray-700/50 flex-shrink-0">
-        <button
-          onClick={onGoBack}
-          className="flex items-center gap-2 text-gray-400 hover:text-gray-200 transition-colors text-sm"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          {backButtonTitle}
-        </button>
-      </div>
     </div>
   );
 };

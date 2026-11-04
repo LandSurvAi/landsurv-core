@@ -138,7 +138,8 @@ export const normalizeLoadedSession = (rawSession: Partial<SessionState>): Sessi
     isPdfViewerFullscreen: rawUiState.isPdfViewerFullscreen ?? false,
     isVisualPanelFullscreen: rawUiState.isVisualPanelFullscreen ?? false,
     isPointEditorFullscreen: rawUiState.isPointEditorFullscreen ?? false,
-    isChatPanelVisible: rawUiState.isChatPanelVisible ?? true,
+    // The agent tool shelf now opens as a bottom sheet and stays closed by default.
+    isChatPanelVisible: rawUiState.isChatPanelVisible ?? false,
     attributeScale: baseScale,
     lineLabelScale: rawUiState.lineLabelScale ?? baseScale,
     dimensionScale: rawUiState.dimensionScale ?? 1,

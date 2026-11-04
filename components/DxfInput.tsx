@@ -1,6 +1,7 @@
 
 import React, { useState, useCallback } from 'react';
-import { DxfIcon, UploadIcon, HomeIcon } from './icons';
+import { DxfIcon } from './icons';
+import { UploadShell, UploadPanel, UploadDropzone, UploadPrimaryButton, UploadGhostButton } from './UploadShell.tsx';
 import { useErrorReporter } from '../contexts/AppStateContext';
 import { parseDxfLayers } from '../utils/dxfLayerParser';
 
@@ -90,100 +91,102 @@ const DxfInput: React.FC<DxfInputProps> = ({ onDxfUploaded, onGoBack, backButton
   };
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-full p-8 text-center">
-       <button onClick={onGoBack} className="absolute top-4 left-4 p-2 text-gray-300 hover:text-white transition-colors" title={backButtonTitle}>
-        <HomeIcon className="w-6 h-6"/>
-      </button>
-      <h1 className="text-5xl sm:text-6xl font-extrabold leading-none tracking-tight text-center mb-4">
-          <span className="text-white">Dxf</span><span className="text-indigo-400">Agent</span><span className="text-[0.5em]"><span className="text-gray-500">.</span><span className="text-white">Land</span><span className="text-cyan-400">Surv</span><span className="text-green-400">.ai</span></span><sup className="text-xl text-gray-500">™</sup>
-      </h1>
-      <p className="text-gray-300 mb-6 max-w-lg">
-        Upload a .dxf file to draw it immediately on the canvas and analyze layers, entities, and CAD geometry with the AI agent.
-      </p>
-      <div
-        className={`w-full max-w-lg cursor-pointer flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-lg transition-colors duration-300 ${isDragging ? 'border-indigo-400 bg-gray-700/50' : 'border-gray-600 hover:border-indigo-500'}`}
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        onClick={handleClick}
-        role="button"
-        tabIndex={0}
-        aria-label="Upload a file by dragging or clicking"
-      >
-        <input
+    <UploadShell
+      icon={DxfIcon}
+      accent="#818cf8"
+      title="DXF Agent"
+      description="Drop a .dxf to draw it immediately on the canvas, then analyze layers, entities, and CAD geometry with the agent."
+      onGoBack={onGoBack}
+      backTitle={backButtonTitle}
+    >
+      <UploadPanel>
+        <UploadDropzone
           id="dxf-file-input"
-          type="file"
-          className="hidden"
           accept=".dxf,application/dxf,image/vnd.dxf,text/plain"
-          onChange={handleFileChange}
+          onFiles={(selected) => {
+            const file = selected?.[0];
+            if (file) handleFile(file);
+          }}
+          onDrop={handleDrop}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          isDragging={isDragging}
+          title="Drop your .dxf file here"
+          hint="or click to browse local files"
+          icon={DxfIcon}
         />
-        <DxfIcon className="w-16 h-16 mb-4 text-gray-500" />
-        <h2 className="text-xl font-semibold text-white">Drop your .dxf file here</h2>
-        <p className="text-gray-400 mt-2">or click to browse local files</p>
-      </div>
 
-      <div className="mt-4 flex flex-col items-stretch justify-center gap-3 w-full max-w-lg">
-        <label className="flex items-center gap-2.5 text-xs sm:text-sm text-gray-300 bg-gray-900/60 border border-gray-700 hover:border-indigo-400/60 rounded-lg px-3.5 py-2 cursor-pointer transition-colors select-none">
-          <input
-            type="checkbox"
-            checked={smoothSplines}
-            onChange={(e) => setSmoothSplines(e.target.checked)}
-            className="w-4 h-4 rounded border-gray-600 text-indigo-500 focus:ring-indigo-400 focus:ring-offset-gray-900 bg-gray-800"
-          />
-          <span className="font-medium text-gray-200">Convert long segment strings to weighted T-splines</span>
-          <span className="text-[11px] text-indigo-300 bg-indigo-950/60 border border-indigo-500/40 rounded px-1.5 py-0.5">Smooth</span>
-        </label>
+        <div className="mt-3.5 flex flex-col gap-2.5">
+          <label className="flex cursor-pointer select-none items-center gap-2.5 rounded-lg border border-white/[0.08] bg-black/20 px-3.5 py-2.5 text-[12px] text-slate-300 transition-colors hover:border-[color:var(--up-accent)]">
+            <input
+              type="checkbox"
+              checked={smoothSplines}
+              onChange={(e) => setSmoothSplines(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-white/20 accent-indigo-500"
+            />
+            <span className="flex-1 font-medium text-slate-200">Convert long segment strings to weighted T-splines</span>
+            <span className="rounded border border-[color:var(--up-accent)]/40 bg-indigo-500/10 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.14em] text-indigo-300">
+              Smooth
+            </span>
+          </label>
 
-        {smoothSplines && (
-          <div className="flex items-center gap-1.5 text-xs bg-gray-900/80 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-300">
-            <span className="text-gray-400 font-medium">Quantization:</span>
-            <button
-              type="button"
-              onClick={() => setQuantizationBits(16)}
-              className={`px-2 py-0.5 rounded font-mono font-semibold transition-colors ${
-                quantizationBits === 16 ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-gray-700 text-gray-400'
-              }`}
-              title="16-bit fixed point bounding-box grid (65,535 steps) with smart curvature decimation"
-            >
-              16-bit
-            </button>
-            <button
-              type="button"
-              onClick={() => setQuantizationBits(32)}
-              className={`px-2 py-0.5 rounded font-mono font-semibold transition-colors ${
-                quantizationBits === 32 ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-gray-700 text-gray-400'
-              }`}
-              title="32-bit high-precision grid (4.29B steps) with smart curvature decimation"
-            >
-              32-bit
-            </button>
-          </div>
-        )}
-
-        {pending && (() => {
-          const term = layerSearch.trim().toLowerCase();
-          const visible = term ? pending.layers.filter(l => l.name.toLowerCase().includes(term)) : pending.layers;
-          return (
-          <div className="bg-gray-900/80 border border-gray-700 rounded-lg p-3 text-left">
-            <div className="flex items-center justify-between mb-2 text-xs text-gray-300">
-              <span className="font-medium truncate">{pending.name} — layers to smooth (none checked = all)</span>
-              <span className="flex gap-2 shrink-0">
-                <button type="button" className="text-indigo-300 hover:underline" onClick={() => setSelectedLayers(prev => new Set([...prev, ...visible.map(l => l.name)]))}>{term ? 'Select shown' : 'All'}</button>
-                <button type="button" className="text-indigo-300 hover:underline" onClick={() => setSelectedLayers(prev => { const next = new Set(prev); visible.forEach(l => next.delete(l.name)); return next; })}>{term ? 'Clear shown' : 'None'}</button>
-              </span>
+          {smoothSplines && (
+            <div className="flex flex-wrap items-center gap-2.5 rounded-lg border border-white/[0.08] bg-black/20 px-3.5 py-2.5 text-[11.5px] text-slate-400">
+              <span className="font-medium text-slate-400">Quantization</span>
+              <div className="inline-flex overflow-hidden rounded-md border border-white/[0.10]">
+                <button
+                  type="button"
+                  onClick={() => setQuantizationBits(16)}
+                  className={`px-2.5 py-1 font-mono text-[11px] font-semibold transition-colors ${
+                    quantizationBits === 16 ? 'bg-indigo-500/80 text-white' : 'text-slate-400 hover:bg-white/[0.06]'
+                  }`}
+                  title="16-bit fixed point bounding-box grid (65,535 steps) with smart curvature decimation"
+                >
+                  16-bit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuantizationBits(32)}
+                  className={`border-l border-white/[0.10] px-2.5 py-1 font-mono text-[11px] font-semibold transition-colors ${
+                    quantizationBits === 32 ? 'bg-indigo-500/80 text-white' : 'text-slate-400 hover:bg-white/[0.06]'
+                  }`}
+                  title="32-bit high-precision grid (4.29B steps) with smart curvature decimation"
+                >
+                  32-bit
+                </button>
+              </div>
+              <span className="text-[10.5px] text-slate-500">Precision grows with sheet size — 16-bit is plenty for most plans.</span>
             </div>
+          )}
+        </div>
+      </UploadPanel>
+
+      {pending && (() => {
+        const term = layerSearch.trim().toLowerCase();
+        const visible = term ? pending.layers.filter(l => l.name.toLowerCase().includes(term)) : pending.layers;
+        return (
+          <UploadPanel
+            eyebrow="Spline conversion"
+            title={`${pending.name} — layers to smooth`}
+            action={
+              <span className="flex gap-3 text-[10.5px] font-medium">
+                <button type="button" className="text-indigo-300 hover:text-indigo-200" onClick={() => setSelectedLayers(prev => new Set([...prev, ...visible.map(l => l.name)]))}>{term ? 'Select shown' : 'All'}</button>
+                <button type="button" className="text-slate-500 hover:text-slate-300" onClick={() => setSelectedLayers(prev => { const next = new Set(prev); visible.forEach(l => next.delete(l.name)); return next; })}>{term ? 'Clear shown' : 'None'}</button>
+              </span>
+            }
+          >
             <input
               type="search"
               value={layerSearch}
               onChange={(e) => setLayerSearch(e.target.value)}
               placeholder="Search layers (matches anywhere in name)"
-              className="w-full mb-2 text-xs bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-400"
+              className="mb-2 w-full rounded-md border border-white/[0.08] bg-black/30 px-2.5 py-1.5 text-[11.5px] text-slate-200 outline-none placeholder:text-slate-600 focus:border-[color:var(--up-accent)]"
             />
-            <div className="max-h-48 overflow-y-auto grid grid-cols-1 gap-1">
-              {visible.length === 0 && <span className="text-xs text-gray-500">No matching layers</span>}
+            <p className="mb-2 text-[10.5px] text-slate-500">None checked = smooth every layer.</p>
+            <div className="grid max-h-48 grid-cols-1 gap-0.5 overflow-y-auto">
+              {visible.length === 0 && <span className="text-[11px] text-slate-500">No matching layers</span>}
               {visible.map(l => (
-                <label key={l.name} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                <label key={l.name} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-[11.5px] text-slate-300 hover:bg-white/[0.04]">
                   <input
                     type="checkbox"
                     checked={selectedLayers.has(l.name)}
@@ -192,22 +195,21 @@ const DxfInput: React.FC<DxfInputProps> = ({ onDxfUploaded, onGoBack, backButton
                       if (e.target.checked) next.add(l.name); else next.delete(l.name);
                       return next;
                     })}
-                    className="w-3.5 h-3.5 rounded border-gray-600 text-indigo-500 bg-gray-800"
+                    className="h-3.5 w-3.5 rounded border-white/20 accent-indigo-500"
                   />
-                  <span className="font-mono truncate">{l.name}</span>
-                  <span className="text-gray-500 ml-auto">{l.entityCount}</span>
+                  <span className="truncate font-mono">{l.name}</span>
+                  <span className="ml-auto text-slate-500">{l.entityCount}</span>
                 </label>
               ))}
             </div>
-            <div className="mt-3 flex gap-2 justify-end">
-              <button type="button" onClick={() => setPending(null)} className="px-3 py-1.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200">Cancel</button>
-              <button type="button" onClick={confirmLoad} className="px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-500 text-white font-semibold">Load</button>
+            <div className="mt-3 flex justify-end gap-2">
+              <UploadGhostButton onClick={() => setPending(null)}>Cancel</UploadGhostButton>
+              <UploadPrimaryButton onClick={confirmLoad}>Load drawing</UploadPrimaryButton>
             </div>
-          </div>
-          );
-        })()}
-      </div>
-    </div>
+          </UploadPanel>
+        );
+      })()}
+    </UploadShell>
   );
 };
 

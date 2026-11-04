@@ -20,6 +20,7 @@
 
 import React, { useCallback, useRef, useState } from 'react';
 import { type ContourGeneration, type InclusionBoundary } from '../types.ts';
+import { ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon } from './icons.tsx';
 
 interface ContourManagementPanelProps {
   generations: ContourGeneration[];
@@ -36,6 +37,8 @@ interface ContourManagementPanelProps {
   onDelete: (id: string) => void;
   onNewGeneration: () => void;
   onClose?: () => void;
+  isDocked?: boolean;
+  onToggleDock?: () => void;
 }
 
 const GENERATION_COLORS = [
@@ -64,6 +67,8 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
   onDelete,
   onNewGeneration,
   onClose,
+  isDocked = false,
+  onToggleDock,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -111,13 +116,19 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
 
   return (
     <div
-      className="fixed z-40 bg-gray-900/95 border border-amber-500/40 rounded-lg shadow-2xl text-sm text-gray-200 backdrop-blur-sm w-[360px]"
-      style={{ left: resolvedPos.x, top: resolvedPos.y }}
+      className={
+        isDocked
+          ? 'w-full bg-gray-900/95 border-b border-amber-500/30 text-sm text-gray-200 flex flex-col'
+          : 'fixed z-40 bg-gray-900/95 border border-amber-500/40 rounded-lg shadow-2xl text-sm text-gray-200 backdrop-blur-sm w-[360px]'
+      }
+      style={isDocked ? undefined : { left: resolvedPos.x, top: resolvedPos.y }}
     >
       {/* Header */}
       <div
-        className="flex items-center justify-between px-3 py-2 border-b border-amber-500/30 cursor-move select-none"
-        onMouseDown={handleDragStart}
+        className={`flex items-center justify-between px-3 py-2 border-b border-amber-500/30 select-none ${
+          isDocked ? 'cursor-default' : 'cursor-move'
+        }`}
+        onMouseDown={isDocked ? undefined : handleDragStart}
       >
         <div className="flex items-center gap-2">
           <span className="text-amber-400">📐</span>
@@ -132,6 +143,16 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
             className="text-[11px] px-2 py-0.5 rounded bg-amber-600/80 hover:bg-amber-500 text-white font-medium"
             title="Generate new contours"
           >+ New</button>
+          {onToggleDock && (
+            <button
+              type="button"
+              onClick={onToggleDock}
+              className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-cyan-400 transition-colors"
+              title={isDocked ? 'Pop out Contour Generations to canvas' : 'Dock Contour Generations into Tool Station'}
+            >
+              {isDocked ? <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" /> : <ArrowDownOnSquareIcon className="w-3.5 h-3.5" />}
+            </button>
+          )}
           <button onClick={() => setCollapsed(c => !c)} className="text-xs text-gray-400 hover:text-white" title={collapsed ? 'Expand' : 'Collapse'}>
             {collapsed ? '▾' : '▴'}
           </button>

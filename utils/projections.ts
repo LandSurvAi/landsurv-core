@@ -1,6 +1,18 @@
 import proj4 from 'proj4';
 import { GLOBAL_CRS } from './crs/globalCatalog.ts';
 
+/** Real-world EPSG codes (wkid) that saved sessions and ArcGIS services
+ *  actually carry, mapped to their state. The zone table below uses internal
+ *  27xxx ids, so State Plane projects need this alias table to be recognized. */
+export const projectionEpsgStates: Record<number, string> = {
+    2271: 'PA', 2272: 'PA',
+    3424: 'NJ',
+    2248: 'MD',
+    2235: 'DE',
+    2260: 'NY', 2261: 'NY', 2262: 'NY', 2263: 'NY',
+    2275: 'TX', 2276: 'TX', 2277: 'TX', 2278: 'TX', 2279: 'TX',
+};
+
 export const projectionStates = [
     { name: 'Alabama', code: 'AL' },
     { name: 'Alaska', code: 'AK' },

@@ -22,7 +22,6 @@ import { StandardsComplianceContent } from './landing/StandardsComplianceContent
 import { BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, DocumentDuplicateIcon, DxfAnalyzerIcon, LsvzIcon, CurrencyDollarIcon, CrosshairsIcon, CogoIcon, FolderIcon, DocumentTextIcon, ArrowUpTrayIcon, DownloadIcon, ScaleIcon, MapPinIcon, CameraIcon, DroneIcon, ClipboardDocumentListIcon, LogClockIcon, BugAntIcon, CpuChipIcon, GisAgentIcon, ContourIcon, ProfileIcon, SatelliteIcon, ARIcon, ZoningIcon, TitleSearchIcon, PlugIcon, LayersIcon, CadManagerIcon, CivilDrafterIcon, KeyIcon, CogIcon, FloodIcon, HomeIcon, StructuresIcon, SoilsIcon, SlopeIcon, StandardsComplianceIcon, EnvelopeIcon, InfoIcon, LegalScaleIcon, ProjectionGlobeIcon } from './icons.tsx';
 import { getRetiredAgents, type HomepageAgentType } from '../utils/retiredAgents.ts';
 import { getGlobalSettings, subscribeGlobalSettings } from '../utils/globalSettings.ts';
-import PublicConciergeChat from './PublicConciergeChat.tsx';
 import { CacpBadge } from './CacpBadge.tsx';
 import CacpManifestModal from './CacpManifestModal.tsx';
 import { agentRegistry } from '../services/AgentRegistry';
@@ -231,6 +230,8 @@ type Card = AgentCard;
 
 interface InitialAgentSelectionProps {
   onSelectAgent: (agent: AgentType) => void;
+  /** Called when the user explicitly clicks a tool option chip on a home card (e.g. Calc, Flood Area, From Survey) so the Tool Dock opens for that tool. */
+  onSelectAgentToolOption?: (agent: AgentType) => void;
   onLoadSession: () => void;
   onShowSettings: () => void;
   onShowApiKeySettings: () => void;
@@ -517,7 +518,7 @@ export const homepageAgentCards = [
 
 const QUICK_CHIP_CLASS = 'agent-quick-chip relative inline-flex items-center gap-1 rounded-[5px] border border-slate-600/70 bg-slate-800/40 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-gray-300 transition-colors hover:border-slate-400 hover:bg-slate-700/60 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-400 light-theme:border-gray-300 light-theme:bg-white/70 light-theme:text-gray-600 light-theme:hover:text-gray-900';
 
-const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean, onShowReleaseStages?: () => void, onInfoClick?: () => void, pulseDelay?: number, onCacpClick?: (agent: AgentType) => void, onLoadPoints?: () => void, onOpenBoundaryEditor?: () => void, onOpenBoundaryGis?: () => void, onOpenCadStandards?: () => void, onOpenGpsStakeout?: () => void, onOpenGpsCollect?: () => void, onOpenContouringFromGis?: () => void, onOpenContouringFromTin?: () => void, cadStandardsLoaded?: boolean }> = ({ card, onClick, isC3DConnected = false, onShowReleaseStages, onInfoClick, pulseDelay = 0, onCacpClick, onLoadPoints, onOpenBoundaryEditor, onOpenBoundaryGis, onOpenCadStandards, onOpenGpsStakeout, onOpenGpsCollect, onOpenContouringFromGis, onOpenContouringFromTin, cadStandardsLoaded = false }) => {
+const Card: React.FC<{ card: Card, onClick: () => void, onToolOptionClick?: () => void, isC3DConnected?: boolean, onShowReleaseStages?: () => void, onInfoClick?: () => void, pulseDelay?: number, onCacpClick?: (agent: AgentType) => void, onLoadPoints?: () => void, onOpenBoundaryEditor?: () => void, onOpenBoundaryGis?: () => void, onOpenCadStandards?: () => void, onOpenGpsStakeout?: () => void, onOpenGpsCollect?: () => void, onOpenContouringFromGis?: () => void, onOpenContouringFromTin?: () => void, cadStandardsLoaded?: boolean }> = ({ card, onClick, onToolOptionClick, isC3DConnected = false, onShowReleaseStages, onInfoClick, pulseDelay = 0, onCacpClick, onLoadPoints, onOpenBoundaryEditor, onOpenBoundaryGis, onOpenCadStandards, onOpenGpsStakeout, onOpenGpsCollect, onOpenContouringFromGis, onOpenContouringFromTin, cadStandardsLoaded = false }) => {
     const Icon = card.icon;
 
     // Hex color mapping for fade animation
@@ -734,11 +735,11 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     Gather Zoning
                 </button>
             )}
-            {/* COGO Agent — Calc CTA opens agent (same as clicking the card). */}
+            {/* COGO Agent — Calc CTA opens agent tool dock. */}
             {card.actionType === 'agent' && card.type === AgentType.COGO_AGENT && (
                 <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); onClick(); }}
+                    onClick={(e) => { e.stopPropagation(); (onToolOptionClick ?? onClick)(); }}
                     title="Open the COGO panel — inverse, intersection, and shrinkwrap (boundary hull) tools"
                     className={QUICK_CHIP_CLASS}
                 >
@@ -746,11 +747,11 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     Calc
                 </button>
             )}
-            {/* Flood Zone Agent — Flood Area CTA opens agent (same as clicking the card). */}
+            {/* Flood Zone Agent — Flood Area CTA opens agent tool dock. */}
             {card.actionType === 'agent' && card.type === AgentType.FLOOD_AGENT && (
                 <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); onClick(); }}
+                    onClick={(e) => { e.stopPropagation(); (onToolOptionClick ?? onClick)(); }}
                     title="Download FEMA NFHL flood-hazard linework for your project area"
                     className={QUICK_CHIP_CLASS}
                 >
@@ -758,11 +759,11 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     Flood Area
                 </button>
             )}
-            {/* Structures Agent — Overlay Structures CTA opens agent. */}
+            {/* Structures Agent — Overlay Structures CTA opens agent tool dock. */}
             {card.actionType === 'agent' && card.type === AgentType.STRUCTURES_AGENT && (
                 <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); onClick(); }}
+                    onClick={(e) => { e.stopPropagation(); (onToolOptionClick ?? onClick)(); }}
                     title="Overlay FEMA NSI structures and synthesize building footprints"
                     className={QUICK_CHIP_CLASS}
                 >
@@ -770,11 +771,11 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     Overlay Structures
                 </button>
             )}
-            {/* Soils Agent — Overlay Soils CTA opens agent. */}
+            {/* Soils Agent — Overlay Soils CTA opens agent tool dock. */}
             {card.actionType === 'agent' && card.type === AgentType.SOILS_AGENT && (
                 <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); onClick(); }}
+                    onClick={(e) => { e.stopPropagation(); (onToolOptionClick ?? onClick)(); }}
                     title="Overlay USDA NRCS SSURGO soil survey map-unit polygons"
                     className={QUICK_CHIP_CLASS}
                 >
@@ -787,7 +788,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                 <div className="mt-2 flex flex-wrap gap-1.5">
                     <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); onClick(); }}
+                        onClick={(e) => { e.stopPropagation(); (onToolOptionClick ?? onClick)(); }}
                         title="Open Contouring Agent and contour from your loaded survey points"
                         className={QUICK_CHIP_CLASS}
                     >
@@ -830,11 +831,11 @@ const Card: React.FC<{ card: Card, onClick: () => void, isC3DConnected?: boolean
                     AI Draw
                 </button>
             )}
-            {/* Profile Agent New Profile CTA — same effect as clicking the card (view agent, no upload screen). */}
+            {/* Profile Agent New Profile CTA — opens Profile tool dock. */}
             {card.actionType === 'agent' && card.type === AgentType.PROFILE_AGENT && (
                 <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); onClick(); }}
+                    onClick={(e) => { e.stopPropagation(); (onToolOptionClick ?? onClick)(); }}
                     title="Open the Profile & Cross Section workspace"
                     className={QUICK_CHIP_CLASS}
                 >
@@ -1138,6 +1139,7 @@ const GpsStatus: React.FC<{
 
 const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({ 
     onSelectAgent,
+    onSelectAgentToolOption,
     onLoadSession,
     onShowSettings,
     onShowApiKeySettings,
@@ -1831,7 +1833,6 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
                   </span>
                 </span>
               )}</span></span>
-              <PublicConciergeChat compact />
               <a
                 href="https://www.youtube.com/@LandSurvAI"
                 target="_blank"
@@ -1987,9 +1988,6 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
               <span>Settings</span>
             </button>
           </div>
-          {/* Public LSVZ Lite concierge chat — now rendered as a compact pulsing
-              bulb next to the LandSurv.ai logo (see header above). The full
-              chat surfaces in a floating dialog on click. */}
           {isJobInfoOpen && jobInfo && setJobInfo && (
             <JobInfoDialog
               jobInfo={jobInfo}
@@ -2034,6 +2032,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
                   key={card.type}
                   card={cardWithRelease}
                   onClick={() => handleCardClick(cardWithRelease)}
+                  onToolOptionClick={onSelectAgentToolOption ? () => onSelectAgentToolOption(cardWithRelease.type) : undefined}
                   isC3DConnected={isC3DConnected} 
                   onShowReleaseStages={onShowReleaseStages}
                   onInfoClick={agentInfoMap[card.type] ? () => setActiveInfoAgent(card.type) : undefined}

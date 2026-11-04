@@ -7,6 +7,7 @@ import { ToolsDrawer } from './ToolsDrawer.tsx';
 import { agentConfig, agentThemeColors } from '../constants/agents.ts';
 import { sanitizeZoningAnswer } from '../utils/zoningRender.ts';
 import { formatChatHtml } from '../utils/chatHtml.ts';
+import { A2UISurface } from './A2UISurface.tsx';
 
 interface ChatInterfaceProps {
   messages: ChatMessage[];
@@ -48,7 +49,7 @@ const agentLabels: { [key in AgentType]?: string } = {
     [AgentType.POINT_EDITOR]: 'Point Editor',
     [AgentType.GPS_STAKEOUT]: 'GPS Rover',
     [AgentType.FIELD_BOOK]: 'Field Book',
-    [AgentType.LSVZ_AGENT]: 'LSVZ Meta-Agent',
+    [AgentType.LSVZ_AGENT]: 'LSAI Agent',
     [AgentType.CIVIL_PLAN_EXPERT]: 'Civil Plan Expert',
     [AgentType.DXF_ANALYZER]: 'DXF Agent',
     [AgentType.IMAGE_ANALYZER]: 'Image Analyzer',
@@ -347,6 +348,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 return formatChatHtml(raw);
               })() }}
               />
+
+              {/* A2UI Interactive Surface (uploads, intake, and data explorers) */}
+              {msg.a2ui && msg.a2ui.kind !== 'intake-prompt' && (
+                <A2UISurface payload={msg.a2ui} />
+              )}
 
               {/* Interactive clarifying question options */}
               {msg.questionOptions && msg.questionOptions.length > 0 && (

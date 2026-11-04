@@ -1,6 +1,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { UploadIcon, HomeIcon } from './icons';
+import { PlumbBobIcon } from './icons';
+import { UploadShell, UploadPanel, UploadDropzone, UploadPrimaryButton, UploadGhostButton } from './UploadShell.tsx';
 import { type SurveyPoint } from '../types.ts';
 import { useErrorReporter } from '../contexts/AppStateContext';
 
@@ -100,6 +101,7 @@ const PointEditorInput: React.FC<PointEditorInputProps> = ({ onSessionStart, onG
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const dropZoneRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const { reportError } = useErrorReporter();
 
@@ -188,7 +190,13 @@ const PointEditorInput: React.FC<PointEditorInputProps> = ({ onSessionStart, onG
     }
     e.target.value = ''; // allow re-selecting the same file/folder
   };
-  const handleClick = () => { document.getElementById('point-editor-file-input')?.click(); };
+  const handleClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    } else {
+      document.getElementById('point-editor-file-input')?.click();
+    }
+  };
   const handleFolderClick = (e: React.MouseEvent) => { e.stopPropagation(); folderInputRef.current?.click(); };
 
   // webkitdirectory / directory aren't in React's input typings and are unreliable via spread props,
@@ -211,72 +219,46 @@ const PointEditorInput: React.FC<PointEditorInputProps> = ({ onSessionStart, onG
   }, [autoOpenUpload]);
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-full p-8 text-center">
-       <button onClick={onGoBack} className="absolute top-4 left-4 p-2 text-gray-300 hover:text-white transition-colors" title="Go to Home Screen">
-        <HomeIcon className="w-6 h-6"/>
-      </button>
-        <h1 className="text-5xl sm:text-6xl font-extrabold leading-none tracking-tight text-center mb-4">
-          <span className="text-white">Point</span><span className="text-yellow-400">Editor</span><span className="text-[0.5em]"><span className="text-gray-500">.</span><span className="text-white">Land</span><span className="text-cyan-400">Surv</span><span className="text-green-400">.ai</span></span><sup className="text-xl text-gray-500">™</sup>
-      </h1>
-      <div className="w-full max-w-2xl flex flex-col items-center">
-        <p className="text-gray-400 mt-2 mb-6 max-w-lg">
-          Upload point files (.csv, .txt), drop an entire folder including its subfolders, or start a new session to manually enter and edit survey points.
-        </p>
+    <UploadShell
+      icon={PlumbBobIcon}
+      accent="#facc15"
+      title="Point Editor"
+      description="Upload point files (.csv, .txt) or drop a whole folder — subfolders included. Or start empty and enter points by hand."
+      onGoBack={onGoBack}
+      backTitle="Go to Home Screen"
+    >
+      {/* Hidden inputs live OUTSIDE the drop zone: a programmatic .click() dispatches a click event
+          that bubbles to ancestors, so keeping them inside the zone would re-trigger the zone's
+          onClick (file picker) and override the folder picker. */}
+      <input ref={fileInputRef} id="point-editor-file-input" type="file" multiple className="hidden" accept=".csv,.txt,text/plain,text/csv" onChange={handleFileChange} />
+      <input ref={setFolderInput} type="file" className="hidden" onChange={handleFileChange} />
 
-        {/* Hidden inputs live OUTSIDE the drop zone: a programmatic .click() dispatches a click event
-            that bubbles to ancestors, so keeping them inside the zone would re-trigger the zone's
-            onClick (file picker) and override the folder picker. */}
-        <input id="point-editor-file-input" type="file" multiple className="hidden" accept=".csv,.txt,text/plain,text/csv" onChange={handleFileChange} />
-        <input ref={setFolderInput} type="file" className="hidden" onChange={handleFileChange} />
-
-        {/* Upload Drop Zone */}
-        <div
-          ref={dropZoneRef}
-          className={`w-full max-w-lg cursor-pointer flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg transition-colors duration-300 mb-6 ${isDragging ? 'border-yellow-400 bg-gray-700/50' : 'border-gray-600 hover:border-yellow-500'}`}
-          onDragEnter={handleDragEnter} 
-          onDragLeave={handleDragLeave} 
-          onDragOver={handleDragOver} 
-          onDrop={handleDrop} 
+      <UploadPanel>
+        <UploadDropzone
           onClick={handleClick}
-          role="button" 
-          tabIndex={0} 
-          aria-label="Upload point files or a folder"
+          onFiles={(selected) => handleFiles(Array.from(selected ?? []))}
+          onDrop={handleDrop}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          isDragging={isDragging}
+          title={isProcessing ? 'Processing files…' : 'Drop point files or a folder here'}
+          hint="P,N,E,Z,D format (.csv or .txt) — subfolders included"
         >
-          <UploadIcon className="w-12 h-12 mb-3 text-gray-500" />
-          <h2 className="text-lg font-semibold text-white">{isProcessing ? 'Processing files…' : 'Drop point files or a folder here'}</h2>
-          <p className="text-gray-400 mt-1 text-sm">P,N,E,Z,D format (.csv or .txt) — subfolders included</p>
-          <div className="flex items-center gap-3 mt-4">
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); handleClick(); }}
-              className="px-4 py-2 text-sm font-medium text-white bg-gray-700 rounded-md hover:bg-gray-600 transition-colors"
-            >
-              Choose Files
-            </button>
-            <button
-              type="button"
-              onClick={handleFolderClick}
-              className="px-4 py-2 text-sm font-medium text-white bg-gray-700 rounded-md hover:bg-gray-600 transition-colors"
-            >
-              Choose Folder
-            </button>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+            <UploadGhostButton onClick={(e) => { e.stopPropagation(); handleClick(); }}>
+              Choose files
+            </UploadGhostButton>
+            <UploadGhostButton onClick={handleFolderClick}>
+              Choose folder
+            </UploadGhostButton>
           </div>
+        </UploadDropzone>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] pt-3">
+          <p className="text-[11.5px] text-slate-400">No file handy? Key the points in by hand instead.</p>
+          <UploadPrimaryButton onClick={onSessionStart}>Start empty session</UploadPrimaryButton>
         </div>
-
-        <div className="flex items-center gap-4 w-full max-w-lg mb-6">
-          <div className="flex-1 h-px bg-gray-700"></div>
-          <span className="text-gray-500 text-sm">or</span>
-          <div className="flex-1 h-px bg-gray-700"></div>
-        </div>
-
-        <button
-          onClick={onSessionStart}
-          className="px-8 py-3 text-lg font-semibold text-white bg-yellow-600 rounded-lg hover:bg-yellow-700 disabled:bg-gray-600 transition-colors duration-200"
-        >
-          Start Empty Session
-        </button>
-      </div>
-    </div>
+      </UploadPanel>
+    </UploadShell>
   );
 };
 

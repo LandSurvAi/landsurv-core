@@ -35,6 +35,7 @@ import type { StaticMapKeys } from '../../services/staticMapsService.ts';
 import { SURVEY_SYMBOL_LIBRARY, findMatchingSymbol } from '../../data/surveySymbolLibrary';
 import { loadCountiesForState, loadMunicipalitiesForState, useJurisdictionList, useMunicipalitiesForCounty } from '../../utils/usJurisdictions';
 import { ESRI_STATE_SERVICES } from '../../utils/esriStateServices.ts';
+import { ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon } from '../icons.tsx';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,8 @@ interface AutoDraftPanelProps {
   /** Build TIN → steep-slope bands → draw. Returns triangle counts. */
   onSteepSlopes?: () => Promise<{ kept: number; analyzed: number } | void>;
   onDismiss:    () => void;
+  isDocked?:    boolean;
+  onToggleDock?: () => void;
 }
 
 type StepId = 'location' | 'aoi' | 'sources' | 'terrain' | 'codes' | 'draw';
@@ -130,6 +133,7 @@ export default function AutoDraftPanel({
   points, lines, jobInfo, zoningContext, projectEpsg, mapKeys,
   onDraft, getCanvasLineCount, onCanvasLines, onParcelResult, onStreetLabels,
   getSymbolCoverage, onAddSymbols, onGenerateContours, onFetchGisContours, onSteepSlopes, onDismiss,
+  isDocked = false, onToggleDock,
 }: AutoDraftPanelProps) {
   const [phases, setPhases]     = useState<OrchestratorPhase[]>([]);
   const [isRunning, setRunning] = useState(false);
@@ -391,7 +395,13 @@ export default function AutoDraftPanel({
   );
 
   return (
-    <div className="absolute bottom-24 right-4 z-[60] w-80 bg-gray-900/95 border border-violet-500/40 rounded-xl shadow-2xl overflow-hidden backdrop-blur-sm select-none">
+    <div
+      className={
+        isDocked
+          ? 'w-full bg-gray-900/95 border-b border-violet-500/30 overflow-hidden select-none'
+          : 'absolute bottom-24 right-4 z-[60] w-80 bg-gray-900/95 border border-violet-500/40 rounded-xl shadow-2xl overflow-hidden backdrop-blur-sm select-none'
+      }
+    >
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-violet-900/50 border-b border-violet-500/30">
@@ -405,13 +415,25 @@ export default function AutoDraftPanel({
             <span className="text-xs text-green-400 ml-1">done</span>
           )}
         </div>
-        <button
-          onClick={onDismiss}
-          className="text-gray-500 hover:text-white text-xs px-1 py-0.5 rounded transition-colors"
-          title="Close auto draft panel"
-        >
-          ✕
-        </button>
+        <div className="flex items-center gap-1">
+          {onToggleDock && (
+            <button
+              type="button"
+              onClick={onToggleDock}
+              className="text-violet-300 hover:text-white p-1 rounded hover:bg-violet-800/50 transition-colors"
+              title={isDocked ? 'Pop out Auto Draft to canvas' : 'Dock Auto Draft into Tool Station'}
+            >
+              {isDocked ? <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" /> : <ArrowDownOnSquareIcon className="w-3.5 h-3.5" />}
+            </button>
+          )}
+          <button
+            onClick={onDismiss}
+            className="text-gray-500 hover:text-white text-xs px-1 py-0.5 rounded transition-colors"
+            title="Close auto draft panel"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       {/* ── Pre-flight Q&A ── */}

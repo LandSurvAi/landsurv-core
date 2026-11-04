@@ -2,6 +2,7 @@ import React, { useState, useCallback, forwardRef, useImperativeHandle } from 'r
 import { type SurveyPoint, AgentType } from '../types.ts';
 import { inverse, formatBearing } from '../utils/cogo.ts';
 import { useErrorReporter } from '../contexts/AppStateContext';
+import { CogoSkillLibrary } from './CogoSkillLibrary.tsx';
 
 interface CogoPanelProps {
   pointLists: { id: string; name: string; points: SurveyPoint[]; isVisible: boolean }[];
@@ -12,6 +13,8 @@ interface CogoPanelProps {
   };
   onPointSelect?: (point: SurveyPoint) => void;
   isSelectingFromCanvas?: boolean;
+  /** Launch a selected COGO skill in the agent chat. */
+  onRunCogoSkill?: (prompt: string) => void;
 }
 
 export interface CogoPanelHandles {
@@ -23,8 +26,7 @@ export const CogoPanel = forwardRef<CogoPanelHandles, CogoPanelProps>(({
   onAddPoint,
   activeAgent,
   settings,
-  onPointSelect,
-  isSelectingFromCanvas = false,
+  onRunCogoSkill,
 }, ref) => {
   const [inversePoint1, setInversePoint1] = useState<string>('');
   const [inversePoint2, setInversePoint2] = useState<string>('');
@@ -32,13 +34,21 @@ export const CogoPanel = forwardRef<CogoPanelHandles, CogoPanelProps>(({
   const [selectingPoint, setSelectingPoint] = useState<'point1' | 'point2' | null>(null);
   const { reportError } = useErrorReporter();
 
-  // Expose handleCanvasPointSelect method via ref
+  const allPoints = pointLists.flatMap(list => list.points);
+
+  const handleCanvasPointSelect = useCallback((point: SurveyPoint) => {
+    if (selectingPoint === 'point1') {
+      setInversePoint1(point.pointNumber);
+      setSelectingPoint(null);
+    } else if (selectingPoint === 'point2') {
+      setInversePoint2(point.pointNumber);
+      setSelectingPoint(null);
+    }
+  }, [selectingPoint]);
+
   useImperativeHandle(ref, () => ({
     handleCanvasPointSelect,
-  }));
-
-  // Get all points from all lists
-  const allPoints = pointLists.flatMap(list => list.points);
+  }), [handleCanvasPointSelect]);
 
   const handleCalculateInverse = useCallback(() => {
     const point1 = allPoints.find(p => p.pointNumber === inversePoint1);
@@ -56,9 +66,9 @@ export const CogoPanel = forwardRef<CogoPanelHandles, CogoPanelProps>(({
 
     setInverseResult({
       distance: result.distance,
-      bearing: formatBearing(result.bearing)
+      bearing: formatBearing(result.bearing),
     });
-  }, [inversePoint1, inversePoint2, allPoints, reportError]);
+  }, [allPoints, inversePoint1, inversePoint2, reportError]);
 
   const handleClearInverse = useCallback(() => {
     setInversePoint1('');
@@ -66,155 +76,166 @@ export const CogoPanel = forwardRef<CogoPanelHandles, CogoPanelProps>(({
     setInverseResult(null);
   }, []);
 
-  const handleCanvasPointSelect = useCallback((point: SurveyPoint) => {
-    if (selectingPoint === 'point1') {
-      setInversePoint1(point.pointNumber);
-      setSelectingPoint(null);
-    } else if (selectingPoint === 'point2') {
-      setInversePoint2(point.pointNumber);
-      setSelectingPoint(null);
-    }
-  }, [selectingPoint]);
-
   const handleSelectFromCanvas = useCallback((pointType: 'point1' | 'point2') => {
     setSelectingPoint(pointType);
-    if (onPointSelect) {
-      // This will trigger canvas selection mode
+  }, []);
+
+  const handleRunSkill = useCallback((prompt: string) => {
+    if (!onRunCogoSkill) {
+      reportError({
+        title: 'COGO chat unavailable',
+        message: 'Open the COGO agent chat to run this skill.',
+      });
+      return;
     }
-  }, [onPointSelect]);
+    onRunCogoSkill(prompt);
+  }, [onRunCogoSkill, reportError]);
 
   return (
-    <div className="w-full h-full bg-gray-800 text-sm text-gray-300 flex flex-col light-theme:bg-gray-50 light-theme:text-gray-600">
-      <div className="flex-grow p-4 space-y-6 overflow-y-auto">
-        {/* Inverse Calculation Tool */}
-        <div className="bg-gray-700/50 rounded-lg p-4 border border-gray-600 light-theme:bg-gray-100/50 light-theme:border-gray-300">
-          <h3 className="text-lg font-semibold text-purple-400 mb-4 light-theme:text-purple-600">Inverse Calculation</h3>
-          <p className="text-gray-400 text-sm mb-4 light-theme:text-gray-500">
-            Calculate the distance and bearing between two points.
-          </p>
+    <div className="flex h-full w-full flex-col overflow-hidden bg-[#0b111a] text-sm text-slate-200 light-theme:bg-gray-50 light-theme:text-gray-700">
+      <div className="flex-1 space-y-4 overflow-y-auto p-3.5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-slate-100">COGO console</h2>
+              <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-violet-300">
+                Precision
+              </span>
+            </div>
+            <p className="mt-0.5 text-[10.5px] text-slate-400">
+              {allPoints.length.toLocaleString()} points available · {pointLists.length} lists
+            </p>
+          </div>
+          <span className="rounded-md border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 font-mono text-[9px] text-slate-500">
+            COGO / CACP
+          </span>
+        </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <section className="rounded-xl border border-white/[0.08] bg-white/[0.025] p-3">
+          <div className="flex items-start justify-between gap-2">
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2 light-theme:text-gray-700">
+              <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-violet-300">Inverse between points</h3>
+              <p className="mt-1 text-[11px] leading-snug text-slate-400">
+                Bearing and distance from any two points in the project.
+              </p>
+            </div>
+            {inverseResult && (
+              <span className="shrink-0 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-300">
+                Ready
+              </span>
+            )}
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-[10.5px] font-semibold text-slate-300">
                 Point 1
               </label>
               <select
                 value={inversePoint1}
-                onChange={(e) => setInversePoint1(e.target.value)}
-                className="w-full p-2 bg-gray-600 border border-gray-500 rounded-md text-white light-theme:bg-gray-200 light-theme:text-gray-800 light-theme:border-gray-400"
+                onChange={event => setInversePoint1(event.target.value)}
+                className="w-full rounded-lg border border-white/[0.08] bg-[#0d1522] px-2 py-1.5 text-[11px] text-slate-200 focus:border-violet-500/40 focus:outline-none"
               >
                 <option value="">Select Point 1...</option>
-                {allPoints.map(point => (
-                  <option key={point.pointNumber} value={point.pointNumber}>
+                {allPoints.map((point, index) => (
+                  <option key={`${point.pointNumber}-${index}`} value={point.pointNumber}>
                     {point.pointNumber} - {point.description || 'No description'}
                   </option>
                 ))}
               </select>
               <button
+                type="button"
                 onClick={() => handleSelectFromCanvas('point1')}
-                className={`mt-2 px-3 py-1 text-xs rounded-md font-semibold ${
+                className={`mt-1.5 w-full rounded-md border px-2 py-1 text-[10px] font-semibold transition-colors ${
                   selectingPoint === 'point1'
-                    ? 'bg-purple-500 text-white'
-                    : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
-                } light-theme:bg-gray-200 light-theme:text-gray-700`}
+                    ? 'border-violet-400/60 bg-violet-500/20 text-violet-200'
+                    : 'border-white/[0.07] bg-white/[0.03] text-slate-400 hover:border-white/[0.14] hover:text-slate-200'
+                }`}
               >
-                {selectingPoint === 'point1' ? 'Click Point on Canvas' : 'Select from Canvas'}
+                {selectingPoint === 'point1' ? 'Click point on canvas' : 'Select from canvas'}
               </button>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2 light-theme:text-gray-700">
+              <label className="mb-1.5 block text-[10.5px] font-semibold text-slate-300">
                 Point 2
               </label>
               <select
                 value={inversePoint2}
-                onChange={(e) => setInversePoint2(e.target.value)}
-                className="w-full p-2 bg-gray-600 border border-gray-500 rounded-md text-white light-theme:bg-gray-200 light-theme:text-gray-800 light-theme:border-gray-400"
+                onChange={event => setInversePoint2(event.target.value)}
+                className="w-full rounded-lg border border-white/[0.08] bg-[#0d1522] px-2 py-1.5 text-[11px] text-slate-200 focus:border-violet-500/40 focus:outline-none"
               >
                 <option value="">Select Point 2...</option>
-                {allPoints.map(point => (
-                  <option key={point.pointNumber} value={point.pointNumber}>
+                {allPoints.map((point, index) => (
+                  <option key={`${point.pointNumber}-${index}`} value={point.pointNumber}>
                     {point.pointNumber} - {point.description || 'No description'}
                   </option>
                 ))}
               </select>
               <button
+                type="button"
                 onClick={() => handleSelectFromCanvas('point2')}
-                className={`mt-2 px-3 py-1 text-xs rounded-md font-semibold ${
+                className={`mt-1.5 w-full rounded-md border px-2 py-1 text-[10px] font-semibold transition-colors ${
                   selectingPoint === 'point2'
-                    ? 'bg-purple-500 text-white'
-                    : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
-                } light-theme:bg-gray-200 light-theme:text-gray-700`}
+                    ? 'border-violet-400/60 bg-violet-500/20 text-violet-200'
+                    : 'border-white/[0.07] bg-white/[0.03] text-slate-400 hover:border-white/[0.14] hover:text-slate-200'
+                }`}
               >
-                {selectingPoint === 'point2' ? 'Click Point on Canvas' : 'Select from Canvas'}
+                {selectingPoint === 'point2' ? 'Click point on canvas' : 'Select from canvas'}
               </button>
             </div>
           </div>
 
           {selectingPoint && (
-            <div className="bg-purple-600/20 border border-purple-500 rounded-lg p-3 mb-4">
-              <p className="text-purple-300 text-sm font-semibold">
-                Click on a point in the canvas to select it as {selectingPoint === 'point1' ? 'Point 1' : 'Point 2'}
-              </p>
+            <div className="mt-2.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2.5 py-2 text-[10.5px] font-medium text-violet-200">
+              Click a point on the canvas to set {selectingPoint === 'point1' ? 'Point 1' : 'Point 2'}.
             </div>
           )}
 
-          <div className="flex gap-2 mb-4">
+          <div className="mt-3 flex gap-1.5">
             <button
+              type="button"
               onClick={handleCalculateInverse}
               disabled={!inversePoint1 || !inversePoint2}
-              className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed font-semibold"
+              className="flex-1 rounded-md border border-violet-400/30 bg-violet-600 px-3 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Calculate Inverse
+              Calculate inverse
             </button>
             <button
+              type="button"
               onClick={handleClearInverse}
-              className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 font-semibold"
+              className="rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold text-slate-300 transition-colors hover:bg-white/[0.07]"
             >
               Clear
             </button>
           </div>
 
           {inverseResult && (
-            <div className="bg-gray-600/50 rounded-lg p-3 border border-gray-500 light-theme:bg-gray-200/50 light-theme:border-gray-400">
-              <h4 className="font-semibold text-purple-300 mb-2 light-theme:text-purple-700">Results:</h4>
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-400 light-theme:text-gray-600">Distance:</span>
-                  <span className="font-mono text-white light-theme:text-gray-800">
-                    {inverseResult.distance.toFixed(settings.coordinatePrecision)}'
-                  </span>
+            <div className="mt-2.5 grid grid-cols-2 gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] p-2.5">
+              <div>
+                <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-emerald-400/80">Distance</div>
+                <div className="mt-0.5 font-mono text-sm text-emerald-200">
+                  {inverseResult.distance.toFixed(settings.coordinatePrecision)}'
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400 light-theme:text-gray-600">Bearing:</span>
-                  <span className="font-mono text-white light-theme:text-gray-800">
-                    {inverseResult.bearing}
-                  </span>
-                </div>
+              </div>
+              <div>
+                <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-emerald-400/80">Bearing</div>
+                <div className="mt-0.5 font-mono text-sm text-emerald-200">{inverseResult.bearing}</div>
               </div>
             </div>
           )}
-        </div>
 
-        {/* Intersection Calculation Tool */}
-        <div className="bg-gray-700/50 rounded-lg p-4 border border-gray-600 light-theme:bg-gray-100/50 light-theme:border-gray-300">
-          <h3 className="text-lg font-semibold text-violet-400 mb-4 light-theme:text-violet-600">Intersection Calculation</h3>
-          <p className="text-gray-400 text-sm mb-4 light-theme:text-gray-500">
-            Find the intersection point of two lines defined by points and bearings.
-          </p>
-          <p className="text-gray-500 text-xs italic light-theme:text-gray-600">
-            (Forward calculation feature — enter bearing and distance from a point to find the intersection)
-          </p>
-        </div>
+          {allPoints.length === 0 && (
+            <p className="mt-2.5 text-[10.5px] text-slate-500">
+              Add or upload points to enable the inverse calculator.
+            </p>
+          )}
+        </section>
 
-        {/* Future COGO Tools Placeholder */}
-        <div className="bg-gray-700/50 rounded-lg p-4 border border-gray-600 light-theme:bg-gray-100/50 light-theme:border-gray-300">
-          <h3 className="text-lg font-semibold text-purple-400 mb-2 light-theme:text-purple-600">Additional Tools</h3>
-          <p className="text-gray-400 text-sm light-theme:text-gray-500">
-            More COGO calculation tools will be added here in future updates.
-          </p>
-        </div>
+        <CogoSkillLibrary onRunSkill={handleRunSkill} />
       </div>
     </div>
   );
 });
+
+CogoPanel.displayName = 'CogoPanel';

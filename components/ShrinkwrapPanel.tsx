@@ -47,6 +47,8 @@ interface ShrinkwrapPanelProps {
   onApplyUpdate: () => void;
   /** Convert the reviewed preview into an inclusion boundary. */
   onDrawInclusion: () => void;
+  /** Convert the reviewed preview into a Boundary object in the Boundary Editor. */
+  onDrawBoundary: () => void;
   /** Whether the current hull has been committed as an inclusion boundary. */
   isCommitted: boolean;
   /** Remove the shrinkwrap polyline and end the session. */
@@ -90,6 +92,7 @@ const ShrinkwrapPanel: React.FC<ShrinkwrapPanelProps> = ({
   onStageRestoreAll,
   onApplyUpdate,
   onDrawInclusion,
+  onDrawBoundary,
   isCommitted,
   onClearShrinkwrap,
 }) => {
@@ -141,7 +144,7 @@ const ShrinkwrapPanel: React.FC<ShrinkwrapPanelProps> = ({
 
       <div className="text-[11px] text-gray-400 light-theme:text-gray-600 leading-snug">
         Layer: <span className="font-mono text-gray-200 light-theme:text-gray-800">{layer}</span> ·
-        {isCommitted ? 'drawn as an inclusion boundary' : 'preview only until drawn as an inclusion boundary'}.
+        {isCommitted ? 'drawn as an inclusion boundary' : 'preview only until drawn as an inclusion or boundary'}.
       </div>
 
       {/* Tightness slider — controls concave-hull KNN. Live-recomputes. */}
@@ -360,26 +363,44 @@ const ShrinkwrapPanel: React.FC<ShrinkwrapPanelProps> = ({
           : 'Update Hull'}
       </button>
 
-      <button
-        type="button"
-        disabled={isCommitted || hullCount < 3}
-        onClick={onDrawInclusion}
-        className={[
-          'w-full px-2 py-2 rounded text-xs font-semibold transition-colors',
-          isCommitted
-            ? 'bg-emerald-700/70 text-emerald-100 cursor-default'
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          disabled={isCommitted || hullCount < 3}
+          onClick={onDrawInclusion}
+          className={[
+            'w-full px-2 py-2 rounded text-xs font-semibold transition-colors',
+            isCommitted
+              ? 'bg-emerald-700/70 text-emerald-100 cursor-default'
+              : hullCount >= 3
+                ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                : 'bg-gray-700 text-gray-500 cursor-not-allowed',
+          ].join(' ')}
+          title={isCommitted
+            ? 'This shrinkwrap is already an inclusion boundary'
             : hullCount >= 3
-              ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+              ? 'Commit the reviewed shrinkwrap as an inclusion boundary'
+              : 'A shrinkwrap needs at least three vertices'}
+        >
+          {isCommitted ? 'Inclusion Drawn' : 'Draw Inclusion'}
+        </button>
+        <button
+          type="button"
+          disabled={hullCount < 3}
+          onClick={onDrawBoundary}
+          className={[
+            'w-full px-2 py-2 rounded text-xs font-semibold transition-colors',
+            hullCount >= 3
+              ? 'border border-amber-500/50 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'
               : 'bg-gray-700 text-gray-500 cursor-not-allowed',
-        ].join(' ')}
-        title={isCommitted
-          ? 'This shrinkwrap is already an inclusion boundary'
-          : hullCount >= 3
-            ? 'Commit the reviewed shrinkwrap as an inclusion boundary'
+          ].join(' ')}
+          title={hullCount >= 3
+            ? 'Convert this shrinkwrap into a Boundary object in the Boundary Editor'
             : 'A shrinkwrap needs at least three vertices'}
-      >
-        {isCommitted ? 'Inclusion Drawn' : 'Draw Inclusion'}
-      </button>
+        >
+          Draw Boundary
+        </button>
+      </div>
 
       <div className="pt-2 border-t border-gray-700/60 light-theme:border-gray-300">
         <button

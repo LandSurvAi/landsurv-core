@@ -41,7 +41,7 @@ export const CogoAgentContent: React.FC = () => {
                 </div>
             </div>
             <p>
-                The COGO (Coordinate Geometry) Agent is the project's computational geometry authority. It owns a comprehensive, deterministic skill set used by every other CACP-enabled agent in LandSurv.ai — Boundary, Civil Drafter, Stationing, GPS Stakeout, and the LSVZ Meta-Agent all delegate calculations here instead of approximating them in chat.
+                The COGO (Coordinate Geometry) Agent is the project's computational geometry authority. It owns a comprehensive, deterministic skill set used by every other CACP-enabled agent in LandSurv.ai — Boundary, Civil Drafter, Stationing, GPS Stakeout, and the LSAI Agent all delegate calculations here instead of approximating them in chat.
             </p>
 
             <h4 className="text-lg font-semibold text-violet-300 pt-2">Skill catalog</h4>

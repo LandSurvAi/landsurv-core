@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
-import { UploadIcon, HomeIcon } from './icons.tsx';
-import { exampleFileContent, exampleFileName } from '../assets/example.raw.ts';
+import { CivilDrafterIcon } from './icons.tsx';
+import { UploadShell, UploadPanel, UploadDropzone, UploadPrimaryButton } from './UploadShell.tsx';
 import PdfPageSelector from './PdfPageSelector';
 import { processPdfForMultimodal } from '../utils/pdfUtils';
 import { type SessionFile } from '../types';
@@ -141,12 +141,16 @@ const CivilDrafterFileUpload: React.FC<CivilDrafterFileUploadProps> = ({
     document.getElementById('civil-drafter-file-input')?.click();
   };
 
-  const handleLoadExample = useCallback(() => {
-    onFileUploaded(exampleFileContent, exampleFileName);
-  }, [onFileUploaded]);
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-full p-8 text-center">
+    <UploadShell
+      icon={CivilDrafterIcon}
+      accent="#e879f9"
+      title="Civil Drafter"
+      description="Upload a point file or a PDF plan — the agent generates intelligent linework from it."
+      onGoBack={onGoBack}
+      backTitle={backButtonTitle}
+    >
       {showPageSelector && pendingPdfFile && (
         <PdfPageSelector
           file={pendingPdfFile}
@@ -160,69 +164,44 @@ const CivilDrafterFileUpload: React.FC<CivilDrafterFileUploadProps> = ({
           }}
         />
       )}
+
       {isParsing && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-gray-900/80 rounded-lg">
-          <div className="w-10 h-10 border-4 border-fuchsia-400 border-t-transparent rounded-full animate-spin mb-4" />
-          <p className="text-fuchsia-300 font-semibold">{progress ?? 'Processing...'}</p>
+        <div className="flex items-center gap-2.5 rounded-lg border border-white/[0.07] bg-black/20 px-3 py-2.5">
+          <span className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-fuchsia-300 border-t-transparent" />
+          <span className="min-w-0 truncate font-mono text-[11px] text-slate-400">{progress ?? 'Processing…'}</span>
         </div>
       )}
-      <button onClick={onGoBack} className="absolute top-4 left-4 p-2 text-gray-300 hover:text-white transition-colors" title={backButtonTitle}>
-        <HomeIcon className="w-6 h-6"/>
-      </button>
-      <h1 className="text-5xl sm:text-6xl font-extrabold leading-none tracking-tight text-center mb-4">
-          <span className="text-white">Civil</span><span className="text-fuchsia-400">Drafter</span><span className="text-[0.5em]"><span className="text-gray-500">.</span><span className="text-white">Land</span><span className="text-cyan-400">Surv</span><span className="text-green-400">.ai</span></span><sup className="text-xl text-gray-500">™</sup>
-      </h1>
-      <p className="text-gray-300 mb-6 max-w-lg">
-        Upload a <strong>point file</strong> (.raw, .txt, .csv) or a <strong>PDF plan</strong> for the AI to generate intelligent linework from.
-      </p>
+
       {existingPointCount > 0 && onUseExistingPoints && (
-        <div className="w-full max-w-lg mb-6 p-4 rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-center">
-          <p className="text-cyan-200 mb-3">
-            You already have <strong>{existingPointCount.toLocaleString()}</strong> point{existingPointCount === 1 ? '' : 's'} loaded.
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-400/25 bg-cyan-400/[0.05] px-4 py-3">
+          <p className="text-[12px] text-slate-300">
+            You already have <span className="font-semibold text-slate-100">{existingPointCount.toLocaleString()}</span> point{existingPointCount === 1 ? '' : 's'} loaded.
           </p>
-          <button
-            onClick={onUseExistingPoints}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-gray-900 font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-300"
-          >
-            Continue to drawing with loaded points
-          </button>
-          <p className="text-gray-400 text-sm mt-3">or upload a new file below.</p>
+          <UploadPrimaryButton onClick={onUseExistingPoints}>Continue with loaded points</UploadPrimaryButton>
         </div>
       )}
-      <div
-        className={`w-full max-w-lg cursor-pointer flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-lg transition-colors duration-300 ${isDragging ? 'border-fuchsia-400 bg-gray-700/50' : 'border-gray-600 hover:border-fuchsia-500'}`}
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        onClick={handleClick}
-        role="button"
-        tabIndex={0}
-        aria-label="Upload a file by dragging or clicking"
-      >
-        <input
+
+      <UploadPanel>
+        <UploadDropzone
           id="civil-drafter-file-input"
-          type="file"
-          className="hidden"
           accept=".raw,.txt,.csv,.pts,.pnezd,.pdf,text/plain,application/pdf"
-          onChange={handleFileChange}
+          onFiles={(selected) => {
+            const file = selected?.[0];
+            if (file) handleFile(file);
+          }}
+          onDrop={handleDrop}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          isDragging={isDragging}
+          title="Drop your point file or PDF here"
+          hint=".raw · .txt · .csv · .pts · .pnezd · .pdf"
         />
-        <UploadIcon className="w-16 h-16 mb-4 text-gray-500" />
-        <h2 className="text-xl font-semibold text-white">Drop your Point File or PDF here</h2>
-        <p className="text-gray-400 mt-2">Accepts: .raw, .txt, .csv, .pts, .pnezd, .pdf</p>
-      </div>
-      <div className="mt-6 text-center text-gray-400">
-        <p>
-          Not sure where to start?{' '}
-          <button
-            onClick={handleLoadExample}
-            className="text-fuchsia-400 hover:text-fuchsia-300 font-semibold underline focus:outline-none focus:ring-2 focus:ring-fuchsia-500 rounded"
-          >
-            Try our example point file.
-          </button>
-        </p>
-      </div>
-    </div>
+      </UploadPanel>
+
+      <p className="text-center text-[11px] text-slate-500">
+        Tip: a legacy .raw file carries the most context — codes, descriptions, and elevations all get read.
+      </p>
+    </UploadShell>
   );
 };
 

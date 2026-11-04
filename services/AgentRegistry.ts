@@ -510,15 +510,15 @@ agentRegistry.register({
 
 agentRegistry.register({
   agent: AgentType.LSVZ_AGENT,
-  displayName: 'LSVZ Orchestrator',
+  displayName: 'LSAI Agent',
   cacpEnabled: true,
-  version: '1.1.0',
+  version: '1.2.0',
   skills: [
     {
       id: 'lsvz_dispatch',
-      name: 'Dispatch to CACP Agent',
+      name: 'Dispatch to Specialist',
       description:
-        'Routes a high-level user intent to the appropriate CACP-enabled agent by looking up the skill in the registry.',
+        'Routes a high-level user intent to the right specialist agent.',
       inputs: {
         skillId: { type: 'string', required: true },
         payload: { type: 'object' },
@@ -526,6 +526,21 @@ agentRegistry.register({
       outputs: {
         ok:     { type: 'boolean', required: true },
         result: { type: 'object' },
+      },
+    },
+    {
+      id: 'lsvz_delegate_agent',
+      name: 'Delegate to Specialist Agent',
+      description:
+        'Hands off a domain-specific or multimodal request (e.g. Civil Drafter Gimbal Vision linework, Boundary Agent deed parsing, Zoning ordinance web research) to the owning specialist agent while keeping results unified in the command bar.',
+      inputs: {
+        targetAgent: { type: 'string', required: true, description: 'Target AgentType (e.g. CIVIL_DRAFTER, DEED_READER, ZONING_AGENT, CIVIL_PLAN_EXPERT).' },
+        query:       { type: 'string', required: true, description: 'The prompt or instruction to send to the specialist agent.' },
+        reason:      { type: 'string', description: 'Short explanation of why this specialist agent is handling the request.' },
+      },
+      outputs: {
+        delegated:   { type: 'boolean', required: true },
+        targetAgent: { type: 'string', required: true },
       },
     },
     {

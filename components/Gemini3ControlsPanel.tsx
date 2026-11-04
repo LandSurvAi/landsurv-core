@@ -68,8 +68,8 @@ export const Gemini3ControlsPanel: React.FC<Props> = ({ onClose, activeAgent }) 
       const dx = ev.clientX - dragState.current.startX;
       const dy = ev.clientY - dragState.current.startY;
       setPos({
-        x: Math.max(0, Math.min(window.innerWidth - 80, dragState.current.origX + dx)),
-        y: Math.max(0, Math.min(window.innerHeight - 40, dragState.current.origY + dy)),
+        x: Math.max(8, Math.min(window.innerWidth - 80, dragState.current.origX + dx)),
+        y: Math.max(60, Math.min(window.innerHeight - 40, dragState.current.origY + dy)),
       });
     };
     const onUp = () => {
@@ -96,8 +96,8 @@ export const Gemini3ControlsPanel: React.FC<Props> = ({ onClose, activeAgent }) 
 
   return (
     <div
-      className="fixed z-40 bg-gray-900/95 border border-purple-500/40 rounded-lg shadow-2xl text-sm text-gray-200 backdrop-blur-sm w-80"
-      style={{ left: resolvedPos.x, top: resolvedPos.y }}
+      className="fixed z-[9500] bg-gray-900/95 border border-purple-500/40 rounded-lg shadow-2xl text-sm text-gray-200 backdrop-blur-sm w-80"
+      style={{ left: resolvedPos.x, top: resolvedPos.y, zIndex: 9500 }}
     >
       <div
         className="flex items-center justify-between px-3 py-2 border-b border-purple-500/30 cursor-move select-none"

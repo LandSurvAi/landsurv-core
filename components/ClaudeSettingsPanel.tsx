@@ -124,8 +124,8 @@ export const ClaudeSettingsPanel: React.FC<Props> = ({ onClose, onModelChange, s
     const onMove = (ev: MouseEvent) => {
       if (!dragState.current) return;
       setPos({
-        x: Math.max(0, Math.min(window.innerWidth - 80, dragState.current.origX + ev.clientX - dragState.current.startX)),
-        y: Math.max(0, Math.min(window.innerHeight - 40, dragState.current.origY + ev.clientY - dragState.current.startY)),
+        x: Math.max(8, Math.min(window.innerWidth - 80, dragState.current.origX + ev.clientX - dragState.current.startX)),
+        y: Math.max(60, Math.min(window.innerHeight - 40, dragState.current.origY + ev.clientY - dragState.current.startY)),
       });
     };
     const onUp = () => {
@@ -214,8 +214,8 @@ export const ClaudeSettingsPanel: React.FC<Props> = ({ onClose, onModelChange, s
 
   return (
     <div
-      className="fixed z-40 bg-gray-900/95 border border-orange-500/40 rounded-lg shadow-2xl text-sm text-gray-200 backdrop-blur-sm w-80"
-      style={{ left: resolvedPos.x, top: resolvedPos.y }}
+      className="fixed z-[9500] bg-gray-900/95 border border-orange-500/40 rounded-lg shadow-2xl text-sm text-gray-200 backdrop-blur-sm w-80"
+      style={{ left: resolvedPos.x, top: resolvedPos.y, zIndex: 9500 }}
     >
       {/* Header */}
       <div

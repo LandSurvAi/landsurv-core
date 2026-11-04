@@ -195,7 +195,7 @@ export const DOC_ARTICLES: DocArticle[] = [
         title: 'WebGPU 3D Engine & Orientation Tuple',
         content: [
           'For terrain surfaces, elevation contours, and dense LiDAR clouds, activate the "3D" toggle in the top header. The viewport switches to a Babylon.js WebGPUEngine with zero-copy Float32Array vertex buffers streamed directly to GPU VRAM.',
-          'Use the Orientation Tuple (OT) widget in the bottom-left corner to rotate the drafting ortho grid or pivot the entire project view without altering ground coordinate systems.',
+          'Use the Orientation Tuple (OT) instrument in the canvas toolbar (its live angle readout sits beside the axis glyph) to rotate the drafting ortho grid or pivot the entire project view without altering ground coordinate systems.',
         ],
       },
     ],

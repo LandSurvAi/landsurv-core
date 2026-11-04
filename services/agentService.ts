@@ -13,6 +13,7 @@
  */
 
 import { AgentType, MessageRole, ProjectSettings, GeminiChatMessage } from '../types';
+import { buildAgentWelcome } from './agentWelcome';
 
 /**
  * Configuration for a single agent
@@ -75,7 +76,7 @@ export function buildGreetingMessage(
 export const contouringAgentConfig: AgentConfig = {
   agentType: AgentType.CONTOURING_AGENT,
   displayName: 'Contouring Agent',
-  greetingMessage: 'I can generate contour lines from your project\'s points. What contour interval would you like?',
+  greetingMessage: buildAgentWelcome(AgentType.CONTOURING_AGENT, 'Tell me the contour interval you would like and I will generate and label the lines.'),
   suggestedQuestions: [
     'Generate contours at a 1-foot interval.',
     'Create 5-foot contours using only points with "GROUND" in the description.',
@@ -90,7 +91,7 @@ export const contouringAgentConfig: AgentConfig = {
 export const profileAgentConfig: AgentConfig = {
   agentType: AgentType.PROFILE_AGENT,
   displayName: 'Profile & Cross Section Agent',
-  greetingMessage: 'I can generate elevation profiles along lines or centerlines. How can I assist?',
+  greetingMessage: buildAgentWelcome(AgentType.PROFILE_AGENT, 'Select a line or alignment to generate a profile or cross sections.'),
   suggestedQuestions: [
     'Generate a profile along line from point 1 to 2.',
     'Create a profile of CL-1 from station 0+00 to 10+00.',
@@ -105,7 +106,7 @@ export const profileAgentConfig: AgentConfig = {
 export const cogoAgentConfig: AgentConfig = {
   agentType: AgentType.COGO_AGENT,
   displayName: 'COGO Agent',
-  greetingMessage: 'I can perform coordinate geometry calculations including inverse calculations and intersection computations. How can I assist?',
+  greetingMessage: buildAgentWelcome(AgentType.COGO_AGENT, 'Select the computation you need, or describe it in plain language.'),
   suggestedQuestions: [
     'Calculate the bearing and distance between two points.',
     'Find the intersection of two lines.',
@@ -120,7 +121,7 @@ export const cogoAgentConfig: AgentConfig = {
 export const gnssAgentConfig: AgentConfig = {
   agentType: AgentType.GNSS_AGENT,
   displayName: 'RINEX Post-Processor',
-  greetingMessage: `I can help you process RINEX observation files from raw GNSS receivers to generate precise positioning solutions.<br/><br/><strong>Available Features:</strong><br/><ul style="margin-top: 8px; margin-left: 20px;"><li>Process RINEX files to generate precise positioning solutions</li><li>Single Point Positioning (SPP) with least-squares optimization</li><li>Support multi-constellation processing (GPS, GLONASS, Galileo, BeiDou)</li><li>Export results in multiple formats (CSV, GeoJSON, KML, JSON)</li><li>Analyze solution quality with DOP calculations</li></ul><br/><strong>To get started:</strong> Click the "RINEX Tools" button below to upload a RINEX file and configure processing parameters. You'll need an API key for premium features.`,
+  greetingMessage: buildAgentWelcome(AgentType.GNSS_AGENT, 'Use the <strong>RINEX Tools</strong> panel to upload an observation file and configure processing parameters.'),
   suggestedQuestions: [
     'What RINEX file formats are supported?',
     'How do I use RTK mode with a reference station?',
@@ -132,7 +133,7 @@ export const gnssAgentConfig: AgentConfig = {
 export const droneAgentConfig: AgentConfig = {
   agentType: AgentType.DRONE_AGENT,
   displayName: 'Drone Agent',
-  greetingMessage: 'I can help you stage aerial imagery in temporary processing storage, run NodeODM photogrammetry, and export orthomosaics and meshes back to connected destination storage.',
+  greetingMessage: buildAgentWelcome(AgentType.DRONE_AGENT, 'Use the <strong>Drone Tools</strong> panel to begin.'),
   suggestedQuestions: [
     'What image overlap do I need for a good orthomosaic?',
     'What outputs will the Drone Agent produce?',
@@ -147,7 +148,7 @@ export const droneAgentConfig: AgentConfig = {
 export const arAgentConfig: AgentConfig = {
   agentType: AgentType.AR_AGENT,
   displayName: 'AR (Augmented Reality)',
-  greetingMessage: `I help you visualize and interact with your survey data in 3D augmented reality on your Meta Quest headset. I can help you:<br/><ul style="margin-top: 8px; margin-left: 20px;"><li>View survey points as 3D markers in your physical environment</li><li>Stake out points using AR visualization</li><li>Analyze point data and relationships in 3D space</li><li>Plan fieldwork with spatial awareness</li><li>Answer questions about your project data</li></ul><br/>Ask me questions about your survey points or ask me to help you visualize specific data in AR!`,
+  greetingMessage: buildAgentWelcome(AgentType.AR_AGENT, 'Ask me to visualize project points or linework, or to prepare a stakeout set for the field.'),
   suggestedQuestions: [
     'Show me all points in AR mode',
     'Which points need stakeout?',
@@ -162,7 +163,7 @@ export const arAgentConfig: AgentConfig = {
 export const gpsStakeoutAgentConfig: AgentConfig = {
   agentType: AgentType.GPS_STAKEOUT,
   displayName: 'GPS Rover',
-  greetingMessage: 'I am now operating in live stakeout mode. Your GPS is active and ready for field work.',
+  greetingMessage: buildAgentWelcome(AgentType.GPS_STAKEOUT, 'Live stakeout mode is active and your GPS is ready for field work.'),
   suggestedQuestions: [
     'What\'s the closest point to me?',
     'Give me stakeout info for point 501.',
@@ -178,7 +179,7 @@ export const gpsStakeoutAgentConfig: AgentConfig = {
 export const standardsComplianceAgentConfig: AgentConfig = {
   agentType: AgentType.STANDARDS_COMPLIANCE,
   displayName: 'Standards Compliance',
-  greetingMessage: 'I can audit plan-sheet completeness and standards compliance using CAD Manager context, any number of reference/control PDFs, or both. Upload your reference and target PDFs to get started.',
+  greetingMessage: buildAgentWelcome(AgentType.STANDARDS_COMPLIANCE, 'Upload your reference and subject PDFs, then run a compliance audit.'),
   suggestedQuestions: [
     'Run compliance using combined mode.',
     'Check title block, north arrow, and revision block only.',
@@ -223,7 +224,10 @@ export function buildGpsStakeoutGreeting(
     ? `<strong>${settings.projection.state} - ${settings.projection.zoneName}</strong>`
     : 'Please set a projection';
 
-  return `Hello! I am the ${displayName} agent. I am now operating in <strong>live stakeout mode</strong>. Your GPS is active and ready for field work. Your current projection is ${projectionInfo}.`;
+  return buildAgentWelcome(
+    AgentType.GPS_STAKEOUT,
+    `I am now operating in <strong>live stakeout mode</strong>. Your GPS is active and ready for field work. Your current projection is ${projectionInfo}.`
+  );
 }
 
 /**
@@ -263,7 +267,7 @@ export function getProjectionValidationError(agentType: AgentType): string | nul
 }
 
 /**
- * Build LSVZ agent context
+ * Build LSAI agent context
  * (Note: The actual implementation is in App.tsx with getSummarizedLsvzContext)
  * This function documents the pattern for context building
  * 
@@ -275,7 +279,7 @@ export function buildLsvzAgentContext(
   sessionState: any,
   pointCount: number
 ): string {
-  let context = 'LSVZ Meta-Agent context: Full project state available for analysis.';
+  let context = 'LSAI Agent context: Full project state available for analysis.';
 
   if (pointCount > 1000) {
     context += '\n[SYSTEM: Vector Search / RAG enabled. For large projects, use semantic search for detailed analysis.]';

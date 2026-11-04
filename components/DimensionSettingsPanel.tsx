@@ -159,7 +159,10 @@ export const DimensionSettingsPanel: React.FC<DimensionSettingsPanelProps> = ({
     };
 
     return (
-        <div className="absolute top-16 right-4 z-40 w-72 bg-gray-950/90 backdrop-blur-md border border-cyan-500/40 rounded-xl shadow-2xl p-3 text-xs text-gray-200 select-none animate-fade-in flex flex-col gap-2.5 max-h-[85vh] overflow-y-auto">
+        <div
+            className="absolute top-16 right-16 z-[90] w-72 bg-gray-950/95 backdrop-blur-md border border-cyan-500/40 rounded-xl shadow-2xl p-3 text-xs text-gray-200 select-none animate-fade-in flex flex-col gap-2.5 max-h-[85vh] overflow-y-auto"
+            style={{ zIndex: 90 }}
+        >
             {/* Header */}
             <div className="flex items-center justify-between border-b border-gray-800 pb-2">
                 <div className="flex flex-col gap-0.5">

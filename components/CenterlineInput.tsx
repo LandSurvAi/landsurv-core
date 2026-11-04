@@ -1,6 +1,7 @@
 
 import React, { useState, useCallback } from 'react';
-import { RoadIcon, UploadIcon, HomeIcon } from './icons';
+import { RoadIcon } from './icons';
+import { UploadShell, UploadPanel, UploadDropzone, UploadPrimaryButton, UploadGhostButton } from './UploadShell.tsx';
 import { exampleHighwayCl } from '../assets/example.highway.cl';
 import { useErrorReporter } from '../contexts/AppStateContext';
 
@@ -68,64 +69,38 @@ const CenterlineInput: React.FC<CenterlineInputProps> = ({ onSessionStart, onClF
 
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-full p-8 text-center">
-       <button onClick={onGoBack} className="absolute top-4 left-4 p-2 text-gray-300 hover:text-white transition-colors" title={backButtonTitle}>
-        <HomeIcon className="w-6 h-6"/>
-      </button>
-        <h1 className="text-5xl sm:text-6xl font-extrabold leading-none tracking-tight text-center mb-4">
-          <span className="text-white">Stationing</span><span className="text-purple-400">&CL</span><span className="text-[0.5em]"><span className="text-gray-500">.</span><span className="text-white">Land</span><span className="text-cyan-400">Surv</span><span className="text-green-400">.ai</span></span><sup className="text-xl text-gray-500">™</sup>
-      </h1>
-      <p className="text-gray-300 mb-6 max-w-lg">
-        Create horizontal alignments by defining PIs, or upload a .cl file. Then, use the AI assistant to perform calculations.
-      </p>
-      
-      <div
-        className={`w-full max-w-lg cursor-pointer flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-lg transition-colors duration-300 ${isDragging ? 'border-purple-400 bg-gray-700/50' : 'border-gray-600 hover:border-purple-500'}`}
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        onClick={handleClick}
-        role="button"
-        tabIndex={0}
-        aria-label="Upload a .cl file by dragging or clicking"
-      >
-        <input
+    <UploadShell
+      icon={RoadIcon}
+      accent="#c084fc"
+      title="Stationing"
+      accentWord=" & CL"
+      description="Upload a .cl alignment or start a blank centerline, then let the agent work stations, curves, and offsets."
+      onGoBack={onGoBack}
+      backTitle={backButtonTitle}
+    >
+      <UploadPanel>
+        <UploadDropzone
           id="cl-file-input"
-          type="file"
-          className="hidden"
           accept=".cl,text/plain"
-          onChange={handleFileChange}
+          onFiles={(selected) => {
+            const file = selected?.[0];
+            if (file) handleFile(file);
+          }}
+          onDrop={handleDrop}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          isDragging={isDragging}
+          title="Drop your .cl file here"
+          hint="or click to browse local files"
         />
-        <UploadIcon className="w-16 h-16 mb-4 text-gray-500" />
-        <h2 className="text-xl font-semibold text-white">Drop your .cl file here</h2>
-        <p className="text-gray-400 mt-2">or click to browse local files</p>
-      </div>
-
-       <div className="mt-6 text-center text-gray-400">
-          <p>
-            Or,{' '}
-            <button
-              onClick={onSessionStart}
-              className="text-purple-400 hover:text-purple-300 font-semibold underline focus:outline-none focus:ring-2 focus:ring-purple-500 rounded"
-            >
-              Start a new blank centerline session.
-            </button>
-          </p>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.08] pt-3">
+          <UploadGhostButton onClick={() => onClFileUploaded(exampleHighwayCl, 'example.highway.cl')}>
+            Load 1.5-mile highway example
+          </UploadGhostButton>
+          <UploadPrimaryButton onClick={onSessionStart}>Start a blank centerline</UploadPrimaryButton>
         </div>
-
-        <div className="mt-4 text-center text-gray-400">
-            <p>Or try a curvy highway example:</p>
-            <div className="flex justify-center gap-2 sm:gap-4 mt-2">
-                <button
-                    onClick={() => onClFileUploaded(exampleHighwayCl, 'example.highway.cl')}
-                    className="text-purple-400 hover:text-purple-300 font-semibold underline focus:outline-none focus:ring-2 focus:ring-purple-500 rounded"
-                >
-                    Load 1.5 Mile Highway Example
-                </button>
-            </div>
-        </div>
-    </div>
+      </UploadPanel>
+    </UploadShell>
   );
 };
 

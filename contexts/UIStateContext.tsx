@@ -99,6 +99,10 @@ interface UIState {
   isChatPanelVisible: boolean;
   setIsChatPanelVisible: (visible: boolean) => void;
   toggleChatPanel: () => void;
+  /** Right-edge shelf that holds the active agent's dockable tools. */
+  isToolShelfVisible: boolean;
+  setIsToolShelfVisible: (visible: boolean) => void;
+  toggleToolShelf: () => void;
   isToolsDrawerOpen: boolean;
   setIsToolsDrawerOpen: (open: boolean) => void;
   toggleToolsDrawer: () => void;
@@ -120,6 +124,10 @@ interface UIState {
   setChatPanelWidth: (width: number) => void;
   isResizingChat: boolean;
   setIsResizingChat: (resizing: boolean) => void;
+  toolShelfWidth: number;
+  setToolShelfWidth: (width: number) => void;
+  isResizingToolShelf: boolean;
+  setIsResizingToolShelf: (resizing: boolean) => void;
 
   // FAB (Floating Action Button) State
   fabPosition: FabPosition;
@@ -186,8 +194,10 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
   const [isPdfViewerFullscreen, setIsPdfViewerFullscreen] = useState<boolean>(false);
   const [isStationingPanelExpanded, setIsStationingPanelExpanded] = useState(false);
   const [isPointEditorExpanded, setIsPointEditorExpanded] = useState(true);
-  const [isChatPanelVisible, setIsChatPanelVisible] = useState(true);
+  const [isChatPanelVisible, setIsChatPanelVisible] = useState(false);
   const toggleChatPanel = useCallback(() => setIsChatPanelVisible(prev => !prev), []);
+  const [isToolShelfVisible, setIsToolShelfVisible] = useState(false);
+  const toggleToolShelf = useCallback(() => setIsToolShelfVisible(prev => !prev), []);
   const [isToolsDrawerOpen, setIsToolsDrawerOpen] = useState(false);
   const toggleToolsDrawer = useCallback(() => setIsToolsDrawerOpen(prev => !prev), []);
 
@@ -201,6 +211,8 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
   const [contourPanelHeight, setContourPanelHeight] = useState<number>(240);
   const [chatPanelWidth, setChatPanelWidth] = useState(450);
   const [isResizingChat, setIsResizingChat] = useState(false);
+  const [toolShelfWidth, setToolShelfWidth] = useState(420);
+  const [isResizingToolShelf, setIsResizingToolShelf] = useState(false);
 
   // FAB (Floating Action Button) State
   const [fabPosition, setFabPosition] = useState<FabPosition>({ x: 0, y: 0, initialized: false });
@@ -291,6 +303,9 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
     isChatPanelVisible,
     setIsChatPanelVisible,
     toggleChatPanel,
+    isToolShelfVisible,
+    setIsToolShelfVisible,
+    toggleToolShelf,
     isToolsDrawerOpen,
     setIsToolsDrawerOpen,
     toggleToolsDrawer,
@@ -312,6 +327,10 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
     setChatPanelWidth,
     isResizingChat,
     setIsResizingChat,
+    toolShelfWidth,
+    setToolShelfWidth,
+    isResizingToolShelf,
+    setIsResizingToolShelf,
 
     // FAB State
     fabPosition,

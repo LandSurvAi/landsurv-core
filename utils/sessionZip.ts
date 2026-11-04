@@ -3,6 +3,55 @@
 
 import JSZip from 'jszip';
 import { AgentType, SessionState, SessionSaveOptions } from '../types';
+import type { CadManagerState, CodeAlias } from '../contexts/types/CadManager.types';
+
+/**
+ * Build the CAD Manager slice of a .lsvz manifest.
+ *
+ * `CadManagerState` stores aliases as a raw-code -> master-code record, while
+ * `SessionState.cadManagerState.confirmedAliases` is a list of CodeAlias
+ * objects. Deriving the list here keeps the CRITICAL session save handler from
+ * reading a non-existent `state.confirmedAliases` field (which used to throw
+ * before the save try/catch and make the Save button appear dead).
+ */
+export const buildCadManagerSessionState = (
+  state: Pick<CadManagerState, 'standard' | 'aliases'>,
+  savedAt: string
+): SessionState['cadManagerState'] => {
+  const confirmedAliases: CodeAlias[] = Object.entries(state.aliases ?? {}).map(([raw, master]) => ({
+    raw,
+    master,
+    masterDescription: state.standard?.codes.find(code => code.code === master)?.description ?? '',
+    confidence: 1,
+    learnedAt: savedAt,
+    source: 'session-save',
+  }));
+
+  if (!state.standard && confirmedAliases.length === 0) return undefined;
+  return { standard: state.standard ?? null, confirmedAliases };
+};
+
+/**
+ * Convert persisted CAD aliases back into the raw -> master record used by the
+ * CAD Manager context. Accepts both the current CodeAlias shape and the legacy
+ * `{ unknownCode, masterCode }` shape found in older .lsvz files.
+ */
+export const toAliasRecord = (
+  confirmedAliases: Array<{
+    raw?: string;
+    master?: string;
+    unknownCode?: string;
+    masterCode?: string;
+  }> | undefined
+): Record<string, string> => {
+  const aliases: Record<string, string> = {};
+  for (const alias of confirmedAliases ?? []) {
+    const raw = alias.raw ?? alias.unknownCode;
+    const master = alias.master ?? alias.masterCode;
+    if (raw && master) aliases[raw] = master;
+  }
+  return aliases;
+};
 
 /**
  * Extracts the raw base64 payload from a value that may be either a full data URI

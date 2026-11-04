@@ -29,6 +29,7 @@ import {
     SlopeIcon,
     SheetViewIcon,
     ChevronDoubleRightIcon,
+    ChevronLeftIcon,
 } from './icons.tsx';
 import {
     AutoRouteIcon,
@@ -48,6 +49,8 @@ import {
     ToolbarStandardsIcon,
     ToolbarDrawToolsIcon,
 } from './toolbarIcons.tsx';
+import { AgentConstellationIcon } from './icons.tsx';
+import { AdjustableWrenchIcon } from './toolbarIcons.tsx';
 import { getRetiredAgents } from '../utils/retiredAgents.ts';
 import { getGlobalSettings, subscribeGlobalSettings } from '../utils/globalSettings.ts';
 
@@ -79,6 +82,10 @@ interface SidebarProps {
     autoHighThinkingOptions?: string[];
     onAutoHighThinkingModelChange?: (model: string) => void;
     onShowClaudeSettings?: () => void;
+    /** Desktop header navigation — the workspace Back / Home controls live in the rail. */
+    canGoBack?: boolean;
+    onGoBack?: () => void;
+    onGoHome?: () => void;
 }
 
 const SIDEBAR_DEFAULT_WIDTH = 264;
@@ -121,7 +128,7 @@ const agentConfig = {
     [AgentType.AR_AGENT]: { icon: ARIcon, label: 'AR View', color: 'rose' },
     [AgentType.ZONING_AGENT]: { icon: ZoningIcon, label: 'Zoning', color: 'emerald' },
     [AgentType.TITLE_SEARCH]: { icon: TitleSearchIcon, label: 'Title Search', color: 'amber' },
-    [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSVZ Meta-Agent', color: 'slate' },
+    [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSAI Agent', color: 'slate' },
     [AgentType.CAD_MANAGER]: { icon: CadManagerIcon, label: 'CAD Manager', color: 'indigo' },
     [AgentType.FLOOD_AGENT]: { icon: FloodIcon, label: 'Flood Zone', color: 'cyan' },
     [AgentType.STRUCTURES_AGENT]: { icon: StructuresIcon, label: 'Structures', color: 'orange' },
@@ -444,27 +451,27 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     // Preserve the links and their respective actions.
     const InfoMenu = () => (
         <div className={`absolute z-50 w-64 rounded-lg border border-white/10 bg-[#0b1119]/95 p-1.5 text-[12px] text-slate-300 shadow-2xl backdrop-blur-md ${props.isDesktop ? 'left-full bottom-2 ml-2' : 'bottom-16 left-4'} light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-700`}>
-            <button onClick={() => handleInfoMenuClick(showAbout)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><BrainCircuitIcon className="w-5 h-5 text-purple-400"/> About</button>
-            <button onClick={() => handleInfoMenuClick(showDoc)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><DocumentDuplicateIcon className="w-5 h-5 text-cyan-400"/> .lsvz Format</button>
+            <button onClick={() => handleInfoMenuClick(showAbout)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><BrainCircuitIcon className="h-[18px] w-[18px] text-purple-400"/> About</button>
+            <button onClick={() => handleInfoMenuClick(showDoc)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><DocumentDuplicateIcon className="h-[18px] w-[18px] text-cyan-400"/> .lsvz Format</button>
             <hr className="border-white/[0.07] my-1"/>
-            <button onClick={() => handleInfoMenuClick(showReleaseLog)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><ClipboardDocumentListIcon className="w-5 h-5 text-blue-400"/> Release Log</button>
-            <button onClick={() => handleInfoMenuClick(showTech)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><CpuChipIcon className="w-5 h-5 text-gray-400"/> Technologies</button>
+            <button onClick={() => handleInfoMenuClick(showReleaseLog)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><ClipboardDocumentListIcon className="h-[18px] w-[18px] text-blue-400"/> Release Log</button>
+            <button onClick={() => handleInfoMenuClick(showTech)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><CpuChipIcon className="h-[18px] w-[18px] text-gray-400"/> Technologies</button>
             <hr className="border-white/[0.07] my-1"/>
-            <a href="https://civil3d.landsurv.ai" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><CpuChipIcon className="w-5 h-5 text-blue-400"/> Civil 3D Plugin</a>
+            <a href="https://civil3d.landsurv.ai" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><CpuChipIcon className="h-[18px] w-[18px] text-blue-400"/> Civil 3D Plugin</a>
             <a href="https://www.youtube.com/@LandSurvAI" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-start gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200">
-                <svg className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+                <svg className="h-[18px] w-[18px] text-red-500 mt-0.5 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
                 <span className="flex flex-col leading-tight">
                     <span>YouTube Tutorials</span>
                     <span className="text-[10px] text-gray-400 font-normal">Learn the app — walkthroughs & tips</span>
                 </span>
             </a>
             <hr className="border-white/[0.07] my-1"/>
-            <button onClick={() => handleInfoMenuClick(showInvestorForm)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><CurrencyDollarIcon className="w-5 h-5 text-emerald-400"/> Investor Inquiry</button>
+            <button onClick={() => handleInfoMenuClick(showInvestorForm)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200"><CurrencyDollarIcon className="h-[18px] w-[18px] text-emerald-400"/> Investor Inquiry</button>
             <a href="https://github.com/msersen/Landsurv.ai_Public-/issues" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200">
-                <BugAntIcon className="w-5 h-5 text-yellow-400"/> Report a Bug
+                <BugAntIcon className="h-[18px] w-[18px] text-yellow-400"/> Report a Bug
             </a>
             <a href="https://github.com/LandSurvAi/landsurv-core" target="_blank" rel="noopener noreferrer" className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-white/[0.06] transition-colors light-theme:hover:bg-gray-200">
-                <CpuChipIcon className="w-5 h-5 text-emerald-400"/> View Source (Open Source)
+                <CpuChipIcon className="h-[18px] w-[18px] text-emerald-400"/> View Source (Open Source)
             </a>
         </div>
     );
@@ -483,7 +490,18 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     const sidebarContent = (
         <>
             <div className="flex-shrink-0">
-                <div className={`flex h-14 items-center px-3 ${props.isDesktop ? 'justify-center lg:justify-start' : 'justify-between'}`}>
+                <div className={`flex h-14 items-center gap-2 px-3 ${props.isDesktop ? 'justify-start' : 'justify-between'}`}>
+                    {props.isDesktop && (
+                        <button
+                            type="button"
+                            onClick={() => setIsCollapsed(true)}
+                            className="hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-cyan-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04] lg:flex"
+                            title="Hide agent panel"
+                            aria-label="Hide agent panel"
+                        >
+                            <ChevronDoubleRightIcon className="h-[18px] w-[18px] rotate-180" />
+                        </button>
+                    )}
                     <div className="flex min-w-0 items-center gap-2">
                         <span className={`h-7 w-7 flex-shrink-0 items-center justify-center rounded-md border border-cyan-400/25 bg-cyan-400/[0.08] ${props.isDesktop ? 'hidden md:flex lg:hidden' : 'flex'}`}>
                             <span className="font-mono text-[10px] font-extrabold tracking-tight text-cyan-300">LS</span>
@@ -494,19 +512,32 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                             </span>
                         </h1>
                         <button onClick={() => props.setIsMobileMenuOpen(false)} className="ml-auto rounded p-1 text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-200 md:hidden">
-                            <XMarkIcon className="h-5 w-5"/>
+                            <XMarkIcon className="h-[18px] w-[18px]"/>
                         </button>
                     </div>
                     {props.isDesktop && (
-                        <button
-                            type="button"
-                            onClick={() => setIsCollapsed(true)}
-                            className="ml-auto hidden h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-cyan-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04] lg:flex"
-                            title="Hide agent panel"
-                            aria-label="Hide agent panel"
-                        >
-                            <ChevronDoubleRightIcon className="h-4 w-4 rotate-180" />
-                        </button>
+                        <div className="ml-auto flex flex-shrink-0 items-center gap-0.5">
+                            {props.canGoBack && (
+                                <button
+                                    type="button"
+                                    onClick={() => props.onGoBack?.()}
+                                    className="flex h-8 w-8 items-center justify-center rounded-md text-cyan-300 transition-colors hover:bg-white/[0.06] hover:text-cyan-200 light-theme:text-cyan-600 light-theme:hover:bg-black/[0.04]"
+                                    title="Go Back"
+                                    aria-label="Go Back"
+                                >
+                                    <ChevronLeftIcon className="h-[18px] w-[18px]" />
+                                </button>
+                            )}
+                            <button
+                                type="button"
+                                onClick={() => props.onGoHome?.()}
+                                className="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-cyan-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04]"
+                                title="Go to Home Screen"
+                                aria-label="Go to Home Screen"
+                            >
+                                <HomeIcon className="h-[18px] w-[18px]" />
+                            </button>
+                        </div>
                     )}
                 </div>
 
@@ -514,24 +545,24 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                     <div className="flex items-center gap-0.5 rounded-md border border-white/[0.06] bg-black/25 p-0.5 light-theme:border-gray-300 light-theme:bg-white">
                         <button
                             onClick={() => setActiveTab('agents')}
-                            className={`flex flex-1 items-center justify-center gap-1.5 rounded-[5px] px-1.5 py-[5px] text-[10px] font-bold uppercase tracking-[0.14em] transition-colors ${
+                            className={`flex flex-1 items-center justify-center gap-1.5 rounded-[5px] px-2 py-[6px] text-[10px] font-bold uppercase tracking-[0.14em] transition-colors ${
                                 activeTab === 'agents'
                                     ? 'bg-white/[0.08] text-cyan-200 ring-1 ring-inset ring-cyan-400/25 light-theme:bg-gray-100 light-theme:text-cyan-700'
                                     : 'text-slate-500 hover:text-slate-300 light-theme:text-gray-500 light-theme:hover:text-gray-800'
                             }`}
                         >
-                            <LayersIcon className="h-3 w-3" />
+                            <AgentConstellationIcon className="h-[18px] w-[18px]" />
                             <span className="hidden lg:inline">Agents</span>
                         </button>
                         <button
                             onClick={() => setActiveTab('views')}
-                            className={`flex flex-1 items-center justify-center gap-1.5 rounded-[5px] px-1.5 py-[5px] text-[10px] font-bold uppercase tracking-[0.14em] transition-colors ${
+                            className={`flex flex-1 items-center justify-center gap-1.5 rounded-[5px] px-2 py-[6px] text-[10px] font-bold uppercase tracking-[0.14em] transition-colors ${
                                 activeTab === 'views'
                                     ? 'bg-white/[0.08] text-cyan-200 ring-1 ring-inset ring-cyan-400/25 light-theme:bg-gray-100 light-theme:text-cyan-700'
                                     : 'text-slate-500 hover:text-slate-300 light-theme:text-gray-500 light-theme:hover:text-gray-800'
                             }`}
                         >
-                            <ToolbarDrawToolsIcon className="h-3 w-3" />
+                            <AdjustableWrenchIcon className="h-[18px] w-[18px]" />
                             <span className="hidden lg:inline">Tools</span>
                         </button>
                     </div>
@@ -612,8 +643,8 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                         title="Save session"
                         className="group relative flex h-10 items-center justify-center gap-2 overflow-hidden rounded-md border border-emerald-400/20 bg-gradient-to-b from-emerald-400/[0.10] to-emerald-400/[0.02] px-2 text-left transition-colors hover:border-emerald-400/45 disabled:cursor-not-allowed disabled:opacity-40 lg:justify-start light-theme:border-emerald-300/60 light-theme:from-emerald-50 light-theme:to-white"
                     >
-                        <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 transition-colors group-hover:border-emerald-400/50 light-theme:border-emerald-300 light-theme:bg-emerald-100 light-theme:text-emerald-700">
-                            <DownloadIcon className="h-3.5 w-3.5" />
+                        <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded border border-emerald-400/25 bg-emerald-400/10 text-emerald-300 transition-colors group-hover:border-emerald-400/50 light-theme:border-emerald-300 light-theme:bg-emerald-100 light-theme:text-emerald-700">
+                            <DownloadIcon className="h-[18px] w-[18px]" />
                         </span>
                         <span className={`flex min-w-0 flex-col leading-none ${props.isDesktop ? 'hidden lg:flex' : 'flex'}`}>
                             <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-200 light-theme:text-emerald-700">Save</span>
@@ -626,8 +657,8 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                         title="Load session"
                         className="group relative flex h-10 items-center justify-center gap-2 overflow-hidden rounded-md border border-sky-400/20 bg-gradient-to-b from-sky-400/[0.10] to-sky-400/[0.02] px-2 text-left transition-colors hover:border-sky-400/45 lg:justify-start light-theme:border-sky-300/60 light-theme:from-sky-50 light-theme:to-white"
                     >
-                        <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded border border-sky-400/25 bg-sky-400/10 text-sky-300 transition-colors group-hover:border-sky-400/50 light-theme:border-sky-300 light-theme:bg-sky-100 light-theme:text-sky-700">
-                            <ArrowUpTrayIcon className="h-3.5 w-3.5" />
+                        <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded border border-sky-400/25 bg-sky-400/10 text-sky-300 transition-colors group-hover:border-sky-400/50 light-theme:border-sky-300 light-theme:bg-sky-100 light-theme:text-sky-700">
+                            <ArrowUpTrayIcon className="h-[18px] w-[18px]" />
                         </span>
                         <span className={`flex min-w-0 flex-col leading-none ${props.isDesktop ? 'hidden lg:flex' : 'flex'}`}>
                             <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-sky-200 light-theme:text-sky-700">Load</span>
@@ -675,13 +706,13 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                                     props.setShowQuickModelSelector?.(false);
                                     props.onModelClick?.();
                                 }}
-                                className={`flex h-[30px] w-[30px] flex-shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-violet-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04] ${
+                                className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-violet-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04] ${
                                     props.isDesktop ? 'md:hidden lg:inline-flex' : 'inline-flex'
                                 }`}
                                 title={`${selectedModelLabel} settings`}
                                 aria-label={`Open ${selectedModelLabel} settings`}
                             >
-                                <CogIcon className="h-4 w-4" />
+                                <CogIcon className="h-[18px] w-[18px]" />
                             </button>
                             <div className={`tooltip ${props.isDesktop ? 'invisible absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-gray-900 text-white text-sm rounded-md shadow-lg opacity-0 transform -translate-x-2 transition-all duration-200 md:inline lg:hidden' : 'hidden'} light-theme:bg-gray-700 light-theme:text-gray-100`}>
                                 Click to change model for this agent
@@ -702,7 +733,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                                         title="Model options"
                                         aria-label="Open model settings"
                                     >
-                                        <CogIcon className="w-3.5 h-3.5" />
+                                        <CogIcon className="h-[18px] w-[18px]" />
                                         Settings
                                     </button>
                                 </div>
@@ -771,25 +802,67 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     // Desktop: a collapsed rail keeps the hide/show affordance reachable.
     if (props.isDesktop) {
         if (isCollapsed) {
+            // Collapsed rail: agent glyphs only — one click to any workspace, with
+            // the same agent colors as the expanded menu so the rail still reads.
+            const railOrder = (() => {
+                const keys = Object.keys(agentConfig) as AgentType[];
+                if (!agentOrderSidebar || agentOrderSidebar.length === 0) return keys;
+                const indexOf = new Map<string, number>();
+                agentOrderSidebar.forEach((id, i) => indexOf.set(id, i));
+                return [...keys].sort((a, b) => {
+                    const ai = indexOf.has(a) ? indexOf.get(a)! : Number.MAX_SAFE_INTEGER;
+                    const bi = indexOf.has(b) ? indexOf.get(b)! : Number.MAX_SAFE_INTEGER;
+                    return ai - bi;
+                });
+            })();
+
             return (
-                <aside className="relative flex w-9 flex-shrink-0 flex-col items-center gap-3 border-r border-white/[0.07] bg-[#0a0f16] py-2 light-theme:border-gray-300 light-theme:bg-gray-100">
+                <aside className="relative flex w-12 flex-shrink-0 flex-col items-center border-r border-white/[0.07] bg-[#0a0f16] light-theme:border-gray-300 light-theme:bg-gray-100">
                     <button
                         type="button"
                         onClick={() => setIsCollapsed(false)}
-                        className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-cyan-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04]"
+                        className="flex h-11 w-full flex-shrink-0 items-center justify-center border-b border-white/[0.06] text-slate-300 transition-colors hover:bg-white/[0.07] hover:text-cyan-200 light-theme:border-gray-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04]"
                         title="Show agent panel"
                         aria-label="Show agent panel"
                     >
-                        <ChevronDoubleRightIcon className="h-4 w-4" />
+                        <ChevronDoubleRightIcon className="h-[18px] w-[18px]" />
                     </button>
-                    <span aria-hidden="true" className="h-8 w-px bg-gradient-to-b from-cyan-400/50 to-transparent" />
-                    <span
-                        aria-hidden="true"
-                        className="mt-auto font-mono text-[8px] font-bold tracking-[0.2em] text-slate-600"
-                        style={{ writingMode: 'vertical-rl' }}
-                    >
-                        AGENTS
-                    </span>
+                    <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto scrollbar-hide px-1.5 py-2">
+                        {railOrder.map(agentKey => {
+                            if (retiredAgents.includes(agentKey)) return null;
+                            if (agentKey === AgentType.LSVZ_AGENT && !isSessionActive) return null;
+                            const config = agentConfig[agentKey];
+                            if (!config) return null;
+                            const Icon = config.icon;
+                            const hexColor = agentThemeColors[agentKey] || '#94a3b8';
+                            const rgbColor = hexToRgb(hexColor);
+                            const isActive = activeAgent === agentKey;
+                            return (
+                                <button
+                                    key={agentKey}
+                                    type="button"
+                                    onClick={() => onAgentChange(agentKey)}
+                                    title={config.label}
+                                    aria-label={config.label}
+                                    className={`relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md transition-colors ${
+                                        isActive ? 'text-white' : 'hover:bg-white/[0.06] light-theme:hover:bg-black/[0.04]'
+                                    }`}
+                                    style={isActive ? {
+                                        background: `linear-gradient(150deg, rgba(${rgbColor},0.22), rgba(${rgbColor},0.05))`,
+                                        boxShadow: `inset 0 0 0 1px rgba(${rgbColor},0.32)`,
+                                    } : undefined}
+                                >
+                                    <Icon className="h-[18px] w-[18px]" style={{ color: isActive ? hexColor : `rgba(${rgbColor},0.8)` }} />
+                                    {isActive && (
+                                        <span
+                                            className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full"
+                                            style={{ backgroundColor: hexColor }}
+                                        />
+                                    )}
+                                </button>
+                            );
+                        })}
+                    </div>
                 </aside>
             );
         }

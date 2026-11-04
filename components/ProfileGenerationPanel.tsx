@@ -15,6 +15,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { SurveyPoint, Centerline } from '../types.ts';
+import { ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon } from './icons.tsx';
 
 // ── Props ──────────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,8 @@ interface ProfileGenerationPanelProps {
   onSaveProfile?: () => void;
   /** Close button. */
   onClose: () => void;
+  isDocked?: boolean;
+  onToggleDock?: () => void;
 }
 
 // ── Panel ──────────────────────────────────────────────────────────────────────
@@ -60,6 +63,8 @@ export const ProfileGenerationPanel: React.FC<ProfileGenerationPanelProps> = ({
   onViewProfile,
   onSaveProfile,
   onClose,
+  isDocked = false,
+  onToggleDock,
 }) => {
   // Position + drag
   const panelRef = useRef<HTMLDivElement>(null);
@@ -128,19 +133,35 @@ export const ProfileGenerationPanel: React.FC<ProfileGenerationPanelProps> = ({
 
   return (
     <div
-      ref={panelRef}
-      style={{ left: pos.x, top: pos.y, position: 'fixed', zIndex: 1550 }}
-      className="w-80 bg-gray-950 border border-sky-500/40 rounded-xl shadow-2xl shadow-sky-900/30 flex flex-col overflow-hidden select-none"
+      ref={isDocked ? undefined : panelRef}
+      style={isDocked ? undefined : { left: pos.x, top: pos.y, position: 'fixed', zIndex: 1550 }}
+      className={
+        isDocked
+          ? 'w-full bg-gray-950 border-b border-sky-500/30 flex flex-col overflow-hidden select-none'
+          : 'w-80 bg-gray-950 border border-sky-500/40 rounded-xl shadow-2xl shadow-sky-900/30 flex flex-col overflow-hidden select-none'
+      }
     >
       {/* Header */}
       <div
-        className="flex items-center gap-2 px-3 py-2 bg-sky-900/30 border-b border-sky-700/40 cursor-grab active:cursor-grabbing"
-        onMouseDown={onMouseDown}
+        className={`flex items-center gap-2 px-3 py-2 bg-sky-900/30 border-b border-sky-700/40 ${
+          isDocked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'
+        }`}
+        onMouseDown={isDocked ? undefined : onMouseDown}
       >
         <svg className="w-4 h-4 text-sky-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M3 20l4-8 4 4 4-6 4 10" />
         </svg>
         <span className="text-xs font-bold text-sky-300 uppercase tracking-wide flex-1">Profile Generator</span>
+        {onToggleDock && (
+          <button
+            type="button"
+            onClick={onToggleDock}
+            className="p-1 rounded hover:bg-gray-800 text-sky-300 hover:text-white transition-colors"
+            title={isDocked ? 'Pop out Profile Generator to canvas' : 'Dock Profile Generator into Tool Station'}
+          >
+            {isDocked ? <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" /> : <ArrowDownOnSquareIcon className="w-3.5 h-3.5" />}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setCollapsed(v => !v)}

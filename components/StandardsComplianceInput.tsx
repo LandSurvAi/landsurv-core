@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import { HomeIcon, UploadIcon, ClipboardDocumentListIcon, XMarkIcon } from './icons';
+import { UploadIcon, ClipboardDocumentListIcon, XMarkIcon } from './icons';
+import { UploadShell, UploadPanel, UploadDropzone, UploadPrimaryButton, UploadActionBar } from './UploadShell.tsx';
 import PdfPageSelector from './PdfPageSelector';
 import { useAppState } from '../contexts/AppStateContext.tsx';
 import {
@@ -249,7 +250,15 @@ const StandardsComplianceInput: React.FC<StandardsComplianceInputProps> = ({
   }, []);
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-full p-8 text-center">
+    <UploadShell
+      icon={ClipboardDocumentListIcon}
+      accent="#a78bfa"
+      title="Standards Compliance"
+      description="Audit a subject PDF against your own standard — add reference PDFs, choose the standards source, and pick which checks to run."
+      onGoBack={onGoBack}
+      backTitle={backButtonTitle}
+      widthClassName="max-w-5xl"
+    >
       {pendingSelectorFile && activeRoleForSelector && (
         <PdfPageSelector
           file={pendingSelectorFile}
@@ -261,126 +270,102 @@ const StandardsComplianceInput: React.FC<StandardsComplianceInputProps> = ({
         />
       )}
 
-      <button
-        onClick={onGoBack}
-        className="absolute top-4 left-4 p-2 text-gray-300 hover:text-white transition-colors"
-        title={backButtonTitle}
-      >
-        <HomeIcon className="w-6 h-6" />
-      </button>
-
-      <h1 className="text-4xl sm:text-5xl font-extrabold leading-none tracking-tight text-center mb-3">
-        <span className="text-white">Standards</span><span className="text-violet-400">Compliance</span>
-      </h1>
-      <p className="text-gray-300 mb-6 max-w-3xl">
-        Upload a subject PDF to audit, optionally add one or more reference/control PDFs (examples of the correct standard), choose source mode, and define checks.
-      </p>
-
-      <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-5 text-left">
-        <div className="bg-gray-900/50 border border-gray-700 rounded-xl p-4">
-          <h3 className="text-lg font-semibold text-violet-300 mb-3 flex items-center gap-2">
-            <ClipboardDocumentListIcon className="w-5 h-5" /> Intake Files
-          </h3>
-
-          <label className="block text-sm text-gray-300 mb-2">Subject PDF (required)</label>
+      <div className="grid grid-cols-1 gap-3.5 text-left lg:grid-cols-2">
+        <UploadPanel eyebrow="Intake" title="Files">
+          <label className="block text-[11.5px] font-medium text-slate-300">Subject PDF <span className="text-rose-300">*</span></label>
           <input
             type="file"
             accept=".pdf,application/pdf"
             onChange={(e) => { void handleFilePick('subject', e.target.files); }}
             disabled={isProcessing}
-            className="block w-full text-sm text-gray-300 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-violet-600 file:text-white hover:file:bg-violet-700"
+            className="mt-1.5 block w-full rounded-md border border-white/[0.08] bg-black/20 p-2 text-[11.5px] text-slate-300 file:mr-3 file:rounded file:border-0 file:bg-white/[0.06] file:px-2.5 file:py-1.5 file:text-[11px] file:font-semibold file:text-slate-200 hover:file:bg-white/[0.1]"
           />
-          <div className="text-xs text-gray-400 mt-2 mb-4">
+          <p className="mb-4 mt-1.5 text-[11px] text-slate-500">
             {subjectFile ? `${subjectFile.file.name} (${subjectFile.pages?.length ?? 0} page(s) selected)` : 'No subject PDF selected.'}
-          </div>
+          </p>
 
-          <label className="block text-sm text-gray-300 mb-2">Reference / control PDFs (optional, any number)</label>
+          <label className="block text-[11.5px] font-medium text-slate-300">Reference / control PDFs <span className="text-slate-500">(optional)</span></label>
           <input
             type="file"
             accept=".pdf,application/pdf"
             multiple
             onChange={(e) => { void handleFilePick('control', e.target.files); e.target.value = ''; }}
             disabled={isProcessing}
-            className="block w-full text-sm text-gray-300 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-gray-700 file:text-gray-100 hover:file:bg-gray-600"
+            className="mt-1.5 block w-full rounded-md border border-white/[0.08] bg-black/20 p-2 text-[11.5px] text-slate-300 file:mr-3 file:rounded file:border-0 file:bg-white/[0.06] file:px-2.5 file:py-1.5 file:text-[11px] file:font-semibold file:text-slate-200 hover:file:bg-white/[0.1]"
           />
           {controlFiles.length === 0 && controlQueue.length === 0 ? (
-            <div className="text-xs text-gray-400 mt-2">No reference PDFs selected. Add as many examples of the correct standard as you have.</div>
+            <p className="mt-1.5 text-[11px] text-slate-500">Add as many examples of the correct standard as you have.</p>
           ) : (
             <ul className="mt-2 space-y-1">
               {controlFiles.map((cf, idx) => (
-                <li key={`${cf.file.name}-${idx}`} className="flex items-center justify-between gap-2 text-xs text-gray-300 bg-gray-800/60 border border-gray-700 rounded-md px-2 py-1.5">
+                <li key={`${cf.file.name}-${idx}`} className="flex items-center justify-between gap-2 rounded-md border border-white/[0.07] bg-white/[0.02] px-2 py-1.5 text-[11px] text-slate-300">
                   <span className="truncate">{cf.file.name} ({cf.pages?.length ?? 0} page(s))</span>
                   <button
                     type="button"
                     onClick={() => removeControlFile(idx)}
                     disabled={isProcessing}
-                    className="p-0.5 text-gray-400 hover:text-red-400 flex-shrink-0"
+                    className="flex-shrink-0 text-slate-500 transition-colors hover:text-rose-300"
                     title="Remove this reference PDF"
                   >
-                    <XMarkIcon className="w-3.5 h-3.5" />
+                    <XMarkIcon className="h-3.5 w-3.5" />
                   </button>
                 </li>
               ))}
               {controlQueue.length > 0 && (
-                <li className="text-xs text-gray-500 italic px-2">{controlQueue.length} more queued for page selection…</li>
+                <li className="px-2 text-[10.5px] italic text-slate-500">{controlQueue.length} more queued for page selection…</li>
               )}
             </ul>
           )}
-        </div>
+        </UploadPanel>
 
-        <div className="bg-gray-900/50 border border-gray-700 rounded-xl p-4">
-          <h3 className="text-lg font-semibold text-violet-300 mb-3">Audit Profile</h3>
-
-          <label className="block text-sm text-gray-300 mb-1">Standards source mode</label>
+        <UploadPanel eyebrow="Profile" title="Audit profile">
+          <label className="block text-[11.5px] font-medium text-slate-300">Standards source mode</label>
           <select
             value={sourceMode}
             onChange={(e) => setSourceMode(e.target.value as ComplianceSourceMode)}
             disabled={isProcessing}
-            className="w-full bg-gray-800 border border-gray-600 rounded-md px-3 py-2 text-sm text-gray-100 mb-2"
+            className="mt-1.5 mb-1.5 w-full rounded-md border border-white/[0.08] bg-black/30 px-2.5 py-2 text-[12px] text-slate-200 outline-none focus:border-[color:var(--up-accent)]"
           >
             {SOURCE_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
-          <p className="text-xs text-gray-400 mb-4">
+          <p className="mb-4 text-[11px] text-slate-500">
             {SOURCE_OPTIONS.find(opt => opt.value === sourceMode)?.help}
           </p>
 
-          <div className="space-y-2">
-            <div className="text-sm text-gray-300">Enabled checks ({selectedCheckCount})</div>
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Enabled checks ({selectedCheckCount})</p>
+          <div className="max-h-64 space-y-0.5 overflow-y-auto pr-1">
             {CHECK_LABELS.map(check => (
-              <label key={check.id} className="flex items-center gap-2 text-sm text-gray-200">
+              <label key={check.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-[11.5px] text-slate-300 hover:bg-white/[0.04]">
                 <input
                   type="checkbox"
                   checked={checks[check.id]}
                   onChange={() => toggleCheck(check.id)}
                   disabled={isProcessing}
-                  className="accent-violet-500"
+                  className="h-3.5 w-3.5 rounded border-white/20 accent-violet-500"
                 />
                 {check.label}
               </label>
             ))}
           </div>
+        </UploadPanel>
+      </div>
+
+      {isProcessing && (
+        <div className="flex items-center gap-2.5 rounded-lg border border-white/[0.07] bg-black/20 px-3 py-2.5 text-[12px] text-violet-200">
+          <span className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-violet-300 border-t-transparent" />
+          {progress || 'Processing…'}
         </div>
-      </div>
+      )}
 
-      <div className="mt-6 flex flex-col items-center gap-3">
-        {isProcessing && (
-          <div className="text-sm text-violet-200 flex items-center gap-2">
-            <div className="w-4 h-4 border-2 border-violet-300 border-t-transparent rounded-full animate-spin" />
-            {progress || 'Processing...'}
-          </div>
-        )}
-
-        <button
-          onClick={() => { void handleStart(); }}
-          disabled={isProcessing || !subjectFile}
-          className="inline-flex items-center gap-2 px-8 py-3 text-lg font-semibold text-white bg-violet-600 rounded-lg hover:bg-violet-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors duration-200"
-        >
-          <UploadIcon className="w-5 h-5" /> Start Standards Compliance
-        </button>
-      </div>
-    </div>
+      <UploadActionBar note={subjectFile ? 'Subject PDF ready' : 'Add a subject PDF to run the audit'}>
+        <UploadPrimaryButton onClick={() => { void handleStart(); }} disabled={isProcessing || !subjectFile}>
+          <UploadIcon className="h-3.5 w-3.5" />
+          Start standards compliance
+        </UploadPrimaryButton>
+      </UploadActionBar>
+    </UploadShell>
   );
 };
 

@@ -1,19 +1,12 @@
 import React, { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react';
+import { ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon } from './icons.tsx';
 
 /**
- * FloatingPanel (v26.05.17.16) \u2014 reusable draggable / floatable dialog wrapper.
+ * FloatingPanel — reusable draggable / floatable / dockable dialog wrapper.
  *
- * Pilot for the "move all dialogs to floating" initiative. Wraps any child
- * content in a fixed-position card with a draggable header bar, configurable
- * initial position, optional close button, and an optional resize handle.
- *
- * Drag is implemented with pointer events (mouse + touch + pen) and bounded
- * to the viewport so the panel can't be dragged off-screen.
- *
- * Usage:
- *   <FloatingPanel title="Flood Tools" onClose={...} initialX={120} initialY={80}>
- *      <FloodPanel ... />
- *   </FloatingPanel>
+ * Supports both floating on the canvas (`isDocked = false`) and docking into
+ * the right-hand Agent Tool Docking Station (`isDocked = true`), matching the
+ * Boundary Agent Deed Draft dialog UX across all agent tools.
  */
 
 interface FloatingPanelProps {
@@ -40,6 +33,10 @@ interface FloatingPanelProps {
   minimizedAnchor?: 'left' | 'center' | 'right';
   /** Bottom offset in px for the minimized chip stack — used to stack multiple chips. Default 16. */
   minimizedOffset?: number;
+  /** Whether the panel is docked inside the Agent Tool Docking Station instead of floating. */
+  isDocked?: boolean;
+  /** Callback to dock/undock the panel between the Tool Docking Station and the canvas. */
+  onToggleDock?: () => void;
 }
 
 export const FloatingPanel: React.FC<FloatingPanelProps> = ({
@@ -56,6 +53,8 @@ export const FloatingPanel: React.FC<FloatingPanelProps> = ({
   onToggleMinimize,
   minimizedAnchor = 'right',
   minimizedOffset = 16,
+  isDocked = false,
+  onToggleDock,
 }) => {
   const [pos, setPos] = useState<{ x: number; y: number }>({ x: initialX, y: initialY });
   const dragState = useRef<{ active: boolean; offsetX: number; offsetY: number }>({ active: false, offsetX: 0, offsetY: 0 });
@@ -68,17 +67,25 @@ export const FloatingPanel: React.FC<FloatingPanelProps> = ({
     const rect = el.getBoundingClientRect();
     const maxX = Math.max(viewportMargin, window.innerWidth - rect.width - viewportMargin);
     const maxY = Math.max(viewportMargin, window.innerHeight - rect.height - viewportMargin);
+    // Measure the live canvas header so dialogs never tuck under it — this
+    // includes the environment banner above the header when one is shown.
+    const header = typeof document !== 'undefined'
+      ? document.querySelector<HTMLElement>('[data-canvas-header]')
+      : null;
+    const headerSafeTop = Math.max(viewportMargin, (header?.getBoundingClientRect().bottom ?? 56) + 12);
     return {
       x: Math.max(viewportMargin, Math.min(x, maxX)),
-      y: Math.max(viewportMargin, Math.min(y, maxY)),
+      y: Math.max(headerSafeTop, Math.min(y, maxY)),
     };
   }, [viewportMargin]);
 
   useLayoutEffect(() => {
+    if (isDocked) return;
     setPos((current) => clampToViewport(current.x, current.y));
-  }, [clampToViewport, initialX, initialY]);
+  }, [clampToViewport, initialX, initialY, isDocked]);
 
   const onHeaderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isDocked) return;
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return;
     dragState.current = {
       active: true,
@@ -88,52 +95,84 @@ export const FloatingPanel: React.FC<FloatingPanelProps> = ({
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onHeaderPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragState.current.active) return;
+    if (isDocked || !dragState.current.active) return;
     const next = clampToViewport(e.clientX - dragState.current.offsetX, e.clientY - dragState.current.offsetY);
     setPos(next);
   };
   const onHeaderPointerUp = () => { dragState.current.active = false; };
 
   useEffect(() => {
+    if (isDocked) return;
     // Re-clamp on window resize so panel stays visible.
     const handler = () => setPos(p => clampToViewport(p.x, p.y));
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
-  }, [clampToViewport]);
+  }, [clampToViewport, isDocked]);
 
   return (
     <div
-      ref={panelRef}
-      className={`fixed bg-gray-800 border ${accentBorder} rounded-lg shadow-2xl flex flex-col`}
-      style={{
-        left: pos.x,
-        top: pos.y,
-        width,
-        maxWidth: 'calc(100vw - 16px)',
-        maxHeight: minimized ? undefined : maxHeight,
-        zIndex,
-      }}
+      ref={isDocked ? undefined : panelRef}
+      className={
+        isDocked
+          ? 'w-full bg-gray-900/95 border-b border-gray-800 flex flex-col overflow-hidden'
+          : `fixed bg-gray-800 border ${accentBorder} rounded-lg shadow-2xl flex flex-col`
+      }
+      style={
+        isDocked
+          ? undefined
+          : {
+              left: pos.x,
+              top: pos.y,
+              width,
+              maxWidth: 'calc(100vw - 16px)',
+              maxHeight: minimized ? undefined : maxHeight,
+              zIndex,
+            }
+      }
       role="dialog"
       aria-label={title}
     >
       <div
-        className={`px-4 py-2.5 flex items-center justify-between cursor-grab active:cursor-grabbing select-none bg-gray-900/60 ${minimized ? 'rounded-lg' : 'rounded-t-lg border-b border-gray-700'}`}
-        style={{ touchAction: 'none' }}
-        onPointerDown={onHeaderPointerDown}
-        onPointerMove={onHeaderPointerMove}
-        onPointerUp={onHeaderPointerUp}
-        onPointerCancel={onHeaderPointerUp}
+        className={`px-3.5 py-2.5 flex items-center justify-between select-none bg-gray-950/80 ${
+          isDocked
+            ? 'cursor-default border-b border-gray-800/80'
+            : `cursor-grab active:cursor-grabbing ${minimized ? 'rounded-lg' : 'rounded-t-lg border-b border-gray-700'}`
+        }`}
+        style={{ touchAction: isDocked ? 'auto' : 'none' }}
+        onPointerDown={isDocked ? undefined : onHeaderPointerDown}
+        onPointerMove={isDocked ? undefined : onHeaderPointerMove}
+        onPointerUp={isDocked ? undefined : onHeaderPointerUp}
+        onPointerCancel={isDocked ? undefined : onHeaderPointerUp}
       >
-        <div className="flex items-center gap-2 text-sm font-semibold text-gray-200">
-          <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-          {title}
+        <div className="flex items-center gap-2 text-sm font-semibold text-gray-200 truncate">
+          {!isDocked && (
+            <svg className="w-4 h-4 text-gray-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          )}
+          <span className="truncate">{title}</span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
+          {onToggleDock && (
+            <button
+              data-no-drag
+              type="button"
+              onClick={onToggleDock}
+              className="p-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-cyan-400 transition-colors"
+              title={isDocked ? `Pop out ${title} to a floating window on canvas` : `Dock ${title} into Agent Tool Station`}
+              aria-label={isDocked ? `Pop out ${title}` : `Dock ${title}`}
+            >
+              {isDocked ? (
+                <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+              ) : (
+                <ArrowDownOnSquareIcon className="w-4 h-4" />
+              )}
+            </button>
+          )}
           {onToggleMinimize && (
             <button
               data-no-drag
+              type="button"
               onClick={onToggleMinimize}
               className="text-gray-400 hover:text-white p-1 rounded hover:bg-gray-700/60 transition-colors"
               aria-label={minimized ? 'Restore' : 'Shade'}
@@ -155,9 +194,11 @@ export const FloatingPanel: React.FC<FloatingPanelProps> = ({
           {onClose && (
             <button
               data-no-drag
+              type="button"
               onClick={onClose}
-              className="text-gray-400 hover:text-white p-1 rounded hover:bg-gray-700/60 transition-colors"
+              className="text-gray-400 hover:text-rose-400 p-1 rounded hover:bg-rose-950/60 transition-colors"
               aria-label="Close"
+              title={`Close ${title}`}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />

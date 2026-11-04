@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
 import {
   PARCEL_LAYER_TAG,
+  findParcelServiceForJurisdiction,
+  type ParcelServiceMatch,
   type ParcelFeatureSummary,
   type ParcelGisServiceDef,
   type ParcelServiceCandidate,
@@ -9,9 +11,15 @@ import {
   deleteCustomParcelService,
   describeParcelService,
 } from '../services/parcelGisService.ts';
-import { type AnnotationCategoryStyle, type ParcelCadTextStyle, type ParcelLabelFormatter, DEFAULT_PARCEL_LABEL_FORMATTER } from '../types.ts';
+import { type AnnotationCategoryStyle, type ParcelCadTextStyle, type ParcelLabelFormatter, type SurveyLine, type SurveyPoint, DEFAULT_PARCEL_LABEL_FORMATTER } from '../types.ts';
 import { applyAnnotationTextCase } from '../utils/annotationTextStyle.ts';
 import { buildParcelLabelLines, resolveEffectiveParcelTextStyle } from '../utils/parcelLabelFormatter.ts';
+import {
+  detectJurisdictionFromBrowser,
+  inferJurisdictionFromEpsg,
+  resolveProjectJurisdiction,
+  type ProjectJurisdiction,
+} from '../utils/projectJurisdiction.ts';
 import { 
   ArrowTopRightOnSquareIcon, 
   ArrowDownOnSquareIcon, 
@@ -44,7 +52,7 @@ export interface ParcelPanelProps {
   /** Trigger a fetch — App.tsx builds the bbox (inclusion or description) and calls the service. */
   onFetchParcels: (
     service: ParcelGisServiceDef,
-    mode: 'inclusion' | 'description',
+    mode: ParcelQueryMode,
     descriptionText?: string,
   ) => void;
   /**
@@ -53,9 +61,15 @@ export interface ParcelPanelProps {
    * relying on a hand-curated list.
    */
   onSearchParcelServices?: (
-    mode: 'inclusion' | 'description',
+    mode: ParcelQueryMode,
     descriptionText?: string,
   ) => Promise<ParcelServiceCandidate[]>;
+  /** Georeferenced survey points on the canvas — used to detect the jurisdiction. */
+  projectPoints?: SurveyPoint[];
+  /** Canvas linework; an inclusion boundary, when present, defines the AOI. */
+  projectLines?: SurveyLine[];
+  /** Project EPSG — required to convert project coordinates to WGS84. */
+  projectEpsg?: number | null;
   /** Remove every line in the project tagged with PARCEL_LAYER_TAG. */
   onClearParcels: () => void;
   /** Current parcel label formatter settings. */
@@ -84,17 +98,33 @@ export interface ParcelPanelProps {
 
 export type ParcelPanelMode = 'query' | 'labels' | 'parcels';
 
+/** How the parcel query area is defined. 'project' uses the georeferenced
+ *  point extent, so no inclusion polygon or typed address is needed. */
+export type ParcelQueryMode = 'inclusion' | 'description' | 'project';
+
 const LAST_SERVICE_KEY = 'landsurv.parcel.lastService';
+
+function rememberServiceId(id: string): void {
+  try { localStorage.setItem(LAST_SERVICE_KEY, id); } catch { /* private mode */ }
+}
 
 /** Default to the last service used on this device, then the PA county fabric
  *  the Boundary Agent shipped with, then whatever is first in the registry. */
-function readInitialServiceId(): string {
+function readInitialServiceId(epsg?: number | null): string {
   const all = getAllParcelServices();
+  const guess = inferJurisdictionFromEpsg(epsg);
+  const suggested = guess ? findParcelServiceForJurisdiction(guess) : null;
   try {
     const saved = localStorage.getItem(LAST_SERVICE_KEY);
-    if (saved && all.some(s => s.id === saved)) return saved;
+    const savedDef = saved ? all.find(s => s.id === saved) : null;
+    if (savedDef) {
+      // A saved layer from the project's own state still wins; one from
+      // another state must not override the project's coordinate system.
+      if (!suggested?.service.state || !savedDef.state) return savedDef.id;
+      if (savedDef.state === suggested.service.state) return savedDef.id;
+    }
   } catch { /* private mode */ }
-  return all.find(s => s.id === 'montco-pa')?.id ?? all[0]?.id ?? '';
+  return suggested?.service.id ?? all.find(s => s.id === 'montco-pa')?.id ?? all[0]?.id ?? '';
 }
 
 /**
@@ -113,6 +143,9 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
   isFetching,
   onFetchParcels,
   onSearchParcelServices,
+  projectPoints = [],
+  projectLines = [],
+  projectEpsg = null,
   onClearParcels,
   parcelLabelFormatter = DEFAULT_PARCEL_LABEL_FORMATTER,
   cadTextStyles = [],
@@ -128,10 +161,20 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
 }) => {
   const [activeMode, setActiveMode] = useState<ParcelPanelMode>('query');
   const [services, setServices] = useState<ParcelGisServiceDef[]>(() => getAllParcelServices());
-  const [selectedServiceId, setSelectedServiceIdRaw] = useState<string>(() => readInitialServiceId());
-  const [queryMode, setQueryMode] = useState<'inclusion' | 'description'>('description');
+  const [selectedServiceId, setSelectedServiceIdRaw] = useState<string>(() => readInitialServiceId(projectEpsg));
+  // Default to the points already on the canvas when they are georeferenced —
+  // the user should not have to type an address or select a county first.
+  const [queryMode, setQueryMode] = useState<ParcelQueryMode>(() =>
+    inclusionSegmentCount === 0 && projectPoints.length > 0 && !!projectEpsg ? 'project' : 'description');
   const [descriptionText, setDescriptionText] = useState<string>('');
   const [parcelSearchFilter, setParcelSearchFilter] = useState<string>('');
+
+  // Jurisdiction detected from the project's georeferenced points.
+  const [jurisdiction, setJurisdiction] = useState<ProjectJurisdiction | null>(null);
+  const [jurisdictionStatus, setJurisdictionStatus] = useState<'idle' | 'detecting' | 'found' | 'error'>('idle');
+  const [jurisdictionError, setJurisdictionError] = useState<string | null>(null);
+  const [serviceMatch, setServiceMatch] = useState<ParcelServiceMatch | null>(null);
+  const userPickedServiceRef = useRef(false);
 
   // Custom-server + discovery state (nationwide coverage).
   const [showCustomServer, setShowCustomServer] = useState(false);
@@ -340,6 +383,141 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
     };
   }, [isDocked, reservedBottom, reservedRight]);
 
+  // ── Auto-detect the jurisdiction from the georeferenced project ─────────
+  // The loaded points (or inclusion boundary) already say where the site is;
+  // reverse-geocode that center once and pre-select the matching county layer
+  // so state/county/service never has to be picked by hand.
+  const projectDataRef = useRef({ points: projectPoints, lines: projectLines, epsg: projectEpsg });
+  projectDataRef.current = { points: projectPoints, lines: projectLines, epsg: projectEpsg };
+
+  const detectionSignature = useMemo(() => {
+    if (!projectEpsg || projectPoints.length === 0) return '';
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of projectPoints) {
+      if (!Number.isFinite(p.easting) || !Number.isFinite(p.northing)) continue;
+      x0 = Math.min(x0, p.easting); x1 = Math.max(x1, p.easting);
+      y0 = Math.min(y0, p.northing); y1 = Math.max(y1, p.northing);
+    }
+    if (!Number.isFinite(x0)) return '';
+    const q = (n: number) => Math.round(n / 10) * 10; // ~10 project units
+    return `${projectEpsg}:${q(x0)},${q(y0)},${q(x1)},${q(y1)}:${projectPoints.length}`;
+  }, [projectEpsg, projectPoints]);
+
+  const applyJurisdiction = useCallback((j: ProjectJurisdiction) => {
+    setJurisdiction(j);
+    setJurisdictionStatus('found');
+    setJurisdictionError(null);
+    const match = findParcelServiceForJurisdiction(j);
+    setServiceMatch(match ?? null);
+    // A manual pick always wins; otherwise select the county fabric for them.
+    if (match && !userPickedServiceRef.current) {
+      setSelectedServiceIdRaw(match.service.id);
+      rememberServiceId(match.service.id);
+    }
+  }, []);
+
+  const handleDetectFromBrowser = useCallback(async () => {
+    setJurisdictionStatus('detecting');
+    setJurisdictionError(null);
+    try {
+      const result = await detectJurisdictionFromBrowser();
+      if (result) applyJurisdiction(result);
+      else {
+        setJurisdictionStatus('error');
+        setJurisdictionError('No US state/county matched this device location.');
+      }
+    } catch (err) {
+      setJurisdictionStatus('error');
+      setJurisdictionError(err instanceof Error ? err.message : String(err));
+    }
+  }, [applyJurisdiction]);
+
+  const lastDetectionSignatureRef = useRef('');
+  const [detectionRetry, setDetectionRetry] = useState(0);
+  const retryDetection = useCallback(() => {
+    if (!lastDetectionSignatureRef.current) return;
+    lastDetectionSignatureRef.current = '';
+    setDetectionRetry(n => n + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!detectionSignature) {
+      if (lastDetectionSignatureRef.current) {
+        lastDetectionSignatureRef.current = '';
+        setJurisdiction(null);
+        setServiceMatch(null);
+        setJurisdictionStatus('idle');
+      }
+      return;
+    }
+    if (lastDetectionSignatureRef.current === detectionSignature) return;
+    lastDetectionSignatureRef.current = detectionSignature;
+    let cancelled = false;
+    let settled = false;
+    const { points: pts, lines: lns, epsg } = projectDataRef.current;
+
+    // The project's State Plane zone names its state, so a matching statewide
+    // parcel layer can be selected instantly — no geocoder round-trip needed.
+    const stateGuess = inferJurisdictionFromEpsg(epsg);
+    let stateFallbackLabel: string | null = null;
+    if (stateGuess) {
+      setJurisdiction(stateGuess);
+      const guessMatch = findParcelServiceForJurisdiction(stateGuess);
+      setServiceMatch(guessMatch ?? null);
+      if (guessMatch?.match === 'statewide') stateFallbackLabel = guessMatch.service.label;
+      if (guessMatch && !userPickedServiceRef.current) {
+        setSelectedServiceIdRaw(guessMatch.service.id);
+        rememberServiceId(guessMatch.service.id);
+      }
+    }
+
+    setJurisdictionStatus('detecting');
+    setJurisdictionError(null);
+
+    const noCountyAdvice = stateGuess
+      ? (stateFallbackLabel
+          ? ' Using ' + stateFallbackLabel + '.'
+          : ' Pick a county layer above, or use “Find layers here”.')
+      : ' Pick the GIS service manually, or use this device’s location.';
+
+    // Hard ceiling: both geocoders time out internally, but the spinner must
+    // never be able to run forever if something else stalls.
+    const watchdog = setTimeout(() => {
+      if (cancelled || settled) return;
+      settled = true;
+      setJurisdictionStatus('error');
+      setJurisdictionError('County lookup timed out.' + noCountyAdvice);
+    }, 10_000);
+
+    resolveProjectJurisdiction({ points: pts, lines: lns, epsg })
+      .then((result) => {
+        if (cancelled || settled) return;
+        settled = true;
+        clearTimeout(watchdog);
+        if (result) {
+          applyJurisdiction(result);
+        } else if (stateGuess) {
+          setJurisdictionStatus('error');
+          setJurisdictionError(
+            'Located ' + stateGuess.state + ' from the project coordinate system, but the county lookup returned no match.' +
+            noCountyAdvice,
+          );
+        } else {
+          setJurisdictionStatus('error');
+          setJurisdictionError('No US state/county matched the project coordinates.');
+        }
+      })
+      .catch((err) => {
+        if (cancelled || settled) return;
+        settled = true;
+        clearTimeout(watchdog);
+        setJurisdictionStatus('error');
+        const reason = err instanceof Error ? err.message : String(err);
+        setJurisdictionError('County lookup failed (' + reason + ').' + noCountyAdvice);
+      });
+    return () => { cancelled = true; clearTimeout(watchdog); };
+  }, [detectionSignature, detectionRetry, applyJurisdiction]);
+
   const selectedService = useMemo(
     () => services.find(s => s.id === selectedServiceId) ?? services[0],
     [services, selectedServiceId],
@@ -354,7 +532,8 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
 
   const setSelectedServiceId = useCallback((id: string) => {
     setSelectedServiceIdRaw(id);
-    try { localStorage.setItem(LAST_SERVICE_KEY, id); } catch { /* private mode */ }
+    userPickedServiceRef.current = true;
+    rememberServiceId(id);
   }, []);
 
   const addService = useCallback((def: ParcelGisServiceDef) => {
@@ -387,7 +566,12 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
   }, [addService, customLabel, customUrl, isProbing, setSelectedServiceId]);
 
   const currentQueryText = queryMode === 'description' ? descriptionText.trim() : undefined;
-  const canQuery = queryMode === 'inclusion' ? inclusionSegmentCount > 0 : (currentQueryText ?? '').length > 0;
+  const canQueryByProject = !!projectEpsg && projectPoints.length > 0;
+  const canQuery = queryMode === 'inclusion'
+    ? inclusionSegmentCount > 0
+    : queryMode === 'project'
+      ? canQueryByProject
+      : (currentQueryText ?? '').length > 0;
 
   const handleDiscover = useCallback(async () => {
     if (!onSearchParcelServices || isDiscovering) return;
@@ -639,6 +823,80 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                 </p>
               </div>
 
+              {/* Project location — auto-detected from georeferenced points */}
+              <div className="rounded-lg border border-cyan-700/50 bg-cyan-950/20 p-2.5 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-cyan-300 flex items-center gap-1.5 min-w-0">
+                    <span aria-hidden="true">📍</span>
+                    <span className="truncate">{jurisdiction ? jurisdiction.label : 'Project Location'}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleDetectFromBrowser}
+                    disabled={jurisdictionStatus === 'detecting'}
+                    className="shrink-0 text-[10px] font-semibold text-cyan-300 hover:text-cyan-200 disabled:text-gray-500"
+                    title="Use this device's location to pick the parcel layer"
+                  >
+                    Use my location
+                  </button>
+                </div>
+                {jurisdictionStatus === 'detecting' && (
+                  <p className="text-[11px] text-gray-300 flex items-center gap-1.5">
+                    <span className="w-3 h-3 border-2 border-cyan-300/30 border-t-cyan-300 rounded-full animate-spin" />
+                    {jurisdiction?.state
+                      ? 'Locating the county in ' + jurisdiction.state + '…'
+                      : 'Locating the project from georeferenced points…'}
+                  </p>
+                )}
+                {jurisdictionStatus === 'found' && jurisdiction && (
+                  <p className="text-[11px] text-gray-300 leading-relaxed light-theme:text-gray-600">
+                    Auto-detected {jurisdiction.aoiSource === 'browser' ? 'from this device' : 'from the project coordinates'}.{' '}
+                    {serviceMatch ? (
+                      serviceMatch.service.id === selectedServiceId ? (
+                        <>Using <span className="font-semibold text-cyan-200">{serviceMatch.service.label}</span>
+                          {serviceMatch.match === 'statewide' ? ' (statewide fabric — no curated county layer)' : ''}.</>
+                      ) : (
+                        <>Suggested <span className="font-semibold text-cyan-200">{serviceMatch.service.label}</span> —{' '}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedServiceId(serviceMatch.service.id)}
+                            className="font-semibold text-cyan-300 hover:text-cyan-200 underline"
+                          >
+                            use it
+                          </button>
+                        </>
+                      )
+                    ) : (
+                      'No built-in parcel layer for this jurisdiction — use “Find layers here”.'
+                    )}
+                  </p>
+                )}
+                {jurisdictionStatus === 'error' && (
+                  <div className="space-y-1">
+                    <p className="text-[11px] text-amber-300 leading-relaxed">
+                      {jurisdictionError ?? 'Could not resolve the project jurisdiction.'}
+                    </p>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={retryDetection}
+                        className="text-[10px] font-semibold text-cyan-300 hover:text-cyan-200"
+                      >
+                        Retry lookup
+                      </button>
+                      <span className="text-[10px] text-gray-500">or pick the GIS service manually</span>
+                    </div>
+                  </div>
+                )}
+                {jurisdictionStatus === 'idle' && (
+                  <p className="text-[11px] text-gray-400 leading-relaxed light-theme:text-gray-500">
+                    {projectPoints.length > 0 && !projectEpsg
+                      ? 'Set the project EPSG in Settings to auto-detect the county from the loaded points.'
+                      : 'Load georeferenced points to auto-detect the county, or use this device’s location.'}
+                  </p>
+                )}
+              </div>
+
               {/* County / state / custom service picker */}
               <label className="block">
                 <span className="flex items-baseline justify-between text-xs font-semibold text-gray-300 mb-1 light-theme:text-gray-700">
@@ -818,6 +1076,17 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                   </button>
                   <button
                     type="button"
+                    onClick={() => setQueryMode('project')}
+                    className={`px-2.5 py-1.5 rounded-md text-xs font-semibold border transition-all ${
+                      queryMode === 'project'
+                        ? 'bg-orange-600 border-orange-400 text-white shadow-sm'
+                        : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 light-theme:bg-gray-100 light-theme:border-gray-300 light-theme:text-gray-700'
+                    }`}
+                  >
+                    Project Points{projectPoints.length > 0 ? ` (${projectPoints.length})` : ''}
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setQueryMode('description')}
                     className={`px-2.5 py-1.5 rounded-md text-xs font-semibold border transition-all ${
                       queryMode === 'description'
@@ -841,6 +1110,21 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                     Draw an inclusion polygon on the canvas first (Drawing Tools → Inclusion).
                   </div>
                 )
+              )}
+
+              {/* Project-points status hint */}
+              {queryMode === 'project' && (
+                <div className={`text-xs rounded-md p-2.5 border ${
+                  canQueryByProject
+                    ? 'text-emerald-300/90 bg-emerald-950/40 border-emerald-800/50'
+                    : 'text-amber-300/90 bg-amber-950/40 border-amber-800/50'
+                }`}>
+                  {canQueryByProject
+                    ? `Project extent from ${projectPoints.length} georeferenced point${projectPoints.length === 1 ? '' : 's'} — no inclusion polygon or address needed.`
+                    : projectPoints.length === 0
+                      ? 'Load georeferenced points first, or draw an inclusion polygon.'
+                      : 'Set the project EPSG in Settings so point coordinates can be georeferenced.'}
+                </div>
               )}
 
               {/* Description input */}

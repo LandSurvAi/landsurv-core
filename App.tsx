@@ -25,9 +25,11 @@ import ZoningResultsPanel from './components/ZoningResultsPanel.tsx';
 import { TitleSearchPanel } from './components/TitleSearchPanel.tsx';
 // FIX: Changed default import to named import for ChatInterface.
 import { ChatInterface } from './components/ChatInterface.tsx';
+import { AgentToolDock, type DockableToolItem } from './components/AgentToolDock.tsx';
+import { AgentToolShelf } from './components/AgentToolShelf.tsx';
 import StationingChat from './components/StationingChat.tsx';
 import { PointEditorChat } from './components/PointEditorChat.tsx';
-import { PointListPanel } from './components/PointListPanel.tsx';
+import { resolveStandardsA2UIQuery } from './services/standardsA2UI.ts';
 import { EnvironmentBanner } from './components/EnvironmentBanner.tsx';
 // FIX: Import ContourPanel for the new contouring controls.
 // FIX: Changed default import to a named import for ContourPanel and added ProfilePanel import.
@@ -73,9 +75,10 @@ import type { ContourFetchOptions } from './utils/usgsNationalContours.ts';
 import { runClawDirectives, parseClawDirectives } from './utils/clawClient.ts';
 import { sanitizeZoningAnswer, extractZoningJsonBlock } from './utils/zoningRender.ts';
 import { setBootstrapStatus } from './utils/zoningBootstrap.ts';
+import { extractStreamingPointsAndLines } from './utils/streamingJsonParser.ts';
 import { isDemoApiKey } from './services/proxyGenAI.ts';
 import { APP_VERSION as APP_VERSION_CONST } from './utils/appVersion.ts';
-import { createSessionZip, generateSessionFileName } from './utils/sessionZip.ts';
+import { buildCadManagerSessionState, createSessionZip, generateSessionFileName, toAliasRecord } from './utils/sessionZip.ts';
 import { isOssBuild } from './utils/ossMode.ts';
 // Defer non-critical page components for faster initial load
 const TechnologiesPage = lazy(() => import('./components/TechnologiesPage.tsx'));
@@ -181,6 +184,7 @@ import ApiKeyOrPayModal, { type CheckoutSelection, type CurrentKeyDetails } from
 import { UpgradeModal } from './components/UpgradeModal.tsx';
 import { HostCostReminderModal } from './components/HostCostReminderModal.tsx';
 import { executeCheckoutRecaptcha } from './utils/recaptcha.ts';
+import { extractClarifyingQuestion } from './utils/clarifyingQuestion.ts';
 import AppLockOverlay from './components/AppLockOverlay.tsx';
 import { ConciergeOverlay } from './components/PublicConciergeChat.tsx';
 import { C3DConnectPanel } from './components/C3DConnectPanel.tsx';
@@ -217,6 +221,7 @@ import { expandChainsToLines, expandWidthCodedChains, repairBankCorridorChains, 
 import { buildCivilDrafterLineworkContext } from './utils/civilDrafterLinework.ts';
 import {
   addLineToList,
+  inheritConnectedLayer,
   addPointToList,
   deleteLineFromList,
   deletePointFromLists,
@@ -248,7 +253,18 @@ import { useStationingSkills } from './services/stationingSkillHandlers.ts';
 import { useDomainSkillHandlers } from './services/domainSkillHandlers.ts';
 import { knowledgeBase, extractDeedMetadataFacts, extractRowFactsFromLines, extractZoningFacts } from './services/KnowledgeBase.ts';
 import { LsvzPersistence } from './services/LsvzPersistence.ts';
-import './services/LsvzOrchestrator.ts';
+import { lsvzOrchestrator } from './services/LsvzOrchestrator.ts';
+import { buildAgentWelcome } from './services/agentWelcome.ts';
+import {
+  A2UI_INTAKE_AGENTS,
+  buildA2UIIntakeGreeting,
+  classifyA2UIIntakeReply,
+  getAgentA2UIWidgetType,
+  getUploadPromptCopy,
+  markPendingA2UICompleted,
+} from './services/a2uiIntake.ts';
+import { A2UISurface, A2UIHostContext, type A2UIHostContextValue } from './components/A2UISurface.tsx';
+import { exampleHighwayCl } from './assets/example.highway.cl.ts';
 import { CacpBadge } from './components/CacpBadge.tsx';
 import { hashKey } from './utils/hashKey';
 import { isConfirmedForKey, confirmKey, clearConfirmed, migrateLegacyConfirm } from './utils/apiKeyConfirmation';
@@ -266,6 +282,7 @@ import { CanvasStateProvider, useCanvasState } from './contexts/CanvasStateConte
 import { useCanvasHistory, useHistorySlice } from './contexts/CanvasHistoryContext.tsx';
 import { useUndoShortcuts } from './hooks/useUndoShortcuts.ts';
 import HistoryPanel from './components/HistoryPanel.tsx';
+import { UndoHistoryQuickPicker } from './components/UndoHistoryQuickPicker.tsx';
 import { useHistorySkills } from './services/historySkillHandlers.ts';
 import { AppStateProvider, useAppState } from './contexts/AppStateContext.tsx';
 import { CadManagerProvider, useCadManager } from './contexts/CadManagerContext.tsx';
@@ -320,7 +337,8 @@ import {
 import { DEFAULT_SETTINGS, COMPATIBLE_VERSIONS, isVersionCompatible } from './utils/sessionDefaults.ts';
 import { mergeSettingsWithDefaults, migrateMessage } from './utils/sessionMigration.ts';
 // FIX: Added ProfileIcon to the imports for the new Profile Agent.
-import { HomeIcon, SheetViewIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon } from './components/icons.tsx';
+import { HomeIcon, SheetViewIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, CogIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon, CogoIcon } from './components/icons.tsx';
+import { ToolbarStandardsIcon, ToolbarSurfaceIcon, ToolbarLayersIcon } from './components/toolbarIcons.tsx';
 import { suggestedQuestionsText } from './assets/suggested_questions.ts';
 import { userSuggestedQuestionsText } from './assets/user_suggested_questions.ts';
 import { deedSuggestedQuestionsText } from './assets/deed_suggested_questions.ts';
@@ -340,172 +358,119 @@ import BoundaryEditor from './components/BoundaryEditor.tsx';
 import StandardsComplianceSummaryPanel from './components/StandardsComplianceSummaryPanel.tsx';
 
 
-// FUTURE GEMINI: These context functions are CRITICAL for the LSVZ Meta-Agent.
-// `getSummarizedLsvzContext` provides a high-level overview.
-// `getDynamicLsvzContext` provides specific, detailed data based on the AI's own analysis of the user's query.
-// Do not modify the truncation limits or logic without careful consideration of the Gemini API's token limits.
-const getSummarizedLsvzContext = (sessionState: Omit<SessionState, 'version' | 'savedAt' | 'lsvzChatHistory'>): string => {
-    // Stricter limits to prevent token overflow
-    const MAX_FILE_CHARS = 1500;
-    const MAX_HISTORY_MESSAGES = 6; // last 6 messages only
-    const MAX_DATA_ITEMS = 5; // preview first 5 items
-
-    const truncateString = (str: string, len: number) => {
-        if (!str || str.length <= len) return str;
-        return str.substring(0, len) + `\n... (content truncated, ${str.length} total chars) ...`;
-    };
-
-    const truncateHistory = (history: ChatMessage[]) => {
-        if (history.length <= MAX_HISTORY_MESSAGES) return history;
-        return [
-            { role: MessageRole.MODEL, text: `... (${history.length - MAX_HISTORY_MESSAGES} messages truncated) ...` },
-            ...history.slice(-MAX_HISTORY_MESSAGES)
-        ];
-    };
-
-    const summarizeData = (data: any[] | undefined, name: string): Record<string, any> => {
-        if (!data || data.length === 0) return { [`${name}Count`]: 0 };
+// FUTURE GEMINI: Lightweight manifest builder for the LSVZ Orchestrator.
+// Keeps LSVZ context strictly bounded (under ~2 KB) with counts, bounding boxes,
+// layer breakdowns, and file headers so the LSVZ Orchestrator never overflows
+// model input tokens and instead dispatches CACP skills for heavy operations.
+const getLightweightLsvzManifest = (sessionState: Partial<Omit<SessionState, 'version' | 'savedAt' | 'lsvzChatHistory'>>): string => {
+    const pointListsSummary = (sessionState.pointLists || []).map(l => {
+        const pts = l.points || [];
+        let minN = Infinity, maxN = -Infinity, minE = Infinity, maxE = -Infinity;
+        const descSet = new Set<string>();
+        for (const p of pts) {
+            if (Number.isFinite(p.northing)) {
+                if (p.northing < minN) minN = p.northing;
+                if (p.northing > maxN) maxN = p.northing;
+            }
+            if (Number.isFinite(p.easting)) {
+                if (p.easting < minE) minE = p.easting;
+                if (p.easting > maxE) maxE = p.easting;
+            }
+            if (p.description && descSet.size < 12) {
+                descSet.add(p.description.trim().split(/\s+/)[0]);
+            }
+        }
         return {
-            [`${name}Count`]: data.length,
-            [`${name}Preview`]: data.slice(0, MAX_DATA_ITEMS)
+            id: l.id,
+            name: l.name,
+            pointCount: pts.length,
+            isVisible: l.isVisible,
+            bbox: Number.isFinite(minN) ? {
+                minN: Math.round(minN * 100) / 100,
+                maxN: Math.round(maxN * 100) / 100,
+                minE: Math.round(minE * 100) / 100,
+                maxE: Math.round(maxE * 100) / 100,
+            } : null,
+            sampleDescriptions: Array.from(descSet),
+            samplePointNumbers: pts.slice(0, 8).map(p => p.pointNumber),
         };
-    };
+    });
 
-    const summarizedContext = {
+    const linesByLayer: Record<string, number> = {};
+    for (const ln of sessionState.lines || []) {
+        const layer = ln.layer || ln.type || 'DEFAULT';
+        linesByLayer[layer] = (linesByLayer[layer] || 0) + 1;
+    }
+
+    const manifest = {
         jobInfo: sessionState.jobInfo,
-        settings: sessionState.settings,
-        fieldbookNotes: truncateString(sessionState.fieldbookNotes, 1000),
-        pointLists: sessionState.pointLists.map(l => ({ id: l.id, name: l.name, pointCount: l.points.length, isVisible: l.isVisible })),
-        ...summarizeData(sessionState.lines, 'lines'),
-        ...summarizeData(sessionState.cutSheetData, 'cutSheet'),
-        centerlines: sessionState.centerlines?.map(cl => ({
+        projection: sessionState.settings?.projection ?? null,
+        linearUnits: sessionState.settings?.linearUnits ?? 'usSurveyFoot',
+        pointLists: pointListsSummary,
+        totalPoints: pointListsSummary.reduce((sum, l) => sum + l.pointCount, 0),
+        linesSummary: {
+            totalCount: (sessionState.lines || []).length,
+            byLayer: linesByLayer,
+        },
+        centerlines: (sessionState.centerlines || []).map(cl => ({
             id: cl.id,
             name: cl.name,
             beginStation: cl.beginStation,
-            ...summarizeData(cl.pis, 'pis'),
+            piCount: cl.pis?.length ?? 0,
         })),
-        cutSheetInfo: sessionState.cutSheetInfo,
-        customSymbols: sessionState.customSymbols.map(s => ({ name: s.name, associatedTerms: s.associatedTerms })),
-        ...summarizeData(sessionState.boundaryFiles, 'boundaryFiles'),
-        ...summarizeData(sessionState.closureReports, 'closureReports'),
-        ...summarizeData(sessionState.knowledgeFacts, 'knowledgeFacts'),
-        ...summarizeData(sessionState.soilMapUnits, 'soilMapUnits'),
-        ...summarizeData(sessionState.steepSlopeRuns, 'steepSlopeRuns'),
-        ...summarizeData(sessionState.draftingStyleLibrary, 'draftingStyleLibrary'),
-        ...summarizeData(sessionState.inclusionBoundaries, 'inclusionBoundaries'),
+        boundaryFiles: (sessionState.boundaryFiles || []).map(bf => ({
+            id: bf.id,
+            name: bf.name,
+            callCount: bf.calls?.length ?? 0,
+            hidden: Boolean(bf.hidden),
+        })),
+        closureReports: (sessionState.closureReports || []).slice(0, 5).map(cr => ({
+            fileName: cr.fileName,
+            precisionRatio: cr.precisionRatio,
+            areaAcres: cr.areaAcres,
+            perimeter: cr.perimeter,
+        })),
+        inclusionBoundariesCount: (sessionState.inclusionBoundaries || []).length,
+        steepSlopeRunsCount: (sessionState.steepSlopeRuns || []).length,
+        soilMapUnitsCount: (sessionState.soilMapUnits || []).length,
         cadStandardName: sessionState.cadManagerState?.standard?.name ?? null,
-
-        files: {
-            raw: sessionState.rawFile ? { name: sessionState.rawFile.name, content: truncateString(sessionState.rawFile.content, MAX_FILE_CHARS) } : null,
-            deed: sessionState.deedFile ? { name: sessionState.deedFile.name, content: truncateString(sessionState.deedFile.content, MAX_FILE_CHARS) } : null,
-            dxf: sessionState.dxfFile ? { name: sessionState.dxfFile.name, content: truncateString(sessionState.dxfFile.content, MAX_FILE_CHARS) } : null,
-            cl: sessionState.clFile ? { name: sessionState.clFile.name, content: truncateString(sessionState.clFile.content, MAX_FILE_CHARS) } : null,
-            plans: sessionState.planFiles?.map(f => ({ name: f.name, content: truncateString(f.content, MAX_FILE_CHARS) })),
-            images: sessionState.imageFiles?.map(f => ({ name: f.name, tags: f.tags })),
-            generated: sessionState.generatedFiles?.map(f => ({ name: f.name, content: truncateString(f.content, MAX_FILE_CHARS) })),
+        filesLoaded: {
+            raw: sessionState.rawFile?.name ?? null,
+            deed: sessionState.deedFile ? {
+                name: sessionState.deedFile.name,
+                deedMetadata: sessionState.deedFile.deedMetadata ?? null,
+            } : null,
+            dxf: sessionState.dxfFile?.name ?? null,
+            cl: sessionState.clFile?.name ?? null,
+            gis: sessionState.gisFile?.name ?? null,
+            plans: (sessionState.planFiles || []).map(f => f.name),
+            images: (sessionState.imageFiles || []).map(f => ({ name: f.name, tags: f.tags })),
+            generated: (sessionState.generatedFiles || []).map(f => f.name),
         },
-        
-        chatHistories: {
-            raw: truncateHistory(sessionState.rawChatHistory),
-            deed: truncateHistory(sessionState.deedChatHistory),
-            civilDrafter: sessionState.civilDrafterChatHistory ? truncateHistory(sessionState.civilDrafterChatHistory) : [],
-            dxf: truncateHistory(sessionState.dxfChatHistory),
-            stationing: truncateHistory(sessionState.stationingChatHistory),
-            pointEditor: truncateHistory(sessionState.pointEditorChatHistory),
-            fieldbook: truncateHistory(sessionState.fieldbookChatHistory),
-            gpsStakeout: truncateHistory(sessionState.gpsStakeoutChatHistory),
-            planExpert: sessionState.planExpertChatHistory ? truncateHistory(sessionState.planExpertChatHistory) : [],
-            imageAnalyzer: sessionState.imageAnalyzerChatHistory ? truncateHistory(sessionState.imageAnalyzerChatHistory) : [],
-            gis: sessionState.gisChatHistory ? truncateHistory(sessionState.gisChatHistory) : [],
-            contouring: sessionState.contouringChatHistory ? truncateHistory(sessionState.contouringChatHistory) : [],
-            steepSlope: sessionState.steepSlopeChatHistory ? truncateHistory(sessionState.steepSlopeChatHistory) : [],
-            soils: sessionState.soilsChatHistory ? truncateHistory(sessionState.soilsChatHistory) : [],
-            structures: sessionState.structuresChatHistory ? truncateHistory(sessionState.structuresChatHistory) : [],
-            standardsCompliance: sessionState.standardsComplianceChatHistory ? truncateHistory(sessionState.standardsComplianceChatHistory) : [],
-            profile: sessionState.profileChatHistory ? truncateHistory(sessionState.profileChatHistory) : [],
-            cogo: sessionState.cogoChatHistory ? truncateHistory(sessionState.cogoChatHistory) : [],
-            rinex: sessionState.rinexChatHistory ? truncateHistory(sessionState.rinexChatHistory) : [],
-            zoning: sessionState.zoningChatHistory ? truncateHistory(sessionState.zoningChatHistory) : [],
-        }
     };
 
-    return JSON.stringify(summarizedContext, null, 2);
+    return JSON.stringify(manifest, null, 2);
 };
 
-const getDynamicLsvzContext = (sessionState: Omit<SessionState, 'version' | 'savedAt' | 'lsvzChatHistory'>, requiredSources: string[]): string => {
-    const context: { [key: string]: any } = {};
+const getSummarizedLsvzContext = getLightweightLsvzManifest;
+const getDynamicLsvzContext = (sessionState: Partial<Omit<SessionState, 'version' | 'savedAt' | 'lsvzChatHistory'>>, _requiredSources?: string[]): string => {
+    return getLightweightLsvzManifest(sessionState);
+};
 
-    const allDataSources = {
-        rawFile: sessionState.rawFile,
-        deedFile: sessionState.deedFile,
-        planFiles: sessionState.planFiles,
-        dxfFile: sessionState.dxfFile,
-        clFile: sessionState.clFile,
-        imageFiles: sessionState.imageFiles,
-        gisFile: sessionState.gisFile,
-        generatedFiles: sessionState.generatedFiles,
-        pointLists: sessionState.pointLists,
-        lines: sessionState.lines,
-        centerlines: sessionState.centerlines,
-        boundaryFiles: sessionState.boundaryFiles,
-        closureReports: sessionState.closureReports,
-        knowledgeFacts: sessionState.knowledgeFacts,
-        soilMapUnits: sessionState.soilMapUnits,
-        steepSlopeRuns: sessionState.steepSlopeRuns,
-        draftingStyleLibrary: sessionState.draftingStyleLibrary,
-        cadManagerState: sessionState.cadManagerState,
-        inclusionBoundaries: sessionState.inclusionBoundaries,
-        cutSheetData: sessionState.cutSheetData,
-        fieldbookNotes: sessionState.fieldbookNotes,
-        jobInfo: sessionState.jobInfo,
-        settings: sessionState.settings,
-        offlineMapAreas: sessionState.offlineMapAreas,
-        customSymbols: sessionState.customSymbols,
-        rawChatHistory: sessionState.rawChatHistory,
-        deedChatHistory: sessionState.deedChatHistory,
-        civilDrafterChatHistory: sessionState.civilDrafterChatHistory,
-        planExpertChatHistory: sessionState.planExpertChatHistory,
-        dxfChatHistory: sessionState.dxfChatHistory,
-        stationingChatHistory: sessionState.stationingChatHistory,
-        pointEditorChatHistory: sessionState.pointEditorChatHistory,
-        fieldbookChatHistory: sessionState.fieldbookChatHistory,
-        gpsStakeoutChatHistory: sessionState.gpsStakeoutChatHistory,
-        imageAnalyzerChatHistory: sessionState.imageAnalyzerChatHistory,
-        gisChatHistory: sessionState.gisChatHistory,
-        contouringChatHistory: sessionState.contouringChatHistory,
-        steepSlopeChatHistory: sessionState.steepSlopeChatHistory,
-        soilsChatHistory: sessionState.soilsChatHistory,
-        structuresChatHistory: sessionState.structuresChatHistory,
-        standardsComplianceChatHistory: sessionState.standardsComplianceChatHistory,
-        profileChatHistory: sessionState.profileChatHistory,
-        cogoChatHistory: sessionState.cogoChatHistory,
-        rinexChatHistory: sessionState.rinexChatHistory,
-        zoningChatHistory: sessionState.zoningChatHistory,
-    };
-
-    // If source selection fails or is not specific, provide a summary of available data keys.
-    // This helps the model ask clarifying questions if needed.
-    if (requiredSources.length === 0) {
-        context.dataSourcesAvailable = Object.keys(allDataSources).filter(key => {
-            const data = (allDataSources as any)[key];
-            if (data === null || data === undefined) return false;
-            if (Array.isArray(data) && data.length === 0) return false;
-            if (typeof data === 'string' && data.length === 0) return false;
-            return true;
-        });
-        // Always include jobInfo in summary view for basic context.
-        context.jobInfo = allDataSources.jobInfo;
-        return JSON.stringify(context, null, 2);
-    }
-    
-    // Include only the specifically requested data sources.
-    for (const source of requiredSources) {
-        if (source in allDataSources) {
-            context[source] = (allDataSources as any)[source];
-        }
-    }
-
-    return JSON.stringify(context, null, 2);
+const A2UI_DOCK_TITLES: Record<string, string> = {
+    'point-upload': 'Point Upload',
+    'deed-upload': 'Deed Upload',
+    'raw-upload': 'RAW Upload',
+    'civil-drafter-upload': 'Civil Drafter Upload',
+    'plan-upload': 'Plan Upload',
+    'dxf-upload': 'DXF Upload',
+    'gis-upload': 'GIS Upload',
+    'zoning-intake': 'Zoning Intake',
+    'title-search-upload': 'Title Search Upload',
+    'standards-compliance-intake': 'Standards Intake',
+    'image-upload': 'Image Upload',
+    'centerline-upload': 'Centerline Upload',
+    'cad-manager-intake': 'CAD Standards Intake',
 };
 
 
@@ -612,6 +577,8 @@ interface DrawingCanvasHandles {
   isPointInView?: (easting: number, northing: number) => boolean;
   isBboxInView?: (minE: number, maxE: number, minN: number, maxN: number) => boolean;
   getMapOverlayTiles?: () => Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: any; opacity?: number }>;
+  beginOtOriginPick?: () => void;
+  beginOtLineAlign?: () => void;
 }
 interface CutSheetPanelHandles {
   downloadDocx: () => void;
@@ -1101,11 +1068,15 @@ const AppContent = () => {
     isPointEditorExpanded, setIsPointEditorExpanded,
     isChatPanelVisible, setIsChatPanelVisible,
     toggleChatPanel,
+    isToolShelfVisible, setIsToolShelfVisible,
+    toggleToolShelf,
     activeVisualPanel, setActiveVisualPanel,
     isResizingPointEditor, setIsResizingPointEditor,
     pointEditorHeight, setPointEditorHeight,
     chatPanelWidth, setChatPanelWidth,
     isResizingChat, setIsResizingChat,
+    toolShelfWidth, setToolShelfWidth,
+    isResizingToolShelf, setIsResizingToolShelf,
     fabPosition, setFabPosition,
     navigationHistory, pushNavigation, goBack, canGoBack,
     isToolsDrawerOpen, setIsToolsDrawerOpen,
@@ -1164,8 +1135,19 @@ const AppContent = () => {
 
   const canvasHistory = useCanvasHistory();
   const { beginTransaction, commitTransaction, undoLabel, redoLabel } = canvasHistory;
-  useUndoShortcuts({ undo, redo, canUndo, canRedo });
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
+  const [isQuickHistoryOpen, setIsQuickHistoryOpen] = useState(false);
+  const [commandBarHeight, setCommandBarHeight] = useState(0);
+  useUndoShortcuts({
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    enabled: !isQuickHistoryOpen,
+    onShowHistory: () => setIsQuickHistoryOpen(true),
+  });
+  const [dockedA2UIKey, setDockedA2UIKey] = useState<string | null>(null);
+  const [agentChatOpenSignal, setAgentChatOpenSignal] = useState(0);
   
   // REFACTORING NOTE: Application-level state moved to AppStateContext
   const {
@@ -1186,6 +1168,9 @@ const AppContent = () => {
     clearNotifications,
   } = useAppState();
   const [isSessionSaveModalOpen, setIsSessionSaveModalOpen] = useState(false);
+  // Multi-deed batch pipeline state. Persisted in the .lsvz manifest so a
+  // batch review can resume after save/load; consumed by the deed batch flow.
+  const [deedBatchJob, setDeedBatchJob] = useState<import('./types.ts').DeedBatchJob | null>(null);
   // Tone of the command result currently open in the text editor, so the
   // editor can render it in the same color the command line used.
   const [textEditorContentTone, setTextEditorContentTone] = useState<TextEditorTone>('normal');
@@ -1447,6 +1432,48 @@ const AppContent = () => {
   const [isBoundaryDialogDocked, setIsBoundaryDialogDocked] = useState<boolean>(true);
   /** Whether the Boundary Dialog is minimized when docked in chat. Defaults to false (visible by default). */
   const [isBoundaryDialogMinimized, setIsBoundaryDialogMinimized] = useState<boolean>(false);
+  /** Unified docking state for all agent-specific tool dialogs. Defaults to docked (true). */
+  const [dockedTools, setDockedTools] = useState<Record<string, boolean>>({
+    cogo: true,
+    shrinkwrap: true,
+    inclusion: true,
+    stationing: true,
+    pointEditor: true,
+    contourGen: true,
+    contourEsri: true,
+    contourMgmt: true,
+    steepSlope: true,
+    profileGen: true,
+    autoDraft: true,
+    flood: true,
+    structures: true,
+    soils: true,
+    gpsStakeout: true,
+    gpsCollect: true,
+    gnss: true,
+    drone: true,
+  });
+  const toggleToolDock = useCallback((key: string, nextDocked?: boolean) => {
+    setDockedTools(prev => {
+      const target = nextDocked ?? !prev[key];
+      if (target) {
+        setIsToolShelfVisible(true);
+      }
+      return { ...prev, [key]: target };
+    });
+  }, [setIsToolShelfVisible]);
+  const handleToggleA2UIDock = useCallback((message: ChatMessage) => {
+    const payload = message.a2ui;
+    if (!payload) return;
+    const key = `${payload.agent}:${payload.widgetType}`;
+    const willDock = dockedA2UIKey !== key;
+    setDockedA2UIKey(willDock ? key : null);
+    if (willDock) setIsToolShelfVisible(true);
+  }, [dockedA2UIKey, setIsToolShelfVisible]);
+  const handleReturnA2UIToChat = useCallback(() => {
+    setDockedA2UIKey(null);
+    setAgentChatOpenSignal(n => n + 1);
+  }, []);
   /** Bumped each time the user clicks "Align" in the BoundaryEditor. The token
    *  forces DrawingCanvas to re-arm the boundary-align tool even when the same
    *  movableBfId is requested twice in a row. */
@@ -1506,11 +1533,6 @@ const AppContent = () => {
     reviewError?: string;
   } | null>(null);
 
-  // Floating point list panel (canvas toolbar)
-  const [isPointListPanelVisible, setIsPointListPanelVisible] = useState(false);
-  // Pulses the point list toolbar button pink to hint the user can open the floating
-  // list (set when entering the Point Editor or after points are uploaded).
-  const [isPointListButtonPulsing, setIsPointListButtonPulsing] = useState(false);
   const [isBoundaryEditorButtonPulsing, setIsBoundaryEditorButtonPulsing] = useState(false);
   /** Nudges the user to the Boundary Editor's first action after choosing the manual route. */
   const [isAddCallRowPulsing, setIsAddCallRowPulsing] = useState(false);
@@ -1743,6 +1765,10 @@ const AppContent = () => {
   }, [ALL_BUILTIN_IDS, setEnabledBuiltinSymbolIds]);
 
   
+  // TIN shading lives here so the top bar can toggle it after the control
+  // moved out of the canvas floating toolbar.
+  const [isTinShadingEnabled, setIsTinShadingEnabled] = useState(false);
+
   // Canvas tool state
   const [canvasToolState, setCanvasToolState] = useState<{
     isDrawing: boolean;
@@ -1792,8 +1818,10 @@ const AppContent = () => {
   const [pulseProjection, setPulseProjection] = useState(false);
   // API Key pulse state (for flashing the API Key input when accessed from home screen)
   const [pulseApiKey, setPulseApiKey] = useState(false);
-  // Triggered by the "Load Points" CTA on the home screen \u2014 routes user to Point Editor and auto-opens the upload picker.
+  // Triggered by the "Load Points" CTA on the home screen — routes user to Point Editor and auto-opens the upload picker.
   const [autoOpenPointUpload, setAutoOpenPointUpload] = useState(false);
+  // Triggered by the "Draft Deed" CTA on the Welcome Screen — routes user to Boundary Agent and auto-expands the A2UI deed uploader in chat.
+  const [autoOpenDeedUpload, setAutoOpenDeedUpload] = useState(false);
   // Triggered by the "Stakeout" / "Collect" CTAs on the GPS Rover home card \u2014 forwarded to the panel as `initialTab`.
   const [gpsInitialTab, setGpsInitialTab] = useState<'stakeout' | 'collect' | 'benchmark' | undefined>(undefined);
   // GPS Rover independent floating panels (v26.05.19.1) � persistent across agent context changes like Point List.
@@ -1863,6 +1891,9 @@ const AppContent = () => {
   // shrinkwrap state to its dependency array and re-subscribing on every edit.
   const shrinkwrapRef = useRef(shrinkwrap);
   useEffect(() => { shrinkwrapRef.current = shrinkwrap; }, [shrinkwrap]);
+  // Ref bridge so the chat handler (declared before the converter) can invoke
+  // the current shrinkwrap-to-boundary action without a hook-ordering problem.
+  const convertShrinkwrapToBoundaryRef = useRef<() => void>(() => {});
 
   // Inclusion Boundaries manager (v26.05.17.38) � named, show/hide-able groups
   // of `type:'inclusion'` SurveyLines. Auto-registered from any inclusion lines
@@ -1956,24 +1987,9 @@ const AppContent = () => {
   // REFACTORING: Use custom hook for projection initialization (Phase 2)
   useProjectionInit();
 
-  // Calculate showUploadScreen early for useFabDrag dependency
-  const agentNeedsInitialScreen = [
-    AgentType.RAW_CRAWLER,
-    AgentType.CIVIL_DRAFTER,
-    AgentType.DEED_READER,
-    AgentType.CIVIL_PLAN_EXPERT,
-    AgentType.DXF_ANALYZER,
-    AgentType.GIS_AGENT,
-    AgentType.CENTERLINE_STATIONING,
-    AgentType.IMAGE_ANALYZER,
-    AgentType.ZONING_AGENT,
-    AgentType.TITLE_SEARCH,
-    AgentType.STANDARDS_COMPLIANCE,
-    AgentType.POINT_EDITOR,
-    ...(!cadStandardsLoaded ? [AgentType.CAD_MANAGER] : []),
-  ].includes(activeAgent);
-
-  const showUploadScreen = activeVisualPanel !== 'sheetview' && (((agentNeedsInitialScreen && !isCurrentAgentInitialized) || isAddingData));
+  // A2UI conversational intake: full-screen upload screens are obfuscated and
+  // integrated directly into the agent chat on the drawing canvas.
+  const showUploadScreen = false;
 
   // REFACTORING: Use custom hook for FAB drag and position logic (Phase 2)
   const { handleFabPointerDown, fabDragState } = useFabDrag(
@@ -2411,6 +2427,10 @@ const AppContent = () => {
         setIsHistoryPanelOpen(false);
         closed = true;
       }
+      if (isQuickHistoryOpen) {
+        setIsQuickHistoryOpen(false);
+        closed = true;
+      }
       if (isMobileMenuOpen) {
         setIsMobileMenuOpen(false);
         closed = true;
@@ -2423,7 +2443,7 @@ const AppContent = () => {
 
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [c3dDrawingsMenuOpen, isHistoryPanelOpen, isMobileMenuOpen, setIsMobileMenuOpen]);
+  }, [c3dDrawingsMenuOpen, isHistoryPanelOpen, isQuickHistoryOpen, isMobileMenuOpen, setIsMobileMenuOpen]);
 
   // Persisted per-browser baseline for sync conflict detection.
   const c3dSyncBaselineKey = 'landsurv_c3d_sync_baseline';
@@ -3163,14 +3183,16 @@ const AppContent = () => {
   );
   */
 
-  // REFACTORING: Use custom hook for ContourPanel vertical panel resizing (Phase 2)
-  // REFACTORING: Use custom hook for horizontal chat panel resizing (Phase 2)
-  const { handleChatResizeMouseDown } = useChatPanelResize(
-    isResizingChat,
-    setIsResizingChat,
-    setChatPanelWidth,
-    320,  // minWidth
-    400   // maxWidthOffset (space for main panel)
+
+  // REFACTORING: Use custom hook for horizontal tool shelf resizing (Phase 2)
+  // The right shelf keeps the dockable tools and resizes from the right edge.
+  const { handleChatResizeMouseDown: handleToolShelfResizeMouseDown } = useChatPanelResize(
+    isResizingToolShelf,
+    setIsResizingToolShelf,
+    setToolShelfWidth,
+    320,
+    400,
+    'right'
   );
 
   const showView = useCallback((viewToShow: VisualPanel) => {
@@ -3263,7 +3285,8 @@ const AppContent = () => {
     setIsForwardThinkingVisible(false);
     setIsHelpModalVisible(false);
     setIsSettingsVisible(false);
-    setIsChatPanelVisible(true);
+    setIsChatPanelVisible(false);
+    setIsToolShelfVisible(false);
 
     setRawChat(null);
     setDeedChat(null);
@@ -3409,18 +3432,23 @@ const AppContent = () => {
 
   const handleFileUploaded = useCallback((content: string, name: string) => {
     try {
-        if (initializedAgents.has(AgentType.RAW_CRAWLER)) {
-            if (rawFile) {
-                setGeneratedFiles(prev => [...prev, { ...rawFile, name: `(Archived) ${rawFile.name}` }]);
-            }
+        if (rawFile) {
+            setGeneratedFiles(prev => [...prev, { ...rawFile, name: `(Archived) ${rawFile.name}` }]);
             logActionToFieldbook(`Replaced RAW file with: ${name}`);
-            const newChat = startChatWithOverride(AgentType.RAW_CRAWLER, content);
-            setRawChat(newChat);
+            try {
+              const newChat = startChatWithOverride(AgentType.RAW_CRAWLER, content);
+              setRawChat(newChat);
+            } catch (chatErr) {
+              console.warn('[RAW Crawler] AI chat deferred:', chatErr);
+            }
             setRawFile({ name, content });
-            setRawChatHistory([{ 
-                role: MessageRole.MODEL, 
-                text: `The <strong style="color: ${agentThemeColors[AgentType.RAW_CRAWLER]};">RAW Crawler</strong> agent has been reset. The new active file is <strong style="color: ${agentThemeColors[AgentType.RAW_CRAWLER]};">"${name}"</strong>. The previous conversation has been cleared.`
-            }]);
+            setRawChatHistory(prev => [
+                ...markPendingA2UICompleted(prev, name),
+                { 
+                    role: MessageRole.MODEL, 
+                    text: `The <strong style="color: ${agentThemeColors[AgentType.RAW_CRAWLER]};">RAW Crawler</strong> agent has loaded the new active file <strong style="color: ${agentThemeColors[AgentType.RAW_CRAWLER]};">"${name}"</strong>.`
+                }
+            ]);
             setPointLists(prev => prev.map(l => l.id === 'working' ? { ...l, points: [] } : l));
             setLines([]);
             setContourLabels([]);
@@ -3430,23 +3458,26 @@ const AppContent = () => {
 
         startSession();
         logActionToFieldbook(`Loaded RAW file: ${name}`);
-        const newChat = startChatWithOverride(AgentType.RAW_CRAWLER, content);
-        setRawChat(newChat);
+        try {
+          const newChat = startChatWithOverride(AgentType.RAW_CRAWLER, content);
+          setRawChat(newChat);
+        } catch (chatErr) {
+          console.warn('[RAW Crawler] AI chat deferred:', chatErr);
+        }
         setRawFile({ name, content });
-        setRawChatHistory([{
-            role: MessageRole.MODEL,
-            text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.RAW_CRAWLER]};">RAW Crawler</strong> agent. I have successfully loaded the file <strong style="color: ${agentThemeColors[AgentType.RAW_CRAWLER]};">"${name}"</strong> and am ready to assist.`,
-        }]);
+        setRawChatHistory(prev => [
+            ...markPendingA2UICompleted(prev, name),
+            {
+                role: MessageRole.MODEL,
+                text: buildAgentWelcome(AgentType.RAW_CRAWLER, `I have loaded <strong>"${name}"</strong>. Ask me to summarize the observations, validate the field data, or plot the file on the canvas.`),
+            }
+        ]);
         
         const questionsSource = name === exampleFileName ? suggestedQuestionsText : userSuggestedQuestionsText;
         const questions = questionsSource.split('\n').filter(q => q.trim() !== '');
         setSuggestedQuestions(questions);
         
         setError(null);
-        
-        // Push navigation history so user can go back to file upload screen
-        pushNavigation(AgentType.RAW_CRAWLER, 'canvas');
-        
         setActiveAgent(AgentType.RAW_CRAWLER);
         setInitializedAgents(prev => new Set(prev).add(AgentType.RAW_CRAWLER));
         showView('canvas');
@@ -3466,20 +3497,25 @@ const AppContent = () => {
         const parsedPoints = parsePointFile(content);
         const listName = name.replace(/\.[^/.]+$/, ""); // Remove file extension
         
-        if (initializedAgents.has(AgentType.CIVIL_DRAFTER)) {
-            if (rawFile) {
-                setGeneratedFiles(prev => [...prev, { ...rawFile, name: `(Archived) ${rawFile.name}` }]);
-            }
+        if (rawFile) {
+            setGeneratedFiles(prev => [...prev, { ...rawFile, name: `(Archived) ${rawFile.name}` }]);
             logActionToFieldbook(`Replaced Civil Drafter RAW file with: ${name}`);
-            const newChat = startChatWithOverride(AgentType.CIVIL_DRAFTER, content, trainingDxf);
-            setCivilDrafterChat(newChat);
+            try {
+              const newChat = startChatWithOverride(AgentType.CIVIL_DRAFTER, content, trainingDxf);
+              setCivilDrafterChat(newChat);
+            } catch (chatErr) {
+              console.warn('[Civil Drafter] AI chat deferred:', chatErr);
+            }
             setRawFile({ name, content });
-            setCivilDrafterChatHistory([{ 
-                role: MessageRole.MODEL, 
-                text: trainingDxf 
-                    ? `The <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent has been reset. The new active file is <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${name}"</strong>. I'm using <strong>"${trainingDxf.name}"</strong> as my drafting template. The previous conversation has been cleared.`
-                    : `The <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent has been reset. The new active file is <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${name}"</strong>. The previous conversation has been cleared.`
-            }]);
+            setCivilDrafterChatHistory(prev => [
+                ...markPendingA2UICompleted(prev, name),
+                { 
+                    role: MessageRole.MODEL, 
+                    text: trainingDxf 
+                        ? `The <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent has loaded <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${name}"</strong>. I'm using <strong>"${trainingDxf.name}"</strong> as my drafting template.`
+                        : `The <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent has loaded <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${name}"</strong>.`
+                }
+            ]);
             // Replace working points with parsed points from new file
             if (parsedPoints.length > 0) {
                 setPointLists(prev => {
@@ -3489,6 +3525,7 @@ const AppContent = () => {
                             { id: 'civil-drafter-points', name: listName, points: parsedPoints, isVisible: true }];
                 });
                 logActionToFieldbook(`Parsed ${parsedPoints.length} points from ${name} for canvas rendering.`);
+                setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
             } else {
                 setPointLists(prev => prev.map(l => l.id === 'working' ? { ...l, points: [] } : l));
             }
@@ -3512,17 +3549,21 @@ const AppContent = () => {
           console.warn('[Civil Drafter] AI chat deferred (no API key configured):', chatErr);
         }
         setRawFile({ name, content });
-        setCivilDrafterChatHistory([{
-            role: MessageRole.MODEL,
-            text: trainingDxf
-                ? `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent. I have loaded the file <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${name}"</strong> and am ready to create intelligent linework. I'm using <strong>"${trainingDxf.name}"</strong> as my template to learn your preferred drafting conventions.`
-                : `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent. I have loaded the file <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${name}"</strong> and am ready to create intelligent linework. I specialize in recognizing road corridors (parallel lines), building footprints, and other civil features.`,
-        }]);
+        setCivilDrafterChatHistory(prev => [
+            ...markPendingA2UICompleted(prev, name),
+            {
+                role: MessageRole.MODEL,
+                text: trainingDxf
+                    ? buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I have loaded <strong>"${name}"</strong> and will draft against <strong>"${trainingDxf.name}"</strong> as the reference for your drafting conventions.`)
+                    : buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I have loaded <strong>"${name}"</strong>. Ask me to extract linework, identify road corridors and building footprints, or annotate the drawing.`),
+            }
+        ]);
         
         // Add parsed points to canvas
         if (parsedPoints.length > 0) {
             setPointLists(prev => [...prev, { id: 'civil-drafter-points', name: listName, points: parsedPoints, isVisible: true }]);
             logActionToFieldbook(`Parsed ${parsedPoints.length} points from ${name} for canvas rendering.`);
+            setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
         }
         
         setSuggestedQuestions([
@@ -3533,10 +3574,6 @@ const AppContent = () => {
         ]);
         
         setError(null);
-        
-        // Push navigation history
-        pushNavigation(AgentType.CIVIL_DRAFTER, 'canvas');
-        
         setActiveAgent(AgentType.CIVIL_DRAFTER);
         setInitializedAgents(prev => new Set(prev).add(AgentType.CIVIL_DRAFTER));
         showView('canvas');
@@ -3544,33 +3581,28 @@ const AppContent = () => {
         const errorMessage = err instanceof Error ? err.message : 'Failed to initialize Civil Drafter agent.';
         setError(`Initialization Error: ${errorMessage}`);
     }
-  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, rawFile, dxfFile, settings, startChatWithOverride]);
+  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, rawFile, dxfFile, settings, startChatWithOverride, canvas2dRef]);
 
   const handleCivilDrafterPdfUploaded = useCallback((files: SessionFile[]) => {
     try {
-
-        if (initializedAgents.has(AgentType.CIVIL_DRAFTER)) {
-            const newChat = startChatWithOverride(AgentType.CIVIL_DRAFTER, files);
-            setCivilDrafterChat(newChat);
-            setPlanFiles(files);
-            setCivilDrafterChatHistory(prev => [...prev, {
-                role: MessageRole.MODEL,
-                text: `Added <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">${files.length} PDF plan(s)</strong>. I'll use these to help generate linework.`,
-            }]);
-            setIsAddingData(false);
-            return;
-        }
-
         startSession();
         logActionToFieldbook(`Loaded ${files.length} PDF plan(s) for Civil Drafter: ${files.map(f => f.name).join(', ')}`);
-        const newChat = startChatWithOverride(AgentType.CIVIL_DRAFTER, files);
-        setCivilDrafterChat(newChat);
+        try {
+          const newChat = startChatWithOverride(AgentType.CIVIL_DRAFTER, files);
+          setCivilDrafterChat(newChat);
+        } catch (chatErr) {
+          console.warn('[Civil Drafter] AI chat deferred:', chatErr);
+        }
         setPlanFiles(files);
         setPdfViewerFiles(files);
-        setCivilDrafterChatHistory([{
-            role: MessageRole.MODEL,
-            text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent. I have loaded <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">${files.length} PDF plan(s)</strong> and am ready to help generate intelligent linework from your civil plans.`,
-        }]);
+        const summaryLabel = files.map(f => f.name).join(', ');
+        setCivilDrafterChatHistory(prev => [
+            ...markPendingA2UICompleted(prev, summaryLabel),
+            {
+                role: MessageRole.MODEL,
+                text: buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I have loaded <strong>${files.length} PDF plan(s)</strong> and will use them as the basis for linework generation.`),
+            }
+        ]);
         setSuggestedQuestions([
             'Draw the road edges as parallel lines',
             'Create centerline from the plan',
@@ -3578,7 +3610,7 @@ const AppContent = () => {
             'Extract lot boundaries',
         ]);
         setError(null);
-        pushNavigation(AgentType.CIVIL_DRAFTER, 'canvas');
+        setIsAddingData(false);
         setActiveAgent(AgentType.CIVIL_DRAFTER);
         setInitializedAgents(prev => new Set(prev).add(AgentType.CIVIL_DRAFTER));
         showView('canvas');
@@ -3618,8 +3650,8 @@ const AppContent = () => {
         setCivilDrafterChatHistory([{
             role: MessageRole.MODEL,
             text: trainingDxf
-                ? `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent. I'm working directly from the <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">${existingPoints.length} points</strong> you already have loaded. I'm using <strong>"${trainingDxf.name}"</strong> as my template to learn your preferred drafting conventions.`
-                : `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent. I'm working directly from the <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">${existingPoints.length} points</strong> you already have loaded and am ready to create intelligent linework.`,
+                ? buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I am working from the <strong>${existingPoints.length} points</strong> already loaded, using <strong>"${trainingDxf.name}"</strong> as the drafting template.`)
+                : buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I am working from the <strong>${existingPoints.length} points</strong> already loaded. Ask me to draft road edges, building footprints, or other linework from this data.`),
         }]);
 
         setSuggestedQuestions([
@@ -3670,44 +3702,21 @@ const AppContent = () => {
       return;
     }
 
-    // Direct jump to canvas in Civil Drafter: Hybrid AI / Manual drafting, no dummy points
+    // Open CAD Environment: hand the workspace to the LSAI Agent so the
+    // project-level assistant takes the first turn instead of a specialist agent.
     try {
       startSession();
-      logActionToFieldbook('Launched Agentic CAD directly to Canvas in Civil Drafter (Hybrid AI / Manual Drafting).');
-      const trainingDxf = dxfFile?.forTraining ? dxfFile : undefined;
-      const newChat = startChatWithOverride(AgentType.CIVIL_DRAFTER, '', trainingDxf);
-      setCivilDrafterChat(newChat);
-      setRawFile({ name: 'agentic_canvas.dxf', content: '' });
-      // Ensure completely clean canvas - NO dummy points
-      setPointLists(prev => prev.map(l => l.id === 'working' ? { ...l, points: [] } : l));
-      setLines([]);
-      setContourLabels([]);
-      setCivilDrafterChatHistory([{
-        role: MessageRole.MODEL,
-        text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent for <strong>Hybrid AI / Manual Drafting</strong>. Canvas is ready with a clean workspace (no dummy points loaded). You can draw lines and points manually with the CAD toolbar, or ask me to draft boundaries, alignments, building footprints, and road corridors using natural language.`,
-      }]);
-      setSuggestedQuestions([
-        'Draw a boundary starting at 5000, 5000 with bearings N 45° E 100 ft',
-        'Create a 30 ft roadway corridor with parallel edges',
-        'Plot a 40x60 ft building footprint with a 25 ft front setback',
-        'Draft easement lines offset 10 ft from right property line',
-      ]);
-      setCivilDrafterVisionSurvey(null);
-      lastVisionPointCountRef.current = 0;
-      visionAerialRef.current = null;
-      setShowVisionHUD(true);
-      setError(null);
-      setIsAddingData(false);
-      setIsInitialScreen(false);
-      setActiveAgent(AgentType.CIVIL_DRAFTER);
-      setInitializedAgents(prev => new Set(prev).add(AgentType.CIVIL_DRAFTER));
+      logActionToFieldbook('Opened the CAD environment. LSAI Agent activated for the active project.');
+      setActiveAgent(AgentType.LSVZ_AGENT);
       setActiveVisualPanel('canvas');
+      // Open full-canvas: do not start LSAI with the tool shelf/chat dock open.
+      setIsChatPanelVisible(false);
+      setIsInitialScreen(false);
       showView('canvas');
-      setIsChatPanelVisible(true);
-      pushNavigation(AgentType.CIVIL_DRAFTER, 'canvas');
+      pushNavigation(AgentType.LSVZ_AGENT, 'canvas');
       setShowWelcome(false);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to launch Agentic CAD.';
+      const errorMessage = err instanceof Error ? err.message : 'Failed to open the CAD environment.';
       setError(`Initialization Error: ${errorMessage}`);
     }
   }, [
@@ -3806,20 +3815,25 @@ const AppContent = () => {
       // Clear empty Manual Boundary placeholder so the real deed geometry takes center stage
       setBoundaryFiles(prev => prev.filter(f => f.name !== 'Manual Boundary' || f.calls.some(c => Boolean(c.bearing && c.distance))));
 
-      if (initializedAgents.has(AgentType.DEED_READER)) {
-            if (deedFile) {
-                setGeneratedFiles(prev => [...prev, { ...deedFile, name: `(Archived) ${deedFile.name}` }]);
-            }
+      if (deedFile && deedFile.content && deedFile.name !== 'Manual Entry') {
+            setGeneratedFiles(prev => [...prev, { ...deedFile, name: `(Archived) ${deedFile.name}` }]);
             logActionToFieldbook(`Replaced Deed Text with: ${file.name}`);
-            const newChat = startChatWithOverride(AgentType.DEED_READER, file);
-            setDeedChat(newChat);
+            try {
+              const newChat = startChatWithOverride(AgentType.DEED_READER, file);
+              setDeedChat(newChat);
+            } catch (chatErr) {
+              console.warn('[Boundary Agent] AI chat deferred:', chatErr);
+            }
             setDeedFile(file);
             clearHighlights(); // Clear old highlights
             setPdfViewerFiles(file.fileData ? [file] : null);
-            setDeedChatHistory([{ 
-                role: MessageRole.MODEL, 
-                text: `The <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">Boundary Agent</strong> has been reset with the new file <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">"${file.name}"</strong>.`
-            }]);
+            setDeedChatHistory(prev => [
+                ...markPendingA2UICompleted(prev, file.name),
+                { 
+                    role: MessageRole.MODEL, 
+                    text: `The <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">Boundary Agent</strong> has loaded <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">"${file.name}"</strong>.`
+                }
+            ]);
             setIsAddingData(false);
             setIsBoundaryEditorVisible(true);
             setIsBoundaryEditorButtonPulsing(false);
@@ -3861,14 +3875,21 @@ const AppContent = () => {
       
       startSession();
       logActionToFieldbook(`Loaded deed description: ${file.name}`);
-      const newChat = startChatWithOverride(AgentType.DEED_READER, file);
-      setDeedChat(newChat);
+      try {
+        const newChat = startChatWithOverride(AgentType.DEED_READER, file);
+        setDeedChat(newChat);
+      } catch (chatErr) {
+        console.warn('[Boundary Agent] AI chat deferred:', chatErr);
+      }
       setDeedFile(file);
       setPdfViewerFiles(file.fileData ? [file] : null);
-      setDeedChatHistory([{
-          role: MessageRole.MODEL,
-          text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">Boundary Agent</strong>. I have loaded the deed description from <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">"${file.name}"</strong> and am ready to assist.`,
-        }]);
+      setDeedChatHistory(prev => [
+          ...markPendingA2UICompleted(prev, file.name),
+          {
+              role: MessageRole.MODEL,
+              text: buildAgentWelcome(AgentType.DEED_READER, `I have loaded the deed description from <strong>"${file.name}"</strong> and am ready to draft the parcel.`),
+          }
+      ]);
       const questions = deedSuggestedQuestionsText.split('\n').filter(q => q.trim() !== '');
       setSuggestedQuestions(questions);
       
@@ -3879,12 +3900,15 @@ const AppContent = () => {
       
       setActiveAgent(AgentType.DEED_READER);
       setInitializedAgents(prev => new Set(prev).add(AgentType.DEED_READER));
-      setIsPointListButtonPulsing(false);
       showView('canvas');
 
       // Show the unified Boundary & Deed Dialog immediately
       setIsBoundaryEditorVisible(true);
       setIsBoundaryEditorButtonPulsing(false);
+      if (isBoundaryDialogDocked) {
+        setActiveBoundaryDockedTab('dialog');
+        setIsToolShelfVisible(true);
+      }
 
       // Populate summary and auto-compute if single-description deed
       setDeedSummaryFileIds(['__pending__']);
@@ -3944,8 +3968,9 @@ const AppContent = () => {
     setIsParcelPanelVisible(true);
     setIsParcelPanelDocked(true);
     setIsParcelPanelMinimized(false);
+    setIsToolShelfVisible(true);
     showView('canvas');
-  }, [showView]);
+  }, [showView, setIsToolShelfVisible]);
 
   const openDeedUpgradeDialog = useCallback(() => {
     const limit = deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT;
@@ -4268,14 +4293,21 @@ const AppContent = () => {
       logActionToFieldbook('Started a blank Boundary Agent session (manual entry).');
 
       const placeholder: SessionFile = { name: 'Manual Entry', content: '' };
-      const newChat = startChatWithOverride(AgentType.DEED_READER, placeholder);
-      setDeedChat(newChat);
+      try {
+        const newChat = startChatWithOverride(AgentType.DEED_READER, placeholder);
+        setDeedChat(newChat);
+      } catch (chatErr) {
+        console.warn('[Boundary Agent] AI chat deferred:', chatErr);
+      }
       setDeedFile(placeholder);
       setPdfViewerFiles(null);
-      setDeedChatHistory([{
-        role: MessageRole.MODEL,
-        text: `Started a <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">blank Boundary Agent</strong> session. Use the pulsing Boundary toolbar button to add bearings and distances by hand, or paste a deed at any time.`,
-      }]);
+      setDeedChatHistory(prev => [
+        ...markPendingA2UICompleted(prev, 'Manual Boundary'),
+        {
+          role: MessageRole.MODEL,
+          text: `Started a <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">blank Boundary Agent</strong> session. Use the Boundary Editor to add bearings and distances by hand, or say <strong>"upload deed"</strong> at any time.`,
+        }
+      ]);
       setSuggestedQuestions([]);
       setError(null);
 
@@ -4309,7 +4341,6 @@ const AppContent = () => {
       setActiveAgent(AgentType.DEED_READER);
       setInitializedAgents(prev => new Set(prev).add(AgentType.DEED_READER));
       setIsAddingData(false);
-      setIsPointListButtonPulsing(false);
       showView('canvas');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to initialize blank Boundary Agent.';
@@ -4319,31 +4350,46 @@ const AppContent = () => {
 
   const handlePlansSubmitted = useCallback((files: SessionFile[]) => {
     try {
-        if (initializedAgents.has(AgentType.CIVIL_PLAN_EXPERT)) {
-            const combinedFiles = [...(planFiles || []), ...files];
-            logActionToFieldbook(`Added ${files.length} plan files: ${files.map(f => f.name).join(', ')}`);
-            const newChat = startChatWithOverride(AgentType.CIVIL_PLAN_EXPERT, combinedFiles);
-            setPlanExpertChat(newChat);
+        const summaryLabel = files.map(f => f.name).join(', ');
+        if (planFiles && planFiles.length > 0) {
+            const combinedFiles = [...planFiles, ...files];
+            logActionToFieldbook(`Added ${files.length} plan files: ${summaryLabel}`);
+            try {
+              const newChat = startChatWithOverride(AgentType.CIVIL_PLAN_EXPERT, combinedFiles);
+              setPlanExpertChat(newChat);
+            } catch (chatErr) {
+              console.warn('[Civil Plan Expert] AI chat deferred:', chatErr);
+            }
             setPlanFiles(combinedFiles);
             setPdfViewerFiles(combinedFiles);
-            setPlanExpertChatHistory(prev => [...prev, { 
-                role: MessageRole.MODEL, 
-                text: `Added <strong style="color: ${agentThemeColors[AgentType.CIVIL_PLAN_EXPERT]};">${files.length} new plan(s)</strong>. I will now consider all <strong style="color: ${agentThemeColors[AgentType.CIVIL_PLAN_EXPERT]};">${combinedFiles.length} plans</strong> in my analysis.`
-            }]);
+            setPlanExpertChatHistory(prev => [
+                ...markPendingA2UICompleted(prev, summaryLabel),
+                { 
+                    role: MessageRole.MODEL, 
+                    text: `Added <strong style="color: ${agentThemeColors[AgentType.CIVIL_PLAN_EXPERT]};">${files.length} new plan(s)</strong>. I will now consider all <strong style="color: ${agentThemeColors[AgentType.CIVIL_PLAN_EXPERT]};">${combinedFiles.length} plans</strong> in my analysis.`
+                }
+            ]);
             setIsAddingData(false);
             return;
         }
 
       startSession();
-      logActionToFieldbook(`Loaded ${files.length} plan files: ${files.map(f => f.name).join(', ')}`);
-      const newChat = startChatWithOverride(AgentType.CIVIL_PLAN_EXPERT, files);
-      setPlanExpertChat(newChat);
+      logActionToFieldbook(`Loaded ${files.length} plan files: ${summaryLabel}`);
+      try {
+        const newChat = startChatWithOverride(AgentType.CIVIL_PLAN_EXPERT, files);
+        setPlanExpertChat(newChat);
+      } catch (chatErr) {
+        console.warn('[Civil Plan Expert] AI chat deferred:', chatErr);
+      }
       setPlanFiles(files);
       setPdfViewerFiles(files);
-      setPlanExpertChatHistory([{
-          role: MessageRole.MODEL,
-          text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CIVIL_PLAN_EXPERT]};">Civil Plan Expert</strong> agent. I have successfully loaded and processed <strong style="color: ${agentThemeColors[AgentType.CIVIL_PLAN_EXPERT]};">${files.length} plan sheet(s)</strong>. How can I assist you?`,
-        }]);
+      setPlanExpertChatHistory(prev => [
+          ...markPendingA2UICompleted(prev, summaryLabel),
+          {
+              role: MessageRole.MODEL,
+              text: buildAgentWelcome(AgentType.CIVIL_PLAN_EXPERT, `I have loaded and processed <strong>${files.length} plan sheet(s)</strong>. Ask me to extract dimensions, annotations, or design data from the sheets.`),
+          }
+      ]);
       setSuggestedQuestions([
           "Plot the storm drain network.",
           "Draw lot 5 and label its dimensions.",
@@ -4782,7 +4828,8 @@ const AppContent = () => {
   }, [buildStandardsComplianceReport, cadManagerContext.state.standard, logActionToFieldbook, runVisualComplianceAudit, standardsComplianceControlFile, standardsComplianceSourceMode]);
 
   const handleStandardsComplianceSessionStart = useCallback((payload: {
-    controlFile: SessionFile | null;
+    controlFile?: SessionFile | null;
+    controlFiles?: SessionFile[];
     subjectFile: SessionFile;
     checks: StandardsComplianceCheckSelection;
     sourceMode: ComplianceSourceMode;
@@ -4793,7 +4840,8 @@ const AppContent = () => {
         startSession();
       }
 
-      setStandardsComplianceControlFile(payload.controlFile);
+      const resolvedControlFile = payload.controlFile ?? payload.controlFiles?.[0] ?? null;
+      setStandardsComplianceControlFile(resolvedControlFile);
       setStandardsComplianceSubjectFile(payload.subjectFile);
       setStandardsComplianceChecks(payload.checks);
       setStandardsComplianceSourceMode(payload.sourceMode);
@@ -4807,28 +4855,35 @@ const AppContent = () => {
         'Standards Compliance intake loaded.',
         `Source mode: ${payload.sourceMode}`,
         `Active checks: ${activeChecks}`,
-        payload.controlFile ? `Control PDF: ${payload.controlFile.name}` : 'Control PDF: none',
+        resolvedControlFile ? `Control PDF: ${resolvedControlFile.name}` : 'Control PDF: none',
         `Subject PDF: ${payload.subjectFile.name}`,
         '',
         `---BEGIN SUBJECT PDF CONTENT---\n${payload.subjectFile.content}\n---END SUBJECT PDF CONTENT---`,
-        payload.controlFile
-          ? `\n---BEGIN CONTROL PDF CONTENT---\n${payload.controlFile.content}\n---END CONTROL PDF CONTENT---`
+        resolvedControlFile
+          ? `\n---BEGIN CONTROL PDF CONTENT---\n${resolvedControlFile.content}\n---END CONTROL PDF CONTENT---`
           : '',
       ].join('\n');
 
-      const newChat = startChatWithOverride(AgentType.STANDARDS_COMPLIANCE, seed);
-      setStandardsComplianceChat(newChat);
-      setStandardsComplianceChatHistory([{
-        role: MessageRole.MODEL,
-        text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.STANDARDS_COMPLIANCE]};">Standards Compliance</strong> agent. I loaded your subject PDF <strong>${payload.subjectFile.name}</strong>${payload.controlFile ? ` and control PDF <strong>${payload.controlFile.name}</strong>` : ''}. Ask me to <strong>run compliance</strong> any time.`,
-      }]);
+      try {
+        const newChat = startChatWithOverride(AgentType.STANDARDS_COMPLIANCE, seed);
+        setStandardsComplianceChat(newChat);
+      } catch (chatErr) {
+        console.warn('[Standards Compliance] AI chat deferred:', chatErr);
+      }
+      setStandardsComplianceChatHistory(prev => [
+        ...markPendingA2UICompleted(prev, payload.subjectFile.name),
+        {
+          role: MessageRole.MODEL,
+          text: buildAgentWelcome(AgentType.STANDARDS_COMPLIANCE, `I have loaded the subject PDF <strong>${payload.subjectFile.name}</strong>${resolvedControlFile ? ` and the control PDF <strong>${resolvedControlFile.name}</strong>` : ''}. Run a compliance audit whenever you are ready.`),
+        }
+      ]);
       setSuggestedQuestions([
         'Run compliance now.',
         'Run compliance using CAD Manager mode.',
         'Show likely layer and linetype mismatches.',
       ]);
 
-      logActionToFieldbook(`Standards Compliance intake loaded (${payload.subjectFile.name}${payload.controlFile ? ` + ${payload.controlFile.name}` : ''}).`);
+      logActionToFieldbook(`Standards Compliance intake loaded (${payload.subjectFile.name}${resolvedControlFile ? ` + ${resolvedControlFile.name}` : ''}).`);
       setError(null);
       setActiveAgent(AgentType.STANDARDS_COMPLIANCE);
       setInitializedAgents(prev => new Set(prev).add(AgentType.STANDARDS_COMPLIANCE));
@@ -4874,18 +4929,23 @@ const AppContent = () => {
             setLines(prev => [...prev, ...parsedDxf.lines]);
         }
 
-        if (initializedAgents.has(AgentType.DXF_ANALYZER)) {
-             if (dxfFile) {
-                setGeneratedFiles(prev => [...prev, { ...dxfFile, name: `(Archived) ${dxfFile.name}` }]);
+        if (dxfFile) {
+            setGeneratedFiles(prev => [...prev, { ...dxfFile, name: `(Archived) ${dxfFile.name}` }]);
+            logActionToFieldbook(`Replaced DXF file with: ${name} (${drawnSummary})`);
+            try {
+              const newChat = startChatWithOverride(AgentType.DXF_ANALYZER, content);
+              setDxfChat(newChat);
+            } catch (chatErr) {
+              console.warn('[DXF Agent] AI chat deferred:', chatErr);
             }
-             logActionToFieldbook(`Replaced DXF file with: ${name} (${drawnSummary})`);
-            const newChat = startChatWithOverride(AgentType.DXF_ANALYZER, content);
-            setDxfChat(newChat);
             setDxfFile({ name, content });
-            setDxfChatHistory([{ 
-                role: MessageRole.MODEL, 
-                text: `The <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">DXF Agent</strong> has loaded <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">"${name}"</strong> and immediately drawn <strong>${drawnSummary}</strong> on your canvas. Ask me anything about layers, entities, or geometry!`
-            }]);
+            setDxfChatHistory(prev => [
+                ...markPendingA2UICompleted(prev, name),
+                { 
+                    role: MessageRole.MODEL, 
+                    text: `The <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">DXF Agent</strong> has loaded <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">"${name}"</strong> and immediately drawn <strong>${drawnSummary}</strong> on your canvas. Ask me anything about layers, entities, or geometry!`
+                }
+            ]);
             setIsAddingData(false);
             showView('canvas');
             setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
@@ -4894,13 +4954,20 @@ const AppContent = () => {
 
         startSession();
         logActionToFieldbook(`Loaded DXF file: ${name} (Drew ${drawnSummary})`);
-        const newChat = startChatWithOverride(AgentType.DXF_ANALYZER, content);
-        setDxfChat(newChat);
+        try {
+          const newChat = startChatWithOverride(AgentType.DXF_ANALYZER, content);
+          setDxfChat(newChat);
+        } catch (chatErr) {
+          console.warn('[DXF Agent] AI chat deferred:', chatErr);
+        }
         setDxfFile({ name, content });
-        setDxfChatHistory([{
-            role: MessageRole.MODEL,
-            text: `Hello! I'm the <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">DXF Agent</strong>. I have loaded <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">"${name}"</strong> and immediately drawn <strong>${drawnSummary}</strong> on your canvas. What would you like to inspect or calculate?`,
-        }]);
+        setDxfChatHistory(prev => [
+            ...markPendingA2UICompleted(prev, name),
+            {
+                role: MessageRole.MODEL,
+                text: `Hello! I'm the <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">DXF Agent</strong>. I have loaded <strong style="color: ${agentThemeColors[AgentType.DXF_ANALYZER]};">"${name}"</strong> and immediately drawn <strong>${drawnSummary}</strong> on your canvas. What would you like to inspect or calculate?`,
+            }
+        ]);
         setSuggestedQuestions([
             "How many layers are in this DXF?",
             "List all entities by layer and type.",
@@ -5009,31 +5076,43 @@ const AppContent = () => {
         // Generate summarized context for the AI
         const aiContext = GisService.getGisContext(features);
 
-        if (initializedAgents.has(AgentType.GIS_AGENT)) {
-             if (gisFile) {
-                setGeneratedFiles(prev => [...prev, { ...gisFile, name: `(Archived) ${gisFile.name}` }]);
+        if (gisFile) {
+            setGeneratedFiles(prev => [...prev, { ...gisFile, name: `(Archived) ${gisFile.name}` }]);
+            logActionToFieldbook(`Replaced GeoJSON file with: ${name}`);
+            try {
+              const newChat = startChatWithOverride(AgentType.GIS_AGENT, aiContext);
+              setGisChat(newChat);
+            } catch (chatErr) {
+              console.warn('[GIS Agent] AI chat deferred:', chatErr);
             }
-             logActionToFieldbook(`Replaced GeoJSON file with: ${name}`);
-            const newChat = startChatWithOverride(AgentType.GIS_AGENT, aiContext);
-            setGisChat(newChat);
             setGisFile(file);
-            setGisChatHistory([{ 
-                role: MessageRole.MODEL, 
-                text: `The <strong style="color: ${agentThemeColors[AgentType.GIS_AGENT]};">GIS Agent</strong> has been reset. The new active file is <strong style="color: ${agentThemeColors[AgentType.GIS_AGENT]};">"${name}"</strong>.`
-            }]);
+            setGisChatHistory(prev => [
+                ...markPendingA2UICompleted(prev, name),
+                { 
+                    role: MessageRole.MODEL, 
+                    text: `The <strong style="color: ${agentThemeColors[AgentType.GIS_AGENT]};">GIS Agent</strong> has loaded <strong style="color: ${agentThemeColors[AgentType.GIS_AGENT]};">"${name}"</strong> (${features.length} features).`
+                }
+            ]);
             setIsAddingData(false);
             return;
         }
 
         startSession();
         logActionToFieldbook(`Loaded GeoJSON file: ${name}`);
-        const newChat = startChatWithOverride(AgentType.GIS_AGENT, aiContext);
-        setGisChat(newChat);
+        try {
+          const newChat = startChatWithOverride(AgentType.GIS_AGENT, aiContext);
+          setGisChat(newChat);
+        } catch (chatErr) {
+          console.warn('[GIS Agent] AI chat deferred:', chatErr);
+        }
         setGisFile(file);
-        setGisChatHistory([{
-            role: MessageRole.MODEL,
-            text: `Hello! I'm the <strong style="color: ${agentThemeColors[AgentType.GIS_AGENT]};">GIS Agent</strong>. I have loaded the file <strong style="color: ${agentThemeColors[AgentType.GIS_AGENT]};">"${name}"</strong> and am ready to analyze its contents. I have processed ${features.length} features.`,
-        }]);
+        setGisChatHistory(prev => [
+            ...markPendingA2UICompleted(prev, name),
+            {
+                role: MessageRole.MODEL,
+                text: `Hello! I'm the <strong style="color: ${agentThemeColors[AgentType.GIS_AGENT]};">GIS Agent</strong>. I have loaded the file <strong style="color: ${agentThemeColors[AgentType.GIS_AGENT]};">"${name}"</strong> and am ready to analyze its contents. I have processed ${features.length} features.`,
+            }
+        ]);
         setSuggestedQuestions([
             "How many features are in this file?",
             "List all features with a 'PARCEL_ID' property.",
@@ -5151,29 +5230,44 @@ const AppContent = () => {
 
   const handleImagesSubmitted = useCallback((files: SessionFile[]) => {
     try {
-        if (initializedAgents.has(AgentType.IMAGE_ANALYZER)) {
-            const combinedFiles = [...(imageFiles || []), ...files];
-            logActionToFieldbook(`Added ${files.length} image files: ${files.map(f => f.name).join(', ')}`);
-            const newChat = startChatWithOverride(AgentType.IMAGE_ANALYZER, combinedFiles);
-            setImageAnalyzerChat(newChat);
+        const summaryLabel = files.map(f => f.name).join(', ');
+        if (imageFiles && imageFiles.length > 0) {
+            const combinedFiles = [...imageFiles, ...files];
+            logActionToFieldbook(`Added ${files.length} image files: ${summaryLabel}`);
+            try {
+              const newChat = startChatWithOverride(AgentType.IMAGE_ANALYZER, combinedFiles);
+              setImageAnalyzerChat(newChat);
+            } catch (chatErr) {
+              console.warn('[Image Analyzer] AI chat deferred:', chatErr);
+            }
             setImageFiles(combinedFiles);
-            setImageAnalyzerChatHistory(prev => [...prev, { 
-                role: MessageRole.MODEL, 
-                text: `Added <strong style="color: ${agentThemeColors[AgentType.IMAGE_ANALYZER]};">${files.length} new image(s)</strong>. I can now analyze all <strong style="color: ${agentThemeColors[AgentType.IMAGE_ANALYZER]};">${combinedFiles.length} images</strong>.`
-            }]);
+            setImageAnalyzerChatHistory(prev => [
+                ...markPendingA2UICompleted(prev, summaryLabel),
+                { 
+                    role: MessageRole.MODEL, 
+                    text: `Added <strong style="color: ${agentThemeColors[AgentType.IMAGE_ANALYZER]};">${files.length} new image(s)</strong>. I can now analyze all <strong style="color: ${agentThemeColors[AgentType.IMAGE_ANALYZER]};">${combinedFiles.length} images</strong>.`
+                }
+            ]);
             setIsAddingData(false);
             return;
         }
 
       startSession();
-      logActionToFieldbook(`Loaded ${files.length} image files: ${files.map(f => f.name).join(', ')}`);
-      const newChat = startChatWithOverride(AgentType.IMAGE_ANALYZER, files);
-      setImageAnalyzerChat(newChat);
+      logActionToFieldbook(`Loaded ${files.length} image files: ${summaryLabel}`);
+      try {
+        const newChat = startChatWithOverride(AgentType.IMAGE_ANALYZER, files);
+        setImageAnalyzerChat(newChat);
+      } catch (chatErr) {
+        console.warn('[Image Analyzer] AI chat deferred:', chatErr);
+      }
       setImageFiles(files);
-      setImageAnalyzerChatHistory([{
-          role: MessageRole.MODEL,
-          text: `Hello, I am the <strong style="color: ${agentThemeColors[AgentType.IMAGE_ANALYZER]};">Image Analyzer</strong> agent. I have loaded <strong style="color: ${agentThemeColors[AgentType.IMAGE_ANALYZER]};">${files.length} image(s)</strong> and am ready to assist.`,
-        }]);
+      setImageAnalyzerChatHistory(prev => [
+          ...markPendingA2UICompleted(prev, summaryLabel),
+          {
+              role: MessageRole.MODEL,
+              text: buildAgentWelcome(AgentType.IMAGE_ANALYZER, `I have loaded <strong>${files.length} image(s)</strong>. Ask me to describe conditions, identify visible features, or associate an image with a point.`),
+          }
+      ]);
       setSuggestedQuestions([
           "Describe what you see in the first image.",
           "Are there any utility markings visible in these photos?",
@@ -5209,12 +5303,19 @@ const AppContent = () => {
               `${p.pointNumber}\t${p.northing.toFixed(4)}\t${p.easting.toFixed(4)}${p.elevation !== undefined ? `\t${p.elevation.toFixed(4)}` : ''}\t${p.description ?? ''}`
             ).join('\n')}\n---END PROJECT POINTS---`
           : '';
-        const newChat = startChatWithOverride(AgentType.CENTERLINE_STATIONING, pointsContext);
-        setStationingChat(newChat);
-        setStationingChatHistory([{
-            role: MessageRole.MODEL,
-            text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CENTERLINE_STATIONING]};">Stationing & CL</strong> agent. A new session has started for <strong style="color: ${agentThemeColors[AgentType.CENTERLINE_STATIONING]};">Centerline "CL-1"</strong>. You can now add Points of Intersection (PIs) to define the alignment.`,
-        }]);
+        try {
+          const newChat = startChatWithOverride(AgentType.CENTERLINE_STATIONING, pointsContext);
+          setStationingChat(newChat);
+        } catch (chatErr) {
+          console.warn('[Stationing & CL] AI chat deferred:', chatErr);
+        }
+        setStationingChatHistory(prev => [
+            ...markPendingA2UICompleted(prev, 'Blank Centerline (CL-1)'),
+            {
+                role: MessageRole.MODEL,
+                text: buildAgentWelcome(AgentType.CENTERLINE_STATIONING, `A new session has started for <strong>Centerline "CL-1"</strong>. Add points of intersection (PIs) to define the alignment.`),
+            }
+        ]);
         setSuggestedQuestions([]);
         setError(null);
         setActiveAgent(AgentType.CENTERLINE_STATIONING);
@@ -5227,10 +5328,8 @@ const AppContent = () => {
   }, [activeModel, showView, startSession, logActionToFieldbook, settings, startChatWithOverride, pointLists]);
   
   const handleClFileUploaded = useCallback((content: string, name: string) => {
-    if (initializedAgents.has(AgentType.CENTERLINE_STATIONING)) {
-        if (clFile) {
-            setGeneratedFiles(prev => [...prev, { ...clFile, name: `(Archived) ${clFile.name}` }]);
-        }
+    if (clFile) {
+        setGeneratedFiles(prev => [...prev, { ...clFile, name: `(Archived) ${clFile.name}` }]);
         logActionToFieldbook(`Replaced Centerline file with: ${name}`);
         const parsedCL = parseClFile(content);
         if (!parsedCL) {
@@ -5240,13 +5339,21 @@ const AppContent = () => {
         parsedCL.name = name.replace(/\.[^/.]+$/, "");
         setCenterlines([parsedCL]);
         setClFile({ name, content });
-        const newChat = startChatWithOverride(AgentType.CENTERLINE_STATIONING, JSON.stringify(parsedCL, null, 2));
-        setStationingChat(newChat);
-        setStationingChatHistory([{ 
-            role: MessageRole.MODEL, 
-            text: `The <strong style="color: ${agentThemeColors[AgentType.CENTERLINE_STATIONING]};">Stationing & CL</strong> agent has been reset with the centerline from <strong style="color: ${agentThemeColors[AgentType.CENTERLINE_STATIONING]};">"${name}"</strong>.`
-        }]);
+        try {
+          const newChat = startChatWithOverride(AgentType.CENTERLINE_STATIONING, JSON.stringify(parsedCL, null, 2));
+          setStationingChat(newChat);
+        } catch (chatErr) {
+          console.warn('[Stationing & CL] AI chat deferred:', chatErr);
+        }
+        setStationingChatHistory(prev => [
+            ...markPendingA2UICompleted(prev, name),
+            { 
+                role: MessageRole.MODEL, 
+                text: `The <strong style="color: ${agentThemeColors[AgentType.CENTERLINE_STATIONING]};">Stationing & CL</strong> agent has loaded the centerline from <strong style="color: ${agentThemeColors[AgentType.CENTERLINE_STATIONING]};">"${name}"</strong>.`
+            }
+        ]);
         setIsAddingData(false);
+        setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
         return;
     }
 
@@ -5270,26 +5377,30 @@ const AppContent = () => {
     try {
         startSession();
         logActionToFieldbook(`Loaded centerline file: ${name}`);
-        const newChat = startChatWithOverride(AgentType.CENTERLINE_STATIONING, JSON.stringify(parsedCL, null, 2));
-        setStationingChat(newChat);
-        setStationingChatHistory([{
-            role: MessageRole.MODEL,
-            text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CENTERLINE_STATIONING]};">Stationing & CL</strong> agent. I have successfully loaded the centerline from <strong style="color: ${agentThemeColors[AgentType.CENTERLINE_STATIONING]};">"${name}"</strong>.`,
-        }]);
+        try {
+          const newChat = startChatWithOverride(AgentType.CENTERLINE_STATIONING, JSON.stringify(parsedCL, null, 2));
+          setStationingChat(newChat);
+        } catch (chatErr) {
+          console.warn('[Stationing & CL] AI chat deferred:', chatErr);
+        }
+        setStationingChatHistory(prev => [
+            ...markPendingA2UICompleted(prev, name),
+            {
+                role: MessageRole.MODEL,
+                text: buildAgentWelcome(AgentType.CENTERLINE_STATIONING, `I have loaded the centerline from <strong>"${name}"</strong>.`),
+            }
+        ]);
         setSuggestedQuestions([]);
         setError(null);
-        
-        // Push navigation history so user can go back to file upload screen
-        pushNavigation(AgentType.CENTERLINE_STATIONING, 'canvas');
-        
         setActiveAgent(AgentType.CENTERLINE_STATIONING);
         setInitializedAgents(prev => new Set(prev).add(AgentType.CENTERLINE_STATIONING));
         showView('canvas');
+        setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to initialize AI chat.';
       setError(`Initialization Error: ${errorMessage}`);
     }
-  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, clFile, settings, startChatWithOverride]);
+  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, clFile, settings, startChatWithOverride, canvas2dRef]);
 
   // Zoning Agent handlers
   const handleZoningSearch = useCallback(async (searchData: { state: string; county: string; municipality: string; zoningDistrict?: string; desiredUse?: string }) => {
@@ -5316,19 +5427,24 @@ const AppContent = () => {
       console.log('[Zoning] ?? startChatWithOverride returned:', newChat ? 'chat instance ?' : 'NULL ? (no API key or model init failure)');
       setZoningChat(newChat);
 
-      let opening = `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.ZONING_AGENT]};">Zoning Agent</strong> � powered by live Google Search grounding.\n\n`;
-      opening += `**Jurisdiction loaded:** ${zMuni}, ${zCounty} County, ${zState}`;
-      if (zDistrict) opening += `\n**District:** ${zDistrict}`;
-      if (zUse) opening += `\n**Desired use:** ${zUse}`;
-      opening += `\n\nI'm ready to research zoning requirements. What would you like to know?`;
-      opening += `\n\n*Suggested questions:*\n- What are the setback requirements${zDistrict ? ` for ${zDistrict}` : ''}?\n- What uses are permitted${zDistrict ? ` in ${zDistrict}` : ''}?\n- What is the maximum building height?\n- Are there any overlay districts I should know about?`;
+      let opening = buildAgentWelcome(AgentType.ZONING_AGENT, `**Jurisdiction:** ${zMuni}, ${zCounty} County, ${zState}`);
+      if (zDistrict) opening += `
+**Zoning district:** ${zDistrict}`;
+      if (zUse) opening += `
+**Proposed use:** ${zUse}`;
+      opening += `
 
-      setZoningChatHistory([{ role: MessageRole.MODEL, text: opening }]);
+Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
+
+      setZoningChatHistory(prev => [
+        ...markPendingA2UICompleted(prev, `${zMuni}, ${zState}`),
+        { role: MessageRole.MODEL, text: opening }
+      ]);
       setActiveAgent(AgentType.ZONING_AGENT);
       setInitializedAgents(prev => new Set(prev).add(AgentType.ZONING_AGENT));
       setIsInitialScreen(false);
       showView('zoning');
-      setIsChatPanelVisible(true);
+      setIsChatPanelVisible(false);
 
       // -------------------------------------------------------------------
       // SILENT BOOTSTRAP � always runs as soon as the jurisdiction is loaded.
@@ -5848,33 +5964,35 @@ const AppContent = () => {
       return;
     }
     try {
-      if (!initializedAgents.has(AgentType.TITLE_SEARCH)) {
-        startSession();
-        logActionToFieldbook(`Title Search initialized with first deed: ${file.name}`);
+      startSession();
+      logActionToFieldbook(`Title Search deed loaded: ${file.name}`);
+      try {
         const newChat = startChatWithOverride(AgentType.TITLE_SEARCH, file);
         setTitleSearchChat(newChat);
-        setTitleSearchChatHistory([{
-          role: MessageRole.MODEL,
-          text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.TITLE_SEARCH]};">Title Search Agent</strong>. I will help you trace the property's ownership history and identify any liens or encumbrances. I've received the first deed: <strong>"${file.name}"</strong>. Please add more deeds to build the chain of title.`,
-        }]);
-        setSuggestedQuestions([
-          "Analyze this deed and extract the key information.",
-          "Who is the current owner?",
-          "Are there any active liens?",
-          "Show me the chain of title.",
-        ]);
-        setActiveAgent(AgentType.TITLE_SEARCH);
-        setInitializedAgents(prev => new Set(prev).add(AgentType.TITLE_SEARCH));
-        showView('titlesearch');
-        setError(null);
+      } catch (chatErr) {
+        console.warn('[Title Search] AI chat deferred:', chatErr);
       }
-      
-      // Add deed to Title Search by sending it to AI
-      logActionToFieldbook(`Added deed to title search: ${file.name}`);
-      setTitleSearchChatHistory(prev => [...prev, {
-        role: MessageRole.USER,
-        text: `Analyze this deed document: "${file.name}"`,
-      }]);
+      setTitleSearchChatHistory(prev => [
+        ...markPendingA2UICompleted(prev, file.name),
+        {
+          role: MessageRole.MODEL,
+          text: buildAgentWelcome(AgentType.TITLE_SEARCH, `I have received the deed: <strong>"${file.name}"</strong>. Add additional deeds to build the chain of title.`),
+        },
+        {
+          role: MessageRole.USER,
+          text: `Analyze this deed document: "${file.name}"`,
+        }
+      ]);
+      setSuggestedQuestions([
+        "Analyze this deed and extract the key information.",
+        "Who is the current owner?",
+        "Are there any active liens?",
+        "Show me the chain of title.",
+      ]);
+      setActiveAgent(AgentType.TITLE_SEARCH);
+      setInitializedAgents(prev => new Set(prev).add(AgentType.TITLE_SEARCH));
+      showView('titlesearch');
+      setError(null);
       
       // AI will extract deed information and update the title search data
       // The response will be handled in handleSendMessage
@@ -5907,7 +6025,7 @@ const AppContent = () => {
     setPointEditorChatHistory([{
         role: MessageRole.MODEL,
         text: aiAvailable
-            ? `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.POINT_EDITOR]};">Point Editor</strong> agent. I am now managing the project's <strong style="color: ${agentThemeColors[AgentType.POINT_EDITOR]};">Point Database</strong>. You can ask me to perform calculations or plot subsets of points.`
+            ? buildAgentWelcome(AgentType.POINT_EDITOR, `I am managing the project <strong>Point Database</strong>. Ask me to run calculations, filter point sets, or plot points on the canvas.`)
             : `<strong style="color: ${agentThemeColors[AgentType.POINT_EDITOR]};">Point Editor</strong> ready. Upload a point file (.csv / .txt) or enter points manually — everything works without a Gemini API key. Add a key in Settings whenever you want AI calculations and plotting.`,
     }]);
     setSuggestedQuestions(aiAvailable ? [
@@ -5957,17 +6075,74 @@ const AppContent = () => {
     }
   }, [startSession, logActionToFieldbook, initializedAgents, settings, setProjectionPrompt]);
 
+  const getSetHistoryForAgent = useCallback((agent: AgentType): React.Dispatch<React.SetStateAction<ChatMessage[]>> | null => {
+    switch (agent) {
+      case AgentType.RAW_CRAWLER: return setRawChatHistory;
+      case AgentType.CIVIL_DRAFTER: return setCivilDrafterChatHistory;
+      case AgentType.DEED_READER: return setDeedChatHistory;
+      case AgentType.CIVIL_PLAN_EXPERT: return setPlanExpertChatHistory;
+      case AgentType.DXF_ANALYZER: return setDxfChatHistory;
+      case AgentType.IMAGE_ANALYZER: return setImageAnalyzerChatHistory;
+      case AgentType.GIS_AGENT: return setGisChatHistory;
+      case AgentType.GPS_STAKEOUT: return setGpsStakeoutChatHistory;
+      case AgentType.LSVZ_AGENT: return setLsvzChatHistory;
+      case AgentType.CENTERLINE_STATIONING: return setStationingChatHistory;
+      case AgentType.POINT_EDITOR: return setPointEditorChatHistory;
+      case AgentType.CONTOURING_AGENT: return setContouringChatHistory;
+      case AgentType.STEEP_SLOPE_AGENT: return setSteepSlopeChatHistory;
+      case AgentType.PROFILE_AGENT: return setProfileChatHistory;
+      case AgentType.COGO_AGENT: return setCogoChatHistory;
+      case AgentType.GNSS_AGENT: return setRinexChatHistory;
+      case AgentType.DRONE_AGENT: return setDroneChatHistory;
+      case AgentType.ZONING_AGENT: return setZoningChatHistory;
+      case AgentType.TITLE_SEARCH: return setTitleSearchChatHistory;
+      case AgentType.CAD_MANAGER: return setCadManagerChatHistory;
+      case AgentType.STANDARDS_COMPLIANCE: return setStandardsComplianceChatHistory;
+      case AgentType.STRUCTURES_AGENT: return setStructuresChatHistory;
+      case AgentType.SOILS_AGENT: return setSoilsChatHistory;
+      default: return null;
+    }
+  }, [
+    setRawChatHistory, setCivilDrafterChatHistory, setDeedChatHistory, setPlanExpertChatHistory,
+    setDxfChatHistory, setImageAnalyzerChatHistory, setGisChatHistory, setGpsStakeoutChatHistory,
+    setLsvzChatHistory, setStationingChatHistory, setPointEditorChatHistory, setContouringChatHistory,
+    setSteepSlopeChatHistory, setProfileChatHistory, setCogoChatHistory, setRinexChatHistory,
+    setDroneChatHistory, setZoningChatHistory, setTitleSearchChatHistory, setCadManagerChatHistory,
+    setStandardsComplianceChatHistory, setStructuresChatHistory, setSoilsChatHistory,
+  ]);
+
   // FIX: Add initialization for the new Contouring Agent.
   const initializeContouringAgent = useCallback(() => {
     try {
         if (!initializedAgents.has(AgentType.CONTOURING_AGENT)) {
             startSession();
             logActionToFieldbook('Contouring agent activated.');
-            const newChat = startChatWithOverride(AgentType.CONTOURING_AGENT, '');
-            setContouringChat(newChat);
+            try {
+              const newChat = startChatWithOverride(AgentType.CONTOURING_AGENT, '');
+              setContouringChat(newChat);
+            } catch (chatErr) {
+              console.warn('[Contouring Agent] AI chat deferred:', chatErr);
+            }
+            const hasPoints = pointLists.some(l => l.points.length > 0);
             setContouringChatHistory([{
                 role: MessageRole.MODEL,
-                text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CONTOURING_AGENT]};">Contouring Agent</strong>. I can generate contour lines from your project's points. What contour interval would you like?`,
+                text: buildAgentWelcome(
+                  AgentType.CONTOURING_AGENT,
+                  hasPoints
+                    ? `Tell me the contour interval you would like and I will generate and label the lines.`
+                    : `Welcome to the drawing canvas! Would you like to upload survey points first so I can generate contours, or pull contours from a public ESRI/GIS service?`
+                ),
+                ...(!hasPoints
+                  ? {
+                      questionOptions: ['Yes, upload points', 'Continue without uploading'],
+                      a2ui: {
+                        kind: 'intake-prompt' as const,
+                        agent: AgentType.CONTOURING_AGENT,
+                        widgetType: 'point-upload' as const,
+                        status: 'prompting' as const,
+                      },
+                    }
+                  : {}),
             }]);
             setSuggestedQuestions([
                 "Generate contours at a 1-foot interval.",
@@ -5981,18 +6156,39 @@ const AppContent = () => {
         const errorMessage = err instanceof Error ? err.message : 'Failed to initialize AI chat.';
         setError(`Initialization Error: ${errorMessage}`);
     }
-  }, [activeModel, startSession, logActionToFieldbook, initializedAgents, settings, startChatWithOverride]);
+  }, [activeModel, startSession, logActionToFieldbook, initializedAgents, settings, startChatWithOverride, pointLists]);
 
   const initializeSteepSlopeAgent = useCallback(() => {
     try {
       if (!initializedAgents.has(AgentType.STEEP_SLOPE_AGENT)) {
         startSession();
         logActionToFieldbook('Steep Slope agent activated.');
-        const newChat = startChatWithOverride(AgentType.STEEP_SLOPE_AGENT, '');
-        setSteepSlopeChat(newChat);
+        try {
+          const newChat = startChatWithOverride(AgentType.STEEP_SLOPE_AGENT, '');
+          setSteepSlopeChat(newChat);
+        } catch (chatErr) {
+          console.warn('[Steep Slope Agent] AI chat deferred:', chatErr);
+        }
+        const hasPoints = pointLists.some(l => l.points.length > 0);
         setSteepSlopeChatHistory([{
           role: MessageRole.MODEL,
-          text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.STEEP_SLOPE_AGENT]};">Steep Slope Agent</strong>. I can classify terrain by slope-percent bands on a TIN and remove connected components below your minimum vertical-span threshold.`,
+          text: buildAgentWelcome(
+            AgentType.STEEP_SLOPE_AGENT,
+            hasPoints
+              ? `Set your slope bands and minimum vertical-span threshold to run the classification.`
+              : `Welcome to the drawing canvas! Would you like to upload survey points first so we can build a TIN surface and classify steep slopes?`
+          ),
+          ...(!hasPoints
+            ? {
+                questionOptions: ['Yes, upload points', 'Continue without uploading'],
+                a2ui: {
+                  kind: 'intake-prompt' as const,
+                  agent: AgentType.STEEP_SLOPE_AGENT,
+                  widgetType: 'point-upload' as const,
+                  status: 'prompting' as const,
+                },
+              }
+            : {}),
         }]);
         setSuggestedQuestions([
           'Run steep slope analysis using 15%, 30%, and 45% bands.',
@@ -6006,7 +6202,7 @@ const AppContent = () => {
       const errorMessage = err instanceof Error ? err.message : 'Failed to initialize AI chat.';
       setError(`Initialization Error: ${errorMessage}`);
     }
-  }, [startSession, logActionToFieldbook, initializedAgents, startChatWithOverride]);
+  }, [startSession, logActionToFieldbook, initializedAgents, startChatWithOverride, pointLists]);
 
   // FIX: Add initialization for the new Profile Agent.
   const initializeProfileAgent = useCallback(() => {
@@ -6014,11 +6210,32 @@ const AppContent = () => {
         if (!initializedAgents.has(AgentType.PROFILE_AGENT)) {
             startSession();
             logActionToFieldbook('Profile & Cross Section agent activated.');
-            const newChat = startChatWithOverride(AgentType.PROFILE_AGENT, '');
-            setProfileChat(newChat);
+            try {
+              const newChat = startChatWithOverride(AgentType.PROFILE_AGENT, '');
+              setProfileChat(newChat);
+            } catch (chatErr) {
+              console.warn('[Profile Agent] AI chat deferred:', chatErr);
+            }
+            const hasPoints = pointLists.some(l => l.points.length > 0);
             setProfileChatHistory([{
                 role: MessageRole.MODEL,
-                text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.PROFILE_AGENT]};">Profile & Cross Section Agent</strong>. I can generate elevation profiles along lines or centerlines. How can I assist?`,
+                text: buildAgentWelcome(
+                  AgentType.PROFILE_AGENT,
+                  hasPoints
+                    ? `Select a line or alignment to generate a profile or cross sections.`
+                    : `Welcome to the drawing canvas! Would you like to upload survey points first so you can generate elevation profiles?`
+                ),
+                ...(!hasPoints
+                  ? {
+                      questionOptions: ['Yes, upload points', 'Continue without uploading'],
+                      a2ui: {
+                        kind: 'intake-prompt' as const,
+                        agent: AgentType.PROFILE_AGENT,
+                        widgetType: 'point-upload' as const,
+                        status: 'prompting' as const,
+                      },
+                    }
+                  : {}),
             }]);
             setSuggestedQuestions([
                 "Generate a profile along line from point 1 to 2.",
@@ -6032,7 +6249,7 @@ const AppContent = () => {
         const errorMessage = err instanceof Error ? err.message : 'Failed to initialize AI chat.';
         setError(`Initialization Error: ${errorMessage}`);
     }
-  }, [activeModel, startSession, logActionToFieldbook, initializedAgents, settings, startChatWithOverride]);
+  }, [activeModel, startSession, logActionToFieldbook, initializedAgents, settings, startChatWithOverride, pointLists]);
 
   // FIX: Add initialization for the new COGO Agent.
   const initializeCogoAgent = useCallback(() => {
@@ -6040,11 +6257,32 @@ const AppContent = () => {
         if (!initializedAgents.has(AgentType.COGO_AGENT)) {
             startSession();
             logActionToFieldbook('COGO agent activated.');
-            const newChat = startChatWithOverride(AgentType.COGO_AGENT, '');
-            setCogoChat(newChat);
+            try {
+              const newChat = startChatWithOverride(AgentType.COGO_AGENT, '');
+              setCogoChat(newChat);
+            } catch (chatErr) {
+              console.warn('[COGO Agent] AI chat deferred:', chatErr);
+            }
+            const hasPoints = pointLists.some(l => l.points.length > 0);
             setCogoChatHistory([{
                 role: MessageRole.MODEL,
-                text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.COGO_AGENT]};">COGO Agent</strong>. I can perform coordinate geometry calculations including inverse calculations and intersection computations. How can I assist?`,
+                text: buildAgentWelcome(
+                  AgentType.COGO_AGENT,
+                  hasPoints
+                    ? `Select the computation you need, or describe it in plain language.`
+                    : `Welcome to the drawing canvas! Would you like to upload survey points first, or run COGO computations directly?`
+                ),
+                ...(!hasPoints
+                  ? {
+                      questionOptions: ['Yes, upload points', 'Continue without uploading'],
+                      a2ui: {
+                        kind: 'intake-prompt' as const,
+                        agent: AgentType.COGO_AGENT,
+                        widgetType: 'point-upload' as const,
+                        status: 'prompting' as const,
+                      },
+                    }
+                  : {}),
             }]);
             setSuggestedQuestions([
                 "Calculate the bearing and distance between two points.",
@@ -6058,7 +6296,7 @@ const AppContent = () => {
         const errorMessage = err instanceof Error ? err.message : 'Failed to initialize AI chat.';
         setError(`Initialization Error: ${errorMessage}`);
     }
-  }, [activeModel, startSession, logActionToFieldbook, initializedAgents, settings, startChatWithOverride]);
+  }, [activeModel, startSession, logActionToFieldbook, initializedAgents, settings, startChatWithOverride, pointLists]);
 
   // FIX: Add initialization for the new RINEX/GNSS Agent.
   const initializeRinexAgent = useCallback(() => {
@@ -6066,11 +6304,15 @@ const AppContent = () => {
         if (!initializedAgents.has(AgentType.GNSS_AGENT)) {
             startSession();
             logActionToFieldbook('RINEX Agent activated.');
-            const newChat = startChatWithOverride(AgentType.GNSS_AGENT, '');
-            setRinexChat(newChat);
+            try {
+              const newChat = startChatWithOverride(AgentType.GNSS_AGENT, '');
+              setRinexChat(newChat);
+            } catch (chatErr) {
+              console.warn('[RINEX Agent] AI chat deferred:', chatErr);
+            }
             setRinexChatHistory([{
                 role: MessageRole.MODEL,
-                text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.GNSS_AGENT]};">RINEX Post-Processor</strong> agent. <br/><br/>I can help you process RINEX observation files from raw GNSS receivers to generate precise positioning solutions.<br/><br/><strong>Available Features:</strong><br/><ul style="margin-top: 8px; margin-left: 20px;"><li>Process RINEX files to generate precise positioning solutions</li><li>Single Point Positioning (SPP) with least-squares optimization</li><li>Support multi-constellation processing (GPS, GLONASS, Galileo, BeiDou)</li><li>Export results in multiple formats (CSV, GeoJSON, KML, JSON)</li><li>Analyze solution quality with DOP calculations</li></ul><br/><strong>To get started:</strong> Click the "RINEX Tools" button below to upload a RINEX file and configure processing parameters. You'll need an API key for premium features.`,
+                text: buildAgentWelcome(AgentType.GNSS_AGENT, `Use the <strong>RINEX Tools</strong> panel to upload an observation file and configure processing parameters.`),
             }]);
             setSuggestedQuestions([
                 "What RINEX file formats are supported?",
@@ -6091,11 +6333,15 @@ const AppContent = () => {
       if (!initializedAgents.has(AgentType.DRONE_AGENT)) {
         startSession();
         logActionToFieldbook('Drone Agent activated.');
-        const newChat = startChatWithOverride(AgentType.DRONE_AGENT, '');
-        setDroneChat(newChat);
+        try {
+          const newChat = startChatWithOverride(AgentType.DRONE_AGENT, '');
+          setDroneChat(newChat);
+        } catch (chatErr) {
+          console.warn('[Drone Agent] AI chat deferred:', chatErr);
+        }
         setDroneChatHistory([{
           role: MessageRole.MODEL,
-          text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.DRONE_AGENT]};">Drone Agent</strong> agent.<br/><br/>I can help you stage aerial imagery in <strong>temporary processing storage</strong>, run NodeODM photogrammetry, and export orthomosaics and meshes back to <strong>connected destination storage</strong> such as Google Drive, Dropbox, or customer-owned object storage.<br/><br/><strong>To get started:</strong> Click the <strong>Drone Tools</strong> button below and paste temporary image URLs from the same overlapping flight set.`,
+          text: buildAgentWelcome(AgentType.DRONE_AGENT, `Use the <strong>Drone Tools</strong> panel to begin, and paste temporary image URLs from the same overlapping flight set.`),
         }]);
         setSuggestedQuestions([
           'What image overlap do I need for a good orthomosaic?',
@@ -6117,11 +6363,15 @@ const AppContent = () => {
         if (!initializedAgents.has(AgentType.AR_AGENT)) {
             startSession();
             logActionToFieldbook('AR Agent activated.');
-            const newChat = startChatWithOverride(AgentType.AR_AGENT, '');
-            setArChat(newChat);
+            try {
+              const newChat = startChatWithOverride(AgentType.AR_AGENT, '');
+              setArChat(newChat);
+            } catch (chatErr) {
+              console.warn('[AR Agent] AI chat deferred:', chatErr);
+            }
             setArChatHistory([{
                 role: MessageRole.MODEL,
-                text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.AR_AGENT]};">AR (Augmented Reality)</strong> agent. <br/><br/>I help you visualize and interact with your survey data in 3D augmented reality on your Meta Quest headset. I can help you:<br/><ul style="margin-top: 8px; margin-left: 20px;"><li>View survey points as 3D markers in your physical environment</li><li>Stake out points using AR visualization</li><li>Analyze point data and relationships in 3D space</li><li>Plan fieldwork with spatial awareness</li><li>Answer questions about your project data</li></ul><br/>Ask me questions about your survey points or ask me to help you visualize specific data in AR!`,
+                text: buildAgentWelcome(AgentType.AR_AGENT, `Ask me to visualize project points or linework, or to prepare a stakeout set for the field.`),
             }]);
             setSuggestedQuestions([
                 "Show me all points in AR mode",
@@ -6142,19 +6392,169 @@ const AppContent = () => {
   // loaded a previous .lsvz), the upload screen is pointless � skip it and initialize
   // the agent in place. The floating Point List panel is NOT auto-opened; instead the
   // toolbar button pulses pink so the user knows they can open it.
+  // A2UI Conversational Intake Initialization:
+  // When entering any agent that formerly used a full-screen upload screen,
+  // go straight to the drawing canvas and greet the user inquisitively in chat.
   useEffect(() => {
-    if (
-      activeAgent === AgentType.POINT_EDITOR &&
-      !isInitialScreen &&
-      !initializedAgents.has(AgentType.POINT_EDITOR) &&
-      pointLists.some(l => l.points.length > 0)
-    ) {
-      handlePointEditorSessionStart();
-      setIsPointListButtonPulsing(true);
+    if (isInitialScreen || !activeAgent) return;
+    if (!A2UI_INTAKE_AGENTS.includes(activeAgent)) return;
+
+    const shouldAutoExpand =
+      (activeAgent === AgentType.POINT_EDITOR && autoOpenPointUpload) ||
+      (activeAgent === AgentType.DEED_READER && autoOpenDeedUpload);
+
+    if (initializedAgents.has(activeAgent)) {
+      if (shouldAutoExpand) {
+        if (autoOpenPointUpload && activeAgent === AgentType.POINT_EDITOR) {
+          setAutoOpenPointUpload(false);
+        }
+        if (autoOpenDeedUpload && activeAgent === AgentType.DEED_READER) {
+          setAutoOpenDeedUpload(false);
+        }
+        const widgetType = getAgentA2UIWidgetType(activeAgent);
+        const setHistory = getSetHistoryForAgent(activeAgent);
+        if (widgetType && setHistory) {
+          setHistory(prev => [
+            ...markPendingA2UICompleted(prev),
+            {
+              role: MessageRole.MODEL,
+              text: getUploadPromptCopy(activeAgent, widgetType),
+              a2ui: {
+                kind: 'upload-widget',
+                agent: activeAgent,
+                widgetType,
+                status: 'expanded',
+              },
+            },
+          ]);
+        }
+      }
+      return;
     }
-    // handlePointEditorSessionStart is defined later via useCallback; it's stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeAgent, isInitialScreen, initializedAgents, pointLists]);
+
+    startSession();
+    const existingPtsCount = pointLists.reduce((sum, l) => sum + l.points.length, 0);
+
+    if (autoOpenPointUpload && activeAgent === AgentType.POINT_EDITOR) {
+      setAutoOpenPointUpload(false);
+    }
+    if (autoOpenDeedUpload && activeAgent === AgentType.DEED_READER) {
+      setAutoOpenDeedUpload(false);
+    }
+
+    const intake = buildA2UIIntakeGreeting(
+      activeAgent,
+      {
+        existingPointCount: existingPtsCount,
+        cadStandardsLoaded,
+        hasBoundaryFiles: boundaryFiles.length > 0 || Boolean(deedFile),
+        hasCenterlines: centerlines.length > 0 || Boolean(clFile),
+        hasGisFeatures: Boolean(gisFeatures && gisFeatures.length > 0),
+        hasDxfLoaded: Boolean(dxfFile),
+        hasPlansLoaded: Boolean(planFiles && planFiles.length > 0),
+        hasImagesLoaded: Boolean(imageFiles && imageFiles.length > 0),
+        hasRawLoaded: Boolean(rawFile),
+      },
+      shouldAutoExpand
+    );
+
+    if (activeAgent === AgentType.POINT_EDITOR) {
+      setIsBoundaryEditorButtonPulsing(false);
+    }
+
+    if (activeAgent === AgentType.CENTERLINE_STATIONING && centerlines.length === 0) {
+      setCenterlines([{
+        id: Date.now().toString(),
+        name: 'CL-1',
+        beginStation: 0,
+        pis: [],
+      }]);
+    }
+
+    if (activeAgent === AgentType.CIVIL_DRAFTER && existingPtsCount > 0 && !rawFile) {
+      const visibleListWithPoints =
+        pointLists.find(l => l.isVisible && l.points.length > 0) ??
+        pointLists.find(l => l.points.length > 0);
+      if (visibleListWithPoints) {
+        const syntheticName = `${visibleListWithPoints.name || 'Canvas Points'}.csv`;
+        const syntheticContent = pointListToString(visibleListWithPoints, settings);
+        setRawFile({ name: syntheticName, content: syntheticContent });
+        try {
+          const trainingDxf = dxfFile?.forTraining ? dxfFile : undefined;
+          const newChat = startChatWithOverride(AgentType.CIVIL_DRAFTER, syntheticContent, trainingDxf);
+          setCivilDrafterChat(newChat);
+        } catch {
+          /* AI chat deferred until needed */
+        }
+      }
+    }
+
+    if (intake) {
+      const setHistory = getSetHistoryForAgent(activeAgent);
+      if (setHistory) {
+        setHistory(prev => (prev.length === 0 ? [intake.message] : prev));
+      }
+      setSuggestedQuestions(intake.suggestedQuestions);
+    }
+
+    logActionToFieldbook(`${agentConfig[activeAgent]?.label || activeAgent} activated on canvas.`);
+    setInitializedAgents(prev => new Set(prev).add(activeAgent));
+    if (activeVisualPanel !== 'sheetview' && activeVisualPanel !== 'cadstandards') {
+      showView('canvas');
+    }
+  }, [
+    activeAgent,
+    isInitialScreen,
+    initializedAgents,
+    pointLists,
+    cadStandardsLoaded,
+    autoOpenPointUpload,
+    autoOpenDeedUpload,
+    boundaryFiles.length,
+    deedFile,
+    centerlines.length,
+    clFile,
+    gisFeatures,
+    dxfFile,
+    planFiles,
+    imageFiles,
+    rawFile,
+    settings,
+    startSession,
+    startChatWithOverride,
+    logActionToFieldbook,
+    activeVisualPanel,
+    showView,
+    getSetHistoryForAgent,
+  ]);
+
+  // When "Add Data" / "Upload ..." is clicked in the chat header or compliance summary,
+  // append the A2UI upload widget directly into the active agent's chat feed on the canvas.
+  useEffect(() => {
+    if (!isAddingData) return;
+    setIsAddingData(false);
+    const widgetType = getAgentA2UIWidgetType(activeAgent);
+    if (!widgetType) return;
+    const setHistory = getSetHistoryForAgent(activeAgent);
+    if (setHistory) {
+      setHistory(prev => [
+        ...markPendingA2UICompleted(prev),
+        {
+          role: MessageRole.MODEL,
+          text: getUploadPromptCopy(activeAgent, widgetType),
+          a2ui: {
+            kind: 'upload-widget',
+            agent: activeAgent,
+            widgetType,
+            status: 'expanded',
+          },
+        },
+      ]);
+    }
+    if (activeVisualPanel !== 'canvas') {
+      showView('canvas');
+    }
+  }, [isAddingData, activeAgent, activeVisualPanel, showView, setIsAddingData, getSetHistoryForAgent]);
   
   useEffect(() => {
     if (activeAgent === AgentType.GPS_STAKEOUT && !isInitialScreen && !initializedAgents.has(AgentType.GPS_STAKEOUT)) {
@@ -6207,7 +6607,7 @@ const AppContent = () => {
           setStructuresChat(newChat);
           setStructuresChatHistory([{
             role: MessageRole.MODEL,
-            text: `Hello! I am the <strong style="color: #fb923c;">Structures Agent</strong>. I pull <strong>FEMA NSI attributes</strong> (occupancy, sqft, stories) and <strong>OpenStreetMap building polygons</strong> (real geometry) for your project area, then deterministically rectify them against your survey BLDG corner shots \u2014 Helmert-snapping OSM polygons to surveyed corners, COGO-completing partial clusters (1, 2, 3, or 4+ corners), and only falling back to synthetic squares when no other data is available. Click <strong>Fetch FEMA Structures</strong>, then <strong>Rectify Building Footprints</strong>.`,
+            text: buildAgentWelcome(AgentType.STRUCTURES_AGENT, `Use <strong>Fetch FEMA Structures</strong> to load the data, then <strong>Rectify Building Footprints</strong> to reconcile it with your survey.`),
           }]);
           setSuggestedQuestions([
             'What occupancy types are in the loaded structures?',
@@ -6239,7 +6639,7 @@ const AppContent = () => {
           setSoilsChat(newChat);
           setSoilsChatHistory([{
             role: MessageRole.MODEL,
-            text: `Hello! I am the <strong style="color: #a8a29e;">Soils Agent</strong>. I can overlay USDA NRCS SSURGO soil survey map-unit polygons for your project area and fetch detailed tabular reports � hydrologic group, drainage class, farmland classification, and tax class. Use the <strong>Fetch Soils</strong> button to load SSURGO linework, then click <strong>Fetch Soil Report</strong> to pull tabular data from the USDA Soil Data Access database.`,
+            text: buildAgentWelcome(AgentType.SOILS_AGENT, `Use <strong>Fetch Soils</strong> to load the SSURGO linework, then <strong>Fetch Soil Report</strong> for the attribute tables.`),
           }]);
           setSuggestedQuestions([
             'What soil types are present in this area?',
@@ -6929,7 +7329,7 @@ const AppContent = () => {
       cutMode: false,
       cutStartPn: null,
       layer,
-      isCommitted: false,
+      isCommitted: reuseExisting ? existing!.isCommitted : false,
       polylineId,
     });
     setIsShrinkwrapPanelVisible(true);
@@ -7019,14 +7419,26 @@ const AppContent = () => {
         ));
       }
 
-      setShrinkwrap({ sourcePns, excludedPns: [], pendingExcludedPns: [], concavityK: 15, cuts: [], cutMode: false, cutStartPn: null, layer, isCommitted: true, polylineId });
+      // A fresh CACP shrinkwrap is a PREVIEW. It only becomes an inclusion
+      // boundary when the user presses Draw Inclusion in the panel. Re-running
+      // on an already-committed session preserves its committed state.
+      setShrinkwrap({
+        sourcePns,
+        excludedPns: [],
+        pendingExcludedPns: [],
+        concavityK: 15,
+        cuts: [],
+        cutMode: false,
+        cutStartPn: null,
+        layer,
+        isCommitted: reuseExisting ? existing!.isCommitted : false,
+        polylineId,
+      });
       setIsShrinkwrapPanelVisible(true);
       // Always un-minimize on (re)open � a stale minimized flag from a prior
       // session would otherwise reopen the panel as a collapsed chip, making it
       // look like "the tool didn't appear".
       setIsShrinkwrapPanelMinimized(false);
-      // Auto-open the Inclusion Boundaries manager so the user can name/store/show-hide.
-      setIsInclusionBoundariesPanelVisible(true);
 
       const hullPns = hull.map(h => h.pointNumber);
       hullPns.push(hullPns[0]);
@@ -7058,8 +7470,8 @@ const AppContent = () => {
   useCogoExtendedSkills({ pointListsRef, logActionToFieldbook });
 
   // Recompute the shrinkwrap polyline whenever the session, the source points,
-  // or the exclusion list changes. Output lines are typed 'inclusion' with no
-  // bearing/distance so the canvas does not render B&D labels on the hull.
+  // or the exclusion list changes. Lines stay preview-only until Draw Inclusion
+  // (or Draw Boundary) is pressed, so no boundary is registered prematurely.
   //
   // v26.05.26.4 � Pool widened from `sourcePns` (whatever COGO was originally
   // handed) to ALL currently-visible points. Without this, when CIVIL_DRAFTER
@@ -7628,7 +8040,7 @@ const AppContent = () => {
    */
   const handleFetchEsriContours = useCallback(async (
     serviceUrl: string,
-    mode: 'inclusion' | 'description',
+    mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
     opts?: ContourFetchOptions,
   ) => {
@@ -8022,7 +8434,7 @@ const AppContent = () => {
    * polygon rings to SurveyLines tagged layer='FEMA-FLOOD-<ZONE>' / type='flood'.
    */
   const handleFetchFloodZones = useCallback(async (
-    mode: 'inclusion' | 'description',
+    mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
   ) => {
     setIsFetchingFlood(true);
@@ -8160,7 +8572,7 @@ const AppContent = () => {
 
   // --- STRUCTURES AGENT ----------------------------------------------------
   const handleFetchStructures = useCallback(async (
-    mode: 'inclusion' | 'description',
+    mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
   ) => {
     setIsFetchingStructures(true);
@@ -8275,7 +8687,7 @@ const AppContent = () => {
   // Fetches USDA NRCS SSURGO soil map-unit polygons for the inclusion bbox
   // or a geocoded description and renders them as SurveyLines per map unit.
   const handleFetchSoils = useCallback(async (
-    mode: 'inclusion' | 'description',
+    mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
   ) => {
     setIsFetchingSoils(true);
@@ -8563,9 +8975,17 @@ const AppContent = () => {
    * parcel fetch and by ArcGIS Online parcel-layer discovery.
    */
   const resolveParcelBbox = useCallback(async (
-    mode: 'inclusion' | 'description',
+    mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
   ): Promise<{ xmin: number; ymin: number; xmax: number; ymax: number }> => {
+    if (mode === 'project') {
+      // The loaded, georeferenced points are the AOI — no inclusion polygon and
+      // no typed address needed to pull the county's tax boundaries.
+      const { resolveAoi } = await import('./utils/aoiResolver.ts');
+      const aoi = await resolveAoi({ points, lines, projectEpsg: settings.projection?.epsg });
+      const [pXmin, pYmin, pXmax, pYmax] = aoi.bboxWgs84;
+      return { xmin: pXmin, ymin: pYmin, xmax: pXmax, ymax: pYmax };
+    }
     const epsg = settings.projection?.epsg;
     if (mode === 'inclusion') {
       const activeB = activeInclusionBoundaryRef.current;
@@ -8629,7 +9049,7 @@ const AppContent = () => {
    */
   const handleFetchParcels = useCallback(async (
     service: import('./services/parcelGisService.ts').ParcelGisServiceDef,
-    mode: 'inclusion' | 'description',
+    mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
   ) => {
     setIsFetchingParcels(true);
@@ -8707,7 +9127,7 @@ const AppContent = () => {
    * what makes coverage nationwide without shipping thousands of county URLs.
    */
   const handleSearchParcelServices = useCallback(async (
-    mode: 'inclusion' | 'description',
+    mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
   ) => {
     const { searchParcelServicesNearby } = await import('./services/parcelGisService.ts');
@@ -8958,6 +9378,187 @@ const AppContent = () => {
       });
     }
 
+    // A2UI Conversational Intake Interceptor:
+    // Handles user replies to inquisitive agent greetings (e.g. "yes", "upload points")
+    // or quick-action chips directly in the chat before hitting any API-key gate.
+    if (!agentOverride && askPeerDepth === 0) {
+      const effectiveIntakeAgent = activeAgent || AgentType.LSVZ_AGENT;
+      const intakeSetHistory = getSetHistoryForAgent(effectiveIntakeAgent);
+      const currentHistoryForIntake =
+        effectiveIntakeAgent === AgentType.RAW_CRAWLER ? rawChatHistory :
+        effectiveIntakeAgent === AgentType.CIVIL_DRAFTER ? civilDrafterChatHistory :
+        effectiveIntakeAgent === AgentType.DEED_READER ? deedChatHistory :
+        effectiveIntakeAgent === AgentType.CIVIL_PLAN_EXPERT ? planExpertChatHistory :
+        effectiveIntakeAgent === AgentType.DXF_ANALYZER ? dxfChatHistory :
+        effectiveIntakeAgent === AgentType.IMAGE_ANALYZER ? imageAnalyzerChatHistory :
+        effectiveIntakeAgent === AgentType.GIS_AGENT ? gisChatHistory :
+        effectiveIntakeAgent === AgentType.CENTERLINE_STATIONING ? stationingChatHistory :
+        effectiveIntakeAgent === AgentType.POINT_EDITOR ? pointEditorChatHistory :
+        effectiveIntakeAgent === AgentType.CONTOURING_AGENT ? contouringChatHistory :
+        effectiveIntakeAgent === AgentType.STEEP_SLOPE_AGENT ? steepSlopeChatHistory :
+        effectiveIntakeAgent === AgentType.PROFILE_AGENT ? profileChatHistory :
+        effectiveIntakeAgent === AgentType.COGO_AGENT ? cogoChatHistory :
+        effectiveIntakeAgent === AgentType.ZONING_AGENT ? zoningChatHistory :
+        effectiveIntakeAgent === AgentType.TITLE_SEARCH ? titleSearchChatHistory :
+        effectiveIntakeAgent === AgentType.CAD_MANAGER ? cadManagerChatHistory :
+        effectiveIntakeAgent === AgentType.STANDARDS_COMPLIANCE ? standardsComplianceChatHistory :
+        lsvzChatHistory;
+      const lastIntakeMsg = currentHistoryForIntake.length > 0
+        ? currentHistoryForIntake[currentHistoryForIntake.length - 1]
+        : null;
+      const a2uiResolution = classifyA2UIIntakeReply(query, effectiveIntakeAgent, lastIntakeMsg);
+
+      if (a2uiResolution && intakeSetHistory) {
+        if (a2uiResolution.action === 'show-upload-widget') {
+          intakeSetHistory(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            {
+              role: MessageRole.MODEL,
+              text: a2uiResolution.replyText,
+              a2ui: {
+                kind: 'upload-widget',
+                agent: a2uiResolution.agent,
+                widgetType: a2uiResolution.widgetType,
+                status: 'expanded',
+              },
+            },
+          ]);
+          return;
+        }
+
+        if (a2uiResolution.action === 'custom-action') {
+          intakeSetHistory(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            { role: MessageRole.MODEL, text: a2uiResolution.replyText },
+          ]);
+          if (a2uiResolution.suggestedQuestions) {
+            setSuggestedQuestions(a2uiResolution.suggestedQuestions);
+          }
+          switch (a2uiResolution.customActionId) {
+            case 'manual-points':
+              setIsToolShelfVisible(true);
+              toggleToolDock('pointEditor', true);
+              break;
+            case 'open-point-tools':
+              setIsToolShelfVisible(true);
+              toggleToolDock('pointEditor', true);
+              break;
+            case 'manual-boundary':
+              handleDeedStartFromScratch();
+              break;
+            case 'open-boundary-gis':
+              handleOpenBoundaryGis();
+              break;
+            case 'open-cad-standards':
+              handleCadManagerSessionStart('cadstandards');
+              break;
+            case 'civil-drafter-existing-points':
+              handleCivilDrafterUseExistingPoints();
+              break;
+            case 'civil-drafter-sample-raw':
+              handleCivilDrafterFileUploaded(exampleFileContent, exampleFileName);
+              break;
+            case 'raw-crawler-example':
+              handleFileUploaded(exampleFileContent, exampleFileName);
+              break;
+            case 'centerline-example':
+              handleClFileUploaded(exampleHighwayCl, 'example.highway.cl');
+              break;
+            case 'centerline-blank':
+              handleCenterlineSessionStart();
+              break;
+            case 'open-image-gallery':
+              showView('imageanalyzer');
+              break;
+            case 'open-zoning-panel':
+              showView('zoning');
+              break;
+            case 'open-title-search-panel':
+              showView('titlesearch');
+              break;
+            case 'open-compliance-panel':
+              showView('compliance');
+              break;
+            default:
+              break;
+          }
+          return;
+        }
+      }
+    }
+
+    // CAD standards questions render a compact, pre-filtered A2UI sheet instead
+    // of dumping the whole spreadsheet into the reply.
+    if (!agentOverride && askPeerDepth === 0 && cadManagerState.standard) {
+      const standardsResolution = resolveStandardsA2UIQuery(query, cadManagerState.standard);
+      const standardsSetHistory = getSetHistoryForAgent(activeAgent || AgentType.CAD_MANAGER);
+      if (standardsResolution && standardsSetHistory) {
+        standardsSetHistory(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          {
+            role: MessageRole.MODEL,
+            text: standardsResolution.replyText,
+            a2ui: {
+              kind: 'standards-explorer',
+              agent: AgentType.CAD_MANAGER,
+              widgetType: 'cad-standards-table',
+              status: 'expanded',
+              standardsFilter: standardsResolution.filter,
+            },
+          },
+        ]);
+        setSuggestedQuestions([
+          'Show all layers in the standards',
+          'What linetypes are in the standards?',
+          'Open CAD standards editor',
+        ]);
+        return;
+      }
+    }
+
+    // Shrinkwrap → boundary/inclusion is a deterministic canvas action. Handle it
+    // here so it never needs a model turn or a CAD Manager round-trip.
+    const shrinkwrapCommand = query.trim().toLowerCase();
+    const isShrinkwrapAction = /^(?:please\s+)?(?:draw|convert|make|create|turn|commit|save)\b/.test(shrinkwrapCommand);
+    if (!agentOverride && askPeerDepth === 0 && isShrinkwrapAction && /\bshrinkwrap\b/.test(shrinkwrapCommand)) {
+      const wantsBoundary = /\bboundary\b/.test(shrinkwrapCommand);
+      const wantsInclusion = /\binclusion\b/.test(shrinkwrapCommand);
+      const shrinkwrapSetHistory = getSetHistoryForAgent(activeAgent || AgentType.POINT_EDITOR);
+      if ((wantsBoundary || wantsInclusion) && shrinkwrapSetHistory) {
+        const activeShrinkwrap = shrinkwrapRef.current;
+        let replyText: string;
+        if (!activeShrinkwrap) {
+          replyText = 'There is no active shrinkwrap session. Open <strong>Shrinkwrap</strong> from the canvas toolbar, review the hull, then ask again.';
+        } else if (wantsBoundary) {
+          convertShrinkwrapToBoundaryRef.current();
+          replyText = 'Converted the active shrinkwrap hull into a <strong>Boundary</strong> file. It is ready in the Boundary Editor.';
+        } else {
+          const pid = activeShrinkwrap.polylineId;
+          setShrinkwrap(prev => prev ? {
+            ...prev,
+            excludedPns: [...(prev.pendingExcludedPns ?? [])],
+            isCommitted: true,
+          } : prev);
+          setLines(prev => prev.map(line => (
+            line.polylineId === pid
+              ? { ...line, type: 'inclusion' as const, hidden: undefined }
+              : line
+          )));
+          setIsInclusionBoundariesPanelVisible(true);
+          replyText = 'Drew the active shrinkwrap as an <strong>Inclusion Boundary</strong>.';
+        }
+        shrinkwrapSetHistory(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          { role: MessageRole.MODEL, text: replyText },
+        ]);
+        return;
+      }
+    }
+
     // Free-trial off period: block inference when the 4hr timer trips unless continuous
     // service access or superuser is present. Boundary Agent turns are exempt: free
     // users get 5 fingerprinted free deeds that are metered separately, so a deed can
@@ -9013,8 +9614,9 @@ const AppContent = () => {
     }
 
     // A CACP hand-off names the agent that must answer; interactive use follows
-    // whichever agent the user has open.
-    const agent = agentOverride ?? activeAgent;
+    // whichever agent the user has open (defaulting to LSVZ_AGENT when unplugged).
+    const effectiveActiveAgent = activeAgent || AgentType.LSVZ_AGENT;
+    const agent = agentOverride ?? effectiveActiveAgent;
     let chat: Chat | null = null;
     let setHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>> | null = null;
     
@@ -9053,12 +9655,30 @@ const AppContent = () => {
         default: return;
     }
 
+    // When LSVZ Orchestrator delegates a turn to a specialist agent while LSVZ is active,
+    // mirror history updates into lsvzChatHistory so the unified command bar feed displays
+    // the specialist's streaming output and clarifying questions seamlessly.
+    if (agentOverride && effectiveActiveAgent === AgentType.LSVZ_AGENT && agent !== AgentType.LSVZ_AGENT && setHistory) {
+      const specialistSetHistory = setHistory;
+      setHistory = (updater) => {
+        specialistSetHistory(updater);
+        setLsvzChatHistory(updater);
+      };
+    }
+
     // Auto-initialize chat on-demand if it hasn't been started yet
     if (!chat && setHistory && query.trim() !== '') {
       try {
         let initialFileContext: string | SessionFile | SessionFile[] = '';
         let initialTrainingContext: SessionFile | undefined;
-        if (agent === AgentType.RAW_CRAWLER) initialFileContext = rawFile?.content || '';
+        if (agent === AgentType.LSVZ_AGENT) {
+          initialFileContext = getLightweightLsvzManifest({
+            jobInfo, settings, pointLists, lines, centerlines, boundaryFiles, closureReports,
+            inclusionBoundaries, steepSlopeRuns, soilMapUnits, cadManagerState,
+            rawFile, deedFile, dxfFile, clFile, gisFile, planFiles, imageFiles, generatedFiles,
+          });
+        }
+        else if (agent === AgentType.RAW_CRAWLER) initialFileContext = rawFile?.content || '';
         else if (agent === AgentType.CIVIL_DRAFTER) {
           initialFileContext = (planFiles && planFiles.length > 0) ? planFiles : (rawFile?.content || '');
           initialTrainingContext = dxfFile?.forTraining ? dxfFile : undefined;
@@ -9250,37 +9870,15 @@ const AppContent = () => {
     const contextPointLists = pointLists.filter(l => l.includeInContext !== false);
 
     if (agent === AgentType.LSVZ_AGENT) {
-        // FIX: In `handleSendMessage`, add `contourLabels`, `profileChatHistory`, `profileData`, and `profileInfo` to the session context for the LSVZ agent to resolve a TypeScript error.
-        const currentSessionForAgent: Omit<SessionState, 'version' | 'savedAt'> = {
-            rawFile, deedFile, planFiles, dxfFile, clFile, imageFiles, gisFile, generatedFiles, jobInfo, settings, rawChatHistory,
-            deedChatHistory, civilDrafterChatHistory, dxfChatHistory, stationingChatHistory, pointEditorChatHistory,
-            fieldbookChatHistory: fieldbookLog, gpsStakeoutChatHistory, lsvzChatHistory, planExpertChatHistory,
-            imageAnalyzerChatHistory, gisChatHistory, contouringChatHistory, profileChatHistory, cogoChatHistory, rinexChatHistory, zoningChatHistory, fieldbookNotes, pointLists, lines, contourLabels, centerlines, cutSheetData, cutSheetInfo,
-            profileData, profileInfo,
-            closureReports,
-            gisFeatures, // Added gisFeatures
-            pdfViewerFiles, pdfHighlights: highlights, offlineMapAreas,
-            wmsServices, activeWmsLayers,
-            customSymbols,
-            uiState: {
-                activeAgent, activeModel, activeVisualPanel, isPdfViewerFullscreen, isVisualPanelFullscreen,
-                attributeScale, lineLabelScale, dimensionScale, symbolScale, pointLayers, activeTextEditorFile,
-                isPointEditorFullscreen: false, isChatPanelVisible,
-                linesVisible,
-                centerlinesVisible,
-            }
-        };
-
-        const contextSelectorModel = activeModel.startsWith('gemini-') ? activeModel : CURRENT_GEMINI_MODEL;
-        const requiredSources = await selectContextSources(query, contextSelectorModel, settings.userApiKey);
-        logActionToFieldbook(`LSVZ agent identified required data sources for query: [${requiredSources.join(', ')}]`);
-
-        const { lsvzChatHistory: _, ...sessionForContext } = currentSessionForAgent;
-        context = `---BEGIN CURRENT SESSION STATE---\n${getDynamicLsvzContext(sessionForContext, requiredSources)}\n---END CURRENT SESSION STATE---\n\n`;
+        const manifestStr = getLightweightLsvzManifest({
+            jobInfo, settings, pointLists, lines, centerlines, boundaryFiles, closureReports,
+            inclusionBoundaries, steepSlopeRuns, soilMapUnits, cadManagerState,
+            rawFile, deedFile, dxfFile, clFile, gisFile, planFiles, imageFiles, generatedFiles,
+        });
+        context = `---BEGIN LSAI PROJECT MANIFEST---\n${manifestStr}\n---END LSAI PROJECT MANIFEST---\n\n`;
         if (activeVisualPanel === 'texteditor' && activeTextEditorFile) {
-            context += `---BEGIN CURRENTLY OPEN TEXT FILE (${activeTextEditorFile})---\n${textEditorContent}\n---END CURRENTLY OPEN TEXT FILE---\n\n`;
+            context += `---BEGIN CURRENTLY OPEN TEXT FILE (${activeTextEditorFile})---\n${textEditorContent.slice(0, 2000)}\n---END CURRENTLY OPEN TEXT FILE---\n\n`;
         }
-
     } else if (agent === AgentType.CENTERLINE_STATIONING) {
         if (activeCL) {
             context = `---BEGIN CENTERLINE DATA---\n${JSON.stringify(activeCL, null, 2)}\n---END CENTERLINE DATA---\n\n`;
@@ -9289,6 +9887,11 @@ const AppContent = () => {
         context += `---BEGIN POINT DATABASE---\n${JSON.stringify(contextPointLists, null, 2)}\n---END POINT DATABASE---\n\n`;
     } else if (agent === AgentType.POINT_EDITOR) {
         context = `---BEGIN POINT DATABASE---\n${JSON.stringify(contextPointLists, null, 2)}\n---END POINT DATABASE---\n\n`;
+        // Hand-drawn and agent-drawn geometry lives in `lines`, not the point
+        // database. Without this block the Point Editor reports an empty canvas
+        // when asked to place points at the corners of existing linework.
+        const pointEditorLinework = buildCivilDrafterLineworkContext(lines, points);
+        if (pointEditorLinework) context += pointEditorLinework;
     } else if (agent === AgentType.DEED_READER) {
         context = `---BEGIN POINT DATABASE---\n${JSON.stringify(contextPointLists, null, 2)}\n---END POINT DATABASE---\n\n`;
     } else if (agent === AgentType.CONTOURING_AGENT) {
@@ -9668,12 +10271,11 @@ const AppContent = () => {
       const responseStream = await chat.sendMessageStream({ message: queryToSend });
       console.log('[handleSendMessage] Got response stream, processing chunks...');
 
-      // Streaming preview throttle � re-parse partial JSON at most every ~120ms.
-      // Cheap enough to run on every chunk for short responses but caps CPU on
-      // long deed traverses with hundreds of points/lines.
+      // Streaming preview cadence — re-parse partial JSON at most every ~50ms
+      // (≈20fps). That is fast enough to read as live drawing while still
+      // capping CPU on long traverses with hundreds of points/lines.
       let lastPreviewAt = 0;
-      let lastPreviewPointCount = 0;
-      let lastPreviewLineCount = 0;
+      let lastPreviewSignature = '';
 
       for await (const chunk of responseStream) {
         if (stopGenerationRef.current) {
@@ -9700,13 +10302,17 @@ const AppContent = () => {
         // only ever wants to see the amber overlay during Compute, and the
         // styled SurveyPoints once they press Draft (Commit).
         const now = Date.now();
-        if (now - lastPreviewAt > 120 && agent !== AgentType.DEED_READER) {
+        if (now - lastPreviewAt >= 50 && agent !== AgentType.DEED_READER) {
           lastPreviewAt = now;
           try {
             const { points: livePts, lines: liveLines } = extractStreamingPointsAndLines(fullResponse);
-            if (livePts.length !== lastPreviewPointCount) {
-              lastPreviewPointCount = livePts.length;
-              const coerced: SurveyPoint[] = livePts
+            // The signature includes the newest object, not just the counts: a
+            // vertex whose coordinates/label land after its closing brace must
+            // repaint too. Nothing is spooled waiting for the reply to finish.
+            const signature = `${livePts.length}|${liveLines.length}|${JSON.stringify(livePts[livePts.length - 1] ?? null)}|${JSON.stringify(liveLines[liveLines.length - 1] ?? null)}`;
+            if (signature !== lastPreviewSignature) {
+              lastPreviewSignature = signature;
+              const coercedPoints: SurveyPoint[] = livePts
                 .filter(p => p && (p.northing !== undefined || p.latitude !== undefined) && (p.easting !== undefined || p.longitude !== undefined))
                 .map((p, idx) => ({
                   pointNumber: String(p.pointNumber ?? p.id ?? `STREAM-${idx}`),
@@ -9716,11 +10322,7 @@ const AppContent = () => {
                   description: p.description ? String(p.description) : '',
                   layer: p.layer ? String(p.layer) : undefined,
                 }));
-              setStreamPreviewPoints(coerced);
-            }
-            if (liveLines.length !== lastPreviewLineCount) {
-              lastPreviewLineCount = liveLines.length;
-              const coerced: SurveyLine[] = liveLines
+              const coercedLines: SurveyLine[] = liveLines
                 .filter(l => l && l.from !== undefined && l.to !== undefined)
                 .map(l => {
                   const isCirc = Boolean(l.isCircle) || (l.from === l.to && Boolean(l.isCurve) && l.curveRadius !== undefined);
@@ -9731,7 +10333,9 @@ const AppContent = () => {
                     distance: l.distance !== undefined ? String(l.distance) : undefined,
                     isCurve: Boolean(l.isCurve) || isCirc,
                     isCircle: isCirc,
-                    circleCenter: l.circleCenter,
+                    circleCenter: l.circleCenter && typeof l.circleCenter === 'object'
+                      ? (l.circleCenter as { x: number; y: number; z?: number })
+                      : undefined,
                     curveRadius: l.curveRadius !== undefined ? Number(l.curveRadius) : undefined,
                     arcLength: l.arcLength !== undefined ? Number(l.arcLength) : (isCirc && l.curveRadius ? 2 * Math.PI * Number(l.curveRadius) : undefined),
                     chordBearing: l.chordBearing ? String(l.chordBearing) : undefined,
@@ -9740,7 +10344,8 @@ const AppContent = () => {
                     lineType: l.lineType ? String(l.lineType) : undefined,
                   };
                 });
-              setStreamPreviewLines(coerced);
+              setStreamPreviewPoints(coercedPoints);
+              setStreamPreviewLines(coercedLines);
             }
           } catch {
             // Streaming preview is best-effort � never let it abort the chat.
@@ -10056,6 +10661,19 @@ const AppContent = () => {
         return null;
       };
 
+      // Some models put their clarifying question inside the thought trace
+      // (before the `---` delimiter) instead of the answer body. Lift it out so
+      // the JSON becomes clickable reply pills instead of raw text in the
+      // thought process.
+      let thinkingClarification: ReturnType<typeof extractClarifyingQuestion> = null;
+      if (thinking) {
+        const extracted = extractClarifyingQuestion(thinking);
+        if (extracted) {
+          thinkingClarification = extracted;
+          thinking = extracted.text || undefined;
+        }
+      }
+
       let fallbackJsonRaw: string | null = null;
       if (!match) {
         fallbackJsonRaw = extractBalancedJson(resultText);
@@ -10098,11 +10716,14 @@ const AppContent = () => {
           if (lastMessage && lastMessage.role === MessageRole.MODEL) {
             newHistory[newHistory.length - 1] = {
               role: MessageRole.MODEL,
-              text: finalFullResponse,
+              text: thinkingClarification?.question || finalFullResponse,
               thinking: thinking,
-              result: finalResultText,
+              result: thinkingClarification?.question || finalResultText,
               isExpanded: isExpanded,
               model: currentModelName,
+              questionOptions: thinkingClarification?.options.length
+                ? thinkingClarification.options
+                : undefined,
             };
           }
           return newHistory;
@@ -10184,6 +10805,27 @@ const AppContent = () => {
             const skillId = ap.skillId;
             const payload = (ap.payload ?? {}) as Record<string, unknown>;
             const reason = ap.reason ?? '';
+            if (skillId === 'lsvz_delegate_agent') {
+              const targetAgent = String(payload.targetAgent || '') as AgentType;
+              const delegatedQuery = String(payload.query || query);
+              const targetLabel = agentConfig[targetAgent]?.label || targetAgent;
+              setHistory(prev => {
+                const newHist = [...prev];
+                const last = newHist[newHist.length - 1];
+                if (last && last.role === MessageRole.MODEL) {
+                  newHist[newHist.length - 1] = {
+                    ...last,
+                    text: `🔗 **Specialist Hand-off** — Bringing in **${targetLabel}**${reason ? ` (${reason})` : ''}…`,
+                    result: undefined,
+                  };
+                }
+                return newHist;
+              });
+              logActionToFieldbook(`LSAI Agent delegated request to ${targetLabel}: "${delegatedQuery.slice(0, 80)}"`);
+              setTimeout(() => { void handleSendMessage(delegatedQuery, targetAgent, askPeerDepth + 1); }, 0);
+              skipFinallyUpdate = true;
+              return;
+            }
             if (skillId) {
               const isGeoSkill = skillId === 'geo_extract_features' || skillId === 'geo_extract_roads';
               const ownerManifest = agentRegistry.findOwnerOfSkill(skillId);
@@ -10203,14 +10845,14 @@ const AppContent = () => {
                   return newHist;
                 });
               } else {
-                // Replace raw askPeer JSON in chat bubble with concise CACP delegation pill
+                // Replace raw askPeer JSON in chat bubble with a concise delegation pill
                 setHistory(prev => {
                   const newHist = [...prev];
                   const last = newHist[newHist.length - 1];
                   if (last && last.role === MessageRole.MODEL) {
                     newHist[newHist.length - 1] = {
                       ...last,
-                      text: `🔗 **CACP Delegation** — Calling \`${skillId}\` on **${ownerLabel}**${reason ? ` (${reason})` : ''}…`,
+                      text: `🔗 **Specialist Assist** — Bringing in **${ownerLabel}**${reason ? ` (${reason})` : ''}…`,
                       result: undefined,
                     };
                   }
@@ -12701,6 +13343,55 @@ const AppContent = () => {
     }
   }, [showView, startSession, logActionToFieldbook, startChatWithOverride, setCadManagerChat, setCadManagerChatHistory, activeVisualPanel]);
 
+  const handleCadManagerFileUploaded = useCallback(async (content: string, fileName: string) => {
+    try {
+      startSession();
+      const { InferenceService } = await import('./services/InferenceService.ts');
+      const { generateLinetypesFromCodes } = await import('./utils/markdownTableParser.ts');
+      let parsedStandard: any = null;
+      if (fileName.toLowerCase().endsWith('.json')) {
+        try {
+          const jsonObj = JSON.parse(content);
+          if (jsonObj && (Array.isArray(jsonObj.codes) || Array.isArray(jsonObj.layers))) {
+            parsedStandard = {
+              name: jsonObj.name || fileName.replace(/\.[^/.]+$/, ''),
+              description: jsonObj.description || `Imported from ${fileName}`,
+              codes: Array.isArray(jsonObj.codes) ? jsonObj.codes : [],
+              layers: Array.isArray(jsonObj.layers) ? jsonObj.layers : [],
+              linetypes: Array.isArray(jsonObj.linetypes) ? jsonObj.linetypes : [],
+            };
+          }
+        } catch {
+          // fall back to InferenceService
+        }
+      }
+      if (!parsedStandard) {
+        parsedStandard = await InferenceService.parseStandards(content, fileName);
+      }
+      if (!parsedStandard.linetypes || parsedStandard.linetypes.length === 0) {
+        const generatedLinetypes = generateLinetypesFromCodes(parsedStandard.codes || []);
+        if (generatedLinetypes.length > 0) {
+          parsedStandard.linetypes = generatedLinetypes;
+        }
+      }
+      cadManagerContext.dispatch({ type: 'SET_STANDARD', payload: parsedStandard });
+      logActionToFieldbook(`Loaded CAD standard "${parsedStandard.name}" from ${fileName} (${parsedStandard.codes?.length ?? 0} codes, ${parsedStandard.layers?.length ?? 0} layers).`);
+      setCadManagerChatHistory(prev => [
+        ...markPendingA2UICompleted(prev, fileName),
+        {
+          role: MessageRole.MODEL,
+          text: `I have loaded the CAD standard <strong>"${parsedStandard.name}"</strong> from <strong>"${fileName}"</strong> (<strong>${parsedStandard.codes?.length ?? 0}</strong> codes, <strong>${parsedStandard.layers?.length ?? 0}</strong> layers). All agents on the canvas will now resolve layers and symbols against this standard!`,
+          questionOptions: ['Open CAD Standards Editor', 'Match survey codes in chat'],
+        },
+      ]);
+      setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
+      showView('canvas');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to parse CAD standards file.';
+      setError(`CAD Manager Import Error: ${errorMessage}`);
+    }
+  }, [startSession, cadManagerContext, logActionToFieldbook, setCadManagerChatHistory, showView]);
+
   // FUTURE GEMINI: This function is the primary mechanism for switching between agents.
   // The logic to manage `activeAgent`, `isInitialScreen`, and `isAddingData` is crucial. Do not change it.
   const handleAgentChange = useCallback((agent: AgentType) => {
@@ -12727,36 +13418,14 @@ const AppContent = () => {
     setIsAddingData(false);
     if (!isDesktop) setIsMobileMenuOpen(false);
 
-    // Only the Point Editor should imply "you probably want the point list
-    // open" and only the Boundary Agent should imply "you probably want the
-    // boundary editor open" � clear the other button's pulse so switching
-    // agents doesn't leave a stale hint flashing on an unrelated toolbar icon.
-    if (agent !== AgentType.POINT_EDITOR) setIsPointListButtonPulsing(false);
+    // Only the Boundary Agent should imply "you probably want the boundary
+    // editor open" — clear the pulse so switching agents doesn't leave a stale
+    // hint flashing on an unrelated toolbar icon.
     if (agent !== AgentType.DEED_READER) {
       setIsBoundaryEditorButtonPulsing(false);
     } else if (boundaryFiles.length > 0 || deedFile || deedSummary) {
       setIsBoundaryEditorVisible(true);
       setIsBoundaryEditorButtonPulsing(false);
-    }
-    
-    // Ensure chat panel is visible for agents with tools or docked workspace panels
-    const agentsWithTools = [
-      AgentType.DEED_READER,
-      AgentType.COGO_AGENT,
-      AgentType.CENTERLINE_STATIONING,
-      AgentType.CONTOURING_AGENT,
-      AgentType.POINT_EDITOR,
-      AgentType.GNSS_AGENT,
-      AgentType.DRONE_AGENT,
-      AgentType.STANDARDS_COMPLIANCE,
-    ];
-    if (agentsWithTools.includes(agent)) {
-      setIsChatPanelVisible(true);
-    }
-
-    if (agent === AgentType.CAD_MANAGER && cadStandardsLoaded && !initializedAgents.has(AgentType.CAD_MANAGER)) {
-      handleCadManagerSessionStart();
-      return;
     }
 
     // If starting a new session with an agent that doesn't require a file upload screen
@@ -12787,44 +13456,12 @@ const AppContent = () => {
         // already on the canvas. This matches user expectation: "I have points
         // in front of me � just give me the agent."
         if (agent === AgentType.CIVIL_DRAFTER && !initializedAgents.has(AgentType.CIVIL_DRAFTER)) {
-            const visibleListWithPoints = pointLists.find(l => l.isVisible && l.points.length > 0)
-                                       ?? pointLists.find(l => l.points.length > 0);
-            if (visibleListWithPoints) {
-                try {
-                    const trainingDxf = dxfFile?.forTraining ? dxfFile : undefined;
-                    const syntheticName = `${visibleListWithPoints.name || 'Canvas Points'}.csv`;
-                    const syntheticContent = pointListToString(visibleListWithPoints, settings);
-                    const newChat = startChatWithOverride(AgentType.CIVIL_DRAFTER, syntheticContent, trainingDxf);
-                    setCivilDrafterChat(newChat);
-                    setRawFile({ name: syntheticName, content: syntheticContent });
-                    setCivilDrafterChatHistory([{
-                        role: MessageRole.MODEL,
-                        text: trainingDxf
-                            ? `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent. I'm working with the <strong>${visibleListWithPoints.points.length}</strong> points already on your canvas (<strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${visibleListWithPoints.name}"</strong>) and using <strong>"${trainingDxf.name}"</strong> as my drafting template.`
-                            : `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent. I'm working with the <strong>${visibleListWithPoints.points.length}</strong> points already on your canvas (<strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${visibleListWithPoints.name}"</strong>). Ask me to draw road edges, building footprints, or any other linework from these points.`,
-                    }]);
-                    setSuggestedQuestions([
-                        'Draw the road edges as parallel lines',
-                        'Create centerline from survey shots',
-                        'Plot building footprints',
-                        'Analyze the point descriptions',
-                    ]);
-                    setInitializedAgents(prev => new Set(prev).add(AgentType.CIVIL_DRAFTER));
-                    logActionToFieldbook(`Civil Drafter auto-initialized from canvas (${visibleListWithPoints.points.length} pts in "${visibleListWithPoints.name}").`);
-                    showView('canvas');
-                    setIsChatPanelVisible(true);
-                    setError(null);
-                    return;
-                } catch (err) {
-                    // Fall through to the standard upload-screen path on any failure.
-                    console.warn('Civil Drafter auto-init from canvas failed; falling back to upload screen.', err);
-                }
-            }
+            showView('canvas');
         }
 
-        const isViewAgent = [AgentType.GPS_STAKEOUT, AgentType.IMAGE_ANALYZER, AgentType.PROFILE_AGENT, AgentType.AR_AGENT, AgentType.CAD_MANAGER, AgentType.STANDARDS_COMPLIANCE].includes(agent);
+        const isViewAgent = [AgentType.GPS_STAKEOUT, AgentType.AR_AGENT].includes(agent);
         if (isViewAgent) {
-            const targetPanel = agent === AgentType.GPS_STAKEOUT ? 'gpsstakeout' : (agent === AgentType.IMAGE_ANALYZER ? 'imageanalyzer' : (agent === AgentType.PROFILE_AGENT ? 'profile' : (agent === AgentType.AR_AGENT ? 'ar' : (agent === AgentType.STANDARDS_COMPLIANCE ? 'compliance' : 'cadmanager'))));
+            const targetPanel = agent === AgentType.GPS_STAKEOUT ? 'gpsstakeout' : 'ar';
             showView(targetPanel);
         } else {
               const panelsToReset: Partial<Record<VisualPanel, boolean>> = {
@@ -12841,6 +13478,10 @@ const AppContent = () => {
                 gnssprocessor: true,
                 ar: true,
                 cadmanager: true,
+                cadstandards: true,
+                compliance: true,
+                zoning: true,
+                titlesearch: true,
               };
               if (panelsToReset[activeVisualPanel]) {
                 showView('canvas');
@@ -12930,6 +13571,7 @@ const AppContent = () => {
     }
     setShowWelcome(false);
     setWelcomeInitialMode('main');
+    setAutoOpenDeedUpload(true);
     handleAgentChange(AgentType.DEED_READER);
   }, [hasLegalSignature, handleAgentChange, setShowWelcome, setWelcomeInitialMode]);
 
@@ -13002,11 +13644,28 @@ const AppContent = () => {
         newLists[workingListIndex] = { ...newLists[workingListIndex], points: [...newLists[workingListIndex].points, ...uniqueNewPoints] };
         return newLists;
     });
+    const summaryLabel = `${fileName} (${newPoints.length} pts)`;
+    const confirmMsg: ChatMessage = {
+      role: MessageRole.MODEL,
+      text: `I have loaded <strong>${newPoints.length.toLocaleString()} point${newPoints.length === 1 ? '' : 's'}</strong> from <strong>"${fileName}"</strong> onto the canvas! Ask me to filter points, run COGO calculations, or inspect the point list.`,
+    };
+    const activeSetHistory = getSetHistoryForAgent(activeAgent) ?? setPointEditorChatHistory;
+    activeSetHistory(prev => [...markPendingA2UICompleted(prev, summaryLabel), confirmMsg]);
+    if (activeAgent !== AgentType.POINT_EDITOR) {
+      setPointEditorChatHistory(prev => markPendingA2UICompleted(prev, summaryLabel));
+    }
     setIsAddingData(false); // Go back to main view
-    setIsPointListButtonPulsing(true);
     setIsBoundaryEditorButtonPulsing(false);
     showView('canvas');
-  }, [logActionToFieldbook, showView]);
+    setIsChatPanelVisible(false);
+    addNotification({
+      kind: 'points',
+      severity: 'success',
+      title: 'Points loaded',
+      message: `${newPoints.length.toLocaleString()} point${newPoints.length === 1 ? '' : 's'} from "${fileName}" are now on the canvas.`,
+    });
+    setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
+  }, [logActionToFieldbook, showView, activeAgent, getSetHistoryForAgent, setPointEditorChatHistory, canvas2dRef, addNotification]);
 
   // Handler to start Point Editor with an empty session (no file upload)
   const handlePointEditorSessionStart = useCallback(() => {
@@ -13014,14 +13673,21 @@ const AppContent = () => {
         startSession();
         logActionToFieldbook('Started a new blank Point Editor session.');
         
-        // Initialize the point editor chat
+        // Initialize the point editor chat (best-effort if no API key is set)
         const pointContext = JSON.stringify([{ id: 'working', name: 'Working Points', points: [], isVisible: true }], null, 2);
-        const newChat = startChatWithOverride(AgentType.POINT_EDITOR, pointContext);
-        setPointEditorChat(newChat);
-        setPointEditorChatHistory([{
+        try {
+          const newChat = startChatWithOverride(AgentType.POINT_EDITOR, pointContext);
+          setPointEditorChat(newChat);
+        } catch (chatErr) {
+          console.warn('[Point Editor] AI chat deferred:', chatErr);
+        }
+        setPointEditorChatHistory(prev => [
+          ...markPendingA2UICompleted(prev, 'Empty Session'),
+          {
             role: MessageRole.MODEL,
-            text: `Hello! I am the <strong style="color: ${agentThemeColors[AgentType.POINT_EDITOR]};">Point Editor</strong> agent. A new empty session has started. You can manually enter points in the panel, upload a file later, or ask me for COGO calculations.`,
-        }]);
+            text: buildAgentWelcome(AgentType.POINT_EDITOR, `A new empty session has started. Enter points on the canvas, open the Point Tools dock, or ask me for COGO calculations.`),
+          }
+        ]);
         setSuggestedQuestions([
             'Calculate inverse from 100 to 101',
             'Add a point at N: 5000, E: 5000',
@@ -13030,7 +13696,6 @@ const AppContent = () => {
         setError(null);
         setActiveAgent(AgentType.POINT_EDITOR);
         setInitializedAgents(prev => new Set(prev).add(AgentType.POINT_EDITOR));
-        setIsPointListButtonPulsing(true);
         setIsBoundaryEditorButtonPulsing(false);
         showView('canvas');
     } catch (err) {
@@ -13076,7 +13741,14 @@ const AppContent = () => {
     });
     
     showView('canvas');
-  }, [logActionToFieldbook, showView]);
+    setIsChatPanelVisible(false);
+    addNotification({
+      kind: 'points',
+      severity: 'success',
+      title: 'Point list imported',
+      message: `${newPoints.length.toLocaleString()} point${newPoints.length === 1 ? '' : 's'} from "${fileName}" were added as a new point list.`,
+    });
+  }, [logActionToFieldbook, showView, addNotification]);
 
   // Handler for importing points from Civil 3D
   const handleImportPointsFromC3D = useCallback((importedPoints: SurveyPoint[], sourceListName: string) => {
@@ -13118,9 +13790,10 @@ const AppContent = () => {
 
   const handleAddLine = useCallback((newLine: SurveyLine) => {
     pushHistory(`Drew line ${newLine.from}�${newLine.to}`);
-    const lineWithId = addLineToList(newLine);
-    setLines(prev => [...prev, lineWithId]);
-    logActionToFieldbook(`Drew line from ${lineWithId.from} to ${lineWithId.to}.`);
+    // A segment drawn onto an existing line's endpoint continues that line's
+    // layer rather than the ambient drawing layer.
+    setLines(prev => [...prev, addLineToList(inheritConnectedLayer(newLine, prev))]);
+    logActionToFieldbook(`Drew line from ${newLine.from} to ${newLine.to}.`);
   }, [pushHistory, logActionToFieldbook]);
 
   /** Apply a multi-entity CAD edit as one history entry and one state update. */
@@ -13728,34 +14401,86 @@ const AppContent = () => {
 
   const handleConvertSelectionToBoundary = useCallback((selectedLines: import('./types.ts').SurveyLine[]) => {
     if (selectedLines.length === 0) return;
-    const calls: import('./types.ts').BoundaryFileCall[] = [];
-    for (const line of selectedLines) {
-      const p1 = pointMap.get(line.from);
-      const p2 = pointMap.get(line.to);
-      const p1c = p1 ? { northing: p1.northing, easting: p1.easting } : (line.fromPt ? { northing: line.fromPt.y, easting: line.fromPt.x } : null);
-      const p2c = p2 ? { northing: p2.northing, easting: p2.easting } : (line.toPt ? { northing: line.toPt.y, easting: line.toPt.x } : null);
-      // Use pre-computed bearing/distance if available, otherwise compute via inverse
-      let bearing = line.bearing ?? '';
-      let distance = line.distance ?? '';
-      if ((!bearing || !distance) && p1c && p2c) {
-        const inv = inverse(p1c, p2c);
-        bearing = formatBearing(inv.bearing);
-        distance = inv.distance.toFixed(2);
+
+    type WorldPt = { northing: number; easting: number };
+    const resolveFrom = (line: import('./types.ts').SurveyLine): WorldPt | null => {
+      const p = pointMap.get(line.from);
+      if (p) return { northing: p.northing, easting: p.easting };
+      return line.fromPt ? { northing: line.fromPt.y, easting: line.fromPt.x } : null;
+    };
+    const resolveTo = (line: import('./types.ts').SurveyLine): WorldPt | null => {
+      const p = pointMap.get(line.to);
+      if (p) return { northing: p.northing, easting: p.easting };
+      return line.toPt ? { northing: line.toPt.y, easting: line.toPt.x } : null;
+    };
+
+    // Only segments with resolvable endpoints can become calls.
+    const segments = selectedLines
+      .map(line => ({ line, a: resolveFrom(line), b: resolveTo(line) }))
+      .filter((seg): seg is { line: import('./types.ts').SurveyLine; a: WorldPt; b: WorldPt } => Boolean(seg.a && seg.b));
+    if (segments.length === 0) return;
+
+    const near = (p: WorldPt, q: WorldPt) => Math.hypot(p.easting - q.easting, p.northing - q.northing) <= 0.05;
+
+    // Walk the selection into a continuous chain, reversing segments the user
+    // picked "backwards". Without this the boundary walked the bearings in
+    // click order and produced a scrambled shape.
+    const remaining = segments.slice();
+    let startIndex = 0;
+    for (let i = 0; i < remaining.length; i++) {
+      const seg = remaining[i];
+      const hasPredecessor = remaining.some((other, j) =>
+        j !== i && (near(other.b, seg.a) || near(other.a, seg.a)),
+      );
+      if (!hasPredecessor) {
+        startIndex = i;
+        break;
       }
-      if (!bearing || !distance) continue; // skip lines with no resolvable geometry
-      const fromNum = p1 ? line.from : (line.fromPt ? `BFPT_${calls.length + 1}` : line.from);
-      const toNum = p2 ? line.to : (line.toPt ? `BFPT_${calls.length + 2}` : line.to);
+    }
+    const ordered: { line: import('./types.ts').SurveyLine; a: WorldPt; b: WorldPt; reversed: boolean }[] = [];
+    const firstSeg = remaining.splice(startIndex, 1)[0];
+    ordered.push({ ...firstSeg, reversed: false });
+    while (remaining.length > 0) {
+      const tail = ordered[ordered.length - 1].b;
+      let nextIndex = remaining.findIndex(seg => near(seg.a, tail));
+      let reversed = false;
+      if (nextIndex === -1) {
+        nextIndex = remaining.findIndex(seg => near(seg.b, tail));
+        reversed = true;
+      }
+      if (nextIndex === -1) break; // disconnected remainder
+      const next = remaining.splice(nextIndex, 1)[0];
+      ordered.push({
+        line: next.line,
+        a: reversed ? next.b : next.a,
+        b: reversed ? next.a : next.b,
+        reversed,
+      });
+    }
+    // Anything not connected to the chain keeps its own direction.
+    remaining.forEach(seg => ordered.push({ ...seg, reversed: false }));
+
+    const calls: import('./types.ts').BoundaryFileCall[] = [];
+    for (const seg of ordered) {
+      const inv = inverse(seg.a, seg.b);
+      if (!inv || !Number.isFinite(inv.distance) || inv.distance <= 0) continue;
+      const bearing = formatBearing(inv.bearing);
+      const distance = inv.distance.toFixed(2);
+      const fromRef = seg.reversed ? seg.line.to : seg.line.from;
+      const toRef = seg.reversed ? seg.line.from : seg.line.to;
+      const fromNum = pointMap.has(fromRef) ? fromRef : `BFPT_${calls.length + 1}`;
+      const toNum = pointMap.has(toRef) ? toRef : `BFPT_${calls.length + 2}`;
       calls.push({
         id: `bfc-${Date.now()}-${calls.length}`,
         from: fromNum,
         to: toNum,
         bearing,
         distance,
-        isCurve: line.isCurve,
-        curveRadius: line.curveRadius,
-        arcLength: line.arcLength,
-        chordBearing: line.chordBearing,
-        tangentBearing: line.tangentBearing,
+        isCurve: seg.line.isCurve,
+        curveRadius: seg.line.curveRadius,
+        arcLength: seg.line.arcLength,
+        chordBearing: seg.line.isCurve ? bearing : seg.line.chordBearing,
+        tangentBearing: seg.line.tangentBearing,
       });
     }
     if (calls.length === 0) return;
@@ -13765,12 +14490,78 @@ const AppContent = () => {
       name,
       createdAt: new Date().toISOString(),
       calls,
+      // Anchor the silhouette on the first drawn vertex so the amber preview
+      // lands on the selected linework instead of the point-cloud centroid / origin.
+      pobOverride: { easting: ordered[0].a.easting, northing: ordered[0].a.northing },
     };
     setBoundaryFiles(prev => [...prev, newBoundaryFile]);
     setIsBoundaryEditorVisible(false);
     setIsBoundaryEditorButtonPulsing(true);
-    logActionToFieldbook(`Converted ${calls.length} selected line(s) to boundary file "${name}".`);
+    logActionToFieldbook(`Converted ${calls.length} line(s) to boundary file "${name}".`);
   }, [pointMap, setBoundaryFiles, setIsBoundaryEditorVisible, setIsBoundaryEditorButtonPulsing, logActionToFieldbook]);
+
+  /**
+   * Convert the active shrinkwrap hull into a BoundaryFile (the same object the
+   * Boundary Editor uses) and retire the preview session. This is the "Draw
+   * Boundary" sibling of "Draw Inclusion".
+   */
+  const handleConvertShrinkwrapToBoundary = useCallback(() => {
+    if (!shrinkwrap) return;
+    const hull = lines.filter(line => line.polylineId === shrinkwrap.polylineId);
+    if (hull.length < 3) {
+      setError('Shrinkwrap needs at least three hull segments before it can become a boundary.');
+      return;
+    }
+    const sessionPolylineId = shrinkwrap.polylineId;
+    handleConvertSelectionToBoundary(hull);
+    // Keep the reviewed hull on the canvas instead of deleting it. The boundary
+    // file only carries the calls table; without these parcel-typed segments the
+    // drawing looked empty even though the bearing/distance list was populated.
+    setLines(prev => prev.map(line => {
+      const pid = line.polylineId || '';
+      if (pid !== sessionPolylineId && !pid.startsWith(`${sessionPolylineId}_cut_`)) return line;
+      // Detach the drawn boundary from the shrinkwrap session id so a later
+      // shrinkwrap run on this layer cannot mistake it for stale preview
+      // geometry and delete it.
+      return {
+        ...line,
+        type: 'parcel' as const,
+        hidden: undefined,
+        polylineId: pid.startsWith(sessionPolylineId) ? `boundary_${pid}` : pid,
+      };
+    }));
+    setShrinkwrap(null);
+    setIsShrinkwrapPanelVisible(false);
+  }, [shrinkwrap, lines, handleConvertSelectionToBoundary]);
+
+  useEffect(() => {
+    convertShrinkwrapToBoundaryRef.current = handleConvertShrinkwrapToBoundary;
+  }, [handleConvertShrinkwrapToBoundary]);
+
+  /**
+   * Commit the reviewed shrinkwrap hull as green inclusion linework.
+   *
+   * The hull-recompute effect types segments from `isCommitted`, but its last
+   * pass may have already run (and a preserved hidden flag could still hide the
+   * result). Re-type the current hull explicitly so the inclusion boundary is
+   * visible the instant the button is pressed.
+   */
+  const handleCommitShrinkwrapAsInclusion = useCallback(() => {
+    if (!shrinkwrap) return;
+    const pid = shrinkwrap.polylineId;
+    setShrinkwrap(prev => prev ? {
+      ...prev,
+      excludedPns: [...(prev.pendingExcludedPns ?? [])],
+      isCommitted: true,
+    } : prev);
+    setLines(prev => prev.map(line => (
+      line.polylineId === pid
+        ? { ...line, type: 'inclusion' as const, hidden: undefined }
+        : line
+    )));
+    setIsInclusionBoundariesPanelVisible(true);
+    logActionToFieldbook(`Shrinkwrap committed as an inclusion boundary on ${shrinkwrap.layer}.`);
+  }, [shrinkwrap, logActionToFieldbook]);
 
   const handleRenameBoundaryFile = useCallback((id: string, name: string) => {
     setBoundaryFiles(prev => prev.map(f => f.id === id ? { ...f, name } : f));
@@ -15234,6 +16025,7 @@ const AppContent = () => {
     if (!isSessionActive) return;
 
     const savedAt = new Date().toISOString();
+    const sessionCadManagerState = buildCadManagerSessionState(cadManagerContext.state, savedAt);
     const suggestedName = generateSessionFileName(
       jobInfo.jobName,
       [rawFile?.name, deedFile?.name, centerlines[0]?.name],
@@ -15333,12 +16125,7 @@ const AppContent = () => {
         // widths, zoning setbacks, parcel ids, monuments) travels with the .lsvz file.
         knowledgeFacts: knowledgeBase.exportFacts() as any,
         keyframeCache: LsvzPersistence.exportKeyframes().length > 0 ? LsvzPersistence.exportKeyframes() : undefined,
-        cadManagerState: (cadManagerContext.state.standard || cadManagerContext.state.confirmedAliases.length > 0)
-            ? {
-                standard: cadManagerContext.state.standard,
-                confirmedAliases: cadManagerContext.state.confirmedAliases,
-              }
-            : undefined,
+        cadManagerState: sessionCadManagerState,
         // Drafting Style Library � CAD Manager sub-tool training data
         draftingStyleLibrary: draftingStyleLibrary.length > 0 ? draftingStyleLibrary : undefined,
         // Soils Agent � SSURGO map units and chat history
@@ -15401,6 +16188,7 @@ const AppContent = () => {
     profileData, profileInfo, APP_VERSION, lineLabelScale, draftingStyleLibrary,
     soilMapUnits, soilsChatHistory, standardsComplianceChatHistory, standardsComplianceControlFile,
     standardsComplianceSubjectFile, standardsComplianceSourceMode, standardsComplianceChecks, standardsComplianceLastReport,
+    cadManagerContext.state, deedBatchJob,
     setIsSessionSaveModalOpen
   ]);
 
@@ -15574,7 +16362,7 @@ const AppContent = () => {
                 if (sessionState.cadManagerState) {
                   cadManagerContext.import({
                     standard: sessionState.cadManagerState.standard ?? null,
-                    confirmedAliases: sessionState.cadManagerState.confirmedAliases ?? [],
+                    aliases: toAliasRecord(sessionState.cadManagerState.confirmedAliases),
                   });
                 }
                 // Restore cached keyframes
@@ -15610,7 +16398,7 @@ const AppContent = () => {
                 setActiveTextEditorFile(uiState.activeTextEditorFile || null);
                 setIsPdfViewerFullscreen(uiState.isPdfViewerFullscreen || false);
                 setIsVisualPanelFullscreen(uiState.isVisualPanelFullscreen);
-                setIsChatPanelVisible(uiState.isChatPanelVisible ?? true);
+                setIsChatPanelVisible(uiState.isChatPanelVisible ?? false);
                 setAttributeScale(uiState.attributeScale || 1);
                 setLineLabelScale(uiState.lineLabelScale || uiState.attributeScale || 1);
                 setDimensionScale(uiState.dimensionScale || 1);
@@ -15680,14 +16468,14 @@ const AppContent = () => {
 
                         setGpsStakeoutChat(startGeminiChat(AgentType.GPS_STAKEOUT, '', uiState.activeModel, loadedSettings));
                         
-                        const sessionContext = JSON.stringify(sessionState, null, 2);
+                        const sessionContext = getLightweightLsvzManifest(sessionState);
                         setLsvzChat(startGeminiChat(AgentType.LSVZ_AGENT, sessionContext, uiState.activeModel, loadedSettings));
                     } catch (chatInitErr) {
                         console.warn("Chat initialization skipped:", chatInitErr instanceof Error ? chatInitErr.message : 'Unknown error');
                     }
                 }
                 if (!sessionState.lsvzChatHistory || sessionState.lsvzChatHistory.length === 0) {
-                    setLsvzChatHistory([{ role: MessageRole.MODEL, text: 'Session loaded. I am the LSVZ Meta-Agent. Ask me anything about this project.' }]);
+                    setLsvzChatHistory([{ role: MessageRole.MODEL, text: buildAgentWelcome(AgentType.LSVZ_AGENT) }]);
                 }
 
                 setIsInitialScreen(false);
@@ -15839,11 +16627,11 @@ const AppContent = () => {
         const newChat = startChatWithOverride(AgentType.LSVZ_AGENT, finalContext);
         setLsvzChat(newChat);
         if (lsvzChatHistory.length === 0) {
-             setLsvzChatHistory([{ role: MessageRole.MODEL, text: 'LSVZ Meta-Agent initialized. Ask me anything about this project.' }]);
+             setLsvzChatHistory([{ role: MessageRole.MODEL, text: buildAgentWelcome(AgentType.LSVZ_AGENT) }]);
         }
         setInitializedAgents(prev => new Set(prev).add(AgentType.LSVZ_AGENT));
     } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Failed to initialize LSVZ agent.';
+        const errorMessage = err instanceof Error ? err.message : 'Failed to initialize the LSAI agent.';
         setError(`Initialization Error: ${errorMessage}`);
     }
   }, [
@@ -15855,17 +16643,20 @@ const AppContent = () => {
   ]);
 
   useEffect(() => {
-    if (activeAgent === AgentType.LSVZ_AGENT && !initializedAgents.has(AgentType.LSVZ_AGENT) && isSessionActive) {
-        // LSVZ Agent is a premium feature
-        if (!settings.userApiKey) {
-            setApiKeyModalTrigger('lsvz');
-            setShowApiKeyModal(true);
-            setActiveAgent(null);
-            return;
-        }
+    // The LSVZ orchestrator is the default for the CAD environment, so it must
+    // initialize as soon as the user leaves the welcome screen — even though no
+    // session existed yet at the moment they opened it.
+    if (activeAgent === AgentType.LSVZ_AGENT && !initializedAgents.has(AgentType.LSVZ_AGENT) && !isInitialScreen) {
         initializeLsvzAgent();
     }
-  }, [activeAgent, initializedAgents, isSessionActive, initializeLsvzAgent, settings.userApiKey]);
+  }, [activeAgent, initializedAgents, isInitialScreen, initializeLsvzAgent]);
+
+  useEffect(() => {
+    lsvzOrchestrator.setSpecialistDelegateHandler(async (targetAgent, delegatedQuery) => {
+      await handleSendMessage(delegatedQuery, targetAgent, 1);
+    });
+    return () => lsvzOrchestrator.setSpecialistDelegateHandler(null);
+  }, [handleSendMessage]);
 
   // Check GNSS agent on initial session start to show API key dialog once
   useEffect(() => {
@@ -16217,6 +17008,15 @@ const AppContent = () => {
     activeAgent === AgentType.CAD_MANAGER ? cadManagerChatHistory :
     activeAgent === AgentType.STANDARDS_COMPLIANCE ? standardsComplianceChatHistory :
     gpsStakeoutChatHistory;
+
+  const dockedA2UIMessage = dockedA2UIKey
+    ? [...currentChatHistory].reverse().find(msg =>
+        msg.a2ui &&
+        `${msg.a2ui.agent}:${msg.a2ui.widgetType}` === dockedA2UIKey &&
+        msg.a2ui.status !== 'completed' &&
+        msg.a2ui.status !== 'dismissed'
+      ) ?? null
+    : null;
   
   // DEBUG: Log chat history and agent
   useEffect(() => {
@@ -16359,6 +17159,71 @@ const AppContent = () => {
     return list;
   }, [highlights, deedFile, planFiles, setPdfViewerFiles, showView, appNotifications]);
 
+  const a2uiHostContextValue = useMemo<A2UIHostContextValue>(() => ({
+    onPointsUploaded: handlePointsUploaded,
+    onPointEditorSessionStart: handlePointEditorSessionStart,
+    onRawFileUploaded: handleFileUploaded,
+    onCivilDrafterFileUploaded: handleCivilDrafterFileUploaded,
+    onCivilDrafterPdfUploaded: handleCivilDrafterPdfUploaded,
+    onCivilDrafterUseExistingPoints: handleCivilDrafterUseExistingPoints,
+    existingPointCount: pointLists.reduce((sum, l) => sum + l.points.length, 0),
+    onDeedSubmitted: handleDeedSubmitted,
+    onDeedStartFromScratch: handleDeedStartFromScratch,
+    onOpenBoundaryGis: handleOpenBoundaryGis,
+    freeDeedsRemaining: deedCreditSnapshot?.remaining ?? null,
+    freeDeedsLimit: deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT,
+    freeDeedsUnlimited: Boolean(deedCreditSnapshot?.unlimited || isDeedMeterExempt),
+    freeDeedsUnverified: Boolean(deedCreditSnapshot?.unverified),
+    onShowUpgrade: openDeedUpgradeDialog,
+    onPlansSubmitted: handlePlansSubmitted,
+    onDxfUploaded: handleDxfUploaded,
+    onGisUploaded: handleGisUploaded,
+    inclusionBoundaries,
+    activeInclusionBoundaryId,
+    hasInclusionLines: lines.some((l: SurveyLine) => l.type === 'inclusion'),
+    getInclusionBboxWgs84,
+    onZoningSearch: handleZoningSearch,
+    jobInfo,
+    onTitleSearchDeedSubmitted: handleTitleSearchDeedSubmitted,
+    onStandardsComplianceSessionStart: handleStandardsComplianceSessionStart,
+    onImagesSubmitted: handleImagesSubmitted,
+    onCenterlineSessionStart: handleCenterlineSessionStart,
+    onClFileUploaded: handleClFileUploaded,
+    onCadManagerSessionStart: () => handleCadManagerSessionStart('cadstandards'),
+    onCadManagerFileUploaded: handleCadManagerFileUploaded,
+    onOpenCadStandards: () => handleCadManagerSessionStart('cadstandards'),
+  }), [
+    handlePointsUploaded,
+    handlePointEditorSessionStart,
+    handleFileUploaded,
+    handleCivilDrafterFileUploaded,
+    handleCivilDrafterPdfUploaded,
+    handleCivilDrafterUseExistingPoints,
+    pointLists,
+    handleDeedSubmitted,
+    handleDeedStartFromScratch,
+    handleOpenBoundaryGis,
+    deedCreditSnapshot,
+    isDeedMeterExempt,
+    openDeedUpgradeDialog,
+    handlePlansSubmitted,
+    handleDxfUploaded,
+    handleGisUploaded,
+    inclusionBoundaries,
+    activeInclusionBoundaryId,
+    lines,
+    getInclusionBboxWgs84,
+    handleZoningSearch,
+    jobInfo,
+    handleTitleSearchDeedSubmitted,
+    handleStandardsComplianceSessionStart,
+    handleImagesSubmitted,
+    handleCenterlineSessionStart,
+    handleClFileUploaded,
+    handleCadManagerSessionStart,
+    handleCadManagerFileUploaded,
+  ]);
+
   if (pageMode === null) {
     return null; // Or a loading spinner
   }
@@ -16459,8 +17324,8 @@ const AppContent = () => {
     <BoundaryEditor
       boundaryFiles={boundaryFiles}
       pointMap={pointMap}
-      reservedRight={isDesktop && isChatPanelVisible ? chatPanelWidth : 0}
-      reservedBottom={!isDesktop && isChatPanelVisible ? Math.floor(window.innerHeight / 2) : 0}
+      reservedRight={0}
+      reservedBottom={0}
       onUpdateCall={handleBoundaryCallUpdate}
       onAddCall={(fileId) => {
         handleBoundaryRowAdd(fileId);
@@ -16549,7 +17414,14 @@ const AppContent = () => {
         void handleSendMessage('Extract all boundary descriptions from this deed.');
       }}
       isDocked={docked}
-      onToggleDock={() => setIsBoundaryDialogDocked(!docked)}
+      onToggleDock={() => {
+        const next = !docked;
+        setIsBoundaryDialogDocked(next);
+        if (next) {
+          setIsToolShelfVisible(true);
+          setActiveBoundaryDockedTab('dialog');
+        }
+      }}
       isMinimized={isBoundaryDialogMinimized}
       onToggleMinimize={() => setIsBoundaryDialogMinimized(prev => !prev)}
     />
@@ -16557,6 +17429,9 @@ const AppContent = () => {
 
   const renderParcelPanel = (docked: boolean) => (
     <ParcelPanel
+      projectPoints={points}
+      projectLines={lines}
+      projectEpsg={settings.projection?.epsg ?? null}
       inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
       parcelLineCount={lines.filter((l: SurveyLine) => l.layer === 'COUNTY-PARCEL').length}
       lastFetchedParcels={lastFetchedParcels}
@@ -16580,6 +17455,7 @@ const AppContent = () => {
           setIsParcelPanelVisible(true);
           setIsParcelPanelMinimized(false);
           setActiveBoundaryDockedTab('gis');
+          setIsToolShelfVisible(true);
         }
       }}
       isMinimized={isParcelPanelMinimized}
@@ -16588,10 +17464,1018 @@ const AppContent = () => {
         setIsParcelPanelVisible(false);
         setIsParcelPanelDocked(true);
       }}
-      reservedRight={isDesktop && isChatPanelVisible ? chatPanelWidth : 0}
-      reservedBottom={!isDesktop && isChatPanelVisible ? Math.floor(window.innerHeight / 2) : 0}
+      reservedRight={0}
+      reservedBottom={0}
     />
   );
+
+  const renderAutoDraftPanel = (docked: boolean) => (
+    <AutoDraftPanel
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('autoDraft')}
+      points={points}
+      lines={lines}
+      jobInfo={jobInfo}
+      zoningContext={{
+        state: zoningState,
+        county: zoningCounty,
+        place: zoningPlace,
+        district: zoningDistrict,
+      } satisfies ZoningContext}
+      projectEpsg={settings.projection?.epsg ?? null}
+      mapKeys={{
+        geminiKey: settings.userApiKey || undefined,
+        mapsKey: settings.googleMaps?.apiKey || undefined,
+      }}
+      onDraft={async (prompt, images) => {
+        pendingAutoDraftImagesRef.current = images ?? [];
+        await handleSendMessage(prompt);
+      }}
+      getCanvasLineCount={() => linesRef.current.length}
+      onCanvasLines={(newLines, sourceTag) => {
+        setLines(prev => [
+          ...prev.filter(l => !(l.layer ?? '').startsWith(sourceTag)),
+          ...newLines,
+        ]);
+      }}
+      onParcelResult={(result) => {
+        setLastFetchedParcels(result.parcels);
+        setLastParcelEnrichment(result.enrichment ?? null);
+        if (result.labelPoints.length > 0) {
+          const ts = Date.now();
+          setParcelLabels(result.labelPoints.map((lp, i) => ({
+            id: `PARCEL-LBL-${i}-${ts}`,
+            x: lp.x,
+            y: lp.y,
+            parcelId: lp.parcelId ?? null,
+            owner: lp.owner ?? null,
+            angle: 0,
+          })));
+        }
+      }}
+      onStreetLabels={(labels) => setStreetLabels(labels)}
+      getSymbolCoverage={(pts) => {
+        const matchers = buildSymbolMatchers(customSymbols);
+        const unmatchedCounts = new Map<string, number>();
+        let matched = 0;
+        let total = 0;
+        for (const p of pts) {
+          const code = (p.description || '').trim();
+          if (!code) continue;
+          total++;
+          const res = resolveSymbol(code, customSymbols, matchers);
+          if (res.symbol) {
+            matched++;
+          } else {
+            const key = code.toUpperCase().split(/\s+/)[0];
+            unmatchedCounts.set(key, (unmatchedCounts.get(key) ?? 0) + 1);
+          }
+        }
+        return {
+          matched,
+          total,
+          unmatched: [...unmatchedCounts.entries()]
+            .map(([code, count]) => ({ code, count }))
+            .sort((a, b) => b.count - a.count),
+        };
+      }}
+      onAddSymbols={(symbols) => setCustomSymbols(prev => [...prev, ...symbols])}
+      onGenerateContours={() => { handleGenerateContours(); }}
+      onFetchGisContours={async (ctx) => {
+        const stateName = (ctx.state || zoningState || '').trim();
+        const entry = ESRI_STATE_SERVICES.find(s =>
+          s.state.toLowerCase() === stateName.toLowerCase() ||
+          s.abbr.toLowerCase() === stateName.toLowerCase());
+        if (!entry || entry.layers.length === 0) {
+          throw new Error(
+            `No public contour service registered for ${stateName || 'this state'}` +
+            `${entry?.portalUrl ? ` — browse ${entry.portalUrl} and use the Contours agent's custom URL instead` : ''}.`
+          );
+        }
+        const desc = [
+          ctx.place || zoningPlace,
+          (ctx.county || zoningCounty) ? `${ctx.county || zoningCounty} County` : null,
+          stateName,
+        ].filter(Boolean).join(', ');
+        await handleFetchEsriContours(entry.layers[0].url, 'description', desc);
+      }}
+      onSteepSlopes={async () => {
+        const tin = steepSlopeTinSurfaces[0]
+          ?? buildTinFromPoints(points, { name: 'Auto Draft TIN' });
+        if (!tin) throw new Error('Need at least 3 points with elevations to build a TIN.');
+        const run = runSteepSlopeAnalysis(tin, { sourceTinId: tin.id });
+        const ssLines = steepSlopeRunToSurveyLines(tin, run);
+        setSteepSlopeRuns(prev => [...prev, run]);
+        setLines(prev => [
+          ...prev.filter(l => l.type !== 'steep-slope'),
+          ...ssLines,
+        ]);
+        logActionToFieldbook(
+          `Auto Draft: steep-slope analysis — ${run.keptTriangleCount}/${run.analyzedTriangleCount} triangles in kept slope bands.`
+        );
+        return { kept: run.keptTriangleCount, analyzed: run.analyzedTriangleCount };
+      }}
+      onDismiss={() => setShowAutoDraftPanel(false)}
+    />
+  );
+
+  const renderFloodPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Flood Zone Agent"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('flood')}
+      onClose={() => setIsFloodPanelVisible(false)}
+      initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
+      initialY={120}
+    >
+      <FloodPanel
+        onFetchFloodZones={handleFetchFloodZones}
+        isFetching={isFetchingFlood}
+        hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
+        inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
+        lastResult={lastFloodResult}
+        onClearFloodLines={handleClearFloodLines}
+        inclusionBoundaries={inclusionBoundaries}
+        activeInclusionBoundaryId={activeInclusionBoundaryId}
+        onSelectInclusionBoundary={setActiveInclusionBoundaryId}
+        onManageInclusionBoundaries={() => setIsInclusionBoundariesPanelVisible(true)}
+        floodHatch={settings.floodHatch}
+        onFloodHatchChange={(patch) => setSettings(prev => ({
+          ...prev,
+          floodHatch: { style: 'lines', scale: 50, opacity: 0.18, ...(prev.floodHatch ?? {}), ...patch },
+        }))}
+        onFetchFirmette={handleFetchFirmette}
+        isFetchingFirmette={isFetchingFirmette}
+        hasFirmette={!!floodFirmetteData}
+        onViewFirmette={() => setIsFirmetteViewerVisible(true)}
+      />
+    </FloatingPanel>
+  );
+
+  const renderStructuresPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Structures Agent"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('structures')}
+      onClose={() => setIsStructuresPanelVisible(false)}
+      initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
+      initialY={160}
+    >
+      <StructuresPanel
+        onFetchStructures={handleFetchStructures}
+        isFetching={isFetchingStructures}
+        hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
+        inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
+        lastResult={lastStructuresResult}
+        osmFootprintCount={lastOsmFootprints?.length ?? 0}
+        lastRectifyStats={lastRectifyStats}
+        onClearStructures={handleClearStructures}
+        onSynthesize={handleSynthesizeStructures}
+        isSynthesizing={isSynthesizingStructures}
+        surveyBldgCount={points.filter((p: SurveyPoint) =>
+          (p.description?.toUpperCase().includes('BLDG') || (p.layer ?? '').toUpperCase().includes('BLDG'))
+        ).length}
+        inclusionBoundaries={inclusionBoundaries}
+        activeInclusionBoundaryId={activeInclusionBoundaryId}
+        onSelectInclusionBoundary={setActiveInclusionBoundaryId}
+        onManageInclusionBoundaries={() => setIsInclusionBoundariesPanelVisible(true)}
+      />
+    </FloatingPanel>
+  );
+
+  const renderSoilsPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Soils Agent"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('soils')}
+      onClose={() => setIsSoilsPanelVisible(false)}
+      initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
+      initialY={220}
+    >
+      <SoilsPanel
+        onFetchSoils={handleFetchSoils}
+        isFetching={isFetchingSoils}
+        hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
+        lastResult={lastSoilsResult}
+        onClearSoils={handleClearSoilsLines}
+        soilMapUnits={soilMapUnits}
+        onFetchReport={handleFetchSoilReport}
+        isFetchingReport={isFetchingSoilReport}
+        soilReportData={soilReportData}
+        inclusionBoundaries={inclusionBoundaries}
+        activeInclusionBoundaryId={activeInclusionBoundaryId}
+        onSelectInclusionBoundary={setActiveInclusionBoundaryId}
+      />
+    </FloatingPanel>
+  );
+
+  const renderProfileGenPanel = (docked: boolean) => (
+    <ProfileGenerationPanel
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('profileGen')}
+      allPoints={pointLists.flatMap((l: import('./types.ts').PointList) => l.points)}
+      profilePointCount={profileData?.length ?? 0}
+      profileElevMin={profileData && profileData.length > 0 ? Math.min(...profileData.map((p: import('./types.ts').ProfilePoint) => p.elevation)) : undefined}
+      profileElevMax={profileData && profileData.length > 0 ? Math.max(...profileData.map((p: import('./types.ts').ProfilePoint) => p.elevation)) : undefined}
+      profileLength={profileData && profileData.length > 0 ? Math.max(...profileData.map((p: import('./types.ts').ProfilePoint) => p.station)) : undefined}
+      profileName={profileInfo?.name}
+      isGenerating={false}
+      onGenerateProfile={handleGenerateProfileDirect}
+      onViewProfile={() => showView('profile')}
+      onSaveProfile={handleSaveProfile}
+      onClose={() => setIsProfileGenPanelVisible(false)}
+    />
+  );
+
+  const renderGpsStakeoutPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Stakeout"
+      accentBorder="border-blue-500/50"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('gpsStakeout')}
+      onClose={() => setIsGpsStakeoutFloatingVisible(false)}
+      initialX={typeof window !== 'undefined' ? Math.max(20, window.innerWidth / 2 - 220) : 80}
+      initialY={80}
+      width="min(460px, 96vw)"
+      maxHeight="88vh"
+    >
+      <GpsStakeoutPanel
+        isOverlay={false}
+        currentPosition={currentPosition}
+        projectedPosition={projectedPosition}
+        projectPoints={points}
+        pointLists={pointLists}
+        onStorePoint={handleStoreGpsPoint}
+        onStoreStakedPoint={handleStoreStakedGpsPoint}
+        settings={settings}
+        targetPointNumber={stakeoutTargetPointNumber}
+        setTargetPointNumber={setStakeoutTargetPointNumber}
+        nextAvailablePointNumber={nextAvailablePointNumber}
+        initialTab="stakeout"
+        lockedTab
+      />
+    </FloatingPanel>
+  );
+
+  const renderGpsCollectPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Collect"
+      accentBorder="border-emerald-500/50"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('gpsCollect')}
+      onClose={() => setIsGpsCollectFloatingVisible(false)}
+      initialX={typeof window !== 'undefined' ? Math.max(20, window.innerWidth / 2 + 20) : 80}
+      initialY={80}
+      width="min(400px, 96vw)"
+      maxHeight="88vh"
+    >
+      <GpsStakeoutPanel
+        isOverlay={false}
+        currentPosition={currentPosition}
+        projectedPosition={projectedPosition}
+        projectPoints={points}
+        pointLists={pointLists}
+        onStorePoint={handleStoreGpsPoint}
+        onStoreStakedPoint={handleStoreStakedGpsPoint}
+        settings={settings}
+        targetPointNumber={stakeoutTargetPointNumber}
+        setTargetPointNumber={setStakeoutTargetPointNumber}
+        nextAvailablePointNumber={nextAvailablePointNumber}
+        initialTab="collect"
+        lockedTab
+      />
+    </FloatingPanel>
+  );
+
+  const renderShrinkwrapPanel = (docked: boolean) => shrinkwrap ? (
+    <FloatingPanel
+      title="Shrinkwrap"
+      accentBorder="border-violet-500/40"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('shrinkwrap')}
+      onClose={() => setIsShrinkwrapPanelVisible(false)}
+      initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 460) : 120}
+      initialY={160}
+      width="min(380px, 94vw)"
+      maxHeight="80vh"
+      minimized={isShrinkwrapPanelMinimized}
+      onToggleMinimize={() => setIsShrinkwrapPanelMinimized(v => !v)}
+      minimizedAnchor="right"
+      minimizedOffset={16}
+    >
+      <ShrinkwrapPanel
+        sourceCount={(() => {
+          const pool = new Set<string>(shrinkwrap.sourcePns);
+          for (const l of pointLists) {
+            if (!l.isVisible) continue;
+            for (const p of l.points) pool.add(p.pointNumber);
+          }
+          return pool.size;
+        })()}
+        hullCount={(() => {
+          const pts = new Set<string>();
+          for (const l of lines.filter(ll => ll.polylineId === shrinkwrap.polylineId)) {
+            pts.add(l.from); pts.add(l.to);
+          }
+          return pts.size;
+        })()}
+        layer={shrinkwrap.layer}
+        excludedPns={shrinkwrap.excludedPns}
+        pendingExcludedPns={shrinkwrap.pendingExcludedPns ?? []}
+        concavityK={shrinkwrap.concavityK ?? 15}
+        onConcavityChange={(k) => setShrinkwrap(prev => prev ? { ...prev, concavityK: k } : prev)}
+        cuts={shrinkwrap.cuts ?? []}
+        cutMode={shrinkwrap.cutMode ?? false}
+        cutStartPn={shrinkwrap.cutStartPn ?? null}
+        onToggleCutMode={() => setShrinkwrap(prev => prev ? {
+          ...prev,
+          cutMode: !prev.cutMode,
+          cutStartPn: null,
+        } : prev)}
+        onFlipCut={(idx) => setShrinkwrap(prev => {
+          if (!prev) return prev;
+          const next = [...(prev.cuts ?? [])];
+          if (!next[idx]) return prev;
+          next[idx] = { ...next[idx], flipped: !next[idx].flipped };
+          return { ...prev, cuts: next };
+        })}
+        onRemoveCut={(idx) => setShrinkwrap(prev => {
+          if (!prev) return prev;
+          const next = (prev.cuts ?? []).filter((_, i) => i !== idx);
+          return { ...prev, cuts: next };
+        })}
+        selectedPoint={selectedPoint}
+        onStageExclude={(pn) => setShrinkwrap(prev =>
+          prev && !(prev.pendingExcludedPns ?? []).includes(pn)
+            ? { ...prev, pendingExcludedPns: [...(prev.pendingExcludedPns ?? []), pn] }
+            : prev
+        )}
+        onUnstageExclude={(pn) => setShrinkwrap(prev =>
+          prev ? { ...prev, pendingExcludedPns: (prev.pendingExcludedPns ?? []).filter(x => x !== pn) } : prev
+        )}
+        onStageRestore={(pn) => setShrinkwrap(prev =>
+          prev ? { ...prev, pendingExcludedPns: (prev.pendingExcludedPns ?? []).filter(x => x !== pn) } : prev
+        )}
+        onStageRestoreAll={() => setShrinkwrap(prev =>
+          prev ? { ...prev, pendingExcludedPns: [] } : prev
+        )}
+        onApplyUpdate={() => setShrinkwrap(prev => {
+          if (!prev) return prev;
+          const pending = prev.pendingExcludedPns ?? [];
+          const before = prev.excludedPns.length;
+          const after = pending.length;
+          const delta = after - before;
+          logActionToFieldbook(
+            `Shrinkwrap update via COGO — excluded set now ${after} point(s)` +
+            (delta !== 0 ? ` (${delta > 0 ? '+' : ''}${delta} from prior).` : ' (no change).')
+          );
+          return { ...prev, excludedPns: [...pending] };
+        })}
+        isCommitted={shrinkwrap.isCommitted}
+        onDrawInclusion={handleCommitShrinkwrapAsInclusion}
+        onDrawBoundary={handleConvertShrinkwrapToBoundary}
+        onClearShrinkwrap={() => {
+          const pid = shrinkwrap.polylineId;
+          const layer = shrinkwrap.layer;
+          setLines(prev => prev.filter(l =>
+            l.polylineId !== pid && !(l.polylineId || '').startsWith(`${pid}_cut_`)
+          ));
+          setShrinkwrap(null);
+          setIsShrinkwrapPanelVisible(false);
+          logActionToFieldbook(`Shrinkwrap on ${layer} cleared by user.`);
+        }}
+      />
+    </FloatingPanel>
+  ) : null;
+
+  const renderInclusionBoundariesPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Inclusion Boundaries"
+      accentBorder="border-emerald-500/40"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('inclusion')}
+      onClose={() => setIsInclusionBoundariesPanelVisible(false)}
+      initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
+      initialY={200}
+      width="min(420px, 94vw)"
+      maxHeight="78vh"
+      minimized={isInclusionBoundariesPanelMinimized}
+      onToggleMinimize={() => setIsInclusionBoundariesPanelMinimized(v => !v)}
+      minimizedAnchor="right"
+      minimizedOffset={56}
+    >
+      <InclusionBoundariesPanel
+        boundaries={inclusionBoundaries}
+        activeBoundaryId={activeInclusionBoundaryId}
+        segmentCounts={(() => {
+          const m: Record<string, number> = {};
+          for (const l of lines) {
+            if (l.type === 'inclusion' && l.polylineId) {
+              m[l.polylineId] = (m[l.polylineId] || 0) + 1;
+            }
+          }
+          return m;
+        })()}
+        visibility={(() => {
+          const v: Record<string, boolean> = {};
+          for (const b of inclusionBoundaries) {
+            const any = lines.find(l => l.polylineId === b.polylineId);
+            v[b.polylineId] = any ? !any.hidden : true;
+          }
+          return v;
+        })()}
+        onSetActive={(id) => setActiveInclusionBoundaryId(id)}
+        onRename={(id, name) => setInclusionBoundaries(prev =>
+          prev.map(b => b.id === id ? { ...b, name } : b)
+        )}
+        onToggleVisible={(id) => {
+          const b = inclusionBoundaries.find(x => x.id === id);
+          if (!b) return;
+          const any = lines.find(l => l.polylineId === b.polylineId);
+          const isHidden = !!(any && any.hidden);
+          const nextHidden = !isHidden;
+          setLines(prev => prev.map(l =>
+            l.polylineId === b.polylineId
+              ? { ...l, hidden: nextHidden ? true : undefined }
+              : l
+          ));
+        }}
+        onDelete={(id) => {
+          const b = inclusionBoundaries.find(x => x.id === id);
+          if (!b) return;
+          setLines(prev => prev.filter(l => l.polylineId !== b.polylineId));
+          if (activeInclusionBoundaryId === id) setActiveInclusionBoundaryId(null);
+          setShrinkwrap(prev => prev && prev.polylineId === b.polylineId ? null : prev);
+        }}
+        onAdjust={(id) => {
+          const b = inclusionBoundaries.find(x => x.id === id);
+          if (!b) return;
+          const groupLines = lines.filter(l => l.polylineId === b.polylineId);
+          if (groupLines.length === 0) return;
+          const pnSet = new Set<string>();
+          for (const l of groupLines) { if (l.from) pnSet.add(l.from); if (l.to) pnSet.add(l.to); }
+          const sourcePns = Array.from(pnSet);
+          const layer = groupLines[0].layer || 'L-SURV-SHRINKWRAP';
+          setShrinkwrap({ sourcePns, excludedPns: [], pendingExcludedPns: [], concavityK: 15, cuts: [], cutMode: false, cutStartPn: null, layer, isCommitted: true, polylineId: b.polylineId });
+          setIsShrinkwrapPanelVisible(true);
+          setIsShrinkwrapPanelMinimized(false);
+          setActiveInclusionBoundaryId(id);
+          logActionToFieldbook(`Reopened "${b.name}" in Shrinkwrap editor (${sourcePns.length} source points).`);
+        }}
+      />
+    </FloatingPanel>
+  );
+
+  const renderContourGenPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Contour Generation"
+      accentBorder="border-amber-500/30"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('contourGen')}
+      onClose={() => setIsContourGenPanelVisible(false)}
+      minimized={isContourGenMinimized}
+      onToggleMinimize={() => setIsContourGenMinimized(v => !v)}
+      minimizedAnchor="left"
+      minimizedOffset={16}
+      initialX={typeof window !== 'undefined' ? Math.max(80, window.innerWidth - 880) : 80}
+      initialY={100}
+      width="min(420px, 94vw)"
+      maxHeight="84vh"
+    >
+      <ContourGenerationPanel
+        settings={contourSettings}
+        onSettingsChange={setContourSettings}
+        onGenerate={handleGenerateContours}
+        isGenerating={isGeneratingContours}
+        points={points}
+        inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
+        breaklineCount={lines.filter((l: SurveyLine) => l.type === 'breakline').length}
+        exclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'exclusion').length}
+        inclusionBoundaries={inclusionBoundaries}
+        activeInclusionBoundaryId={activeInclusionBoundaryId}
+        onSelectInclusionBoundary={setActiveInclusionBoundaryId}
+        onManageInclusionBoundaries={() => setIsInclusionBoundariesPanelVisible(true)}
+      />
+    </FloatingPanel>
+  );
+
+  const renderContourEsriPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="ESRI REST Contour Sources"
+      accentBorder="border-teal-500/30"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('contourEsri')}
+      onClose={() => setIsContourEsriPanelVisible(false)}
+      minimized={isContourEsriMinimized}
+      onToggleMinimize={() => setIsContourEsriMinimized(v => !v)}
+      minimizedAnchor="right"
+      minimizedOffset={16}
+      initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 460) : 120}
+      initialY={140}
+      width="min(440px, 94vw)"
+      maxHeight="82vh"
+    >
+      <ContourEsriPanel
+        settings={contourSettings}
+        onSettingsChange={setContourSettings}
+        onDiscoverPublicServices={handleDiscoverPublicContourServices}
+        isDiscovering={isDiscoveringContourServices}
+        discoveredServices={discoveredContourServices}
+        hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
+        inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
+        hasProjectProjection={!!settings.projection?.epsg}
+        isFetchingEsri={isFetchingEsri}
+        onFetchEsriContours={handleFetchEsriContours}
+      />
+    </FloatingPanel>
+  );
+
+  const renderContourMgmtPanel = (docked: boolean) => (
+    <ContourManagementPanel
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('contourMgmt')}
+      generations={contourGenerations}
+      inclusionBoundaries={inclusionBoundaries}
+      onToggleVisible={handleContourGenToggleVisible}
+      onRename={handleContourGenRename}
+      onSetColor={handleContourGenSetColor}
+      onSetOpacity={handleContourGenSetOpacity}
+      onToggleEsriBlend={handleContourGenToggleBlend}
+      onSetEsriBlendPolylineId={handleContourGenSetBlendPolylineId}
+      onDelete={handleContourGenDelete}
+      onNewGeneration={() => setIsContourGenPanelVisible(true)}
+      onClose={() => setIsContourManagementVisible(false)}
+    />
+  );
+
+  const renderSteepSlopePanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Steep Slope"
+      accentBorder="border-rose-500/30"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('steepSlope')}
+      onClose={() => setIsSteepSlopePanelVisible(false)}
+      minimized={isSteepSlopePanelMinimized}
+      onToggleMinimize={() => setIsSteepSlopePanelMinimized(v => !v)}
+      minimizedAnchor="right"
+      minimizedOffset={16}
+      initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 460) : 120}
+      initialY={160}
+      width="min(440px, 94vw)"
+      maxHeight="84vh"
+    >
+      <SteepSlopePanel
+        tinSurfaces={steepSlopeTinSurfaces}
+        onToggleTinSurfaceVisibility={handleToggleSteepSlopeTinSurfaceVisibility}
+        onRunAnalysis={handleRunSteepSlopeFromPanel}
+        inclusionBoundaries={inclusionBoundaries}
+        steepSlopeSegmentCount={steepSlopeSegmentCount}
+        onToggleGeometryVisibility={handleToggleSteepSlopeGeometryVisibility}
+        onClearGeometry={handleClearSteepSlopeGeometry}
+        onOpenReport={handleOpenSteepSlopeReport}
+      />
+    </FloatingPanel>
+  );
+
+  // NOTE: must not be a hook — it is declared after the page-mode early returns
+  // above, so adding a hook here changes AppContent's hook count at runtime.
+  const handleRunCogoSkill = (prompt: string) => {
+    setIsChatPanelVisible(false);
+    setAgentChatOpenSignal(n => n + 1);
+    void handleSendMessage(prompt, AgentType.COGO_AGENT);
+  };
+
+  const renderCogoToolsPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="COGO Tools"
+      accentBorder="border-violet-500/40"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('cogo')}
+    >
+      <CogoPanel
+        pointLists={pointLists}
+        onAddPoint={handleAddPoint}
+        activeAgent={activeAgent}
+        settings={settings}
+        onRunCogoSkill={handleRunCogoSkill}
+      />
+    </FloatingPanel>
+  );
+
+  const renderStationingToolsPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Stationing Tools"
+      accentBorder="border-purple-500/40"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('stationing')}
+    >
+      <StationingChat
+        centerlines={centerlines}
+        onUpdateCenterline={handleUpdateCenterline}
+        onPlacePoint={handlePlaceStationOffsetPoint}
+        activeAgent={activeAgent}
+        settings={settings}
+      />
+    </FloatingPanel>
+  );
+
+  const renderPointEditorToolsPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Point Editor Tools"
+      accentBorder="border-yellow-500/40"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('pointEditor')}
+    >
+      <PointEditorChat
+        pointLists={pointLists}
+        onAddPoint={handleAddPoint}
+        onUpdatePoint={handleUpdatePoint}
+        onDeletePoint={handleDeletePoint}
+        activeAgent={activeAgent}
+        onSaveUnsavedPoints={handleSaveUnsavedPointsAsList}
+        onMergeUnsavedPoints={handleMergeUnsavedPointsIntoList}
+        onRenameList={handleRenamePointList}
+        onDeleteList={handleDeletePointList}
+        onToggleVisibility={handleTogglePointListVisibility}
+        onToggleContext={handleTogglePointListContext}
+        onImportPointList={handleImportPointList}
+        onAddPhotoToPoint={handleAddPhotoToPoint}
+        onDeletePhotoFromPoint={handleDeletePhotoFromPoint}
+        onStakeoutPoint={handleStakeoutPoint}
+        onZoomToPoint={handleZoomToPoint}
+        nextAvailablePointNumber={nextAvailablePointNumber}
+        settings={settings}
+        c3dSessionToken={c3dSessionToken}
+        onImportPointsFromC3D={handleImportPointsFromC3D}
+        convertLatLon={convertLatLon}
+      />
+    </FloatingPanel>
+  );
+
+  const renderGnssPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="RINEX / GNSS Tools"
+      accentBorder="border-lime-500/40"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('gnss')}
+    >
+      <GNSSProcessingPanel
+        onClose={() => {}}
+        hasApiKey={!!settings.userApiKey || hasConfirmedApiKey}
+        onShowApiKeyModal={() => {
+          setApiKeyModalTrigger('rinex');
+          setShowApiKeyModal(true);
+        }}
+        onGoHome={() => {
+          setActiveAgent(null);
+          setIsInitialScreen(true);
+        }}
+      />
+    </FloatingPanel>
+  );
+
+  const renderDronePanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Drone Processing Tools"
+      accentBorder="border-amber-500/40"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('drone')}
+    >
+      {isRestrictedApiKey ? (
+        <div className="max-w-2xl rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 text-amber-100">
+          <h2 className="mb-2 text-2xl font-bold text-amber-300">Drone Agent unavailable for this key</h2>
+          <p className="text-sm text-amber-100/90">
+            This API key is restricted from drone photogrammetry processing. Use a full-access key if you need Drone Agent or RINEX processing.
+          </p>
+        </div>
+      ) : (
+        <DroneProcessingPanel onClose={() => {}} />
+      )}
+    </FloatingPanel>
+  );
+
+  const dockedA2UIPayload = dockedA2UIMessage?.a2ui ?? null;
+  const dockedA2UIToolItem: DockableToolItem[] = dockedA2UIPayload
+    ? [{
+        id: 'a2ui-chat-tool',
+        title: A2UI_DOCK_TITLES[dockedA2UIPayload.widgetType] || 'A2UI Tool',
+        icon: <SparklesIcon className="w-3.5 h-3.5 text-cyan-400" />,
+        content: (
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/[0.06] px-3 py-1.5">
+              <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-slate-500">
+                Docked from chat
+              </span>
+              <button
+                type="button"
+                onClick={handleReturnA2UIToChat}
+                className="rounded border border-white/[0.08] px-2 py-0.5 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06]"
+              >
+                Return to chat
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+              <A2UISurface payload={dockedA2UIPayload} />
+            </div>
+          </div>
+        ),
+        isDocked: true,
+        onDock: () => setIsToolShelfVisible(true),
+        onUndock: handleReturnA2UIToChat,
+      }]
+    : [];
+
+  const dockableToolItems: DockableToolItem[] = [
+    ...dockedA2UIToolItem,
+    ...(activeAgent === AgentType.DEED_READER && isBoundaryEditorVisible && (boundaryFiles.length > 0 || deedSummaryFileIds.length > 0 || deedSummary || deedFile)
+      ? [{
+          id: 'boundary-deed',
+          title: 'Deed Draft',
+          icon: <CourthouseIcon className="w-3.5 h-3.5 text-emerald-400" />,
+          content: renderBoundaryEditor(true),
+          isDocked: isBoundaryDialogDocked,
+          onDock: () => {
+            setIsBoundaryDialogDocked(true);
+            setIsBoundaryDialogMinimized(false);
+            setIsBoundaryEditorVisible(true);
+            setActiveBoundaryDockedTab('dialog');
+            setIsToolShelfVisible(true);
+          },
+          onUndock: () => setIsBoundaryDialogDocked(false),
+        }]
+      : []),
+    ...(activeAgent === AgentType.DEED_READER && isParcelPanelVisible
+      ? [{
+          id: 'boundary-gis',
+          title: 'County Parcels GIS',
+          icon: <GisAgentIcon className="w-3.5 h-3.5 text-orange-400" />,
+          content: renderParcelPanel(true),
+          isDocked: isParcelPanelDocked,
+          onDock: () => {
+            setIsParcelPanelDocked(true);
+            setIsParcelPanelMinimized(false);
+            setIsParcelPanelVisible(true);
+            setActiveBoundaryDockedTab('gis');
+            setIsToolShelfVisible(true);
+          },
+          onUndock: () => setIsParcelPanelDocked(false),
+        }]
+      : []),
+    ...(activeAgent === AgentType.COGO_AGENT
+      ? [{
+          id: 'cogo',
+          title: 'COGO Tools',
+          icon: <CogoIcon className="w-3.5 h-3.5 text-violet-400" />,
+          content: renderCogoToolsPanel(true),
+          isDocked: dockedTools.cogo,
+          onDock: () => toggleToolDock('cogo', true),
+          onUndock: () => toggleToolDock('cogo', false),
+        }]
+      : []),
+    ...(shrinkwrap && isShrinkwrapPanelVisible
+      ? [{
+          id: 'shrinkwrap',
+          title: 'Shrinkwrap',
+          icon: <CogoIcon className="w-3.5 h-3.5 text-violet-400" />,
+          content: renderShrinkwrapPanel(true),
+          isDocked: dockedTools.shrinkwrap,
+          onDock: () => toggleToolDock('shrinkwrap', true),
+          onUndock: () => toggleToolDock('shrinkwrap', false),
+        }]
+      : []),
+    ...(isInclusionBoundariesPanelVisible
+      ? [{
+          id: 'inclusion',
+          title: 'Inclusion Boundaries',
+          content: renderInclusionBoundariesPanel(true),
+          isDocked: dockedTools.inclusion,
+          onDock: () => toggleToolDock('inclusion', true),
+          onUndock: () => toggleToolDock('inclusion', false),
+        }]
+      : []),
+    ...(activeAgent === AgentType.CENTERLINE_STATIONING
+      ? [{
+          id: 'stationing',
+          title: 'Stationing Tools',
+          icon: <ScaleIcon className="w-3.5 h-3.5 text-purple-400" />,
+          content: renderStationingToolsPanel(true),
+          isDocked: dockedTools.stationing,
+          onDock: () => toggleToolDock('stationing', true),
+          onUndock: () => toggleToolDock('stationing', false),
+        }]
+      : []),
+    ...(activeAgent === AgentType.POINT_EDITOR
+      ? [{
+          id: 'pointEditor',
+          title: 'Point Tools',
+          icon: <PlumbBobIcon className="w-3.5 h-3.5 text-yellow-400" />,
+          content: renderPointEditorToolsPanel(true),
+          isDocked: dockedTools.pointEditor,
+          onDock: () => toggleToolDock('pointEditor', true),
+          onUndock: () => toggleToolDock('pointEditor', false),
+        }]
+      : []),
+    ...(activeAgent === AgentType.CONTOURING_AGENT && isContourGenPanelVisible
+      ? [{
+          id: 'contourGen',
+          title: 'Contour Generation',
+          icon: <ContourIcon className="w-3.5 h-3.5 text-amber-400" />,
+          content: renderContourGenPanel(true),
+          isDocked: dockedTools.contourGen,
+          onDock: () => toggleToolDock('contourGen', true),
+          onUndock: () => toggleToolDock('contourGen', false),
+        }]
+      : []),
+    ...(activeAgent === AgentType.CONTOURING_AGENT && isContourEsriPanelVisible
+      ? [{
+          id: 'contourEsri',
+          title: 'ESRI REST Sources',
+          icon: <GisAgentIcon className="w-3.5 h-3.5 text-teal-400" />,
+          content: renderContourEsriPanel(true),
+          isDocked: dockedTools.contourEsri,
+          onDock: () => toggleToolDock('contourEsri', true),
+          onUndock: () => toggleToolDock('contourEsri', false),
+        }]
+      : []),
+    ...(isContourManagementVisible
+      ? [{
+          id: 'contourMgmt',
+          title: 'Contour Generations',
+          icon: <ContourIcon className="w-3.5 h-3.5 text-amber-400" />,
+          content: renderContourMgmtPanel(true),
+          isDocked: dockedTools.contourMgmt,
+          onDock: () => toggleToolDock('contourMgmt', true),
+          onUndock: () => toggleToolDock('contourMgmt', false),
+        }]
+      : []),
+    ...(activeAgent === AgentType.STEEP_SLOPE_AGENT && isSteepSlopePanelVisible
+      ? [{
+          id: 'steepSlope',
+          title: 'Steep Slope Tools',
+          icon: <SlopeIcon className="w-3.5 h-3.5 text-rose-400" />,
+          content: renderSteepSlopePanel(true),
+          isDocked: dockedTools.steepSlope,
+          onDock: () => toggleToolDock('steepSlope', true),
+          onUndock: () => toggleToolDock('steepSlope', false),
+        }]
+      : []),
+    ...(isProfileGenPanelVisible
+      ? [{
+          id: 'profileGen',
+          title: 'Profile Generator',
+          icon: <ProfileIcon className="w-3.5 h-3.5 text-sky-400" />,
+          content: renderProfileGenPanel(true),
+          isDocked: dockedTools.profileGen,
+          onDock: () => toggleToolDock('profileGen', true),
+          onUndock: () => toggleToolDock('profileGen', false),
+        }]
+      : []),
+    ...(activeAgent === AgentType.CIVIL_DRAFTER && showAutoDraftPanel
+      ? [{
+          id: 'autoDraft',
+          title: 'Auto Draft',
+          icon: <CivilDrafterIcon className="w-3.5 h-3.5 text-fuchsia-400" />,
+          content: renderAutoDraftPanel(true),
+          isDocked: dockedTools.autoDraft,
+          onDock: () => toggleToolDock('autoDraft', true),
+          onUndock: () => toggleToolDock('autoDraft', false),
+        }]
+      : []),
+    ...(isFloodPanelVisible
+      ? [{
+          id: 'flood',
+          title: 'Flood Zone Tools',
+          icon: <FloodIcon className="w-3.5 h-3.5 text-cyan-400" />,
+          content: renderFloodPanel(true),
+          isDocked: dockedTools.flood,
+          onDock: () => toggleToolDock('flood', true),
+          onUndock: () => toggleToolDock('flood', false),
+        }]
+      : []),
+    ...(isStructuresPanelVisible
+      ? [{
+          id: 'structures',
+          title: 'Structures Tools',
+          icon: <StructuresIcon className="w-3.5 h-3.5 text-orange-400" />,
+          content: renderStructuresPanel(true),
+          isDocked: dockedTools.structures,
+          onDock: () => toggleToolDock('structures', true),
+          onUndock: () => toggleToolDock('structures', false),
+        }]
+      : []),
+    ...(isSoilsPanelVisible
+      ? [{
+          id: 'soils',
+          title: 'Soils Tools',
+          icon: <SoilsIcon className="w-3.5 h-3.5 text-stone-400" />,
+          content: renderSoilsPanel(true),
+          isDocked: dockedTools.soils,
+          onDock: () => toggleToolDock('soils', true),
+          onUndock: () => toggleToolDock('soils', false),
+        }]
+      : []),
+    ...(isGpsStakeoutFloatingVisible
+      ? [{
+          id: 'gpsStakeout',
+          title: 'GPS Stakeout',
+          icon: <CrosshairsIcon className="w-3.5 h-3.5 text-blue-400" />,
+          content: renderGpsStakeoutPanel(true),
+          isDocked: dockedTools.gpsStakeout,
+          onDock: () => toggleToolDock('gpsStakeout', true),
+          onUndock: () => toggleToolDock('gpsStakeout', false),
+        }]
+      : []),
+    ...(isGpsCollectFloatingVisible
+      ? [{
+          id: 'gpsCollect',
+          title: 'GPS Collect',
+          icon: <MapPinIcon className="w-3.5 h-3.5 text-emerald-400" />,
+          content: renderGpsCollectPanel(true),
+          isDocked: dockedTools.gpsCollect,
+          onDock: () => toggleToolDock('gpsCollect', true),
+          onUndock: () => toggleToolDock('gpsCollect', false),
+        }]
+      : []),
+    ...(activeAgent === AgentType.GNSS_AGENT
+      ? [{
+          id: 'gnss',
+          title: 'RINEX / GNSS Tools',
+          icon: <SatelliteIcon className="w-3.5 h-3.5 text-lime-400" />,
+          content: renderGnssPanel(true),
+          isDocked: dockedTools.gnss,
+          onDock: () => toggleToolDock('gnss', true),
+          onUndock: () => toggleToolDock('gnss', false),
+        }]
+      : []),
+    ...(activeAgent === AgentType.DRONE_AGENT
+      ? [{
+          id: 'drone',
+          title: 'Drone Tools',
+          icon: <DroneIcon className="w-3.5 h-3.5 text-amber-400" />,
+          content: renderDronePanel(true),
+          isDocked: dockedTools.drone,
+          onDock: () => toggleToolDock('drone', true),
+          onUndock: () => toggleToolDock('drone', false),
+        }]
+      : []),
+  ];
+
+  const boundaryToolsRowAccessories = activeAgent === AgentType.DEED_READER ? (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      <button
+        type="button"
+        onClick={() => {
+          setIsBoundaryDialogDocked(true);
+          setIsBoundaryDialogMinimized(false);
+          setIsBoundaryEditorVisible(true);
+          setActiveBoundaryDockedTab('dialog');
+          setIsToolShelfVisible(true);
+        }}
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition-all border shadow-sm ${
+          !isBoundaryDialogDocked
+            ? 'bg-cyan-950/70 text-cyan-200 border-cyan-500/60 hover:bg-cyan-900/80'
+            : (!isBoundaryDialogMinimized && isBoundaryEditorVisible)
+              ? 'bg-emerald-950/70 text-emerald-200 border-emerald-500/60 hover:bg-emerald-900/80'
+              : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
+        }`}
+        title={!isBoundaryDialogDocked ? 'Deed Dialog is floating on canvas — click to dock into Tool Station' : 'Open Deed Dialog in Tool Station'}
+      >
+        <CourthouseIcon className={`w-3.5 h-3.5 ${!isBoundaryDialogDocked ? 'text-cyan-400' : 'text-emerald-400'}`} />
+        <span>Deed</span>
+        {activeBoundaryCallsCount > 0 && (
+          <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-200 border border-emerald-400/40">
+            {activeBoundaryCallsCount}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setIsParcelPanelDocked(true);
+          setIsParcelPanelMinimized(false);
+          setIsParcelPanelVisible(true);
+          setActiveBoundaryDockedTab('gis');
+          setIsToolShelfVisible(true);
+        }}
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition-all border shadow-sm ${
+          !isParcelPanelDocked
+            ? 'bg-amber-950/70 text-amber-200 border-amber-500/60 hover:bg-amber-900/80'
+            : (!isParcelPanelMinimized && isParcelPanelVisible)
+              ? 'bg-orange-950/70 text-orange-200 border-orange-500/60 hover:bg-orange-900/80'
+              : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
+        }`}
+        title={!isParcelPanelDocked ? 'County Parcels GIS is floating on canvas — click to dock into Tool Station' : 'Open County Parcels GIS in Tool Station'}
+      >
+        <GisAgentIcon className={`w-3.5 h-3.5 ${!isParcelPanelDocked ? 'text-amber-400' : 'text-orange-400'}`} />
+        <span>GIS</span>
+        {lastFetchedParcels.length > 0 && (
+          <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-orange-500/20 text-orange-200 border border-orange-400/40">
+            {lastFetchedParcels.length}
+          </span>
+        )}
+      </button>
+    </div>
+  ) : undefined;
 
   // ============================================================================
   // REFACTORING: Removed FileStateProvider from here - now in App wrapper
@@ -16614,6 +18498,7 @@ const AppContent = () => {
           showLegal
         }}>
         <HighlightContext.Provider value={{ highlights, addHighlights, clearHighlights, goToHighlight, zoomTargetHighlightId }}>
+        <A2UIHostContext.Provider value={a2uiHostContextValue}>
         <div className="h-[var(--app-height,100dvh)] bg-gray-900 text-gray-100 flex flex-col font-sans light-theme:bg-gray-100 light-theme:text-gray-900 overflow-hidden">
           <EnvironmentBanner />
           <div className="flex flex-1 min-h-0 relative">
@@ -16626,6 +18511,9 @@ const AppContent = () => {
             isMobileMenuOpen={isMobileMenuOpen}
             setIsMobileMenuOpen={setIsMobileMenuOpen}
             isDesktop={isDesktop}
+            canGoBack={canGoBack}
+            onGoBack={handleNavigateBack}
+            onGoHome={handleGoBackToInitialScreen}
             jobInfo={jobInfo}
             setJobInfo={setJobInfo}
             isLoading={isLoading}
@@ -16663,14 +18551,23 @@ const AppContent = () => {
           
           <main ref={mainContentRef} className={`flex-1 flex flex-col min-w-0 h-full ${isVisualPanelFullscreen ? 'absolute inset-0 z-20' : ''}`}>
              {isCivil3DPageVisible ? (
-              <div className="flex-grow min-h-0 bg-gray-900">
+              <div className="flex-grow min-h-0 bg-[#0a0f16]">
                 <Suspense fallback={<LoadingFallback />}><ConnectorDownloadPage onClose={() => setIsCivil3DPageVisible(false)} /></Suspense>
               </div>
             ) : isInitialScreen || showUploadScreen ? (
-              <div className="flex-grow min-h-0 bg-gray-900">
+              <div className="flex-grow min-h-0 bg-[#0a0f16]">
                 {isInitialScreen ? (
                    <InitialAgentSelection 
-                        onSelectAgent={handleAgentChange} 
+                        onSelectAgent={handleAgentChange}
+                        onSelectAgentToolOption={(agent) => {
+                          if (!hasLegalSignature && !hasSignedLegalAgreement()) {
+                            setShowLegalGate(true);
+                            return;
+                          }
+                          startSession();
+                          handleAgentChange(agent);
+                          setAgentChatOpenSignal(n => n + 1);
+                        }}
                         onLoadSession={handleLoadSession}
                         onShowDoc={showDoc}
                         onShowReleaseLog={showReleaseLog}
@@ -16717,6 +18614,9 @@ const AppContent = () => {
                           // Point the user at the first row once the blank editor opens.
                           setIsAddCallRowPulsing(true);
                           window.setTimeout(() => setIsAddCallRowPulsing(false), 12000);
+                          setIsBoundaryDialogDocked(true);
+                          setActiveBoundaryDockedTab('dialog');
+                          setIsToolShelfVisible(true);
                           handleAgentChange(AgentType.DEED_READER);
                           // Defer one tick so handleAgentChange's state updates settle
                           // before we open the Boundary Editor scratch session.
@@ -16734,34 +18634,46 @@ const AppContent = () => {
                             setShowLegalGate(true);
                             return;
                           }
-                          handleAgentChange(AgentType.CAD_MANAGER);
+                          setIsInitialScreen(false);
+                          setActiveAgent(AgentType.CAD_MANAGER);
+                          handleCadManagerSessionStart('cadstandards');
                         }}
                         onOpenGpsStakeout={() => {
                           if (!hasLegalSignature && !hasSignedLegalAgreement()) {
                             setShowLegalGate(true);
                             return;
                           }
+                          startSession();
                           initializeGpsStakeoutAgent();
+                          setIsInitialScreen(false);
                           setActiveAgent(AgentType.GPS_STAKEOUT);
                           setIsGpsStakeoutFloatingVisible(true);
+                          toggleToolDock('gpsStakeout', true);
+                          showView('canvas');
                         }}
                         onOpenGpsCollect={() => {
                           if (!hasLegalSignature && !hasSignedLegalAgreement()) {
                             setShowLegalGate(true);
                             return;
                           }
+                          startSession();
                           initializeGpsStakeoutAgent();
+                          setIsInitialScreen(false);
                           setActiveAgent(AgentType.GPS_STAKEOUT);
                           setIsGpsCollectFloatingVisible(true);
+                          toggleToolDock('gpsCollect', true);
+                          showView('canvas');
                         }}
                         onOpenContouringFromGis={() => {
                           if (!hasLegalSignature && !hasSignedLegalAgreement()) {
                             setShowLegalGate(true);
                             return;
                           }
+                          startSession();
                           setContourAutoOpenGis(true);
                           setIsContourEsriPanelVisible(true);
                           setIsContourEsriMinimized(false);
+                          toggleToolDock('contourEsri', true);
                           handleAgentChange(AgentType.CONTOURING_AGENT);
                         }}
                         currentProjectionEpsg={settings.projection.epsg}
@@ -16795,24 +18707,32 @@ const AppContent = () => {
                 )}
               </div>
             ) : (
-                <div className={`flex flex-1 min-h-0 ${!isDesktop && 'flex-col'}`}>
-                    <div ref={visualPanelAndEditorContainerRef} className={`flex flex-col min-w-0 ${isResizingChat ? '' : 'transition-all duration-300'} ${isDesktop ? 'flex-1' : (isChatPanelVisible ? 'h-1/2' : 'h-full')}`}>
+                <div className="flex flex-1 min-h-0 relative">
+                    <div
+                        ref={visualPanelAndEditorContainerRef}
+                        className="flex flex-col min-w-0 flex-1"
+                        style={{
+                            marginRight: activeVisualPanel === 'canvas' && isToolShelfVisible ? toolShelfWidth : 0,
+                        }}
+                    >
                         {/* Main Header Bar */}
-                        <div className="relative z-[80] overflow-visible flex-shrink-0 flex items-center gap-2 p-2 h-[50px] bg-[#0a0f16] border-b border-white/[0.06] light-theme:bg-white/60 light-theme:border-gray-300/40">
-                            <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 md:hidden"><Bars3Icon className="w-6 h-6"/></button>
-                            {canGoBack && (
+                        <div data-canvas-header className="relative z-40 overflow-visible flex-shrink-0 flex items-center gap-1.5 px-2 h-14 bg-[#0a0f16] border-b border-white/[0.06] light-theme:bg-white/60 light-theme:border-gray-300/40">
+                            <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 md:hidden"><Bars3Icon className="h-[18px] w-[18px]"/></button>
+                            {!isDesktop && canGoBack && (
                                 <button 
                                     onClick={handleNavigateBack} 
                                     className="p-2 rounded-full hover:bg-gray-700 text-cyan-400 transition-colors animate-pulse" 
                                     title="Go Back"
                                 >
-                                    <ChevronLeftIcon className="w-6 h-6"/>
+                                    <ChevronLeftIcon className="h-[18px] w-[18px]"/>
                                 </button>
                             )}
                             {activeVisualPanel !== 'canvas' && (
-                                <button onClick={() => showView('canvas')} className="p-2 rounded-full hover:bg-gray-700 transition-colors animate-pulse" title="Return to Canvas"><MonitorIcon className="w-6 h-6 text-cyan-400"/></button>
+                                <button onClick={() => showView('canvas')} className="p-2 rounded-full hover:bg-gray-700 transition-colors animate-pulse" title="Return to Canvas"><MonitorIcon className="h-[18px] w-[18px] text-cyan-400"/></button>
                             )}
-                            <button onClick={handleGoBackToInitialScreen} className="p-2 rounded-full hover:bg-gray-700 text-gray-300 transition-colors" title="Go to Home Screen"><HomeIcon className="w-6 h-6"/></button>
+                            {!isDesktop && (
+                                <button onClick={handleGoBackToInitialScreen} className="p-2 rounded-full hover:bg-gray-700 text-gray-300 transition-colors" title="Go to Home Screen"><HomeIcon className="h-[18px] w-[18px]"/></button>
+                            )}
                             <button 
                                 onClick={() => showView(activeVisualPanel === 'sheetview' ? 'canvas' : 'sheetview')} 
                                 className={`p-2 rounded-full transition-all ${
@@ -16822,16 +18742,16 @@ const AppContent = () => {
                                 }`} 
                                 title={activeVisualPanel === 'sheetview' ? "Return to Canvas Workspace" : "Open Sheet View (24x36 Paperspace Plot Layout)"}
                             >
-                                <SheetViewIcon className="w-6 h-6 text-amber-400"/>
+                                <SheetViewIcon className="h-[18px] w-[18px] text-amber-400"/>
                             </button>
                             
                             
                             
                             {activeVisualPanel === 'canvas' && (
                                 <>
-                                    <button onClick={() => handleOpenDxfExportModal()} className="p-2 rounded-full hover:bg-gray-700 transition-colors flex items-center gap-1" title="Export DXF"><DownloadIcon className="w-5 h-5 text-gray-300"/><span className="text-xs font-medium text-gray-300">DXF</span></button>
-                                    <button onClick={() => undo()} disabled={!canUndo} className={`p-2 rounded-full transition-colors ${canUndo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canUndo && undoLabel ? `Undo: ${undoLabel} (Ctrl+Z)` : 'Nothing to undo'}><UndoIcon className="w-5 h-5 text-gray-300"/></button>
-                                    <button onClick={() => redo()} disabled={!canRedo} className={`p-2 rounded-full transition-colors ${canRedo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canRedo && redoLabel ? `Redo: ${redoLabel} (Ctrl+Y)` : 'Nothing to redo'}><RedoIcon className="w-5 h-5 text-gray-300"/></button>
+                                    <button onClick={() => handleOpenDxfExportModal()} className="p-2 rounded-full hover:bg-gray-700 transition-colors flex items-center gap-1" title="Export DXF"><DownloadIcon className="h-[18px] w-[18px] text-gray-300"/><span className="text-xs font-medium text-gray-300">DXF</span></button>
+                                    <button onClick={() => undo()} disabled={!canUndo} className={`p-2 rounded-full transition-colors ${canUndo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canUndo && undoLabel ? `Undo: ${undoLabel} (Ctrl+Z or U)` : 'Nothing to undo'}><UndoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
+                                    <button onClick={() => redo()} disabled={!canRedo} className={`p-2 rounded-full transition-colors ${canRedo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canRedo && redoLabel ? `Redo: ${redoLabel} (Ctrl+Y)` : 'Nothing to redo'}><RedoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
                                     <button
                                         onClick={() => setIsHistoryPanelOpen(v => !v)}
                                         className={`p-2 rounded-full transition-colors text-xs font-medium ${isHistoryPanelOpen ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
@@ -16839,44 +18759,35 @@ const AppContent = () => {
                                     >
                                         Hist
                                     </button>
+                                    {/* Canvas tools promoted from the floating toolbar */}
                                     <button
-                                        onClick={cycleAgentDrawMode}
-                                        className={`p-2 rounded-full transition-colors flex items-center gap-1 text-xs font-medium ${agentDrawMode === 'points' ? 'bg-yellow-600 hover:bg-yellow-700' : agentDrawMode === 'lines' ? 'bg-purple-600 hover:bg-purple-700' : 'hover:bg-gray-700'}`}
-                                        title={`Agent draws: ${agentDrawMode === 'both' ? 'Points & Lines' : agentDrawMode === 'points' ? 'Points only' : 'Lines only'} � click to cycle`}
+                                        onClick={() => showView('cadstandards')}
+                                        className="p-2 rounded-full transition-colors hover:bg-gray-700 text-gray-300"
+                                        title="CAD Standards — open the standards editor"
+                                        aria-label="CAD Standards"
                                     >
-                                        {agentDrawMode === 'both' && <><span>P</span><span className="text-gray-400">+</span><span>L</span></>}
-                                        {agentDrawMode === 'points' && <span>P</span>}
-                                        {agentDrawMode === 'lines' && <span>L</span>}
+                                        <ToolbarStandardsIcon className="h-[18px] w-[18px]" />
                                     </button>
                                     <button
-                                        onClick={cycleAgentAnnotMode}
-                                        className={`p-2 rounded-full transition-colors flex items-center gap-1 text-xs font-medium ${agentAnnotMode === 'bearing' ? 'bg-teal-600 hover:bg-teal-700' : agentAnnotMode === 'distance' ? 'bg-orange-600 hover:bg-orange-700' : 'hover:bg-gray-700'}`}
-                                        title={`Line annotation: ${agentAnnotMode === 'both' ? 'Bearing & Distance' : agentAnnotMode === 'bearing' ? 'Bearing only' : 'Distance only'} � click to cycle`}
+                                        onClick={() => setIsTinShadingEnabled(v => !v)}
+                                        className={`p-2 rounded-full transition-colors ${isTinShadingEnabled ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
+                                        title={isTinShadingEnabled ? 'TIN Shading: ON' : 'TIN Shading: OFF'}
+                                        aria-label="Toggle TIN shading"
                                     >
-                                        {agentAnnotMode === 'both' && <><span>B</span><span className="text-gray-400">+</span><span>D</span></>}
-                                        {agentAnnotMode === 'bearing' && <span>B</span>}
-                                        {agentAnnotMode === 'distance' && <span>D</span>}
+                                        <ToolbarSurfaceIcon className="h-[18px] w-[18px]" />
+                                    </button>
+                                    <button
+                                        onClick={() => setIsLayerPanelOpen(v => !v)}
+                                        className={`p-2 rounded-full transition-colors ${isLayerPanelOpen ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
+                                        title="Data Visibility"
+                                        aria-label="Data Visibility"
+                                    >
+                                        <ToolbarLayersIcon className="h-[18px] w-[18px]" />
                                     </button>
                                 </>
                             )}
                             
-                            <button onClick={() => setIsGridVisible(v => !v)} className={`p-2 rounded-full transition-colors ${isGridVisible ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-700'}`} title={isGridVisible ? 'Hide background grid' : 'Show background grid'}><GridIcon className={`w-6 h-6 ${isGridVisible ? 'text-white' : 'text-gray-400'}`}/></button>
-                            <button
-                                onClick={() => {
-                                    setSettings(prev => ({
-                                        ...prev,
-                                        googleMaps: {
-                                            ...prev.googleMaps,
-                                            enabled: !prev.googleMaps?.enabled,
-                                            ...(!prev.googleMaps?.enabled ? { mapType: 'naip' as const, scale: 2 } : {}),
-                                        },
-                                    }));
-                                }}
-                                className={`px-2.5 py-1 rounded text-xs font-bold font-mono transition-colors ${settings.googleMaps?.enabled ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
-                                title={settings.googleMaps?.enabled ? 'Map Imagery: ON (Click to toggle)' : 'Map Imagery: OFF (Click to toggle)'}
-                            >
-                                MAP
-                            </button>
+
                             {/* C3D Sync — mirror of the DLL connector: Sync button + active-drawing dropdown */}
                             {isC3DConnected && (
                                 <div className="relative flex items-center">
@@ -16931,9 +18842,34 @@ const AppContent = () => {
                                     )}
                                 </div>
                             )}
-                            <NotificationCenter notifications={headerNotifications} onDismiss={dismissNotification} onClearAll={clearNotifications} />
                             
                             <div className="flex-grow"></div>
+                            <button onClick={() => setIsGridVisible(v => !v)} className={`p-2 rounded-full transition-colors ${isGridVisible ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-700'}`} title={isGridVisible ? 'Hide background grid' : 'Show background grid'}><GridIcon className={`h-[18px] w-[18px] ${isGridVisible ? 'text-white' : 'text-gray-400'}`}/></button>
+                            <button
+                                onClick={() => {
+                                    setSettings(prev => ({
+                                        ...prev,
+                                        googleMaps: {
+                                            ...prev.googleMaps,
+                                            enabled: !prev.googleMaps?.enabled,
+                                            ...(!prev.googleMaps?.enabled ? { mapType: 'naip' as const, scale: 2 } : {}),
+                                        },
+                                    }));
+                                }}
+                                className={`px-2.5 py-2 rounded text-[11px] font-bold font-mono transition-colors ${settings.googleMaps?.enabled ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
+                                title={settings.googleMaps?.enabled ? 'Map Imagery: ON (Click to toggle)' : 'Map Imagery: OFF (Click to toggle)'}
+                            >
+                                MAP
+                            </button>
+                            <button
+                                onClick={showSettings}
+                                className="p-2 rounded-full transition-colors hover:bg-gray-700 text-gray-300"
+                                title="Settings"
+                                aria-label="Open Settings"
+                            >
+                                <CogIcon className="h-[18px] w-[18px]" />
+                            </button>
+                            <NotificationCenter notifications={headerNotifications} onDismiss={dismissNotification} onClearAll={clearNotifications} />
                         </div>
                         {/* Visual Panel Area */}
                         <div className="flex-grow min-h-0 relative">
@@ -16942,15 +18878,33 @@ const AppContent = () => {
                                <HistoryPanel onClose={() => setIsHistoryPanelOpen(false)} />
                              </div>
                            )}
+                           {isQuickHistoryOpen && (
+                             <UndoHistoryQuickPicker
+                               entries={canvasHistory.entries}
+                               onJump={(entryId) => {
+                                 canvasHistory.jumpTo(entryId);
+                                 setIsQuickHistoryOpen(false);
+                               }}
+                               onClose={() => setIsQuickHistoryOpen(false)}
+                               bottomOffset={commandBarHeight}
+                             />
+                           )}
                            <div className="absolute inset-0">
                              {activeVisualPanel === 'canvas' ? (
                                     <>
                                     <DrawingCanvas 
                                         ref={canvas2dRef}
                                         isDesktop={isDesktop}
-                                        isChatPanelVisible={isChatPanelVisible}
-                                        chatPanelWidth={chatPanelWidth}
-                                        isChatResizing={isResizingChat}
+                                        onCommandBarHeightChange={setCommandBarHeight}
+                                        commandBarRightExtension={isToolShelfVisible ? toolShelfWidth : 0}
+                                        // The tool shelf owns the right edge; the left-docked
+                                        // agent chat handles the conversation itself.
+                                        isChatPanelVisible={isToolShelfVisible}
+                                        chatPanelWidth={toolShelfWidth}
+                                        isChatResizing={isResizingToolShelf}
+                                        dockedA2UIKey={dockedA2UIMessage ? dockedA2UIKey : null}
+                                        onToggleA2UIDock={handleToggleA2UIDock}
+                                        agentChatOpenSignal={agentChatOpenSignal}
                                         keyInfo={{
                                             label: activeKeyStatusLabel,
                                             detail: activeKeyStatusDetail,
@@ -17000,6 +18954,8 @@ const AppContent = () => {
                                         ownerNameOffset={deedFile?.ownerNameOffset}
                                         onAddLine={handleAddLine}
                                         onDeleteLine={handleDeleteLine}
+                                        onDeletePoints={(pointNumbers) => pointNumbers.forEach(pn => handleDeletePoint(pn))}
+                                        onDeleteCenterline={(centerlineId) => setCenterlines(prev => prev.filter(cl => cl.id !== centerlineId))}
                                         onBatchLinesChange={handleBatchLines}
                                         canUndo={canUndo}
                                         canRedo={canRedo}
@@ -17033,6 +18989,7 @@ const AppContent = () => {
                                         agentAnnotMode={agentAnnotMode}
                                         onCycleAgentAnnotMode={cycleAgentAnnotMode}
                                         isGridVisible={isGridVisible}
+                                        tinShading={isTinShadingEnabled}
                                         onAddBoundaryCall={handleAddBoundaryCall}
                                         onConvertSelectionToBoundary={handleConvertSelectionToBoundary}
                                         onComputeCurrentClosure={handleComputeCurrentClosure}
@@ -17076,19 +19033,52 @@ const AppContent = () => {
                                         linetypes={cadManagerState.standard?.linetypes}
                                         globalLinetypeScale={cadManagerState.standard?.globalLinetypeScale ?? 1}
                                         layerLinetypeMap={layerLinetypeMap}
-                                        onOpenPointListPanel={() => { setIsPointListButtonPulsing(false); setIsPointListPanelVisible(p => !p); }}
-                                        isPointListPanelOpen={isPointListPanelVisible}
-                                        isPointListButtonPulsing={isPointListButtonPulsing}
+                                        agentMessages={currentChatHistory}
+                                        onSendAgentMessage={handleSendMessage}
+                                        onStopGenerating={handleStopGenerating}
+                                        isAgentLoading={isLoading}
+                                        thinkingTime={thinkingTime}
+                                        currentModelName={currentModelName}
+                                        suggestedQuestions={suggestedQuestions}
+                                        onToggleExpandMessage={handleToggleExpandMessage}
+                                        chatHeaderControls={chatHeaderControls}
+                                        chatBarAccessories={
+                                            activeAgent === AgentType.CIVIL_DRAFTER ? (
+                                                <div className="flex items-center gap-2 px-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setShowAutoDraftPanel(true);
+                                                            if (dockedTools.autoDraft) setIsToolShelfVisible(true);
+                                                        }}
+                                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 border border-violet-400/40 text-white text-[11px] font-bold shadow-sm transition-all active:scale-95"
+                                                        title="Open Auto Draft workflow panel"
+                                                    >
+                                                        <span>⚡</span>
+                                                        <span>Auto Draft</span>
+                                                    </button>
+                                                </div>
+                                            ) : undefined
+                                        }
+                                        toolsRowAccessories={boundaryToolsRowAccessories}
+                                        hasDockableTools={dockableToolItems.length > 0}
+                                        chatToolDialogs={
+                                            isToolShelfVisible
+                                                ? []
+                                                : dockableToolItems.filter(item => item.isDocked && item.id !== 'a2ui-chat-tool')
+                                        }
+                                        isToolDockOpen={isToolShelfVisible}
+                                        onToggleToolDock={toggleToolShelf}
                                         onOpenBoundaryEditor={() => {
                                             setIsBoundaryEditorButtonPulsing(false);
                                             if (!isBoundaryEditorVisible) {
                                                 setIsBoundaryEditorVisible(true);
                                                 setIsBoundaryDialogMinimized(false);
-                                                if (isBoundaryDialogDocked) setIsChatPanelVisible(true);
+                                                if (isBoundaryDialogDocked) setIsToolShelfVisible(true);
                                             } else {
                                                 if (isBoundaryDialogDocked) {
-                                                    if (!isChatPanelVisible) {
-                                                        setIsChatPanelVisible(true);
+                                                    if (!isToolShelfVisible) {
+                                                        setIsToolShelfVisible(true);
                                                         setIsBoundaryDialogMinimized(false);
                                                     } else {
                                                         setIsBoundaryDialogMinimized(p => !p);
@@ -17101,7 +19091,7 @@ const AppContent = () => {
                                         isBoundaryEditorOpen={
                                             isBoundaryEditorVisible && (
                                                 isBoundaryDialogDocked
-                                                    ? (isChatPanelVisible && !isBoundaryDialogMinimized)
+                                                    ? (isToolShelfVisible && !isBoundaryDialogMinimized)
                                                     : true
                                             )
                                         }
@@ -17176,8 +19166,10 @@ const AppContent = () => {
                                         />
                                     )}
                                     {/* Civil Drafter Auto Draft panel */}
-                                    {activeAgent === AgentType.CIVIL_DRAFTER && showAutoDraftPanel && (
+                                    {activeAgent === AgentType.CIVIL_DRAFTER && showAutoDraftPanel && !dockedTools.autoDraft && (
                                         <AutoDraftPanel
+                                            isDocked={false}
+                                            onToggleDock={() => toggleToolDock('autoDraft')}
                                             points={points}
                                             lines={lines}
                                             jobInfo={jobInfo}
@@ -17286,26 +19278,19 @@ const AppContent = () => {
                                         />
                                     )}
                                     
-                                    {/* Floating Point List Panel */}
-                                    {isPointListPanelVisible && (
-                                        <PointListPanel
-                                          pointLists={pointLists}
-                                          onClose={() => setIsPointListPanelVisible(false)}
-                                          onZoomToPoint={handleZoomToPoint}
-                                          onToggleContext={handleTogglePointListContext}
-                                          onTogglePointListVisibility={handleTogglePointListVisibility}
-                                        />
-                                    )}
                                     {/* Floating Data Visibility dialog (canvas toolbar Layers button) */}
                                     {isLayerPanelOpen && (() => {
-                                        const defaultPos = { x: Math.max(0, window.innerWidth - 400), y: 60 };
+                                        const headerBottom = (typeof document !== 'undefined'
+                                            ? document.querySelector<HTMLElement>('[data-canvas-header]')?.getBoundingClientRect().bottom
+                                            : null) ?? 56;
+                                        const defaultPos = { x: Math.max(0, window.innerWidth - 400), y: headerBottom + 12 };
                                         const dvPos = dataVisibilityPos || defaultPos;
                                         const handleDvDrag = (e: React.MouseEvent) => {
                                             e.preventDefault();
                                             dataVisibilityDragState.current = { dragging: true, startX: e.clientX, startY: e.clientY, startPosX: dvPos.x, startPosY: dvPos.y };
                                             const onMove = (ev: MouseEvent) => {
                                                 if (!dataVisibilityDragState.current.dragging) return;
-                                                setDataVisibilityPos({ x: dataVisibilityDragState.current.startPosX + (ev.clientX - dataVisibilityDragState.current.startX), y: dataVisibilityDragState.current.startPosY + (ev.clientY - dataVisibilityDragState.current.startY) });
+                                                setDataVisibilityPos({ x: Math.max(8, dataVisibilityDragState.current.startPosX + (ev.clientX - dataVisibilityDragState.current.startX)), y: Math.max(headerBottom + 12, dataVisibilityDragState.current.startPosY + (ev.clientY - dataVisibilityDragState.current.startY)) });
                                             };
                                             const onUp = () => { dataVisibilityDragState.current.dragging = false; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
                                             window.addEventListener('mousemove', onMove);
@@ -17647,17 +19632,27 @@ const AppContent = () => {
                            </div>
                         </div>
                     </div>
+                    {activeVisualPanel === 'canvas' && (
+                      <AgentToolShelf
+                        isOpen={isToolShelfVisible}
+                        width={toolShelfWidth}
+                        onResizeStart={handleToolShelfResizeMouseDown}
+                        accentColor={hexColor}
+                        bottomOffset={commandBarHeight}
+                        topOffset={56}
+                      >
+                        <AgentToolDock
+                          activeAgent={activeAgent}
+                          items={dockableToolItems}
+                          headerControls={chatHeaderControls}
+                          toolsRowAccessories={boundaryToolsRowAccessories}
+                          onClose={toggleToolShelf}
+                        />
+                      </AgentToolShelf>
+                    )}
                     
-                    {isChatPanelVisible && activeVisualPanel !== 'cadmanager' && activeVisualPanel !== 'gpsstakeout' && activeVisualPanel !== 'sheetview' && activeVisualPanel !== 'draftstylelib' && activeVisualPanel !== 'linetypemanager' && activeVisualPanel !== 'compliance' && (
-                        <div data-chat-panel className={`relative border-white/[0.06] ${isResizingChat ? '' : 'transition-all duration-300'} ${isDesktop ? 'flex-shrink-0 border-l' : 'h-1/2 border-t'}`} style={isDesktop ? { width: `${chatPanelWidth}px` } : {}}>
-                            {isDesktop && (
-                                <div
-                                    onMouseDown={handleChatResizeMouseDown}
-                                    className="absolute top-0 left-0 h-full w-2 cursor-col-resize z-10"
-                                    title="Resize Chat Panel"
-                                />
-                            )}
-                            <div className="h-full w-full flex flex-col">
+                    {false && (
+                        <div className="hidden">
                                 <ChatInterface
                                     messages={currentChatHistory}
                                     onSendMessage={handleSendMessage}
@@ -17693,6 +19688,7 @@ const AppContent = () => {
                                                 onAddPoint={handleAddPoint} 
                                                 activeAgent={activeAgent} 
                                                 settings={settings} 
+                                                onRunCogoSkill={handleRunCogoSkill}
                                             />
                                         ) : activeAgent === AgentType.CENTERLINE_STATIONING ? (
                                             <StationingChat
@@ -17990,31 +19986,7 @@ const AppContent = () => {
                                         ) : undefined
                                     }
                                 />
-                            </div>
                         </div>
-                    )}
-                    
-                    {!isChatPanelVisible && (
-                        <button
-                            ref={fabRef}
-                            onClick={handleFabClick}
-                            onMouseDown={handleFabPointerDown as any}
-                            onTouchStart={handleFabPointerDown as any}
-                            className={`fixed p-4 rounded-full bg-gray-800/80 border-2 border-${color}-400 text-white shadow-lg transition-transform duration-200 z-30 ${isLoading ? 'animate-pulse-thinking' : 'animate-pulse-border'}`}
-                            style={{
-                                left: fabPosition.initialized ? fabPosition.x : undefined,
-                                top: fabPosition.initialized ? fabPosition.y : undefined,
-                                right: fabPosition.initialized ? undefined : '1.5rem',
-                                bottom: fabPosition.initialized ? undefined : '1.5rem',
-                                transform: fabDragState.current.hasMoved ? 'translate3d(0, 0, 0) scale(1.1)' : 'translate3d(0, 0, 0) scale(1)',
-                                touchAction: 'none',
-                                willChange: 'transform',
-                                '--pulse-color': rgbColor,
-                            } as React.CSSProperties}
-                            title="Show Chat"
-                        >
-                            <ActiveAgentIcon className="w-6 h-6" />
-                        </button>
                     )}
                 </div>
             )}
@@ -18041,7 +20013,7 @@ const AppContent = () => {
           
           {/* Model Config Popup - Quick access to current model info and Gemini settings */}
           {showModelConfigPopup && (
-            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center" onClick={() => setShowModelConfigPopup(false)}>
+            <div className="fixed inset-0 bg-black/50 z-[9990] flex items-center justify-center" style={{ zIndex: 9990 }} onClick={() => setShowModelConfigPopup(false)}>
               <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-700" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-xl font-bold text-white">Model Configuration</h2>
@@ -18155,9 +20127,11 @@ const AppContent = () => {
               }}
             />
           )}
-          {isFloodPanelVisible && (
+          {isFloodPanelVisible && !dockedTools.flood && (
             <FloatingPanel
               title="Flood Zone Agent"
+              isDocked={false}
+              onToggleDock={() => toggleToolDock('flood')}
               onClose={() => setIsFloodPanelVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
               initialY={120}
@@ -18192,7 +20166,7 @@ const AppContent = () => {
               accentBorder="border-indigo-500/40"
               onClose={() => setIsFirmetteViewerVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(40, window.innerWidth / 2 - 240) : 80}
-              initialY={60}
+              initialY={72}
               width="min(500px, 96vw)"
               maxHeight="90vh"
             >
@@ -18220,9 +20194,11 @@ const AppContent = () => {
               </div>
             </FloatingPanel>
           )}
-          {isStructuresPanelVisible && (
+          {isStructuresPanelVisible && !dockedTools.structures && (
             <FloatingPanel
               title="Structures Agent"
+              isDocked={false}
+              onToggleDock={() => toggleToolDock('structures')}
               onClose={() => setIsStructuresPanelVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
               initialY={160}
@@ -18249,9 +20225,11 @@ const AppContent = () => {
             </FloatingPanel>
           )}
           {/* Soils Agent � SSURGO soil map-unit overlay floating panel */}
-          {isSoilsPanelVisible && (
+          {isSoilsPanelVisible && !dockedTools.soils && (
             <FloatingPanel
               title="Soils Agent"
+              isDocked={false}
+              onToggleDock={() => toggleToolDock('soils')}
               onClose={() => setIsSoilsPanelVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
               initialY={220}
@@ -18273,8 +20251,10 @@ const AppContent = () => {
             </FloatingPanel>
           )}
           {/* Profile Agent � client-side profile generator panel */}
-          {isProfileGenPanelVisible && (
+          {isProfileGenPanelVisible && !dockedTools.profileGen && (
             <ProfileGenerationPanel
+              isDocked={false}
+              onToggleDock={() => toggleToolDock('profileGen')}
               allPoints={pointLists.flatMap((l: import('./types.ts').PointList) => l.points)}
               profilePointCount={profileData?.length ?? 0}
               profileElevMin={profileData && profileData.length > 0 ? Math.min(...profileData.map((p: import('./types.ts').ProfilePoint) => p.elevation)) : undefined}
@@ -18289,10 +20269,12 @@ const AppContent = () => {
             />
           )}
           {/* GPS Rover � independent Stakeout floating panel (v26.05.19.1) */}
-          {isGpsStakeoutFloatingVisible && (
+          {isGpsStakeoutFloatingVisible && !dockedTools.gpsStakeout && (
             <FloatingPanel
               title="? Stakeout"
               accentBorder="border-blue-500/50"
+              isDocked={false}
+              onToggleDock={() => toggleToolDock('gpsStakeout')}
               onClose={() => setIsGpsStakeoutFloatingVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(20, window.innerWidth / 2 - 220) : 80}
               initialY={80}
@@ -18317,10 +20299,12 @@ const AppContent = () => {
             </FloatingPanel>
           )}
           {/* GPS Rover � independent Collect floating panel (v26.05.19.1) */}
-          {isGpsCollectFloatingVisible && (
+          {isGpsCollectFloatingVisible && !dockedTools.gpsCollect && (
             <FloatingPanel
               title="?? Collect"
               accentBorder="border-emerald-500/50"
+              isDocked={false}
+              onToggleDock={() => toggleToolDock('gpsCollect')}
               onClose={() => setIsGpsCollectFloatingVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(20, window.innerWidth / 2 + 20) : 80}
               initialY={80}
@@ -18344,10 +20328,12 @@ const AppContent = () => {
               />
             </FloatingPanel>
           )}
-          {shrinkwrap && isShrinkwrapPanelVisible && (
+          {shrinkwrap && isShrinkwrapPanelVisible && !dockedTools.shrinkwrap && (
             <FloatingPanel
               title="Shrinkwrap"
               accentBorder="border-violet-500/40"
+              isDocked={false}
+              onToggleDock={() => toggleToolDock('shrinkwrap')}
               onClose={() => setIsShrinkwrapPanelVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 460) : 120}
               initialY={160}
@@ -18429,15 +20415,8 @@ const AppContent = () => {
                   return { ...prev, excludedPns: [...pending] };
                 })}
                 isCommitted={shrinkwrap.isCommitted}
-                onDrawInclusion={() => {
-                  setShrinkwrap(prev => prev ? {
-                    ...prev,
-                    excludedPns: [...(prev.pendingExcludedPns ?? [])],
-                    isCommitted: true,
-                  } : prev);
-                  setIsInclusionBoundariesPanelVisible(true);
-                  logActionToFieldbook(`Shrinkwrap committed as an inclusion boundary on ${shrinkwrap.layer}.`);
-                }}
+                onDrawInclusion={handleCommitShrinkwrapAsInclusion}
+                onDrawBoundary={handleConvertShrinkwrapToBoundary}
                 onClearShrinkwrap={() => {
                   const pid = shrinkwrap.polylineId;
                   const layer = shrinkwrap.layer;
@@ -18451,10 +20430,12 @@ const AppContent = () => {
               />
             </FloatingPanel>
           )}
-          {isInclusionBoundariesPanelVisible && (
+          {isInclusionBoundariesPanelVisible && !dockedTools.inclusion && (
             <FloatingPanel
               title="Inclusion Boundaries"
               accentBorder="border-emerald-500/40"
+              isDocked={false}
+              onToggleDock={() => toggleToolDock('inclusion')}
               onClose={() => setIsInclusionBoundariesPanelVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
               initialY={200}
@@ -18534,10 +20515,12 @@ const AppContent = () => {
               />
             </FloatingPanel>
           )}
-          {activeAgent === AgentType.CONTOURING_AGENT && isContourGenPanelVisible && (
+          {activeAgent === AgentType.CONTOURING_AGENT && isContourGenPanelVisible && !dockedTools.contourGen && (
             <FloatingPanel
               title="Contour Generation"
               accentBorder="border-amber-500/30"
+              isDocked={false}
+              onToggleDock={() => toggleToolDock('contourGen')}
               onClose={() => setIsContourGenPanelVisible(false)}
               minimized={isContourGenMinimized}
               onToggleMinimize={() => setIsContourGenMinimized(v => !v)}
@@ -18564,10 +20547,12 @@ const AppContent = () => {
               />
             </FloatingPanel>
           )}
-          {activeAgent === AgentType.CONTOURING_AGENT && isContourEsriPanelVisible && (
+          {activeAgent === AgentType.CONTOURING_AGENT && isContourEsriPanelVisible && !dockedTools.contourEsri && (
             <FloatingPanel
               title="ESRI REST Contour Sources"
               accentBorder="border-teal-500/30"
+              isDocked={false}
+              onToggleDock={() => toggleToolDock('contourEsri')}
               onClose={() => setIsContourEsriPanelVisible(false)}
               minimized={isContourEsriMinimized}
               onToggleMinimize={() => setIsContourEsriMinimized(v => !v)}
@@ -18592,10 +20577,12 @@ const AppContent = () => {
               />
             </FloatingPanel>
           )}
-          {activeAgent === AgentType.STEEP_SLOPE_AGENT && isSteepSlopePanelVisible && (
+          {activeAgent === AgentType.STEEP_SLOPE_AGENT && isSteepSlopePanelVisible && !dockedTools.steepSlope && (
             <FloatingPanel
               title="Steep Slope"
               accentBorder="border-rose-500/30"
+              isDocked={false}
+              onToggleDock={() => toggleToolDock('steepSlope')}
               onClose={() => setIsSteepSlopePanelVisible(false)}
               minimized={isSteepSlopePanelMinimized}
               onToggleMinimize={() => setIsSteepSlopePanelMinimized(v => !v)}
@@ -18655,23 +20642,9 @@ const AppContent = () => {
           {!showWelcome && isReleaseStagesModalVisible && <ReleaseStagesModal isOpen={isReleaseStagesModalVisible} onClose={() => setIsReleaseStagesModalVisible(false)} />}
 
           {/* Contour Generations Manager � persistent across agents (v26.05.19.3) */}
-          {!showWelcome && isContourManagementVisible && (
-            <ContourManagementPanel
-              generations={contourGenerations}
-              inclusionBoundaries={inclusionBoundaries}
-              onToggleVisible={handleContourGenToggleVisible}
-              onRename={handleContourGenRename}
-              onSetColor={handleContourGenSetColor}
-              onSetOpacity={handleContourGenSetOpacity}
-              onToggleEsriBlend={handleContourGenToggleBlend}
-              onSetEsriBlendPolylineId={handleContourGenSetBlendPolylineId}
-              onDelete={handleContourGenDelete}
-              onNewGeneration={() => setIsContourGenPanelVisible(true)}
-              onClose={() => setIsContourManagementVisible(false)}
-            />
+          {!showWelcome && isContourManagementVisible && !dockedTools.contourMgmt && (
+            renderContourMgmtPanel(false)
           )}
-
-          {/* Claude 4.7 Vertex AI settings panel (v26.05.19.3) */}
           {!showWelcome && isClaudeSettingsVisible && (
             <ClaudeSettingsPanel
               selectedModel={claudeSettingsModel || undefined}
@@ -19074,6 +21047,7 @@ const AppContent = () => {
           <CacpActivityIndicator enabled={!!settings.showCacpNotifications} />
           </div>
         </div>
+        </A2UIHostContext.Provider>
         </HighlightContext.Provider>
         </UIContext.Provider>
       </AgentContext.Provider>

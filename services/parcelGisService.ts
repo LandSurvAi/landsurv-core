@@ -48,6 +48,8 @@ export interface ParcelGisServiceDef {
   ownerFields?: string[];
   /** USPS state abbreviation (e.g. 'PA'), used for county → state fallback. */
   state?: string;
+  /** County basename (e.g. 'Montgomery') when this entry is a county layer. */
+  county?: string;
   /** Where the entry came from. Defaults to 'county' for built-ins. */
   scope?: 'county' | 'statewide' | 'custom';
   /** Optional secondary layer for owner/deed enrichment by parcel id. */
@@ -287,6 +289,7 @@ const PARCEL_COUNTY_SERVICES: ParcelGisServiceDef[] = [
   {
     id: 'montco-pa',
     label: 'Montgomery County, PA',
+    county: 'Montgomery',
     region: 'Pennsylvania',
     state: 'PA',
     scope: 'county',
@@ -314,6 +317,7 @@ const PARCEL_COUNTY_SERVICES: ParcelGisServiceDef[] = [
   {
     id: 'bucks-pa',
     label: 'Bucks County, PA',
+    county: 'Bucks',
     region: 'Pennsylvania',
     state: 'PA',
     scope: 'county',
@@ -326,6 +330,7 @@ const PARCEL_COUNTY_SERVICES: ParcelGisServiceDef[] = [
   {
     id: 'berks-pa',
     label: 'Berks County, PA',
+    county: 'Berks',
     region: 'Pennsylvania',
     state: 'PA',
     scope: 'county',
@@ -340,6 +345,7 @@ const PARCEL_COUNTY_SERVICES: ParcelGisServiceDef[] = [
   {
     id: 'lehigh-pa',
     label: 'Lehigh County, PA',
+    county: 'Lehigh',
     region: 'Pennsylvania',
     state: 'PA',
     scope: 'county',
@@ -365,6 +371,7 @@ const PARCEL_COUNTY_SERVICES: ParcelGisServiceDef[] = [
   {
     id: 'philly-pa',
     label: 'Philadelphia County, PA',
+    county: 'Philadelphia',
     region: 'Pennsylvania',
     state: 'PA',
     scope: 'county',
@@ -378,6 +385,7 @@ const PARCEL_COUNTY_SERVICES: ParcelGisServiceDef[] = [
   {
     id: 'chester-pa',
     label: 'Chester County, PA',
+    county: 'Chester',
     region: 'Pennsylvania',
     state: 'PA',
     scope: 'county',
@@ -392,6 +400,7 @@ const PARCEL_COUNTY_SERVICES: ParcelGisServiceDef[] = [
   {
     id: 'lancaster-pa',
     label: 'Lancaster County, PA',
+    county: 'Lancaster',
     region: 'Pennsylvania',
     state: 'PA',
     scope: 'county',
@@ -528,6 +537,47 @@ export function getAllParcelServices(): ParcelGisServiceDef[] {
 
 export function findParcelServiceById(id: string): ParcelGisServiceDef | null {
   return getAllParcelServices().find((s) => s.id === id) ?? null;
+}
+
+/** Normalize a county name for comparison ("Montgomery County" → "montgomery"). */
+function normalizeCountyName(name: string): string {
+  return String(name ?? '')
+    .replace(/\b(county|parish|borough|census area|municipio)\b/gi, '')
+    .replace(/[^a-z0-9]/gi, '')
+    .toLowerCase();
+}
+
+export interface ParcelServiceMatch {
+  service: ParcelGisServiceDef;
+  /** 'county' when the county's own parcel fabric matched; 'statewide' is the fallback. */
+  match: 'county' | 'statewide';
+}
+
+/**
+ * Pick the best built-in parcel layer for a detected jurisdiction.
+ * Curated county layers win; otherwise the state's statewide parcel fabric is
+ * used so a project in an uncurated county still has a one-click source.
+ */
+export function findParcelServiceForJurisdiction(jurisdiction: {
+  state?: string;
+  county?: string;
+}): ParcelServiceMatch | null {
+  const raw = (jurisdiction.state ?? '').trim();
+  if (!raw) return null;
+  const abbr = raw.length === 2 ? raw.toUpperCase() : US_STATE_ABBR[raw.toLowerCase()];
+  if (!abbr) return null;
+
+  const countyKey = normalizeCountyName(jurisdiction.county ?? '');
+  if (countyKey) {
+    const countyService = PARCEL_COUNTY_SERVICES.find((s) =>
+      s.state === abbr &&
+      normalizeCountyName(s.county ?? s.label.split(',')[0]) === countyKey,
+    );
+    if (countyService) return { service: countyService, match: 'county' };
+  }
+
+  const statewide = PARCEL_STATEWIDE_SERVICES.find((s) => s.state === abbr);
+  return statewide ? { service: statewide, match: 'statewide' } : null;
 }
 
 /** Statewide layer for a USPS abbreviation or full state name, if we have one. */

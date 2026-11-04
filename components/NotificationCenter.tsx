@@ -96,7 +96,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ notifications, 
                 className={`p-2 rounded-full hover:bg-gray-700 transition-colors relative ${hasAny ? 'animate-pulse' : ''}`}
                 title={hasAny ? `${badge} notification${badge === 1 ? '' : 's'}` : 'No notifications'}
             >
-                <ExclamationTriangleIcon className={`w-6 h-6 ${bellColor}`} />
+                <ExclamationTriangleIcon className={`h-[18px] w-[18px] ${bellColor}`} />
                 {hasAny && (
                     <span className={`absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center ring-2 ${severityStyles[topSeverity].ring} ${
                         topSeverity === 'error' ? 'bg-rose-600 text-white'

@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
-import { CameraIcon, UploadIcon, HomeIcon } from './icons';
+import { CameraIcon } from './icons';
+import { UploadShell, UploadPanel, UploadDropzone, UploadPrimaryButton, UploadActionBar, UploadFileList } from './UploadShell.tsx';
 import { type SessionFile } from '../types';
 import { useAppState } from '../contexts/AppStateContext.tsx';
 
@@ -72,52 +73,49 @@ const ImageInput: React.FC<ImageInputProps> = ({ onImagesSubmitted, onGoBack, ba
   const handleClick = () => { document.getElementById('image-file-input')?.click(); };
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-full p-8 text-center">
-      <button onClick={onGoBack} className="absolute top-4 left-4 p-2 text-gray-300 hover:text-white transition-colors" title={backButtonTitle}>
-        <HomeIcon className="w-6 h-6"/>
-      </button>
-      <h1 className="text-5xl sm:text-6xl font-extrabold leading-none tracking-tight text-center mb-4">
-          <span className="text-white">Image</span><span className="text-red-400">Analyzer</span><span className="text-[0.5em]"><span className="text-gray-500">.</span><span className="text-white">Land</span><span className="text-cyan-400">Surv</span><span className="text-green-400">.ai</span></span><sup className="text-xl text-gray-500">™</sup>
-      </h1>
-      <p className="text-gray-300 mb-6 max-w-lg">Upload one or more site photos. The AI will help you analyze, tag, and associate them with project data.</p>
-      
-      <div className="w-full max-w-2xl flex flex-col items-center gap-4">
-        <div
-          className={`w-full cursor-pointer flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-lg transition-colors duration-300 ${isDragging ? 'border-red-400 bg-gray-700/50' : 'border-gray-600 hover:border-red-500'}`}
-          onDragEnter={handleDragEnter} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={handleDrop} onClick={handleClick}
-        >
-          <input id="image-file-input" type="file" className="hidden" accept="image/*" multiple onChange={handleFileChange} />
-          <UploadIcon className="w-16 h-16 mb-4 text-gray-500" />
-          <h2 className="text-xl font-semibold text-white">Drop Image Files Here</h2>
-          <p className="text-gray-400 mt-2">or click to browse local files</p>
+    <UploadShell
+      icon={CameraIcon}
+      accent="#f87171"
+      title="Image Analyzer"
+      description="Drop site photos and let the agent tag, analyze, and tie them back to your project data."
+      onGoBack={onGoBack}
+      backTitle={backButtonTitle}
+    >
+      <UploadPanel>
+        <UploadDropzone
+          id="image-file-input"
+          accept="image/*"
+          multiple
+          onFiles={(selected) => handleFiles(selected)}
+          onDrop={handleDrop}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          isDragging={isDragging}
+          title="Drop image files here"
+          hint="or click to browse · JPG, PNG, WebP, and other raster formats"
+        />
+
+        <div className="mt-3">
+          <UploadFileList
+            files={files.map((file, index) => ({ key: `${file.name}-${index}`, name: file.name }))}
+            title="Queued images"
+          />
         </div>
+      </UploadPanel>
 
-        {files.length > 0 && (
-          <div className="w-full text-left bg-gray-900/50 p-3 rounded-lg border border-gray-700">
-            <h4 className="font-semibold mb-2">Selected Files:</h4>
-            <ul className="text-sm list-disc list-inside text-gray-300">
-              {files.map((f, i) => <li key={i} className="truncate">{f.name}</li>)}
-            </ul>
-          </div>
-        )}
-
-        {isProcessing ? (
-             <div className="mt-4 text-center">
-                <div className="w-8 h-8 mx-auto border-4 border-red-400 border-t-transparent rounded-full animate-spin mb-4"></div>
-                <h2 className="text-xl font-semibold text-white">Processing...</h2>
-                <p className="text-red-300 mt-2 font-mono text-sm">{progress}</p>
-              </div>
-        ) : (
-             <button
-                onClick={processFiles}
-                disabled={files.length === 0}
-                className="mt-4 px-8 py-3 text-lg font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors duration-200"
-            >
-                Process {files.length} Image{files.length !== 1 && 's'}
-            </button>
-        )}
-      </div>
-    </div>
+      {isProcessing ? (
+        <div className="flex items-center gap-2.5 rounded-lg border border-white/[0.07] bg-black/20 px-3 py-2.5">
+          <span className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-red-300 border-t-transparent" />
+          <span className="min-w-0 truncate font-mono text-[11px] text-slate-400">{progress || 'Processing…'}</span>
+        </div>
+      ) : (
+        <UploadActionBar note={files.length === 0 ? 'No images queued yet' : `${files.length} image${files.length === 1 ? '' : 's'} queued`}>
+          <UploadPrimaryButton onClick={processFiles} disabled={files.length === 0}>
+            Process {files.length} image{files.length !== 1 && 's'}
+          </UploadPrimaryButton>
+        </UploadActionBar>
+      )}
+    </UploadShell>
   );
 };
 

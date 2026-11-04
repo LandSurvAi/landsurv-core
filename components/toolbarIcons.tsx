@@ -104,6 +104,23 @@ export const ToolbarAddPointIcon: React.FC<IconProps> = (props) => (
 );
 
 /** Pencil over chained linework — drawing tools. */
+/** Adjustable crescent wrench with a worm screw — the Tools tab. */
+export const AdjustableWrenchIcon: React.FC<IconProps> = (props) => (
+  <Base {...props}>
+    <g transform="rotate(45 12 12)">
+      {/* Filled silhouette: handle, two jaws with a real opening, and a
+          worm-screw bore cut out with evenodd so it works on any surface. */}
+      <path
+        d="M8.6 3.4H16v7.8h-2.6v10.2h-2.8V11.2H8.6V9.4H4.2V7.6h4.4V5.4H3.6V3.4Zm4.5 4a1.15 1.15 0 1 0 0 2.3 1.15 1.15 0 0 0 0-2.3Z"
+        fill="currentColor"
+        fillRule="evenodd"
+        stroke="none"
+        strokeWidth="0"
+      />
+    </g>
+  </Base>
+);
+
 export const ToolbarDrawToolsIcon: React.FC<IconProps> = (props) => (
   <Base {...props}>
     <path d="M2.6 17.4 7 13l2.6 2.4 4.1-4.1" strokeWidth="1.45" strokeLinejoin="round" strokeLinecap="round" />

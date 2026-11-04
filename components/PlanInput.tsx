@@ -1,6 +1,7 @@
 
 import React, { useState, useCallback } from 'react';
-import { DocumentDuplicateIcon, UploadIcon, HomeIcon } from './icons';
+import { DocumentDuplicateIcon } from './icons';
+import { UploadShell, UploadPanel, UploadDropzone, UploadPrimaryButton, UploadActionBar, UploadFileList } from './UploadShell.tsx';
 import { processPdfForMultimodal } from '../utils/pdfUtils';
 import PdfPageSelector from './PdfPageSelector';
 import { type SessionFile } from '../types';
@@ -185,7 +186,14 @@ const PlanInput: React.FC<PlanInputProps> = ({ onPlansSubmitted, onGoBack, backB
   const handleClick = () => { document.getElementById('plan-file-input')?.click(); };
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-full p-8 text-center">
+    <UploadShell
+      icon={DocumentDuplicateIcon}
+      accent="#fb923c"
+      title="Civil Plan Expert"
+      description="Drop one or more PDF plan sheets. The agent reads them and helps you extract and calculate the data you need."
+      onGoBack={onGoBack}
+      backTitle={backButtonTitle}
+    >
       {/* Page Selector Modal - only show if file index is valid and file needs page selection */}
       {showPageSelector && selectorIndex !== null && files[selectorIndex] && (!files[selectorIndex].pages || files[selectorIndex].pages!.length === 0) && (
         <PdfPageSelector
@@ -198,69 +206,54 @@ const PlanInput: React.FC<PlanInputProps> = ({ onPlansSubmitted, onGoBack, backB
         />
       )}
 
-      <button onClick={onGoBack} className="absolute top-4 left-4 p-2 text-gray-300 hover:text-white transition-colors" title={backButtonTitle}>
-        <HomeIcon className="w-6 h-6"/>
-      </button>
-      <h1 className="text-5xl sm:text-6xl font-extrabold leading-none tracking-tight text-center mb-4">
-          <span className="text-white">Plan</span><span className="text-orange-400">Expert</span><span className="text-[0.5em]"><span className="text-gray-500">.</span><span className="text-white">Land</span><span className="text-cyan-400">Surv</span><span className="text-green-400">.ai</span></span><sup className="text-xl text-gray-500">™</sup>
-      </h1>
-      <p className="text-gray-300 mb-6 max-w-lg">Upload one or more PDF plan sheets. The AI will read them and help you extract and calculate data.</p>
-      
-      <div className="w-full max-w-2xl flex flex-col items-center gap-4">
-        <div
-          className={`w-full cursor-pointer flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-lg transition-colors duration-300 ${isDragging ? 'border-orange-400 bg-gray-700/50' : 'border-gray-600 hover:border-orange-500'}`}
-          onDragEnter={handleDragEnter} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={handleDrop} onClick={handleClick}
-        >
-          <input id="plan-file-input" type="file" className="hidden" accept=".pdf,application/pdf" multiple onChange={handleFileChange} />
-          <UploadIcon className="w-16 h-16 mb-4 text-gray-500" />
-          <h2 className="text-xl font-semibold text-white">Drop PDF Plan Sheets Here</h2>
-          <p className="text-gray-400 mt-2">or click to browse local files</p>
+      <UploadPanel>
+        <UploadDropzone
+          id="plan-file-input"
+          accept=".pdf,application/pdf"
+          multiple
+          onFiles={(selected) => handleFiles(selected)}
+          onDrop={handleDrop}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          isDragging={isDragging}
+          title="Drop PDF plan sheets here"
+          hint="or click to browse · multi-page sheets are supported"
+        />
+
+        <div className="mt-3">
+          <UploadFileList
+            files={files.map((fw, i) => ({
+              key: i,
+              name: fw.file.name,
+              meta: fw.pages && fw.pages.length > 0 ? `${fw.pages.length} page${fw.pages.length !== 1 ? 's' : ''}` : undefined,
+              action: (
+                <button
+                  type="button"
+                  onClick={() => showPageSelectorForFile(i)}
+                  className="rounded-md border border-white/[0.10] px-2 py-1 text-[10.5px] font-medium text-slate-300 transition-colors hover:border-[color:var(--up-accent)] hover:text-slate-100"
+                >
+                  {fw.pages && fw.pages.length > 0 ? 'Edit pages' : 'Select pages'}
+                </button>
+              ),
+            }))}
+            title="Plan sheets"
+          />
         </div>
+      </UploadPanel>
 
-        {files.length > 0 && (
-          <div className="w-full text-left bg-gray-900/50 p-3 rounded-lg border border-gray-700">
-            <h4 className="font-semibold mb-2">Selected Files:</h4>
-            <ul className="text-sm space-y-2">
-              {files.map((fw, i) => (
-                <li key={i} className="flex items-center justify-between p-2 bg-gray-800 rounded border border-gray-700">
-                  <span className="truncate text-gray-300">{fw.file.name}</span>
-                  {fw.pages && fw.pages.length > 0 ? (
-                    <button
-                      onClick={() => showPageSelectorForFile(i)}
-                      className="text-xs px-2 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded transition-colors"
-                    >
-                      {fw.pages.length} page{fw.pages.length !== 1 ? 's' : ''}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => showPageSelectorForFile(i)}
-                      className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
-                    >
-                      Select pages
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {isParsing ? (
-             <div className="mt-4 text-center">
-                <div className="w-8 h-8 mx-auto border-4 border-orange-400 border-t-transparent rounded-full animate-spin mb-4"></div>
-                <h2 className="text-xl font-semibold text-white">Processing...</h2>
-                <p className="text-orange-300 mt-2 font-mono text-sm">{progress}</p>
-              </div>
-        ) : (
-             <button
-                onClick={processFiles}
-                disabled={files.length === 0}
-                className="mt-4 px-8 py-3 text-lg font-semibold text-white bg-orange-600 rounded-lg hover:bg-orange-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors duration-200"
-            >
-                Process {files.length} Plan{files.length !== 1 && 's'}
-            </button>
-        )}      </div>
-    </div>
+      {isParsing ? (
+        <div className="flex items-center gap-2.5 rounded-lg border border-white/[0.07] bg-black/20 px-3 py-2.5">
+          <span className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-orange-300 border-t-transparent" />
+          <span className="min-w-0 truncate font-mono text-[11px] text-slate-400">{progress || 'Processing…'}</span>
+        </div>
+      ) : (
+        <UploadActionBar note={files.length === 0 ? 'No plan sheets selected yet' : `${files.length} sheet${files.length === 1 ? '' : 's'} ready`}>
+          <UploadPrimaryButton onClick={processFiles} disabled={files.length === 0}>
+            Process {files.length} plan{files.length !== 1 && 's'}
+          </UploadPrimaryButton>
+        </UploadActionBar>
+      )}
+    </UploadShell>
   );
 };
 

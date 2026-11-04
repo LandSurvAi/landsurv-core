@@ -16,7 +16,45 @@ export interface DispatchResult {
   error?: string;
 }
 
+export type SpecialistDelegateHandler = (
+  targetAgent: AgentType,
+  query: string,
+  reason?: string
+) => Promise<void> | void;
+
 class LsvzOrchestrator {
+  private delegateHandler: SpecialistDelegateHandler | null = null;
+
+  /** Register the host callback that executes a specialist agent turn. */
+  setSpecialistDelegateHandler(handler: SpecialistDelegateHandler | null): void {
+    this.delegateHandler = handler;
+  }
+
+  /** Delegate a turn to a specialist agent pipeline (e.g. Civil Drafter, Deed Reader). */
+  async delegateToSpecialist(
+    targetAgent: AgentType,
+    query: string,
+    reason?: string
+  ): Promise<{ delegated: boolean; targetAgent: AgentType; error?: string }> {
+    if (!this.delegateHandler) {
+      return {
+        delegated: false,
+        targetAgent,
+        error: 'No specialist delegate handler registered in host.',
+      };
+    }
+    try {
+      await this.delegateHandler(targetAgent, query, reason);
+      return { delegated: true, targetAgent };
+    } catch (e) {
+      return {
+        delegated: false,
+        targetAgent,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
   /** Dispatch a single skill to its registered owner. */
   async dispatch(skillId: string, payload: Record<string, unknown> = {}, timeoutMs = 5000): Promise<DispatchResult> {
     const owner = agentRegistry.findOwnerOfSkill(skillId);
@@ -69,5 +107,20 @@ bus.onCommand('lsvz_dispatch', async (message) => {
     timestamp: Date.now(),
     data: { result },
     error: result.error,
+  };
+});
+
+bus.onCommand('lsvz_delegate_agent', async (message) => {
+  const targetAgent = String(message.data.targetAgent || '') as AgentType;
+  const query = String(message.data.query || '');
+  const reason = message.data.reason ? String(message.data.reason) : undefined;
+  const res = await lsvzOrchestrator.delegateToSpecialist(targetAgent, query, reason);
+  return {
+    requestId: message.id,
+    from: AgentType.LSVZ_AGENT,
+    success: res.delegated,
+    timestamp: Date.now(),
+    data: { delegated: res.delegated, targetAgent: res.targetAgent, reason },
+    error: res.error,
   };
 });

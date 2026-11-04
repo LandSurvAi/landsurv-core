@@ -63,7 +63,7 @@ export const agentConfig: { [key in AgentType]?: AgentConfig } = {
   [AgentType.CONTOURING_AGENT]: { icon: ContourIcon, label: 'Contouring', color: 'amber' },
   [AgentType.STEEP_SLOPE_AGENT]: { icon: SlopeIcon, label: 'Steep Slope', color: 'red' },
   [AgentType.IMAGE_ANALYZER]: { icon: CameraIcon, label: 'Image Analyzer', color: 'red' },
-  [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSVZ Meta-Agent', color: 'slate' },
+  [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSAI Agent', color: 'slate' },
   [AgentType.PROFILE_AGENT]: { icon: ProfileIcon, label: 'Profile & XS', color: 'sky' },
   [AgentType.COGO_AGENT]: { icon: CogoIcon, label: 'COGO', color: 'violet' },
   [AgentType.GNSS_AGENT]: { icon: SatelliteIcon, label: 'RINEX', color: 'lime' },
@@ -195,6 +195,8 @@ export const addDataButtonLabels: { [key in AgentType]?: string } = {
   [AgentType.IMAGE_ANALYZER]: 'Add Images...',
   [AgentType.TITLE_SEARCH]: 'Add Deeds...',
   [AgentType.STANDARDS_COMPLIANCE]: 'Upload Compliance PDFs...',
+  [AgentType.CAD_MANAGER]: 'Upload Standards File...',
+  [AgentType.ZONING_AGENT]: 'Set Jurisdiction...',
 };
 
 // ============================================================================

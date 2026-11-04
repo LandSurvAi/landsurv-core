@@ -164,7 +164,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                       </span>
                     </div>
                     <p className="text-sm text-slate-300 light-theme:text-gray-600 leading-relaxed max-w-lg">
-                      Open the full CAD environment with AI-assisted and manual drafting tools, COGO solvers, layer management, and Civil 3D sync. Starts with a clean workspace.
+                      Open the full CAD environment with the LSAI Agent in command: AI-assisted and manual drafting, COGO solvers, layer management, and Civil 3D sync, all connected to the active project.
                     </p>
                   </div>
 

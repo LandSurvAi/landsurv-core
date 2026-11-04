@@ -134,7 +134,7 @@ const ASK_PEER_EXAMPLE = `// An AI agent emits this JSON fragment inside its res
   }
 }
 
-// ── Dispatch via the LSVZ Orchestrator hub ────────────────────────────────
+// ── Dispatch via the LSAI Agent hub ───────────────────────────────────────
 {
   "askPeer": {
     "skillId": "lsvz_dispatch",
@@ -202,7 +202,7 @@ const AGENT_MANIFEST_SNIPPET = `// services/AgentRegistry.ts — manifest declar
 interface AgentManifest {
   agent:        AgentType;
   displayName:  string;
-  cacpEnabled:  boolean;  // true = UI badge shown + LSVZ orchestrator enabled
+  cacpEnabled:  boolean;  // true = UI badge shown + LSAI orchestration enabled
   version:      string;   // bump when shape changes
   skills:       SkillSchema[];
 }
@@ -439,8 +439,8 @@ export function CacpSubdomainPage({ onClose }: { onClose?: () => void }) {
             },
             {
               icon: CpuIcon,
-              title: 'LSVZ Orchestrator & Live Memory',
-              body: 'The LSVZ hub owns lsvz_dispatch and kb_query / kb_record. On every chat turn, the host injects live Project Knowledge Base facts and recent CACP cached results so newly learned session facts are immediately visible to all initialized agents.',
+              title: 'LSAI Agent & Live Memory',
+              body: 'The LSAI Agent owns lsvz_dispatch and kb_query / kb_record. On every chat turn, the host injects live Project Knowledge Base facts and recent specialist results so newly learned session facts are immediately visible to all initialized agents.',
             },
             {
               icon: BroadcastIcon,
@@ -808,7 +808,7 @@ export function CacpSubdomainPage({ onClose }: { onClose?: () => void }) {
       <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 border-t border-gray-800">
         <h2 className="text-2xl font-bold text-white mb-2">Project Knowledge Base</h2>
         <p className="text-gray-400 mb-6 max-w-3xl text-sm">
-          The LSVZ Orchestrator hub agent maintains a session-scoped Knowledge Base (KB) —
+          The LSAI Agent maintains a session-scoped Knowledge Base (KB) —
           a structured store of facts that agents discover and share during a session.
           Any CACP-enabled agent can write facts via <code className="text-emerald-400 font-mono">kb_record</code> and
           query them via <code className="text-emerald-400 font-mono">kb_query</code>.

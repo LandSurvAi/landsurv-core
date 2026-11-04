@@ -182,6 +182,47 @@ export interface ChatMessageAction {
   };
 }
 
+export type A2UIStandardsFacet = 'all' | 'layers' | 'codes' | 'linetypes' | 'symbols';
+
+/** Pre-applied filter for the compact A2UI CAD-standards sheet. */
+export interface A2UIStandardsFilter {
+  /** Search text extracted from the user's question (layer/code/linetype name). */
+  query?: string;
+  /** Which section of the standard to show first. */
+  facet?: A2UIStandardsFacet;
+}
+
+export type A2UIWidgetType =
+  | 'point-upload'
+  | 'deed-upload'
+  | 'raw-upload'
+  | 'civil-drafter-upload'
+  | 'plan-upload'
+  | 'dxf-upload'
+  | 'gis-upload'
+  | 'zoning-intake'
+  | 'title-search-upload'
+  | 'standards-compliance-intake'
+  | 'image-upload'
+  | 'centerline-upload'
+  | 'cad-manager-intake'
+  | 'cad-standards-table';
+
+export interface A2UIPayload {
+  /** Surface kind: inquisitive prompt, upload/intake widget, or data explorer. */
+  kind: 'intake-prompt' | 'upload-widget' | 'standards-explorer';
+  /** The agent that owns this A2UI surface */
+  agent: AgentType;
+  /** Which interactive upload/intake widget to render */
+  widgetType: A2UIWidgetType;
+  /** Current lifecycle state of the A2UI surface */
+  status?: 'prompting' | 'expanded' | 'completed' | 'dismissed';
+  /** Optional summary displayed once completed */
+  completedSummary?: string;
+  /** Pre-set query/facet for the compact CAD-standards explorer. */
+  standardsFilter?: A2UIStandardsFilter;
+}
+
 export interface ChatMessage {
   role: MessageRole;
   text: string;
@@ -193,6 +234,8 @@ export interface ChatMessage {
   model?: string;
   /** Interactive clarifying question options or quick reply choices presented by the model */
   questionOptions?: string[];
+  /** A2UI (Agent-to-UI) interactive surface embedded directly in the chat message */
+  a2ui?: A2UIPayload;
   sources?: any[];
 }
 

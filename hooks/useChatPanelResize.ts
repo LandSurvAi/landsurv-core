@@ -14,16 +14,20 @@ import type React from 'react';
  * @param setChatPanelWidth - Function to commit the final chat panel width
  * @param minWidth - Minimum width for the chat panel (default: 320px)
  * @param maxWidthOffset - Space to keep for main panel (default: 400px)
+ * @param side - Edge the panel is docked to; controls which way width grows
  */
 export function useChatPanelResize(
   isResizingChat: boolean,
   setIsResizingChat: (isResizing: boolean) => void,
   setChatPanelWidth: (width: number) => void,
   minWidth: number = 320,
-  maxWidthOffset: number = 400
+  maxWidthOffset: number = 400,
+  side: 'left' | 'right' = 'right'
 ) {
   /** The `[data-chat-panel]` element being dragged. */
   const panelRef = useRef<HTMLElement | null>(null);
+  /** Viewport x of a left-docked panel's edge, captured at drag start. */
+  const panelLeftRef = useRef<number>(0);
   /** Latest width computed on mousemove, applied in the next frame. */
   const pendingWidthRef = useRef<number | null>(null);
   const frameRef = useRef<number | null>(null);
@@ -44,6 +48,7 @@ export function useChatPanelResize(
     if (!panel) return;
 
     panelRef.current = panel;
+    panelLeftRef.current = panel.getBoundingClientRect().left;
     pendingWidthRef.current = panel.getBoundingClientRect().width;
     // Keep the compositor from guessing; no transition is active during drag.
     panel.style.willChange = 'width';
@@ -54,14 +59,17 @@ export function useChatPanelResize(
     if (!isResizingChat) return;
 
     const maxWidth = Math.max(minWidth, window.innerWidth - maxWidthOffset);
-    const nextWidth = Math.max(minWidth, Math.min(maxWidth, window.innerWidth - e.clientX));
+    const rawWidth = side === 'left'
+      ? e.clientX - panelLeftRef.current
+      : window.innerWidth - e.clientX;
+    const nextWidth = Math.max(minWidth, Math.min(maxWidth, rawWidth));
     pendingWidthRef.current = nextWidth;
 
     // Coalesce multiple pointer events into one style write per frame.
     if (frameRef.current === null) {
       frameRef.current = requestAnimationFrame(flushPendingWidth);
     }
-  }, [isResizingChat, minWidth, maxWidthOffset, flushPendingWidth]);
+  }, [isResizingChat, minWidth, maxWidthOffset, side, flushPendingWidth]);
 
   const handleChatResizeMouseUp = useCallback(() => {
     if (frameRef.current !== null) {

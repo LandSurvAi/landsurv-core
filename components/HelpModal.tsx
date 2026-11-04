@@ -41,7 +41,7 @@ const agentInfo = [
     { type: AgentType.IMAGE_ANALYZER, icon: CameraIcon, title: 'Image Analyzer', description: 'Analyzes site photos, adds tags, and associates them with points.' },
     { type: AgentType.FILE_MANAGER, icon: FolderIcon, title: 'File Manager', description: 'Provides an overview of all files in the current session.' },
     { type: AgentType.TEXT_EDITOR, icon: DocumentTextIcon, title: 'Text Editor', description: 'A simple text editor with an AI assistant for modifying files.' },
-    { type: AgentType.LSVZ_AGENT, icon: LsvzIcon, title: 'LSVZ Meta-Agent', description: 'A high-level agent that can see and reason about the entire project.' },
+    { type: AgentType.LSVZ_AGENT, icon: LsvzIcon, title: 'LSAI Agent', description: 'Your project assistant — ask anything, and it will handle the work or bring in the right specialist.' },
 ];
 
 const HelpModal: React.FC<HelpModalProps> = ({ onClose, activeAgent, onShowAbout, onShowForwardThinking, onShowTech, onShowDisclaimer, onShowErrorConsole }) => {
@@ -76,7 +76,8 @@ const HelpModal: React.FC<HelpModalProps> = ({ onClose, activeAgent, onShowAbout
     
   return (
     <div 
-      className="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in"
+      className="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[9990] flex items-center justify-center p-4 animate-fade-in"
+      style={{ zIndex: 9990 }}
       onClick={onClose}
     >
       <div 

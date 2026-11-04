@@ -48,7 +48,8 @@ const ProjectionSelectionModal: React.FC<ProjectionSelectionModalProps> = ({
 
   return (
     <div 
-      className="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in"
+      className="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[9990] flex items-center justify-center p-4 animate-fade-in"
+      style={{ zIndex: 9990 }}
       onClick={onClose}
     >
       <div 

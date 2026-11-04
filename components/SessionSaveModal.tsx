@@ -90,7 +90,7 @@ const SessionSaveModal: React.FC<SessionSaveModalProps> = ({
   );
 
   return (
-    <div className="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+    <div className="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[9990] flex items-center justify-center p-4 animate-fade-in" style={{ zIndex: 9990 }} onClick={onClose}>
       <div className="bg-gray-800 border border-gray-700 rounded-lg shadow-2xl max-w-2xl w-full flex flex-col animate-modal-panel-fade-in-down max-h-[90vh]" onClick={e => e.stopPropagation()}>
         <header className="flex items-center justify-between p-4 border-b border-gray-700">
           <h2 className="text-xl font-bold text-cyan-400 flex items-center gap-2"><DownloadIcon className="w-6 h-6" /> Save Session</h2>

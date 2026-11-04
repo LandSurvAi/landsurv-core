@@ -85,6 +85,24 @@ const ArcGISZoningMap: React.FC<{
       img.src = url;
     };
 
+    // Fitting against a 0×0 container (the results panel is still collapsed or
+    // mid-animation when the card mounts) makes Leaflet clamp to a meaningless
+    // zoom and centre. Tiles then download for a view that is effectively
+    // off-screen, so the map looks blank even though the network is busy.
+    // Defer the fit until the container has real dimensions, then re-fit once.
+    let pendingBounds: L.LatLngBounds | null = null;
+    let hasFitted = false;
+    const fitWhenSized = (bounds: L.LatLngBounds): boolean => {
+      pendingBounds = bounds;
+      const size = map.getSize();
+      if (size.x === 0 || size.y === 0) return false;
+      map.fitBounds(bounds, { padding: [10, 10] });
+      hasFitted = true;
+      pendingBounds = null;
+      refreshOverlay();
+      return true;
+    };
+
     const identify = async (evt: L.LeafletMouseEvent) => {
       try {
         const size = map.getSize();
@@ -141,10 +159,9 @@ const ArcGISZoningMap: React.FC<{
         if (cancelled) return;
         const swLL = L.CRS.EPSG3857.unproject(L.point(pe.xmin, pe.ymin));
         const neLL = L.CRS.EPSG3857.unproject(L.point(pe.xmax, pe.ymax));
-        map.fitBounds(L.latLngBounds(swLL, neLL), { padding: [10, 10] });
         map.on('moveend zoomend', refreshOverlay);
         map.on('click', identify);
-        refreshOverlay();
+        fitWhenSized(L.latLngBounds(swLL, neLL));
         setStatus('ready');
 
         // Legend is decorative — never fail the map over it.
@@ -178,7 +195,17 @@ const ArcGISZoningMap: React.FC<{
       }
     })();
 
-    const ro = new ResizeObserver(() => { try { map.invalidateSize(); } catch { /* detached */ } });
+    const ro = new ResizeObserver(() => {
+      try { map.invalidateSize(); } catch { /* detached */ }
+      const size = map.getSize();
+      if (size.x === 0 || size.y === 0) return;
+      // First real layout: fit the deferred extent instead of leaving the map
+      // at the zoom it computed while the panel had no size.
+      if (!hasFitted && pendingBounds) { fitWhenSized(pendingBounds); return; }
+      // invalidateSize fires 'resize', not 'moveend' — the export overlay must
+      // be refreshed explicitly or the map keeps rendering the old/stale frame.
+      refreshOverlay();
+    });
     ro.observe(container);
     return () => {
       cancelled = true;

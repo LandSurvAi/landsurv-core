@@ -69,7 +69,6 @@ import {
     ToolbarDimensionIcon,
     ToolbarStandardsIcon,
     ToolbarSymbolExclusionIcon,
-    ToolbarPointListIcon,
     ToolbarShrinkwrapIcon,
 } from './toolbarIcons.tsx';
 import proj4 from 'proj4';
@@ -166,6 +165,10 @@ export interface DrawingCanvasHandles {
   isBboxInView?: (minE: number, maxE: number, minN: number, maxN: number) => boolean;
   getViewportBboxWorld?: () => { minE: number; maxE: number; minN: number; maxN: number; minX: number; maxX: number; minY: number; maxY: number };
   getMapOverlayTiles?: () => Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: WorldQuad; opacity?: number }>;
+  /** Arms the Orientation Tuple pivot-origin picker from the toolbar instrument. */
+  beginOtOriginPick: () => void;
+  /** Arms the Orientation Tuple align-to-line picker from the toolbar instrument. */
+  beginOtLineAlign: () => void;
 }
 
 import { CanvasTerminal, type TerminalTone } from './CanvasTerminal';
@@ -237,6 +240,10 @@ interface DrawingCanvasProps {
     ownerNameOffset?: { x: number; y: number }; // Offset for owner name label in world coordinates
     onAddLine: (newLine: SurveyLine) => void;
     onDeleteLine: (lineId: string) => void;
+    /** Select-mode point picks — delete one or more project points by number. */
+    onDeletePoints?: (pointNumbers: string[]) => void;
+    /** Select-mode centerline picks — delete a centerline by id. */
+    onDeleteCenterline?: (centerlineId: string) => void;
     /** Apply a multi-entity edit as a single undo step (used by typed CAD commands). */
     onBatchLinesChange?: (removeIds: string[], addLines: SurveyLine[]) => void;
     canUndo: boolean;
@@ -302,6 +309,8 @@ interface DrawingCanvasProps {
     isC3DConnected?: boolean;
     /** Faint futuristic background grid — toggled from the app header. */
     isGridVisible?: boolean;
+    /** TIN shading — toggled from the app header. */
+    tinShading?: boolean;
     // Agent draw mode
     agentDrawMode: 'both' | 'points' | 'lines';
     onCycleAgentDrawMode: () => void;
@@ -361,11 +370,6 @@ interface DrawingCanvasProps {
     // Active drawing layer — applied to manually drawn polylines (not AI lines)
     activeDrawingLayer?: string;
     onSetActiveDrawingLayer?: (layer: string) => void;
-    // Floating point list panel
-    onOpenPointListPanel?: () => void;
-    isPointListPanelOpen?: boolean;
-    /** Pulse the point list toolbar button pink to hint the user can open the floating list. */
-    isPointListButtonPulsing?: boolean;
     /** Opens the boundary editor as a canvas-toolbar panel. */
     onOpenBoundaryEditor?: () => void;
     /** Whether the boundary editor is currently open. */
@@ -429,6 +433,32 @@ interface DrawingCanvasProps {
     canRedo?: boolean;
     canUndo?: boolean;
     onClearAll?: () => void;
+    /** Unified Agent Mode props for the Command Bar */
+    agentMessages?: import('../types.ts').ChatMessage[];
+    onSendAgentMessage?: (query: string) => void;
+    onStopGenerating?: () => void;
+    isAgentLoading?: boolean;
+    thinkingTime?: number;
+    currentModelName?: string;
+    suggestedQuestions?: string[];
+    onToggleExpandMessage?: (msgIndex: number) => void;
+    chatHeaderControls?: React.ReactNode;
+    chatBarAccessories?: React.ReactNode;
+    toolsRowAccessories?: React.ReactNode;
+    hasDockableTools?: boolean;
+    isToolDockOpen?: boolean;
+    onToggleToolDock?: () => void;
+    /** A2UI surface currently docked in the shelf, so the chat can show its placeholder. */
+    dockedA2UIKey?: string | null;
+    onToggleA2UIDock?: (message: import('../types.ts').ChatMessage) => void;
+    /** Docked tool panels relevant to the active agent, mirrored under the chat feed. */
+    chatToolDialogs?: import('./AgentToolDock.tsx').DockableToolItem[];
+    /** Increment to pull the command bar's agent feed back open (e.g. Return to chat). */
+    agentChatOpenSignal?: number;
+    /** Reports the command bar height so overlay drawers can rest on its top edge. */
+    onCommandBarHeightChange?: (height: number) => void;
+    /** Pixels the command bar extends right, underneath the open agent tool shelf. */
+    commandBarRightExtension?: number;
 }
 
 type OsnapMode = 'endpoint' | 'midpoint' | 'intersection' | 'center' | 'nearest' | 'perpendicular' | 'tangent';
@@ -589,7 +619,7 @@ const OSNAP_GLYPHS: Record<OsnapMode, string> = {
 const OSNAP_ORDER: OsnapMode[] = ['endpoint', 'midpoint', 'intersection', 'center', 'nearest', 'perpendicular', 'tangent'];
 
 const NorthArrow: React.FC<{ style: 'classic' | 'modern' | 'elegant', position: 'left' | 'right', isLightTheme: boolean, rotationRad?: number, onClick?: () => void }> = ({ style, position, isLightTheme, rotationRad = 0, onClick }) => {
-    const positionClass = position === 'left' ? 'top-4 left-4' : 'top-4 right-4';
+    const positionClass = position === 'left' ? 'top-4 left-20' : 'top-4 right-4';
     const rotationDeg = -(rotationRad * 180) / Math.PI;
 
     const classicArrow = (
@@ -659,7 +689,24 @@ const NorthArrow: React.FC<{ style: 'classic' | 'modern' | 'elegant', position: 
     }
 
     return (
-        <div className={`absolute ${positionClass} z-10 cursor-pointer hover:scale-110 transition-transform`} onClick={onClick} title="Settings / North Arrow">
+        <div
+            className={`group absolute ${positionClass} z-30 cursor-pointer hover:scale-110 transition-transform`}
+            onClick={onClick}
+            onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onClick?.();
+                }
+            }}
+            role="button"
+            tabIndex={0}
+            aria-label="Settings"
+        >
+            <span
+                className={`pointer-events-none absolute top-1/2 -translate-y-1/2 whitespace-nowrap rounded-md border border-white/10 bg-[#0a0f16]/95 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-200 opacity-0 shadow-lg backdrop-blur transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 ${position === 'right' ? 'right-full mr-2' : 'left-full ml-2'}`}
+            >
+                Settings
+            </span>
             <div
                 style={{
                     transform: `rotate(${rotationDeg}deg)`,
@@ -742,11 +789,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         initialTransform,
         onTransformChange,
         points, lines, contourLabels, centerlines, customSymbols, enabledBuiltinSymbolIds, pointLayers, attributeScale, setAttributeScale, lineLabelScale, setLineLabelScale, lineThickness, setLineThickness, contourLabelScale, onLayerColorChange, activeAgent, settings, zoomTarget, onZoomComplete,
-        onUpdatePointLabelOffset, onAddLine, onDeleteLine, canUndo, canRedo, onUndo, onRedo, wmsServices, activeWmsLayers, offlineMapAreas, onRedrawAndShowAll, onOpenDxfExportModal,
+        onUpdatePointLabelOffset, onAddLine, onDeleteLine, onDeletePoints, onDeleteCenterline, canUndo, canRedo, onUndo, onRedo, wmsServices, activeWmsLayers, offlineMapAreas, onRedrawAndShowAll, onOpenDxfExportModal,
         onUpdatePointAnnotationOffset,
         isLayerPanelOpen, setIsLayerPanelOpen, onLayerToggle, activeAccent, currentPosition, projectedPosition, onZoomToPoint,
         linesVisible, onSetLinesVisible, centerlinesVisible, onSetCenterlinesVisible, pointLists, onTogglePointListVisibility, deedMetadata, onToolStateChange, onShowSettings,
-        isC3DConnected, isGridVisible, agentDrawMode, onCycleAgentDrawMode, agentAnnotMode, onCycleAgentAnnotMode, onAddBoundaryCall, onConvertSelectionToBoundary, onComputeCurrentClosure,
+        isC3DConnected, isGridVisible, tinShading, agentDrawMode, onCycleAgentDrawMode, agentAnnotMode, onCycleAgentAnnotMode, onAddBoundaryCall, onConvertSelectionToBoundary, onComputeCurrentClosure,
         dimensions, onAddDimension, onUpdateDimension, onDeleteDimension, onClearDimensions, onAddPoint, nextAvailablePointNumber, dimensionScale, setDimensionScale, symbolScale, setSymbolScale,
         customAnnotations = [], annotationScale = 1, setAnnotationScale,
         parcelLabels, annotationCategories,
@@ -895,7 +942,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [isFindPointsOpen, setIsFindPointsOpen] = useState(false);
     const [findPointsQuery, setFindPointsQuery] = useState('');
     const [isZoomExtentsOpen, setIsZoomExtentsOpen] = useState(false);
-    const [isTinShadingEnabled, setIsTinShadingEnabled] = useState(false);
+    // TIN shading is lifted to App.tsx so the app header can control it.
+    const isTinShadingEnabled = tinShading ?? false;
     const [isAttributeFlyoutOpen, setIsAttributeFlyoutOpen] = useState(false);
     const [isOtPopupOpen, setIsOtPopupOpen] = useState(false);
     const [isPickingOtOrigin, setIsPickingOtOrigin] = useState(false);
@@ -1164,7 +1212,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     // Toolbar orientation: default vertical, flippable to horizontal
     const [toolbarOrientation, setToolbarOrientation] = useState<'vertical' | 'horizontal'>(() => {
         try {
-            const saved = localStorage.getItem('landsurv-canvas-toolbar-orientation');
+            const saved = localStorage.getItem('landsurv-canvas-toolbar-orientation-v2');
             return saved === 'horizontal' ? 'horizontal' : 'vertical';
         } catch {
             return 'vertical';
@@ -1172,7 +1220,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     });
 
     const toolbarRef = useRef<HTMLDivElement>(null);
-    // Toolbar dragging state — the default is the left edge, above the OT widget.
+    // Toolbar dragging state — the default is the left edge of the canvas viewport.
     // The position key is versioned so the new left-side default is picked up once.
     const [viewToolbarPosition, setViewToolbarPosition] = useState<ViewToolbarPosition | null>(() => {
         try {
@@ -1208,6 +1256,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [isViewToolbarDragging, setIsViewToolbarDragging] = useState(false);
     const viewToolbarDragStart = useRef<{ clientX: number; clientY: number; toolbarX: number; toolbarY: number } | null>(null);
     const viewToolbarRafRef = useRef<number | null>(null);
+
+    // Live height of the command bar, reported by CanvasTerminal. The floating
+    // view toolbar rests on its top edge instead of using a hardcoded offset.
+    const [commandBarHeight, setCommandBarHeight] = useState(0);
+    const handleCommandBarHeightChange = useCallback((height: number) => {
+        setCommandBarHeight(prev => (Math.abs(prev - height) < 1 ? prev : height));
+        props.onCommandBarHeightChange?.(height);
+    }, [props.onCommandBarHeightChange]);
 
     // If toolbar is NOT docked but positioned behind the agent chat (e.g. chat just expanded or container resized),
     // push it out so it remains visible and does not get lost behind the chat.
@@ -1258,13 +1314,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const maxH = container.clientHeight;
         const toolbarH = toolbarRef.current?.offsetHeight ?? (toolbarOrientation === 'vertical' ? 450 : 50);
         if (maxH > 0 && viewToolbarPosition?.y !== undefined) {
-            const maxY = Math.max(8, maxH - toolbarH - 8);
+            const maxY = Math.max(8, maxH - toolbarH - commandBarHeight - 8);
             if (viewToolbarPosition.y > maxY) {
                 setViewToolbarPosition(prev => prev ? { ...prev, y: maxY } : null);
             }
         }
         pushToolbarOutOfChatIfNeeded();
-    }, [toolbarOrientation, pushToolbarOutOfChatIfNeeded]);
+    }, [toolbarOrientation, pushToolbarOutOfChatIfNeeded, commandBarHeight]);
 
     // Terminal incoming notification/event feed
     const [terminalIncoming, setTerminalIncoming] = useState<{ text: string; tone?: 'normal' | 'ok' | 'error' | 'info' } | null>(null);
@@ -1279,6 +1335,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     /** Interactive MIRROR: two snapped axis points, with a live reflected ghost. */
     const [isMirroringSelection, setIsMirroringSelection] = useState(false);
     const [mirrorAxisStart, setMirrorAxisStart] = useState<{ easting: number; northing: number } | null>(null);
+    /** MIRROR [L] sub-mode: the next line pick becomes the mirror axis. */
+    const [isPickingMirrorLine, setIsPickingMirrorLine] = useState(false);
     /** Interactive MOVE: snapped base point, then snapped destination. */
     const [isMovingSelection, setIsMovingSelection] = useState(false);
     const [moveBasePoint, setMoveBasePoint] = useState<{ easting: number; northing: number } | null>(null);
@@ -1315,6 +1373,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [isOverLabel, setIsOverLabel] = useState(false);
     // Line selection mode (active when drawing tools menu open, no sub-tool)
     const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
+    /** Select-mode survey point picks (stationing / point cleanup). */
+    const [selectedPointNumbers, setSelectedPointNumbers] = useState<Set<string>>(new Set());
+    /** Select-mode centerline alignment picks (Stationing & CL). */
+    const [selectedCenterlineIds, setSelectedCenterlineIds] = useState<Set<string>>(new Set());
+    // Point / centerline picks are only meaningful while the SELECT tool is live.
+    // Drop them when the canvas leaves selection mode so their rings can never
+    // linger behind a drawing or transform command.
+    useEffect(() => {
+        if (isSelectionMode) return;
+        setSelectedPointNumbers(prev => (prev.size === 0 ? prev : new Set()));
+        setSelectedCenterlineIds(prev => (prev.size === 0 ? prev : new Set()));
+    }, [isSelectionMode]);
     const [isOverLine, setIsOverLine] = useState(false);
     const [shiftBoxSelect, setShiftBoxSelect] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
     const [hoveredGrip, setHoveredGrip] = useState<EntityGrip | null>(null);
@@ -2522,6 +2592,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setTypedRotateAngle('');
         setIsMirroringSelection(false);
         setMirrorAxisStart(null);
+        setIsPickingMirrorLine(false);
         setIsMovingSelection(false);
         setMoveBasePoint(null);
         setIsScalingSelection(false);
@@ -3312,6 +3383,74 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
         return byPid;
     }, [lines, pointMap]);
+
+    /**
+     * Hit-test the drawn centerline alignment — straight tangent runs plus the
+     * sampled circular curves — so Stationing & CL alignments are pickable in
+     * Select mode. Returns the owning centerline rather than a single segment.
+     */
+    const findCenterlineNearClick = useCallback((clickX: number, clickY: number, threshold: number = 12): Centerline | null => {
+        if (!centerlinesVisible) return null;
+        const distToSegment = (px: number, py: number, ax: number, ay: number, bx: number, by: number) => {
+            const dx = bx - ax;
+            const dy = by - ay;
+            const len2 = dx * dx + dy * dy;
+            if (len2 < 1e-12) return Math.hypot(px - ax, py - ay);
+            let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+            t = Math.max(0, Math.min(1, t));
+            return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+        };
+        const normalizeAng = (a: number) => { let n = a % (2 * Math.PI); if (n < 0) n += 2 * Math.PI; return n; };
+
+        let nearest: Centerline | null = null;
+        let best = threshold;
+
+        for (const cl of centerlines) {
+            if (!cl || !cl.pis || cl.pis.length < 2) continue;
+            let prevScreen = worldToScreen(cl.pis[0].easting, cl.pis[0].northing);
+
+            const considerWorld = (worldPts: Array<{ easting: number; northing: number }>) => {
+                let from = prevScreen;
+                for (const w of worldPts) {
+                    const to = worldToScreen(w.easting, w.northing);
+                    const d = distToSegment(clickX, clickY, from.x, from.y, to.x, to.y);
+                    if (d < best) {
+                        best = d;
+                        nearest = cl;
+                    }
+                    from = to;
+                }
+                prevScreen = from;
+            };
+
+            for (let i = 1; i < cl.pis.length; i++) {
+                const pCurr = cl.pis[i];
+                const curve = (i < cl.pis.length - 1 && pCurr.curveRadius)
+                    ? calculateCurveGeometry(cl.pis[i - 1], pCurr, cl.pis[i + 1], pCurr.curveRadius)
+                    : null;
+                if (curve) {
+                    considerWorld([{ easting: curve.pcEasting, northing: curve.pcNorthing }]);
+                    const sweep = curve.turnRight
+                        ? -normalizeAng(curve.startAngle - curve.endAngle)
+                        : normalizeAng(curve.endAngle - curve.startAngle);
+                    const samples: Array<{ easting: number; northing: number }> = [];
+                    const steps = 32;
+                    for (let k = 1; k <= steps; k++) {
+                        const ang = curve.startAngle + sweep * (k / steps);
+                        samples.push({
+                            easting: curve.centerEasting + curve.radius * Math.cos(ang),
+                            northing: curve.centerNorthing + curve.radius * Math.sin(ang),
+                        });
+                    }
+                    considerWorld(samples);
+                } else {
+                    considerWorld([{ easting: pCurr.easting, northing: pCurr.northing }]);
+                }
+            }
+        }
+
+        return nearest;
+    }, [centerlines, centerlinesVisible, worldToScreen]);
 
     // Helper function to find line near a click point
     const findLineNearClick = useCallback((clickX: number, clickY: number, threshold: number = 10): SurveyLine | null => {
@@ -5148,6 +5287,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         getTransform: () => transformRef.current,
         setTransform: (newTransform: { scale: number; offsetX: number; offsetY: number }) => {
             setTransform(newTransform);
+        },
+        beginOtOriginPick: () => {
+            setIsPickingOtOrigin(true);
+            setIsPickingOtLineAlign(false);
+        },
+        beginOtLineAlign: () => {
+            setIsPickingOtLineAlign(true);
+            setIsPickingOtOrigin(false);
         },
         getViewCenterWorld: () => {
             const container = containerRef.current;
@@ -7080,9 +7227,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         // Draw centerlines
         centerlines.forEach(cl => {
             if (cl.pis.length < 2) return;
+            const isClSelected = selectedCenterlineIds.has(cl.id);
+            ctx.save();
+            ctx.setLineDash([]);
+            if (isClSelected) {
+                ctx.shadowColor = 'rgba(34, 211, 238, 0.9)';
+                ctx.shadowBlur = 10;
+            }
             
-            ctx.strokeStyle = 'rgba(66, 153, 225, 0.8)';
-            ctx.lineWidth = Math.max(scaledLineWidth * 1.2, minScreenPixelWidth);
+            ctx.strokeStyle = isClSelected ? '#22d3ee' : 'rgba(66, 153, 225, 0.8)';
+            ctx.lineWidth = isClSelected
+                ? Math.max(scaledLineWidth * 2.2, 2.5)
+                : Math.max(scaledLineWidth * 1.2, minScreenPixelWidth);
 
             let lastPt = { easting: cl.pis[0].easting, northing: cl.pis[0].northing };
 
@@ -7120,6 +7276,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     lastPt = p_curr;
                 }
             }
+            ctx.restore();
         });
 
         if (gpuBasemap && useGpuBasemap) {
@@ -9053,6 +9210,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 return;
             }
 
+            // Select-mode pick ring — drawn under the glyph like the shrinkwrap ring.
+            if (selectedPointNumbers.has(p.pointNumber)) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, 8, 0, 2 * Math.PI);
+                ctx.strokeStyle = '#22d3ee';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([3, 2]);
+                ctx.stroke();
+                ctx.restore();
+            }
+
             // Shrinkwrap highlight ring — drawn before the point itself so it sits underneath
             if (shrinkwrapPnSet?.has(p.pointNumber)) {
                 const isHov = p.pointNumber === hoveredShrinkwrapPn;
@@ -9495,7 +9664,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         ctx.restore(); // --- End screen-space pass ---
-    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, props.streetLabels, parcelLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter]);
+    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, props.streetLabels, parcelLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter]);
 
     // Throttled draw using requestAnimationFrame to prevent flickering during rapid updates
     const scheduleDraw = useCallback(() => {
@@ -10177,9 +10346,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setIsSelectionMode(false);
         setIsBoxSelectMode(false);
         setMirrorAxisStart(null);
+        setIsPickingMirrorLine(false);
         setIsMirroringSelection(true);
         setTerminalIncoming({
-            text: 'MIRROR: Specify first axis point — click, snap, or type E,N [Esc to cancel]',
+            text: 'MIRROR: Specify first axis point — click, snap, or type E,N · [L] pick a line to mirror about, [Esc] to cancel',
             tone: 'info',
         });
     // clearOffsetPreview may be declared later in the body.
@@ -10682,7 +10852,23 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 }
                 return;
             }
-            if (e.key === 's' || e.key === 'S') {
+            // MIRROR: [L] swaps the axis pick between two points and a picked line.
+        if (isMirroringSelection && (e.key === 'l' || e.key === 'L')) {
+            if (isTextInput) return;
+            e.preventDefault();
+            const next = !isPickingMirrorLine;
+            setIsPickingMirrorLine(next);
+            setMirrorAxisStart(null);
+            setTerminalIncoming({
+                text: next
+                    ? 'MIRROR: Pick the mirror line — click a line to reflect the selection across it [L] two points, [Esc] cancel'
+                    : 'MIRROR: Two-point axis — click, snap, or type E,N [L] pick a line, [Esc] cancel',
+                tone: 'info',
+            });
+            setCommandFocusRequest(n => n + 1);
+            return;
+        }
+        if (e.key === 's' || e.key === 'S') {
                 e.preventDefault();
                 setTerminalIncoming({ text: 'Command: S (SELECT) — click lines or chain [Esc to clear]', tone: 'ok' });
                 if (isSelectionMode) {
@@ -10836,11 +11022,25 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTerminalIncoming({ text: 'Deleted dimension', tone: 'info' });
             return;
         }
-        if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'd' || e.key === 'D') && selectedLineIds.size > 0) {
+        if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'd' || e.key === 'D')
+            && (selectedLineIds.size > 0 || selectedPointNumbers.size > 0 || selectedCenterlineIds.size > 0)) {
             if (isTextInput) return;
             e.preventDefault();
+            const removedLineCount = selectedLineIds.size;
+            const removedPointCount = selectedPointNumbers.size;
+            const removedClCount = selectedCenterlineIds.size;
             selectedLineIds.forEach(id => onDeleteLine(id));
+            if (removedPointCount > 0) onDeletePoints?.(Array.from(selectedPointNumbers));
+            if (removedClCount > 0) selectedCenterlineIds.forEach(id => onDeleteCenterline?.(id));
             setSelectedLineIds(new Set());
+            setSelectedPointNumbers(new Set());
+            setSelectedCenterlineIds(new Set());
+            setTerminalIncoming({
+                text: `Deleted ${removedLineCount} line${removedLineCount === 1 ? '' : 's'}, ${removedPointCount} point${removedPointCount === 1 ? '' : 's'}, ${removedClCount} centerline${removedClCount === 1 ? '' : 's'}.`,
+                tone: 'ok',
+            });
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
         }
         // Escape unwinds the corner-align tool one step at a time: nest picker →
         // pending corner → whole tool (handled by the generic drawingMode branch).
@@ -10916,16 +11116,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         if (e.key === 'Escape' && isSelectionMode) {
             if (isTextInput) return;
             e.preventDefault();
-            if (selectedLineIds.size > 0) {
+            if (selectedLineIds.size > 0 || selectedPointNumbers.size > 0 || selectedCenterlineIds.size > 0) {
                 setSelectedLineIds(new Set());
+                setSelectedPointNumbers(new Set());
+                setSelectedCenterlineIds(new Set());
             } else {
                 setIsSelectionMode(false);
                 setIsBoxSelectMode(false);
             }
             return;
         }
-        if (e.key === 'Escape' && selectedLineIds.size > 0) {
+        if (e.key === 'Escape' && (selectedLineIds.size > 0 || selectedPointNumbers.size > 0 || selectedCenterlineIds.size > 0)) {
             setSelectedLineIds(new Set());
+            setSelectedPointNumbers(new Set());
+            setSelectedCenterlineIds(new Set());
             return;
         }
         if (e.key === 'Escape' && (drawingMode !== 'none' || isTrimmingLines || isExtendingLines || isDeletingLines)) {
@@ -10946,7 +11150,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTtrEntity2(null);
             setTtrHoverEntity(null);
         }
-    }, [selectedLineIds, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isAddPointFlyoutOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
+    }, [selectedLineIds, selectedPointNumbers, selectedCenterlineIds, isPickingMirrorLine, onDeletePoints, onDeleteCenterline, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isAddPointFlyoutOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
 
     const handleKeyUp = useCallback((e: KeyboardEvent) => {
         if (e.key === 'Control' || e.key === 'Meta') {
@@ -11011,6 +11215,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const container = containerRef.current;
                 const maxW = container?.clientWidth ?? window.innerWidth;
                 const maxH = container?.clientHeight ?? window.innerHeight;
+                const usableH = maxH - (commandBarHeight > 0 ? commandBarHeight : 0);
                 const toolbarW = toolbarRef.current?.offsetWidth ?? (toolbarOrientation === 'vertical' ? 50 : 380);
                 const toolbarH = toolbarRef.current?.offsetHeight ?? (toolbarOrientation === 'vertical' ? 450 : 50);
 
@@ -11021,7 +11226,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     rawX,
                     rawY,
                     maxW,
-                    maxH,
+                    maxH: usableH,
                     toolbarW,
                     toolbarH,
                     isDesktop,
@@ -11061,7 +11266,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 window.removeEventListener('pointercancel', handlePointerUp);
             };
         }
-    }, [isViewToolbarDragging, isDesktop, toolbarOrientation]);
+    }, [isViewToolbarDragging, isDesktop, toolbarOrientation, commandBarHeight]);
     
     const handleContainerMouseMove = useCallback((e: React.MouseEvent) => {
         // Floating canvas dialogs (Properties, etc.) own their own hover: skip
@@ -12000,6 +12205,32 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const rect = canvas.getBoundingClientRect();
             const clickX = e.clientX - rect.left;
             const clickY = e.clientY - rect.top;
+
+            // [L] armed: the picked line's endpoints become the mirror axis.
+            if (isPickingMirrorLine) {
+                const pickedLine = findLineNearClick(clickX, clickY, 15);
+                const pickedEnds = pickedLine ? resolveLineEndpoints(pickedLine) : null;
+                if (!pickedLine || !pickedEnds) {
+                    setTerminalIncoming({ text: 'MIRROR: No line under the cursor — click a line, or press [L] to go back to two points.', tone: 'error' });
+                    return;
+                }
+                const axisA = { easting: pickedEnds.p1.x, northing: pickedEnds.p1.y };
+                const axisB = { easting: pickedEnds.p2.x, northing: pickedEnds.p2.y };
+                if (Math.hypot(axisB.easting - axisA.easting, axisB.northing - axisA.northing) < 1e-9) {
+                    setTerminalIncoming({ text: 'MIRROR: That line has zero length — pick another line.', tone: 'error' });
+                    return;
+                }
+                const mirroredByLine = mirrorSelectionCommand(axisA, axisB);
+                stopInteractiveTransforms();
+                setCommandFocusRequest(n => n + 1);
+                setTerminalIncoming({
+                    text: `MIRROR: Mirrored ${mirroredByLine} ${mirroredByLine === 1 ? 'entity' : 'entities'} across the picked line (E ${axisA.easting.toFixed(2)}, N ${axisA.northing.toFixed(2)} → E ${axisB.easting.toFixed(2)}, N ${axisB.northing.toFixed(2)}).`,
+                    tone: 'ok',
+                });
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+
             const world = resolveSnappedWorld(clickX, clickY, currentSnap);
 
             if (!mirrorAxisStart) {
@@ -12385,7 +12616,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
         // General point selection — fires whenever a point is clicked in normal mode.
         // Does NOT consume the event (no return), so panning still works when clicking empty space.
-        if (props.onPointSelected && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
+        if (props.onPointSelected && !isSelectionMode && !pendingSelectionCommand && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
             const canvas = canvasRef.current;
             if (canvas) {
                 const rect = canvas.getBoundingClientRect();
@@ -12478,6 +12709,25 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             if (clickedDim && !isBoxSelectMode) {
                 setSelectedDimensionId(prev => (prev === clickedDim.id ? null : clickedDim.id));
                 setSelectedLineIds(new Set());
+                setSelectedPointNumbers(new Set());
+                setSelectedCenterlineIds(new Set());
+                return;
+            }
+
+            // Survey points are small; pick them before linework so a shot that
+            // sits on a line endpoint is still selectable in Select mode.
+            // Point / CL picks belong to the SELECT tool, not to a command that is
+            // still gathering linework (MIRROR, MOVE, ERASE …).
+            const allowScenePicks = !pendingSelectionCommand && !isBoxSelectMode;
+            const clickedPoint = allowScenePicks ? findNearestSurveyPoint(clickX, clickY, 10) : null;
+            if (clickedPoint) {
+                const pickedPn = clickedPoint.pointNumber;
+                setSelectedPointNumbers(prev => {
+                    const next = new Set(prev);
+                    if (next.has(pickedPn)) next.delete(pickedPn);
+                    else next.add(pickedPn);
+                    return next;
+                });
                 return;
             }
 
@@ -12504,6 +12754,19 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     } else {
                         memberLineIds.forEach(id => next.add(id));
                     }
+                    return next;
+                });
+                return;
+            }
+
+            // Centerline alignment (Stationing & CL) — pick the whole alignment.
+            const clickedCenterline = allowScenePicks ? findCenterlineNearClick(clickX, clickY, 12) : null;
+            if (clickedCenterline) {
+                const clId = clickedCenterline.id;
+                setSelectedCenterlineIds(prev => {
+                    const next = new Set(prev);
+                    if (next.has(clId)) next.delete(clId);
+                    else next.add(clId);
                     return next;
                 });
                 return;
@@ -13451,7 +13714,32 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const previewCanvas = canvasRef.current;
         if (previewCanvas) {
             const previewRect = previewCanvas.getBoundingClientRect();
-            const previewWorld = screenToWorld(e.clientX - previewRect.left, e.clientY - previewRect.top);
+            const previewScreenX = e.clientX - previewRect.left;
+            const previewScreenY = e.clientY - previewRect.top;
+            let previewWorld = screenToWorld(previewScreenX, previewScreenY);
+            // Transform picks (ROTATE / MIRROR / MOVE / SCALE / COPY) honour the
+            // same running osnaps as drafting, so the crosshair shows a snap
+            // marker and the ghost locks to the exact endpoint / intersection.
+            if (isRotatingSelection || isMirroringSelection || isMovingSelection || isScalingSelection || isCopyingSelection) {
+                const transformModes = inlineOsnapOverride
+                    ? new Set<OsnapMode>([inlineOsnapOverride])
+                    : (runningOsnaps.size > 0 ? runningOsnaps : new Set<OsnapMode>(['endpoint', 'midpoint', 'intersection', 'nearest']));
+                const transformAnchor = mirrorAxisStart ?? moveBasePoint ?? rotatePivot ?? scaleBasePoint ?? copyBasePoint ?? null;
+                const snappedTransform = resolveOsnapAtScreen(previewScreenX, previewScreenY, transformModes, 25, transformAnchor);
+                const surveyTransform = snappedTransform ? null : findNearestSurveyPoint(previewScreenX, previewScreenY, 25);
+                const resolvedTransform: OsnapResult | null = snappedTransform ?? (surveyTransform
+                    ? {
+                        easting: surveyTransform.easting,
+                        northing: surveyTransform.northing,
+                        mode: 'endpoint',
+                        sourcePoint: surveyTransform,
+                    }
+                    : null);
+                setActiveOsnapPoint(resolvedTransform);
+                if (resolvedTransform) {
+                    previewWorld = { easting: resolvedTransform.easting, northing: resolvedTransform.northing };
+                }
+            }
             if (isRotatingSelection && rotatePivot) {
                 const dE = previewWorld.easting - rotatePivot.easting;
                 const dN = previewWorld.northing - rotatePivot.northing;
@@ -13779,7 +14067,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 shiftHoverAnchorRef.current = null;
             }
         }
-    }, [isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview]);
+    }, [isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview, inlineOsnapOverride, runningOsnaps, findNearestSurveyPoint, resolveOsnapAtScreen]);
 
     const handleMouseUp = useCallback(() => {
         if (shiftBoxSelect) {
@@ -14040,12 +14328,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 isTrimming: isTrimmingLines,
                 isExtending: isExtendingLines,
                 isDeleting: isDeletingLines,
-                selectedCount: selectedLineIds.size,
+                selectedCount: selectedLineIds.size + selectedPointNumbers.size + selectedCenterlineIds.size,
                 segmentCount: polylinePoints.length > 0 ? polylinePoints.length - 1 : 0,
                 lineType
             });
         }
-    }, [drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, polylinePoints.length, onToolStateChange, selectedLineIds.size]);
+    }, [drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, polylinePoints.length, onToolStateChange, selectedLineIds.size, selectedPointNumbers.size, selectedCenterlineIds.size]);
 
     const handleZoomToPointSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -14692,292 +14980,6 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
             />
-
-            {/* OT (Orientation Tuple / UCS) Widget in Bottom-Left */}
-            {(() => {
-                const curMode = orientationTuple.mode ?? 'drafting';
-                const curAngle = curMode === 'drafting'
-                    ? (orientationTuple.draftingAngle ?? orientationTuple.angle ?? 0)
-                    : (orientationTuple.viewAngle ?? orientationTuple.angle ?? 0);
-                const curOriginX = curMode === 'drafting'
-                    ? (orientationTuple.draftingOriginX ?? orientationTuple.originX ?? 0)
-                    : (orientationTuple.viewOriginX ?? orientationTuple.originX ?? 0);
-                const curOriginY = curMode === 'drafting'
-                    ? (orientationTuple.draftingOriginY ?? orientationTuple.originY ?? 0)
-                    : (orientationTuple.viewOriginY ?? orientationTuple.originY ?? 0);
-                const curAngleDeg = Math.round((curAngle * 180) / Math.PI * 100) / 100;
-
-                const setModeAngle = (rad: number) => {
-                    if (!onSetOrientationTuple) return;
-                    onSetOrientationTuple(prev => {
-                        const m = prev.mode ?? 'drafting';
-                        if (m === 'drafting') {
-                            return { ...prev, draftingAngle: rad, angle: rad, placed: true };
-                        } else {
-                            return { ...prev, viewAngle: rad, angle: rad, placed: true };
-                        }
-                    });
-                };
-
-                const setModeOriginX = (val: number) => {
-                    if (!onSetOrientationTuple) return;
-                    onSetOrientationTuple(prev => {
-                        const m = prev.mode ?? 'drafting';
-                        if (m === 'drafting') {
-                            return { ...prev, draftingOriginX: val, originX: val, placed: true };
-                        } else {
-                            return { ...prev, viewOriginX: val, originX: val, placed: true };
-                        }
-                    });
-                };
-
-                const setModeOriginY = (val: number) => {
-                    if (!onSetOrientationTuple) return;
-                    onSetOrientationTuple(prev => {
-                        const m = prev.mode ?? 'drafting';
-                        if (m === 'drafting') {
-                            return { ...prev, draftingOriginY: val, originY: val, placed: true };
-                        } else {
-                            return { ...prev, viewOriginY: val, originY: val, placed: true };
-                        }
-                    });
-                };
-
-                const resetModeOrigin = () => {
-                    if (!onSetOrientationTuple) return;
-                    onSetOrientationTuple(prev => {
-                        const m = prev.mode ?? 'drafting';
-                        if (m === 'drafting') {
-                            return { ...prev, draftingOriginX: 0, draftingOriginY: 0, originX: 0, originY: 0, placed: prev.draftingAngle !== 0 };
-                        } else {
-                            return { ...prev, viewOriginX: 0, viewOriginY: 0, originX: 0, originY: 0, placed: prev.viewAngle !== 0 };
-                        }
-                    });
-                };
-
-                const p0 = worldToScreen(curOriginX, curOriginY);
-                const localTheta = curMode === 'drafting' ? curAngle : 0;
-                const p1 = worldToScreen(curOriginX + Math.cos(localTheta), curOriginY + Math.sin(localTheta));
-                const screenAngleDeg = Math.round(Math.atan2(p1.y - p0.y, p1.x - p0.x) * (180 / Math.PI) * 100) / 100;
-
-                return (
-                    <div className="absolute bottom-20 left-3 z-30 select-none">
-                        <button
-                            type="button"
-                            onClick={() => setIsOtPopupOpen(prev => !prev)}
-                            className="group relative flex h-[52px] w-[52px] flex-col items-center justify-center gap-0.5 rounded-lg border border-white/[0.09] bg-[#0b1119]/95 text-cyan-200 shadow-[0_10px_30px_-8px_rgba(0,0,0,0.9)] backdrop-blur-md transition-colors hover:border-cyan-400/40 hover:bg-[#0e1620]"
-                            title={`Orientation Tuple (OT / UCS) — ${curAngleDeg.toFixed(1)}°. Click to adjust orientation and pivot origin.`}
-                            aria-label="Open orientation tuple settings"
-                        >
-                            <svg className="h-6 w-6 overflow-visible" viewBox="0 0 32 32" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                <g transform={`rotate(${screenAngleDeg} 9 23)`}>
-                                    {/* Fine quadrant reference arc */}
-                                    <path d="M9 6.5A16.5 16.5 0 0 1 25.5 23" stroke="#22d3ee" strokeOpacity="0.22" strokeWidth="0.8" strokeDasharray="1.5 2" />
-                                    {/* X axis */}
-                                    <line x1="9" y1="23" x2="27.4" y2="23" stroke="#34d399" />
-                                    <path d="M27.6 23l-4.1-2.2v4.4z" fill="#34d399" stroke="none" />
-                                    <text x="24.6" y="20.4" fontSize="4.1" fontWeight="700" fill="#34d399" stroke="none" fontFamily="ui-monospace, SFMono-Regular, monospace">X</text>
-                                    {/* Y axis */}
-                                    <line x1="9" y1="23" x2="9" y2="4.6" stroke="#f87171" />
-                                    <path d="M9 4.4L6.8 8.6h4.4z" fill="#f87171" stroke="none" />
-                                    <text x="10.8" y="7.6" fontSize="4.1" fontWeight="700" fill="#f87171" stroke="none" fontFamily="ui-monospace, SFMono-Regular, monospace">Y</text>
-                                    {/* Crisp origin marker */}
-                                    <circle cx="9" cy="23" r="2.4" fill="#0b1119" stroke="#e2e8f0" strokeWidth="1.2" />
-                                    <line x1="7.2" y1="23" x2="10.8" y2="23" stroke="#e2e8f0" strokeWidth="0.9" />
-                                    <line x1="9" y1="21.2" x2="9" y2="24.8" stroke="#e2e8f0" strokeWidth="0.9" />
-                                </g>
-                            </svg>
-                            <span className="font-mono text-[7px] font-bold tracking-[0.18em] text-slate-500 transition-colors group-hover:text-cyan-300">OT</span>
-                        </button>
-
-                        {isOtPopupOpen && (
-                            <div className="absolute bottom-full mb-3 left-0 w-72 rounded-xl border border-white/[0.09] bg-[#0b1119]/97 p-3.5 text-xs text-slate-200 shadow-[0_24px_70px_-16px_rgba(0,0,0,0.9)] backdrop-blur-xl z-40 animate-fade-in-up">
-                                <div className="mb-2.5 flex items-center justify-between border-b border-white/[0.07] pb-2">
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="font-bold text-cyan-400">Orientation Tuple (OT)</span>
-                                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 border border-cyan-700/50 font-mono">UCS</span>
-                                    </div>
-                                    <button 
-                                        onClick={() => setIsOtPopupOpen(false)}
-                                        className="text-gray-400 hover:text-white p-0.5 rounded"
-                                    >
-                                        ✕
-                                    </button>
-                                </div>
-
-                                <div className="space-y-3.5">
-                                    {/* Mode Selector */}
-                                    <div>
-                                        <div className="flex rounded-lg bg-gray-900 p-0.5 border border-gray-800">
-                                            <button
-                                                type="button"
-                                                onClick={() => onSetOrientationTuple?.(prev => ({
-                                                    ...prev,
-                                                    mode: 'drafting',
-                                                }))}
-                                                className={`flex-1 py-1 px-2 rounded-md text-[11px] font-medium transition-all ${
-                                                    curMode === 'drafting'
-                                                        ? 'bg-cyan-600 text-white shadow-sm'
-                                                        : 'text-gray-400 hover:text-gray-200'
-                                                }`}
-                                                title="Drafting: Geometry & North stay put, new lines with Ortho follow OT angle"
-                                            >
-                                                Drafting
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => onSetOrientationTuple?.(prev => ({
-                                                    ...prev,
-                                                    mode: 'view',
-                                                }))}
-                                                className={`flex-1 py-1 px-2 rounded-md text-[11px] font-medium transition-all ${
-                                                    curMode === 'view'
-                                                        ? 'bg-cyan-600 text-white shadow-sm'
-                                                        : 'text-gray-400 hover:text-gray-200'
-                                                }`}
-                                                title="View: Rotates the entire canvas viewport and all geometry"
-                                            >
-                                                View
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    {/* Rotation Angle */}
-                                    <div>
-                                        <div className="flex justify-between items-center text-[11px] text-gray-400 mb-1.5">
-                                            <span className="font-semibold text-gray-300">Rotation Angle:</span>
-                                            <div className="flex items-center gap-1">
-                                                <input 
-                                                    type="number" 
-                                                    step="any"
-                                                    value={curAngleDeg}
-                                                    onChange={(e) => {
-                                                        const val = parseFloat(e.target.value);
-                                                        if (!isNaN(val)) {
-                                                            setModeAngle((val * Math.PI) / 180);
-                                                        }
-                                                    }}
-                                                    className="w-16 px-1.5 py-0.5 rounded bg-gray-900 border border-gray-700 text-cyan-300 font-mono text-right text-xs focus:border-cyan-400 focus:outline-none"
-                                                />
-                                                <span className="text-cyan-300 font-mono">°</span>
-                                            </div>
-                                        </div>
-                                        <input 
-                                            type="range" 
-                                            min="-180" 
-                                            max="180" 
-                                            step="0.5"
-                                            value={curAngleDeg}
-                                            onChange={(e) => {
-                                                const deg = parseFloat(e.target.value);
-                                                setModeAngle((deg * Math.PI) / 180);
-                                            }}
-                                            className="w-full accent-cyan-500 cursor-pointer"
-                                        />
-                                        <div className="flex items-center gap-1 pt-1.5">
-                                            <button 
-                                                onClick={() => setModeAngle(0)}
-                                                className="flex-1 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 font-mono text-[10px] transition-colors"
-                                            >
-                                                0°
-                                            </button>
-                                            <button 
-                                                onClick={() => setModeAngle(curAngle + Math.PI / 2)}
-                                                className="flex-1 py-0.5 rounded bg-cyan-900/60 hover:bg-cyan-700 text-cyan-200 font-mono text-[10px] transition-colors"
-                                                title="+90°"
-                                            >
-                                                +90°
-                                            </button>
-                                            <button 
-                                                onClick={() => setModeAngle(curAngle - Math.PI / 2)}
-                                                className="flex-1 py-0.5 rounded bg-cyan-900/60 hover:bg-cyan-700 text-cyan-200 font-mono text-[10px] transition-colors"
-                                                title="-90°"
-                                            >
-                                                -90°
-                                            </button>
-                                            <button 
-                                                onClick={() => setModeAngle(curAngle + Math.PI)}
-                                                className="flex-1 py-0.5 rounded bg-cyan-900/60 hover:bg-cyan-700 text-cyan-200 font-mono text-[10px] transition-colors"
-                                                title="180°"
-                                            >
-                                                180°
-                                            </button>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                setIsPickingOtLineAlign(true);
-                                                setIsOtPopupOpen(false);
-                                            }}
-                                            className="mt-2 w-full py-1 rounded bg-indigo-700/80 hover:bg-indigo-600 text-indigo-100 font-medium text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm border border-indigo-500/40"
-                                            title="Click any line or boundary segment on canvas to align rotation angle to it"
-                                        >
-                                            <span>📏</span> Align to Line
-                                        </button>
-                                    </div>
-
-                                    {/* Origin (Pivot Point) */}
-                                    <div className="pt-2 border-t border-gray-800/80">
-                                        <div className="flex justify-between items-center text-[11px] text-gray-400 mb-1.5">
-                                            <span className="font-semibold text-gray-300">Origin / Pivot Point:</span>
-                                            <span className="text-[10px] text-gray-500 font-mono">World Coords</span>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-2 mb-2">
-                                            <div>
-                                                <label className="text-[10px] text-emerald-400 font-mono block mb-0.5">X (Easting):</label>
-                                                <input 
-                                                    type="number" 
-                                                    step="any"
-                                                    value={curOriginX}
-                                                    onChange={(e) => {
-                                                        const val = parseFloat(e.target.value);
-                                                        setModeOriginX(isNaN(val) ? 0 : val);
-                                                    }}
-                                                    className="w-full px-2 py-1 rounded bg-gray-900 border border-gray-700 text-emerald-300 font-mono text-xs focus:border-emerald-400 focus:outline-none"
-                                                    placeholder="0.00"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="text-[10px] text-red-400 font-mono block mb-0.5">Y (Northing):</label>
-                                                <input 
-                                                    type="number" 
-                                                    step="any"
-                                                    value={curOriginY}
-                                                    onChange={(e) => {
-                                                        const val = parseFloat(e.target.value);
-                                                        setModeOriginY(isNaN(val) ? 0 : val);
-                                                    }}
-                                                    className="w-full px-2 py-1 rounded bg-gray-900 border border-gray-700 text-red-300 font-mono text-xs focus:border-red-400 focus:outline-none"
-                                                    placeholder="0.00"
-                                                />
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-1.5">
-                                            <button 
-                                                onClick={() => {
-                                                    setIsPickingOtOrigin(true);
-                                                    setIsOtPopupOpen(false);
-                                                }}
-                                                className="flex-1 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white font-medium text-xs transition-colors flex items-center justify-center gap-1 shadow-sm"
-                                                title="Click canvas or snap to point/line to set origin"
-                                            >
-                                                <span>🎯</span> Pick Origin
-                                            </button>
-                                            <button 
-                                                onClick={resetModeOrigin}
-                                                className="py-1 px-2.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium text-xs transition-colors"
-                                                title="Reset origin to (0,0)"
-                                            >
-                                                Reset (0,0)
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                );
-            })()}
 
             {inlineOsnapMenuPos && (
                 <div
@@ -16123,7 +16125,15 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const toolbarW = toolbarRef.current?.offsetWidth ?? (toolbarOrientation === 'vertical' ? 50 : 380);
                 const toolbarH = toolbarRef.current?.offsetHeight ?? (toolbarOrientation === 'vertical' ? 450 : 50);
                 const effectiveX = isDocked ? (containerW - toolbarW - 16) : (viewToolbarPosition?.x ?? 16);
-                const effectiveY = viewToolbarPosition?.y ?? Math.max(16, containerH - toolbarH - 148);
+                // Fall back to the old offset until CanvasTerminal reports its
+                // measured height, then keep the toolbar's bottom edge pinned to
+                // the top of the command bar (even while the feed is expanded).
+                const commandBarInset = commandBarHeight > 0 ? commandBarHeight : 148;
+                const maxAnchoredY = Math.max(8, containerH - toolbarH - commandBarInset - 8);
+                const defaultY = Math.max(16, containerH - toolbarH - commandBarInset - 12);
+                const effectiveY = viewToolbarPosition?.y === undefined
+                    ? defaultY
+                    : Math.min(viewToolbarPosition.y, maxAnchoredY);
 
                 // Placement must be decided in viewport coordinates, not container
                 // coordinates, and the toolbar's real size is part of its center.
@@ -16168,7 +16178,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     setToolbarOrientation(prev => {
                         const next = prev === 'vertical' ? 'horizontal' : 'vertical';
                         try {
-                            localStorage.setItem('landsurv-canvas-toolbar-orientation', next);
+                            localStorage.setItem('landsurv-canvas-toolbar-orientation-v2', next);
                         } catch { /* ignore */ }
                         return next;
                     });
@@ -16180,7 +16190,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const FLYOUT_SHELL = 'max-h-[var(--flyout-max-height)] overflow-y-auto backdrop-blur-xl bg-[#0b1119]/95 border border-white/[0.09] shadow-[0_24px_70px_-16px_rgba(0,0,0,0.9)] text-slate-200';
 
                 const wrapperStyle: React.CSSProperties = isViewToolbarDragging
-                    ? { left: `${viewToolbarPosition?.x ?? effectiveX}px`, top: `${viewToolbarPosition?.y ?? effectiveY}px` }
+                    ? { left: `${viewToolbarPosition?.x ?? effectiveX}px`, top: `${effectiveY}px` }
                     : isDocked
                     ? { right: '1rem', top: `${effectiveY}px` }
                     : { left: `${viewToolbarPosition?.x ?? effectiveX}px`, top: `${effectiveY}px` };
@@ -16901,6 +16911,245 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     )}
                                 </div>
                             )}
+
+                            {/* Orientation Tuple (OT / UCS) Flyout */}
+                            {isOtPopupOpen && (() => {
+                                const curMode = orientationTuple.mode ?? 'drafting';
+                                const curAngle = curMode === 'drafting'
+                                    ? (orientationTuple.draftingAngle ?? orientationTuple.angle ?? 0)
+                                    : (orientationTuple.viewAngle ?? orientationTuple.angle ?? 0);
+                                const curOriginX = curMode === 'drafting'
+                                    ? (orientationTuple.draftingOriginX ?? orientationTuple.originX ?? 0)
+                                    : (orientationTuple.viewOriginX ?? orientationTuple.originX ?? 0);
+                                const curOriginY = curMode === 'drafting'
+                                    ? (orientationTuple.draftingOriginY ?? orientationTuple.originY ?? 0)
+                                    : (orientationTuple.viewOriginY ?? orientationTuple.originY ?? 0);
+                                const curAngleDeg = Math.round((curAngle * 180) / Math.PI * 100) / 100;
+
+                                const setModeAngle = (rad: number) => {
+                                    if (!onSetOrientationTuple) return;
+                                    onSetOrientationTuple(prev => {
+                                        const m = prev.mode ?? 'drafting';
+                                        return m === 'drafting'
+                                            ? { ...prev, draftingAngle: rad, angle: rad, placed: true }
+                                            : { ...prev, viewAngle: rad, angle: rad, placed: true };
+                                    });
+                                };
+
+                                const setModeOriginX = (val: number) => {
+                                    if (!onSetOrientationTuple) return;
+                                    onSetOrientationTuple(prev => {
+                                        const m = prev.mode ?? 'drafting';
+                                        return m === 'drafting'
+                                            ? { ...prev, draftingOriginX: val, originX: val, placed: true }
+                                            : { ...prev, viewOriginX: val, originX: val, placed: true };
+                                    });
+                                };
+
+                                const setModeOriginY = (val: number) => {
+                                    if (!onSetOrientationTuple) return;
+                                    onSetOrientationTuple(prev => {
+                                        const m = prev.mode ?? 'drafting';
+                                        return m === 'drafting'
+                                            ? { ...prev, draftingOriginY: val, originY: val, placed: true }
+                                            : { ...prev, viewOriginY: val, originY: val, placed: true };
+                                    });
+                                };
+
+                                const resetModeOrigin = () => {
+                                    if (!onSetOrientationTuple) return;
+                                    onSetOrientationTuple(prev => {
+                                        const m = prev.mode ?? 'drafting';
+                                        return m === 'drafting'
+                                            ? { ...prev, draftingOriginX: 0, draftingOriginY: 0, originX: 0, originY: 0, placed: prev.draftingAngle !== 0 }
+                                            : { ...prev, viewOriginX: 0, viewOriginY: 0, originX: 0, originY: 0, placed: prev.viewAngle !== 0 };
+                                    });
+                                };
+
+                                return (
+                                    <div
+                                        role="dialog"
+                                        aria-label="Orientation Tuple settings"
+                                        className={`absolute ${flyoutPlacementClass} rounded-xl p-3.5 w-72 text-xs z-30 animate-fade-in-up ${FLYOUT_SHELL}`}
+                                    >
+                                        <div className="mb-2.5 flex items-center justify-between border-b border-white/[0.07] pb-2">
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="font-bold text-cyan-400">Orientation Tuple (OT)</span>
+                                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 border border-cyan-700/50 font-mono">UCS</span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsOtPopupOpen(false)}
+                                                className="text-gray-400 hover:text-white p-0.5 rounded"
+                                                title="Close orientation controls"
+                                            >
+                                                ✕
+                                            </button>
+                                        </div>
+
+                                        <div className="space-y-3.5">
+                                            <div>
+                                                <div className="flex rounded-lg bg-gray-900 p-0.5 border border-gray-800">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => onSetOrientationTuple?.(prev => ({ ...prev, mode: 'drafting' }))}
+                                                        className={`flex-1 py-1 px-2 rounded-md text-[11px] font-medium transition-all ${
+                                                            curMode === 'drafting'
+                                                                ? 'bg-cyan-600 text-white shadow-sm'
+                                                                : 'text-gray-400 hover:text-gray-200'
+                                                        }`}
+                                                        title="Drafting: Geometry & North stay put, new lines with Ortho follow OT angle"
+                                                    >
+                                                        Drafting
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => onSetOrientationTuple?.(prev => ({ ...prev, mode: 'view' }))}
+                                                        className={`flex-1 py-1 px-2 rounded-md text-[11px] font-medium transition-all ${
+                                                            curMode === 'view'
+                                                                ? 'bg-cyan-600 text-white shadow-sm'
+                                                                : 'text-gray-400 hover:text-gray-200'
+                                                        }`}
+                                                        title="View: Rotates the entire canvas viewport and all geometry"
+                                                    >
+                                                        View
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <div className="flex justify-between items-center text-[11px] text-gray-400 mb-1.5">
+                                                    <span className="font-semibold text-gray-300">Rotation Angle:</span>
+                                                    <div className="flex items-center gap-1">
+                                                        <input
+                                                            type="number"
+                                                            step="any"
+                                                            value={curAngleDeg}
+                                                            onChange={(e) => {
+                                                                const val = parseFloat(e.target.value);
+                                                                if (!isNaN(val)) setModeAngle((val * Math.PI) / 180);
+                                                            }}
+                                                            className="w-16 px-1.5 py-0.5 rounded bg-gray-900 border border-gray-700 text-cyan-300 font-mono text-right text-xs focus:border-cyan-400 focus:outline-none"
+                                                        />
+                                                        <span className="text-cyan-300 font-mono">°</span>
+                                                    </div>
+                                                </div>
+                                                <input
+                                                    type="range"
+                                                    min="-180"
+                                                    max="180"
+                                                    step="0.5"
+                                                    value={curAngleDeg}
+                                                    onChange={(e) => setModeAngle((parseFloat(e.target.value) * Math.PI) / 180)}
+                                                    className="w-full accent-cyan-500 cursor-pointer"
+                                                />
+                                                <div className="flex items-center gap-1 pt-1.5">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setModeAngle(0)}
+                                                        className="flex-1 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 font-mono text-[10px] transition-colors"
+                                                    >
+                                                        0°
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setModeAngle(curAngle + Math.PI / 2)}
+                                                        className="flex-1 py-0.5 rounded bg-cyan-900/60 hover:bg-cyan-700 text-cyan-200 font-mono text-[10px] transition-colors"
+                                                        title="+90°"
+                                                    >
+                                                        +90°
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setModeAngle(curAngle - Math.PI / 2)}
+                                                        className="flex-1 py-0.5 rounded bg-cyan-900/60 hover:bg-cyan-700 text-cyan-200 font-mono text-[10px] transition-colors"
+                                                        title="-90°"
+                                                    >
+                                                        -90°
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setModeAngle(curAngle + Math.PI)}
+                                                        className="flex-1 py-0.5 rounded bg-cyan-900/60 hover:bg-cyan-700 text-cyan-200 font-mono text-[10px] transition-colors"
+                                                        title="180°"
+                                                    >
+                                                        180°
+                                                    </button>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setIsPickingOtLineAlign(true);
+                                                        setIsOtPopupOpen(false);
+                                                    }}
+                                                    className="mt-2 w-full py-1 rounded bg-indigo-700/80 hover:bg-indigo-600 text-indigo-100 font-medium text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm border border-indigo-500/40"
+                                                    title="Click any line or boundary segment on canvas to align rotation angle to it"
+                                                >
+                                                    <span>📏</span> Align to Line
+                                                </button>
+                                            </div>
+
+                                            <div className="pt-2 border-t border-gray-800/80">
+                                                <div className="flex justify-between items-center text-[11px] text-gray-400 mb-1.5">
+                                                    <span className="font-semibold text-gray-300">Origin / Pivot Point:</span>
+                                                    <span className="text-[10px] text-gray-500 font-mono">World Coords</span>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-2 mb-2">
+                                                    <div>
+                                                        <label className="text-[10px] text-emerald-400 font-mono block mb-0.5">X (Easting):</label>
+                                                        <input
+                                                            type="number"
+                                                            step="any"
+                                                            value={curOriginX}
+                                                            onChange={(e) => {
+                                                                const val = parseFloat(e.target.value);
+                                                                setModeOriginX(isNaN(val) ? 0 : val);
+                                                            }}
+                                                            className="w-full px-2 py-1 rounded bg-gray-900 border border-gray-700 text-emerald-300 font-mono text-xs focus:border-emerald-400 focus:outline-none"
+                                                            placeholder="0.00"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-[10px] text-red-400 font-mono block mb-0.5">Y (Northing):</label>
+                                                        <input
+                                                            type="number"
+                                                            step="any"
+                                                            value={curOriginY}
+                                                            onChange={(e) => {
+                                                                const val = parseFloat(e.target.value);
+                                                                setModeOriginY(isNaN(val) ? 0 : val);
+                                                            }}
+                                                            className="w-full px-2 py-1 rounded bg-gray-900 border border-gray-700 text-red-300 font-mono text-xs focus:border-red-400 focus:outline-none"
+                                                            placeholder="0.00"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setIsPickingOtOrigin(true);
+                                                            setIsOtPopupOpen(false);
+                                                        }}
+                                                        className="flex-1 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white font-medium text-xs transition-colors flex items-center justify-center gap-1 shadow-sm"
+                                                        title="Click canvas or snap to point/line to set origin"
+                                                    >
+                                                        <span>🎯</span> Pick Origin
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={resetModeOrigin}
+                                                        className="py-1 px-2.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium text-xs transition-colors"
+                                                        title="Reset origin to (0,0)"
+                                                    >
+                                                        Reset (0,0)
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
                             
                             {/* Main toolbar - vertical (default) or horizontal */}
                             <div
@@ -16954,6 +17203,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsDrawingToolsMenuOpen(false);
                                             setIsAddPointFlyoutOpen(false);
                                             setIsDimFlyoutOpen(false);
+                                            setIsOtPopupOpen(false);
                                         }
                                     }}
                                     className={`p-2.5 rounded-lg transition-colors ${isZoomExtentsOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
@@ -16973,40 +17223,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsDrawingToolsMenuOpen(false);
                                             setIsAddPointFlyoutOpen(false);
                                             setIsDimFlyoutOpen(false);
+                                            setIsOtPopupOpen(false);
                                         }
                                     }}
                                     className={`p-2.5 rounded-lg transition-colors ${isAttributeFlyoutOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
                                     title="Annotation Scale"
                                 >
                                     <ToolbarAnnotationScaleIcon className="w-5 h-5"/>
-                                </button>
-
-                                <button
-                                    data-no-drag
-                                    onClick={() => {
-                                        setIsLayerPanelOpen(p => !p);
-                                        if (!isLayerPanelOpen) {
-                                            setIsZoomExtentsOpen(false);
-                                            setIsAttributeFlyoutOpen(false);
-                                            setIsZoomToPointOpen(false);
-                                            setIsDrawingToolsMenuOpen(false);
-                                            setIsAddPointFlyoutOpen(false);
-                                            setIsDimFlyoutOpen(false);
-                                        }
-                                    }}
-                                    className={`p-2.5 rounded-lg transition-colors ${isLayerPanelOpen ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
-                                    title="Data Visibility"
-                                >
-                                    <ToolbarLayersIcon className="w-5 h-5"/>
-                                </button>
-
-                                <button
-                                    data-no-drag
-                                    onClick={() => setIsTinShadingEnabled(v => !v)}
-                                    className={`p-2.5 rounded-lg transition-colors ${isTinShadingEnabled ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
-                                    title={isTinShadingEnabled ? 'TIN Shading: ON' : 'TIN Shading: OFF'}
-                                >
-                                    <ToolbarSurfaceIcon className="w-5 h-5"/>
                                 </button>
 
                                 <button
@@ -17022,6 +17245,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setIsDrawingToolsMenuOpen(false);
                                                 setIsAddPointFlyoutOpen(false);
                                                 setIsDimFlyoutOpen(false);
+                                                setIsOtPopupOpen(false);
                                                 setDrawingMode('none');
                                                 setIsTrimmingLines(false);
                                                 setIsExtendingLines(false);
@@ -17056,6 +17280,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setIsLayerPanelOpen(false);
                                                 setIsDrawingToolsMenuOpen(false);
                                                 setIsDimFlyoutOpen(false);
+                                                setIsOtPopupOpen(false);
                                             }
                                             return willOpen;
                                         });
@@ -17077,6 +17302,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsLayerPanelOpen(false);
                                             setIsAddPointFlyoutOpen(false);
                                             setIsDimFlyoutOpen(false);
+                                            setIsOtPopupOpen(false);
                                         } else {
                                             setSelectedLineIds(new Set());
                                         }
@@ -17098,23 +17324,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             setIsLayerPanelOpen(false);
                                             setIsDrawingToolsMenuOpen(false);
                                             setIsAddPointFlyoutOpen(false);
+                                            setIsOtPopupOpen(false);
                                         }
                                     }}
                                     className={`p-2.5 rounded-lg transition-colors ${isDimFlyoutOpen || isDimensionDrawingMode(drawingMode) ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
                                     title="Dimension Tools"
                                 >
                                     <ToolbarDimensionIcon className="w-5 h-5"/>
-                                </button>
-
-                                {/* CAD Standards spreadsheet editor (quick open) */}
-                                <button
-                                    data-no-drag
-                                    onClick={() => setIsCadStandardsEditorOpen(true)}
-                                    disabled={!cadStandard}
-                                    className={`p-2.5 rounded-lg transition-colors flex items-center ${cadStandard ? 'hover:bg-gray-800' : 'opacity-40 cursor-not-allowed'}`}
-                                    title={cadStandard ? `Open CAD Standards editor (${cadStandard.codes.length} codes)` : 'Load a CAD standard to edit codes'}
-                                >
-                                    <ToolbarStandardsIcon className="w-5 h-5"/>
                                 </button>
 
                                 {/* Symbol exclusion mode — click points to hide their symbols */}
@@ -17128,18 +17344,6 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 >
                                     <ToolbarSymbolExclusionIcon className="w-5 h-5"/>
                                 </button>
-
-                                {/* Floating Point List Panel toggle */}
-                                {props.onOpenPointListPanel && (
-                                    <button
-                                        data-no-drag
-                                        onClick={props.onOpenPointListPanel}
-                                        className={`p-2.5 rounded-lg transition-colors ${props.isPointListPanelOpen ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-800'} ${props.isPointListButtonPulsing && !props.isPointListPanelOpen ? 'animate-pulse-pink-cta' : ''}`}
-                                        title="Point List Panel"
-                                    >
-                                        <ToolbarPointListIcon className="w-5 h-5"/>
-                                    </button>
-                                )}
 
                                 {props.onOpenBoundaryEditor && (boundaryFiles?.length ?? 0) > 0 && (
                                     <button
@@ -17163,6 +17367,77 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                         <ToolbarShrinkwrapIcon className="w-5 h-5"/>
                                     </button>
                                 )}
+
+                                {/* UCS / Orientation Tuple (OT) button on the floating toolbar */}
+                                {(() => {
+                                    const curMode = orientationTuple.mode ?? 'drafting';
+                                    const curAngle = curMode === 'drafting'
+                                        ? (orientationTuple.draftingAngle ?? orientationTuple.angle ?? 0)
+                                        : (orientationTuple.viewAngle ?? orientationTuple.angle ?? 0);
+                                    const curOriginX = curMode === 'drafting'
+                                        ? (orientationTuple.draftingOriginX ?? orientationTuple.originX ?? 0)
+                                        : (orientationTuple.viewOriginX ?? orientationTuple.originX ?? 0);
+                                    const curOriginY = curMode === 'drafting'
+                                        ? (orientationTuple.draftingOriginY ?? orientationTuple.originY ?? 0)
+                                        : (orientationTuple.viewOriginY ?? orientationTuple.originY ?? 0);
+                                    const curAngleDeg = Math.round((curAngle * 180) / Math.PI * 100) / 100;
+                                    const p0 = worldToScreen(curOriginX, curOriginY);
+                                    const localTheta = curMode === 'drafting' ? curAngle : 0;
+                                    const p1 = worldToScreen(curOriginX + Math.cos(localTheta), curOriginY + Math.sin(localTheta));
+                                    const screenAngleDeg = Math.round(Math.atan2(p1.y - p0.y, p1.x - p0.x) * (180 / Math.PI) * 100) / 100;
+                                    const isOtActive = isOtPopupOpen || isPickingOtOrigin || isPickingOtLineAlign || Math.abs(curAngleDeg) > 0.01;
+
+                                    return (
+                                        <button
+                                            data-no-drag
+                                            type="button"
+                                            data-testid="toolbar-ot-button"
+                                            onClick={() => {
+                                                setIsOtPopupOpen(p => {
+                                                    const willOpen = !p;
+                                                    if (willOpen) {
+                                                        setIsZoomExtentsOpen(false);
+                                                        setIsAttributeFlyoutOpen(false);
+                                                        setIsZoomToPointOpen(false);
+                                                        setIsLayerPanelOpen(false);
+                                                        setIsDrawingToolsMenuOpen(false);
+                                                        setIsAddPointFlyoutOpen(false);
+                                                        setIsDimFlyoutOpen(false);
+                                                    }
+                                                    return willOpen;
+                                                });
+                                            }}
+                                            className={`p-2 rounded-lg transition-colors flex flex-col items-center justify-center gap-0.5 ${
+                                                isOtPopupOpen
+                                                    ? 'bg-cyan-600 text-white'
+                                                    : isOtActive
+                                                    ? 'bg-cyan-950/60 text-cyan-200 ring-1 ring-cyan-500/40 hover:bg-gray-800'
+                                                    : 'hover:bg-gray-800 text-slate-300'
+                                            }`}
+                                            title={`Orientation Tuple (OT / UCS) — ${curAngleDeg.toFixed(1)}°. Click to adjust orientation and pivot origin.`}
+                                            aria-label="Open orientation tuple settings"
+                                            aria-expanded={isOtPopupOpen}
+                                        >
+                                            <svg className="w-5 h-5 overflow-visible" viewBox="0 0 32 32" fill="none" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                                                <g transform={`rotate(${screenAngleDeg} 9 23)`}>
+                                                    <path d="M9 6.5A16.5 16.5 0 0 1 25.5 23" stroke="#22d3ee" strokeOpacity="0.28" strokeWidth="0.8" strokeDasharray="1.5 2" />
+                                                    <line x1="9" y1="23" x2="27.4" y2="23" stroke="#34d399" />
+                                                    <path d="M27.6 23l-4.1-2.2v4.4z" fill="#34d399" stroke="none" />
+                                                    <text x="24.6" y="20.4" fontSize="4.1" fontWeight="700" fill="#34d399" stroke="none" fontFamily="ui-monospace, SFMono-Regular, monospace">X</text>
+                                                    <line x1="9" y1="23" x2="9" y2="4.6" stroke="#f87171" />
+                                                    <path d="M9 4.4L6.8 8.6h4.4z" fill="#f87171" stroke="none" />
+                                                    <text x="10.8" y="7.6" fontSize="4.1" fontWeight="700" fill="#f87171" stroke="none" fontFamily="ui-monospace, SFMono-Regular, monospace">Y</text>
+                                                    <circle cx="9" cy="23" r="2.4" fill="#0b1119" stroke="#e2e8f0" strokeWidth="1.2" />
+                                                    <line x1="7.2" y1="23" x2="10.8" y2="23" stroke="#e2e8f0" strokeWidth="0.9" />
+                                                    <line x1="9" y1="21.2" x2="9" y2="24.8" stroke="#e2e8f0" strokeWidth="0.9" />
+                                                </g>
+                                            </svg>
+                                            <span className="font-mono text-[7px] font-bold leading-none tracking-[0.16em] text-cyan-300/90">
+                                                {Math.abs(curAngleDeg) > 0.01 ? `${curAngleDeg.toFixed(0)}°` : 'OT'}
+                                            </span>
+                                        </button>
+                                    );
+                                })()}
                             </div>
                         </div>
                     );
@@ -17451,6 +17726,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     onZoomExtents: () => zoomExtents(),
                     onOpenSettings: onShowSettings,
                     onOpenKeyModal: props.keyInfo?.onClick,
+                    onActivateSelectionMode: () => {
+                        finishDrawing();
+                        setPendingSelectionCommand(null);
+                        stopInteractiveTransforms();
+                        setIsSelectionMode(true);
+                    },
                     onCancel: () => {
                         if (activeCommandPrompt) {
                             if (isPickingPolarCenter) {
@@ -17680,6 +17961,31 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     osnapOverride: inlineOsnapOverride ? OSNAP_LABELS[inlineOsnapOverride] : null,
                     isOrthoEnabled,
                 }}
+                agentDrawMode={agentDrawMode}
+                agentAnnotMode={agentAnnotMode}
+                onCycleAgentDrawMode={onCycleAgentDrawMode}
+                onCycleAgentAnnotMode={onCycleAgentAnnotMode}
+                activeAgent={activeAgent}
+                messages={props.agentMessages}
+                onSendMessage={props.onSendAgentMessage}
+                onStopGenerating={props.onStopGenerating}
+                isLoading={props.isAgentLoading}
+                thinkingTime={props.thinkingTime}
+                currentModelName={props.currentModelName}
+                suggestedQuestions={props.suggestedQuestions}
+                onToggleExpandMessage={props.onToggleExpandMessage}
+                headerControls={props.chatHeaderControls}
+                chatBarAccessories={props.chatBarAccessories}
+                toolsRowAccessories={props.toolsRowAccessories}
+                hasDockableTools={props.hasDockableTools}
+                isToolDockOpen={props.isToolDockOpen}
+                onToggleToolDock={props.onToggleToolDock}
+                dockedA2UIKey={props.dockedA2UIKey}
+                onToggleA2UIDock={props.onToggleA2UIDock}
+                chatToolDialogs={props.chatToolDialogs}
+                agentChatOpenSignal={props.agentChatOpenSignal}
+                onHeightChange={handleCommandBarHeightChange}
+                rightExtension={props.commandBarRightExtension ?? 0}
             />
 
             {/* Operation-anchored arrow pad for multi-value commands */}

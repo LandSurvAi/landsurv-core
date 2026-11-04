@@ -54,6 +54,8 @@ export interface CommandContext {
   onOpenKeyModal?: () => void;
   onClear?: () => void;
   onCancel?: () => void;
+  /** Enter canvas Selection mode (used when Escape closes the command / agent line). */
+  onActivateSelectionMode?: () => void;
   onNumericInput?: (value: number) => void;
   onCoordinateInput?: (point: { easting: number; northing: number }) => void;
   onSelectAll?: () => number;

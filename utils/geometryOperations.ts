@@ -107,6 +107,34 @@ export const addLineToList = (newLine: SurveyLine): SurveyLine => {
 };
 
 /**
+ * CAD-style layer inheritance for newly drawn segments.
+ *
+ * When a segment is drawn between two points and either endpoint already
+ * terminates an existing line, the new segment continues that line's layer
+ * instead of the ambient drawing layer. The start (`from`) connection wins when
+ * the two ends land on lines with different layers, and full circles (which
+ * encode from === to) are never treated as a connecting entity.
+ */
+export const inheritConnectedLayer = (newLine: SurveyLine, lines: SurveyLine[]): SurveyLine => {
+  if (newLine.from === newLine.to) return newLine; // circle — no free endpoint
+
+  const layerOf = (line: SurveyLine | undefined): string | null =>
+    line && typeof line.layer === 'string' && line.layer.length > 0 ? line.layer : null;
+
+  const candidates = lines.filter(line => line.from !== line.to && layerOf(line) !== null);
+  const touches = (line: SurveyLine, pointNumber: string): boolean =>
+    line.from === pointNumber || line.to === pointNumber;
+
+  const startLayer = layerOf(candidates.find(line => touches(line, newLine.from)));
+  if (startLayer) return { ...newLine, layer: startLayer };
+
+  const endLayer = layerOf(candidates.find(line => touches(line, newLine.to)));
+  if (endLayer) return { ...newLine, layer: endLayer };
+
+  return newLine;
+};
+
+/**
  * Delete a line from the lines list by ID. Matches either the explicit
  * `line.id` or the composite `from-to` key used by selection tooling.
  */

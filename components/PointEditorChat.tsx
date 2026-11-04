@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, useRef, useEffect, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { type SurveyPoint, type PointList, AgentType } from '../types.ts';
-import { DownloadIcon, EraserIcon, ChevronDownIcon, ChevronUpIcon, CameraIcon, CrosshairsIcon, MapPinIcon, EyeIcon, ChevronLeftIcon, ChevronRightIcon, CpuChipIcon } from './icons.tsx';
+import { DownloadIcon, ArrowUpTrayIcon, XMarkIcon, EraserIcon, ChevronDownIcon, ChevronUpIcon, CameraIcon, CrosshairsIcon, MapPinIcon, EyeIcon, ChevronLeftIcon, ChevronRightIcon, CpuChipIcon } from './icons.tsx';
 import { PointEditorC3DSync } from './PointEditorC3DSync.tsx';
 import { expandGoogleMapsShortLink, isGoogleMapsShortLink, parseGoogleMapsLatLon } from '../utils/googleMaps.ts';
 import { useErrorReporter } from '../contexts/AppStateContext';
@@ -14,6 +14,22 @@ const SyncIcon = () => (
     <path d="M16 16h5v5"/>
   </svg>
 );
+
+const SearchGlyph = () => (
+  <svg
+    aria-hidden="true"
+    className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500"
+    fill="none"
+    viewBox="0 0 24 24"
+    stroke="currentColor"
+    strokeWidth={2}
+  >
+    <circle cx="11" cy="11" r="7" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="m20 20-3.5-3.5" />
+  </svg>
+);
+
+type PointSortKey = 'pn' | 'northing' | 'easting' | 'elevation' | 'description';
 
 interface PointEditorChatProps {
   pointLists: PointList[];
@@ -84,6 +100,75 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
   // C3D Sync state
   const [isC3DSyncOpen, setIsC3DSyncOpen] = useState(false);
   const [selectedPointNumbers, setSelectedPointNumbers] = useState<Set<string>>(new Set());
+
+  // Workspace filter, sorting, and quick stats.
+  const [searchQuery, setSearchQuery] = useState('');
+  const [listFilter, setListFilter] = useState<string>('all');
+  const [duplicatesOnly, setDuplicatesOnly] = useState(false);
+  const [sortKey, setSortKey] = useState<PointSortKey>('pn');
+  const [sortAscending, setSortAscending] = useState(true);
+  const allPoints = useMemo(() => pointLists.flatMap(list => list.points), [pointLists]);
+  const visiblePointCount = useMemo(
+    () => pointLists.filter(list => list.isVisible).reduce((total, list) => total + list.points.length, 0),
+    [pointLists]
+  );
+  const duplicatePointNumbers = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const point of allPoints) {
+      const key = point.pointNumber.trim().toUpperCase();
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return new Set(
+      [...counts.entries()].filter(([, count]) => count > 1).map(([key]) => key)
+    );
+  }, [allPoints]);
+  const duplicatePointCount = duplicatePointNumbers.size;
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const matchesSearch = (point: SurveyPoint) => {
+    if (!normalizedSearch) return true;
+    return `${point.pointNumber} ${point.description ?? ''} ${point.northing} ${point.easting} ${point.elevation ?? ''}`
+      .toLowerCase()
+      .includes(normalizedSearch);
+  };
+  const matchesFilters = (point: SurveyPoint) => {
+    if (duplicatesOnly && !duplicatePointNumbers.has(point.pointNumber.trim().toUpperCase())) {
+      return false;
+    }
+    return matchesSearch(point);
+  };
+  const sortPoints = (points: SurveyPoint[]) => {
+    const direction = sortAscending ? 1 : -1;
+    return [...points].sort((a, b) => {
+      if (sortKey === 'pn') {
+        return a.pointNumber.localeCompare(b.pointNumber, undefined, { numeric: true }) * direction;
+      }
+      if (sortKey === 'description') {
+        return (a.description ?? '').localeCompare(b.description ?? '') * direction;
+      }
+      return ((a[sortKey] ?? 0) - (b[sortKey] ?? 0)) * direction;
+    });
+  };
+  const handleSort = (key: PointSortKey) => {
+    if (sortKey === key) {
+      setSortAscending(value => !value);
+    } else {
+      setSortKey(key);
+      setSortAscending(true);
+    }
+  };
+  const sortIndicator = (key: PointSortKey) =>
+    sortKey === key ? (sortAscending ? ' ▲' : ' ▼') : '';
+  const filteredLists = pointLists.filter(
+    list => listFilter === 'all' || list.id === listFilter
+  );
+  const showAllLists = () =>
+    pointLists.forEach(list => {
+      if (!list.isVisible) onToggleVisibility(list.id);
+    });
+  const hideAllLists = () =>
+    pointLists.forEach(list => {
+      if (list.isVisible) onToggleVisibility(list.id);
+    });
 
   // Expose handleCanvasPointSelect method via ref
   useImperativeHandle(ref, () => ({
@@ -229,6 +314,50 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
         reportError({ title: 'Location not found', message: 'Could not find latitude/longitude in that link. Paste a full Google Maps URL or a "lat,lon" pair.' });
     };
   
+  const handleExportPoints = () => {
+    if (allPoints.length === 0) return;
+    const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const rows = [
+      ['List', 'Point Number', 'Northing', 'Easting', 'Elevation', 'Description', 'Photos']
+        .map(csvCell)
+        .join(','),
+    ];
+    for (const list of pointLists) {
+      for (const point of list.points) {
+        rows.push([
+          list.name,
+          point.pointNumber,
+          point.northing,
+          point.easting,
+          point.elevation ?? 0,
+          point.description ?? '',
+          (point.photos ?? []).length,
+        ].map(csvCell).join(','));
+      }
+    }
+    const blob = new Blob([rows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `landsurv-points-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  const handleImportPointsFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = loadEvent => {
+      const content = typeof loadEvent.target?.result === 'string' ? loadEvent.target.result : '';
+      if (content.trim()) onImportPointList(content, file.name);
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  };
+
   const handleToggleExpand = (listId: string) => {
     setExpandedListIds(prev => {
         const next = new Set(prev);
@@ -254,9 +383,10 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
   const PointListSection: React.FC<{ list: PointList }> = ({ list }) => {
     const isExpanded = expandedListIds.has(list.id);
     const isUnsaved = list.id === 'working';
+    const matchingPoints = sortPoints(list.points.filter(matchesFilters));
     
     return (
-        <div className="bg-gray-700/50 rounded-lg border border-gray-600 light-theme:bg-gray-100/50 light-theme:border-gray-300 mb-3">
+        <div className="bg-white/[0.025] rounded-xl border border-white/[0.07] light-theme:bg-gray-100/50 light-theme:border-gray-300 mb-3">
             <header 
                 className="p-3 flex justify-between items-center cursor-pointer hover:bg-gray-700/30 light-theme:hover:bg-gray-200/30"
                 onClick={() => handleToggleExpand(list.id)}
@@ -281,7 +411,9 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                             {list.name}
                         </h4>
                     )}
-                    <span className="text-xs text-gray-400 light-theme:text-gray-600">({list.points.length})</span>
+                    <span className="text-xs text-gray-400 light-theme:text-gray-600">
+                        ({normalizedSearch ? `${matchingPoints.length}/${list.points.length}` : list.points.length})
+                    </span>
                 </div>
                 <div className="flex items-center gap-1">
                     <button onClick={(e) => { e.stopPropagation(); onToggleVisibility(list.id); }} className={`p-1.5 rounded-full text-xs ${list.isVisible ? 'text-yellow-400' : 'text-gray-500'} hover:bg-yellow-800/50`} title="Toggle Visibility"><EyeIcon className="w-3 h-3"/></button>
@@ -302,7 +434,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
             </header>
             {isExpanded && (
                 <div className="border-t border-gray-600 light-theme:border-gray-300">
-                    {list.points.length > 0 ? (
+                    {matchingPoints.length > 0 ? (
                         <div className="overflow-x-auto overflow-y-hidden">
                             <div className="flex justify-end gap-1 px-2 py-1 border-b border-gray-600/50 light-theme:border-gray-300/50 bg-gray-700/20 light-theme:bg-gray-100/20">
                                 <button
@@ -348,7 +480,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                                         {visibleColumns.has('pn') && (
                                             <th className="px-3 py-1.5 text-left">
                                                 <div className="flex items-center justify-between group hover:bg-gray-600/50 light-theme:hover:bg-gray-300/50 -mx-1 px-1 rounded whitespace-nowrap">
-                                                    <span>PN</span>
+                                                    <button type="button" onClick={() => handleSort('pn')} className="text-left hover:text-cyan-300" title="Sort by point number">PN{sortIndicator('pn')}</button>
                                                     <button onClick={() => { const newCols = new Set(visibleColumns); newCols.delete('pn'); setVisibleColumns(newCols); }} className="ml-1 p-0.5 opacity-0 group-hover:opacity-100 rounded hover:bg-gray-500 light-theme:hover:bg-gray-400 flex-shrink-0" title="Hide PN column"><ChevronLeftIcon className="w-3 h-3"/></button>
                                                 </div>
                                             </th>
@@ -356,7 +488,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                                         {visibleColumns.has('northing') && (
                                             <th className="px-3 py-1.5 text-left">
                                                 <div className="flex items-center justify-between group hover:bg-gray-600/50 light-theme:hover:bg-gray-300/50 -mx-1 px-1 rounded whitespace-nowrap">
-                                                    <span>Northing</span>
+                                                    <button type="button" onClick={() => handleSort('northing')} className="text-left hover:text-cyan-300" title="Sort by northing">Northing{sortIndicator('northing')}</button>
                                                     <button onClick={() => { const newCols = new Set(visibleColumns); newCols.delete('northing'); setVisibleColumns(newCols); }} className="ml-1 p-0.5 opacity-0 group-hover:opacity-100 rounded hover:bg-gray-500 light-theme:hover:bg-gray-400 flex-shrink-0" title="Hide Northing column"><ChevronLeftIcon className="w-3 h-3"/></button>
                                                 </div>
                                             </th>
@@ -364,7 +496,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                                         {visibleColumns.has('easting') && (
                                             <th className="px-3 py-1.5 text-left">
                                                 <div className="flex items-center justify-between group hover:bg-gray-600/50 light-theme:hover:bg-gray-300/50 -mx-1 px-1 rounded whitespace-nowrap">
-                                                    <span>Easting</span>
+                                                    <button type="button" onClick={() => handleSort('easting')} className="text-left hover:text-cyan-300" title="Sort by easting">Easting{sortIndicator('easting')}</button>
                                                     <button onClick={() => { const newCols = new Set(visibleColumns); newCols.delete('easting'); setVisibleColumns(newCols); }} className="ml-1 p-0.5 opacity-0 group-hover:opacity-100 rounded hover:bg-gray-500 light-theme:hover:bg-gray-400 flex-shrink-0" title="Hide Easting column"><ChevronLeftIcon className="w-3 h-3"/></button>
                                                 </div>
                                             </th>
@@ -372,7 +504,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                                         {visibleColumns.has('elev') && (
                                             <th className="px-3 py-1.5 text-left">
                                                 <div className="flex items-center justify-between group hover:bg-gray-600/50 light-theme:hover:bg-gray-300/50 -mx-1 px-1 rounded whitespace-nowrap">
-                                                    <span>Elev</span>
+                                                    <button type="button" onClick={() => handleSort('elevation')} className="text-left hover:text-cyan-300" title="Sort by elevation">Elev{sortIndicator('elevation')}</button>
                                                     <button onClick={() => { const newCols = new Set(visibleColumns); newCols.delete('elev'); setVisibleColumns(newCols); }} className="ml-1 p-0.5 opacity-0 group-hover:opacity-100 rounded hover:bg-gray-500 light-theme:hover:bg-gray-400 flex-shrink-0" title="Hide Elevation column"><ChevronLeftIcon className="w-3 h-3"/></button>
                                                 </div>
                                             </th>
@@ -380,7 +512,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                                         {visibleColumns.has('desc') && (
                                             <th className="px-3 py-1.5 text-left">
                                                 <div className="flex items-center justify-between group hover:bg-gray-600/50 light-theme:hover:bg-gray-300/50 -mx-1 px-1 rounded whitespace-nowrap">
-                                                    <span>Desc</span>
+                                                    <button type="button" onClick={() => handleSort('description')} className="text-left hover:text-cyan-300" title="Sort by description">Desc{sortIndicator('description')}</button>
                                                     <button onClick={() => { const newCols = new Set(visibleColumns); newCols.delete('desc'); setVisibleColumns(newCols); }} className="ml-1 p-0.5 opacity-0 group-hover:opacity-100 rounded hover:bg-gray-500 light-theme:hover:bg-gray-400 flex-shrink-0" title="Hide Description column"><ChevronLeftIcon className="w-3 h-3"/></button>
                                                 </div>
                                             </th>
@@ -389,7 +521,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {list.points.map(p => (
+                                    {matchingPoints.map(p => (
                                         <tr key={p.pointNumber} className="border-b border-gray-600/50 hover:bg-gray-600/50 light-theme:border-gray-300/50 light-theme:hover:bg-gray-200/50 text-gray-300 light-theme:text-gray-700">
                                             {visibleColumns.has('pn') && <td className="px-3 py-1 font-mono font-bold">{p.pointNumber}</td>}
                                             {visibleColumns.has('northing') && <td className="px-3 py-1 font-mono text-xs">{p.northing.toFixed(2)}</td>}
@@ -412,7 +544,11 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                             </table>
                         </div>
                     ) : (
-                        <p className="p-3 text-xs text-gray-500 light-theme:text-gray-600">Empty</p>
+                        <p className="p-3 text-xs text-gray-500 light-theme:text-gray-600">
+                            {list.points.length === 0
+                              ? 'Empty'
+                              : `No points match${searchQuery.trim() ? ` “${searchQuery.trim()}”` : ''}${duplicatesOnly ? ' with duplicate point numbers' : ''}.`}
+                        </p>
                     )}
                 </div>
             )}
@@ -421,7 +557,132 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
   };
 
   return (
-    <div className="w-full h-full bg-gray-800 text-sm text-gray-300 flex flex-col light-theme:bg-gray-50 light-theme:text-gray-600 overflow-hidden">
+    <div className="w-full h-full bg-[#0b111a] text-sm text-slate-200 flex flex-col light-theme:bg-gray-50 light-theme:text-gray-600 overflow-hidden">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,.txt,.pnl,.pnezd"
+          className="hidden"
+          onChange={handleImportPointsFile}
+        />
+        <div className="flex-shrink-0 border-b border-white/[0.07] bg-[#0b111a]/90 px-3.5 py-3">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-slate-100">Point Workspace</h2>
+                <span className="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-yellow-300">
+                  Live
+                </span>
+              </div>
+              <p className="mt-0.5 text-[10.5px] text-slate-400">
+                {allPoints.length.toLocaleString()} points · {savedLists.length + (unsavedPointsList ? 1 : 0)} lists
+                {visiblePointCount !== allPoints.length ? ` · ${visiblePointCount.toLocaleString()} visible` : ''}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-1 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.15] hover:bg-white/[0.07] hover:text-white"
+                title="Import a point file"
+              >
+                <ArrowUpTrayIcon className="h-3 w-3" />
+                Import
+              </button>
+              <button
+                type="button"
+                onClick={handleExportPoints}
+                disabled={allPoints.length === 0}
+                className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-1 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.15] hover:bg-white/[0.07] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                title="Export all points as CSV"
+              >
+                <DownloadIcon className="h-3 w-3" />
+                Export
+              </button>
+            </div>
+          </div>
+          <div className="relative mt-2.5">
+            <SearchGlyph />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={event => setSearchQuery(event.target.value)}
+              placeholder="Search point #, description, or coordinates..."
+              aria-label="Search points"
+              className="w-full rounded-lg border border-white/[0.08] bg-white/[0.03] py-1.5 pl-8 pr-8 text-[11px] text-slate-200 placeholder:text-slate-500 focus:border-yellow-500/40 focus:outline-none"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-200"
+                aria-label="Clear point search"
+              >
+                <XMarkIcon className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className="rounded border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 text-[9.5px] font-medium text-slate-400">
+              {allPoints.length} total
+            </span>
+            <span className="rounded border border-yellow-500/20 bg-yellow-500/[0.06] px-1.5 py-0.5 text-[9.5px] font-medium text-yellow-300/90">
+              {unsavedPointsList?.points.length ?? 0} unsaved
+            </span>
+            {duplicatePointCount > 0 && (
+              <span
+                className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9.5px] font-medium text-amber-300"
+                title="The same point number appears in more than one list."
+              >
+                {duplicatePointCount} duplicate PN{duplicatePointCount === 1 ? '' : 's'}
+              </span>
+            )}
+            <span className="rounded border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 text-[9.5px] font-medium text-slate-400">
+              {visiblePointCount} visible
+            </span>
+            <select
+              value={listFilter}
+              onChange={event => setListFilter(event.target.value)}
+              aria-label="Filter by point list"
+              className="rounded border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[9.5px] text-slate-300 focus:border-yellow-500/40 focus:outline-none"
+            >
+              <option value="all">All lists</option>
+              <option value="working">Unsaved only</option>
+              {savedLists.map(list => (
+                <option key={list.id} value={list.id}>{list.name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setDuplicatesOnly(value => !value)}
+              aria-pressed={duplicatesOnly}
+              className={`rounded border px-1.5 py-0.5 text-[9.5px] font-semibold transition-colors ${
+                duplicatesOnly
+                  ? 'border-amber-500/50 bg-amber-500/15 text-amber-200'
+                  : 'border-white/[0.07] bg-white/[0.025] text-slate-400 hover:border-white/[0.16] hover:text-slate-200'
+              }`}
+              title="Show only duplicate point numbers"
+            >
+              Duplicates only
+            </button>
+            <button
+              type="button"
+              onClick={showAllLists}
+              className="rounded border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-400 transition-colors hover:border-white/[0.16] hover:text-slate-200"
+              title="Show every point list on the canvas"
+            >
+              Show all
+            </button>
+            <button
+              type="button"
+              onClick={hideAllLists}
+              className="rounded border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-400 transition-colors hover:border-white/[0.16] hover:text-slate-200"
+              title="Hide every point list on the canvas"
+            >
+              Hide all
+            </button>
+          </div>
+        </div>
         {photoTarget && (
             <div className="fixed inset-0 bg-gray-900/80 z-50 flex items-center justify-center p-4 animate-fade-in" onClick={handleClosePhotoModal}>
                 <div className="bg-gray-800 p-4 rounded-lg shadow-xl w-full max-w-lg" onClick={e => e.stopPropagation()}>
@@ -442,11 +703,11 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
             </div>
         )}
         
-        <div className="flex-grow p-4 space-y-3 flex flex-col overflow-y-auto scrollbar-hide">
+        <div className="flex-grow p-3.5 space-y-3 flex flex-col overflow-y-auto scrollbar-hide">
             {/* Add Point Form */}
-            <div className="bg-gray-700/50 rounded-lg p-3 border border-gray-600 light-theme:bg-gray-100/50 light-theme:border-gray-300 flex-shrink-0">
+            <div className="bg-white/[0.025] rounded-xl p-3 border border-white/[0.08] light-theme:bg-gray-100/50 light-theme:border-gray-300 flex-shrink-0">
                 <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-semibold text-cyan-400 light-theme:text-cyan-600">New Point</h3>
+                    <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-300 light-theme:text-cyan-600">New point</h3>
                     {/* C3D Sync Button */}
                     {c3dSessionToken && (
                         <button
@@ -489,7 +750,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
 
             {/* Unsaved Points Alert */}
             {unsavedPointsList && unsavedPointsList.points.length > 0 && (
-                 <div className="p-3 bg-yellow-900/20 border border-yellow-500/30 rounded-lg space-y-2 flex-shrink-0">
+                 <div className="p-3 bg-amber-500/[0.06] border border-amber-500/25 rounded-xl space-y-2 flex-shrink-0">
                     <p className="text-xs text-yellow-300">({unsavedPointsList.points.length} unsaved)</p>
                     <div className="grid grid-cols-1 gap-2">
                         <form onSubmit={(e) => { e.preventDefault(); onSaveUnsavedPoints(newListName); setNewListName(''); }} className="flex gap-1.5">
@@ -513,9 +774,19 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
             {/* Point Lists - No scroll */}
             <div className="flex-grow min-h-0">
                 <div className="space-y-3 pr-2">
-                    <h3 className="text-sm font-semibold text-purple-400 mb-2 light-theme:text-purple-600">Points</h3>
-                    <PointListSection list={unsavedPointsList || { id: 'working', name: 'Unsaved', points: [], isVisible: true }} />
-                    {savedLists.map(list => <PointListSection key={list.id} list={list} />)}
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-yellow-300 light-theme:text-yellow-700">Points</h3>
+                      <span className="text-[9.5px] text-slate-500">
+                        {filteredLists.length} of {pointLists.length} list{pointLists.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    {filteredLists.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-white/[0.08] p-3 text-center text-[10.5px] text-slate-500">
+                        No point lists match this filter.
+                      </p>
+                    ) : (
+                      filteredLists.map(list => <PointListSection key={list.id} list={list} />)
+                    )}
                 </div>
             </div>
         </div>

@@ -1,6 +1,7 @@
 
 import React, { useState, useCallback } from 'react';
-import { CourthouseIcon, UploadIcon, HomeIcon } from './icons';
+import { CourthouseIcon } from './icons';
+import { UploadShell, UploadPanel, UploadDropzone, UploadPrimaryButton, UploadGhostButton, UploadActionBar, UploadModeSwitch, UploadFileList } from './UploadShell.tsx';
 import { processPdfForMultimodal, processRasterImageForMultimodal, isRasterImageFile, type OcrProgress } from '../utils/pdfUtils';
 import PdfPageSelector from './PdfPageSelector';
 import { exampleDeedContent } from '../assets/example.deed';
@@ -303,7 +304,14 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
   };
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-full p-8 text-center">
+    <UploadShell
+      icon={CourthouseIcon}
+      accent="#34d399"
+      title="Boundary Agent"
+      description="Paste a legal description or drop a PDF / scanned image — the agent drafts the parcel boundary straight onto your canvas."
+      onGoBack={onGoBack}
+      backTitle={backButtonTitle}
+    >
       {/* Page Selector Modal - only show if file index is valid and file needs page selection */}
       {showPageSelector && selectorIndex !== null && files[selectorIndex] && (!files[selectorIndex].pages || files[selectorIndex].pages!.length === 0) && (
         <PdfPageSelector
@@ -316,23 +324,14 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
         />
       )}
 
-      <button onClick={onGoBack} className="absolute top-4 left-4 p-2 text-gray-300 hover:text-white transition-colors" title={backButtonTitle}>
-        <HomeIcon className="w-6 h-6"/>
-      </button>
-      
-      <h1 className="text-5xl sm:text-6xl font-extrabold leading-none tracking-tight text-center mb-4">
-          <span className="text-white">Deed</span><span className="text-green-400">Reader</span><span className="text-[0.5em]"><span className="text-gray-500">.</span><span className="text-white">Land</span><span className="text-cyan-400">Surv</span><span className="text-green-400">.ai</span></span><sup className="text-xl text-gray-500">™</sup>
-      </h1>
-      
-      <div className="w-full max-w-2xl flex flex-col items-center gap-4">
-        {/* Free-deed offer: 5 per device, metered by the fingerprint ledger.
-            Key holders already have unlimited deeds, so show them nothing. */}
-        {!freeDeedsUnlimited && (
+      {/* Free-deed offer: 5 per device, metered by the fingerprint ledger.
+          Key holders already have unlimited deeds, so show them nothing. */}
+      {!freeDeedsUnlimited && (
         <div
-          className={`w-full rounded-xl border px-4 py-3 text-left ${
+          className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 ${
             isOutOfFreeDeeds
-              ? 'border-amber-500/60 bg-amber-950/30'
-              : 'border-emerald-400/60 bg-gradient-to-r from-emerald-950/60 via-gray-900 to-emerald-950/40 shadow-lg shadow-emerald-950/40'
+              ? 'border-amber-400/25 bg-amber-400/[0.06]'
+              : 'border-emerald-400/25 bg-emerald-400/[0.05]'
           }`}
           title={
             freeDeedsUnverified
@@ -340,210 +339,161 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
               : `This device gets ${freeDeedsLimit} free deeds`
           }
         >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="flex flex-wrap items-center gap-2 text-sm font-extrabold text-white">
-                <span className="text-base leading-none">🎁</span>
-                {isOutOfFreeDeeds
-                  ? `You've used all ${freeDeedsLimit} free deeds`
-                  : `${freeDeedsLimit} free deeds included`}
-                {!isOutOfFreeDeeds && (
-                  <span className="rounded-full bg-emerald-400/20 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-emerald-300 border border-emerald-400/40">
-                    No card needed
-                  </span>
-                )}
-                {freeDeedsUnverified && (
-                  <span className="text-[10px] font-normal text-emerald-200/60">offline count</span>
-                )}
-              </p>
-              <p className="mt-1 text-xs leading-relaxed text-gray-300">
-                {isOutOfFreeDeeds
-                  ? 'Unlock unlimited AI deed drafting with an Enabling Key or compute credits — your drafted boundaries stay on the canvas.'
-                  : `${freeDeedsLeft} of ${freeDeedsLimit} left. Upload a deed and the Boundary Agent drafts the parcel for you.`}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3 shrink-0">
-              <div
-                className="flex items-center gap-1"
-                aria-label={`${freeDeedsLeft} of ${freeDeedsLimit} free deeds left`}
-              >
-                {Array.from({ length: freeDeedsLimit }).map((_, index) => (
-                  <span
-                    key={index}
-                    className={`h-2.5 w-2.5 rounded-full ${
-                      index < freeDeedsLeft ? 'bg-emerald-400 shadow-sm shadow-emerald-500/50' : 'bg-gray-600'
-                    }`}
-                  />
-                ))}
-              </div>
-              {isOutOfFreeDeeds && onShowUpgrade && (
-                <button
-                  type="button"
-                  onClick={onShowUpgrade}
-                  className="rounded-lg bg-gradient-to-br from-amber-400 via-amber-500 to-orange-600 px-3 py-1.5 text-xs font-extrabold text-gray-900 shadow-md hover:from-amber-300 hover:via-amber-400 hover:to-orange-500 transition-colors active:scale-95"
-                >
-                  Unlock unlimited →
-                </button>
+          <div className="min-w-0">
+            <p className="flex flex-wrap items-center gap-2 text-[12.5px] font-semibold text-slate-100">
+              {isOutOfFreeDeeds
+                ? `All ${freeDeedsLimit} free deeds used`
+                : `${freeDeedsLimit} free deeds included`}
+              {!isOutOfFreeDeeds && (
+                <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-emerald-300">
+                  No card needed
+                </span>
               )}
+              {freeDeedsUnverified && (
+                <span className="text-[10px] font-normal text-slate-500">offline count</span>
+              )}
+            </p>
+            <p className="mt-1 text-[11.5px] leading-relaxed text-slate-400">
+              {isOutOfFreeDeeds
+                ? 'Unlock unlimited AI deed drafting with an Enabling Key or compute credits — drafted boundaries stay on the canvas.'
+                : `${freeDeedsLeft} of ${freeDeedsLimit} left — upload a deed and the agent drafts the parcel for you.`}
+            </p>
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-3">
+            <div
+              className="flex items-center gap-1"
+              aria-label={`${freeDeedsLeft} of ${freeDeedsLimit} free deeds left`}
+            >
+              {Array.from({ length: freeDeedsLimit }).map((_, index) => (
+                <span
+                  key={index}
+                  className={`h-1.5 w-1.5 rounded-full ${index < freeDeedsLeft ? 'bg-emerald-400' : 'bg-white/15'}`}
+                />
+              ))}
             </div>
+            {isOutOfFreeDeeds && onShowUpgrade && (
+              <UploadPrimaryButton onClick={onShowUpgrade}>Unlock unlimited</UploadPrimaryButton>
+            )}
           </div>
         </div>
-        )}
+      )}
 
-        <p className="text-gray-400 mb-2">
-          Paste the legal description or upload a PDF/image (including scans) for the AI to analyze and plot.
-        </p>
-
-        {/* Mode Switcher */}
-        <div className="p-1 bg-gray-700 rounded-lg flex">
-          <button 
-            onClick={() => { setMode('text'); setFiles([]); }} 
-            className={`px-4 py-1 rounded-md text-sm font-semibold transition-colors ${mode === 'text' ? 'bg-green-500 text-white' : 'text-gray-300 hover:bg-gray-600'}`}
-          >
-            Paste Text
-          </button>
-          <button 
-            onClick={() => setMode('files')} 
-            className={`px-4 py-1 rounded-md text-sm font-semibold transition-colors ${mode === 'files' ? 'bg-green-500 text-white' : 'text-gray-300 hover:bg-gray-600'}`}
-          >
-            Upload Files
-          </button>
+      <UploadPanel>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <UploadModeSwitch
+            value={mode}
+            options={[{ value: 'text' as InputMode, label: 'Paste text' }, { value: 'files' as InputMode, label: 'Upload files' }]}
+            onChange={(next) => {
+              setMode(next);
+              if (next === 'text') setFiles([]);
+            }}
+          />
+          <span className="text-[11px] text-slate-500">
+            {mode === 'text' ? 'Metes & bounds, lot or block description' : 'PDF · PNG · JPG · TIFF · BMP · WebP — multiple files'}
+          </span>
         </div>
 
         {mode === 'text' ? (
-          <>
+          <div className="mt-3.5 flex flex-col gap-3">
             <textarea
               value={deedText}
               onChange={(e) => setDeedText(e.target.value)}
               placeholder="e.g., COMMENCING AT A 5/8 INCH IRON ROD FOUND AT THE NORTHEAST CORNER OF SECTION 1..."
-              className="w-full max-w-lg h-48 p-4 text-sm font-mono text-gray-200 bg-gray-900 border-2 border-gray-600 rounded-lg resize-y focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition"
+              className="h-52 w-full resize-y rounded-lg border border-white/[0.08] bg-black/30 p-3.5 font-mono text-[12px] leading-relaxed text-slate-200 outline-none transition-colors placeholder:text-slate-600 focus:border-[color:var(--up-accent)]"
             />
-            {deedText.trim() && (
-                <button
-                    onClick={handleSubmit}
-                    disabled={isParsing}
-                    className="px-8 py-3 text-lg font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors duration-200"
-                >
-                    {isParsing ? 'Processing...' : 'Process Deed'}
-                </button>
-            )}
-          </>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={handleLoadExample}
+                className="text-[11.5px] text-slate-400 underline-offset-4 transition-colors hover:text-slate-100 hover:underline"
+              >
+                Load an example deed
+              </button>
+              <UploadPrimaryButton onClick={handleSubmit} disabled={!deedText.trim() || isParsing}>
+                {isParsing ? 'Processing…' : 'Process deed'}
+              </UploadPrimaryButton>
+            </div>
+          </div>
         ) : (
-          <>
-            <div
-              className={`w-full cursor-pointer flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-lg transition-colors duration-300 ${isDragging ? 'border-green-400 bg-gray-700/50' : 'border-gray-600 hover:border-green-500'}`}
+          <div className="mt-3.5 flex flex-col gap-3">
+            <UploadDropzone
+              id="deed-file-input"
+              accept=".pdf,.png,.jpg,.jpeg,.gif,.bmp,.webp,.tif,.tiff,application/pdf,image/png,image/jpeg,image/gif,image/bmp,image/webp,image/tiff"
+              onFiles={(selected) => handleFiles(selected)}
+              onDrop={handleDrop}
               onDragEnter={handleDragEnter}
               onDragLeave={handleDragLeave}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
-              onClick={handleClick}
+              isDragging={isDragging}
+              title="Drop your PDF or image here"
+              hint="or click to browse · multiple files supported"
             >
-              <input
-                id="deed-file-input"
-                type="file"
-                className="hidden"
-                accept=".pdf,.png,.jpg,.jpeg,.gif,.bmp,.webp,.tif,.tiff,application/pdf,image/png,image/jpeg,image/gif,image/bmp,image/webp,image/tiff"
-                onChange={handleFileChange}
-              />
-              <UploadIcon className="w-16 h-16 mb-4 text-gray-500" />
-              <h2 className="text-xl font-semibold text-white">Drop your PDF or image here</h2>
-              <p className="text-gray-400 mt-2">Supported: PDF, PNG, JPG, GIF, TIFF, BMP, WebP (multiple files supported)</p>
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); handleFolderClick(); }}
-                className="mt-3 text-xs px-3 py-1.5 border border-gray-600 text-gray-300 rounded hover:border-cyan-500 hover:text-cyan-300 transition-colors"
+                className="mt-3 inline-flex h-7 items-center rounded-md border border-white/[0.10] px-2.5 text-[11px] font-medium text-slate-400 transition-colors hover:border-[color:var(--up-accent)] hover:text-slate-100"
               >
-                Select Folder (batch)
+                Select folder (batch)
               </button>
-            </div>
+            </UploadDropzone>
 
-            {files.length > 0 && (
-              <div className="w-full text-left bg-gray-900/50 p-3 rounded-lg border border-gray-700">
-                <h4 className="font-semibold mb-2">Selected Files:</h4>
-                <ul className="text-sm space-y-2">
-                  {files.map((fw, i) => (
-                    <li key={i} className="flex items-center justify-between p-2 bg-gray-800 rounded border border-gray-700">
-                      <span className="truncate text-gray-300">{fw.file.name}</span>
-                      {fw.pages && fw.pages.length > 0 ? (
-                        <button
-                          onClick={() => showPageSelectorForFile(i)}
-                          className="text-xs px-2 py-1 bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
-                        >
-                          {fw.pages.length} page{fw.pages.length !== 1 ? 's' : ''}
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => showPageSelectorForFile(i)}
-                          className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
-                        >
-                          Select pages
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            <UploadFileList
+              files={files.map((fw, i) => ({
+                key: i,
+                name: fw.file.name,
+                meta: fw.pages && fw.pages.length > 0 ? `${fw.pages.length} page${fw.pages.length !== 1 ? 's' : ''}` : undefined,
+                action: (
+                  <button
+                    type="button"
+                    onClick={() => showPageSelectorForFile(i)}
+                    className="rounded-md border border-white/[0.10] px-2 py-1 text-[10.5px] font-medium text-slate-300 transition-colors hover:border-[color:var(--up-accent)] hover:text-slate-100"
+                  >
+                    {fw.pages && fw.pages.length > 0 ? 'Edit pages' : 'Select pages'}
+                  </button>
+                ),
+              }))}
+            />
 
             {isParsing ? (
-              <div className="mt-4 text-center">
-                <div className="w-8 h-8 mx-auto border-4 border-green-400 border-t-transparent rounded-full animate-spin mb-4"></div>
-                <h2 className="text-xl font-semibold text-white">Processing...</h2>
-                <p className="text-green-300 mt-2 font-mono text-sm">{ocrProgress}</p>
+              <div className="flex items-center gap-2.5 rounded-lg border border-white/[0.07] bg-black/20 px-3 py-2.5">
+                <span className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-emerald-300 border-t-transparent" />
+                <span className="min-w-0 truncate font-mono text-[11px] text-slate-400">{ocrProgress || 'Processing…'}</span>
               </div>
             ) : (
-              <button
-                onClick={processFiles}
-                disabled={files.length === 0}
-                className="px-8 py-3 text-lg font-semibold text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors duration-200"
+              <UploadActionBar
+                note={files.length === 0 ? 'No files selected yet' : `${files.length} file${files.length === 1 ? '' : 's'} ready`}
               >
-                Process {files.length} File{files.length !== 1 && 's'}
-              </button>
-            )}
-          </>
-        )}
-
-        {mode === 'text' && (
-          <div className="text-center text-gray-400">
-            <p>
-              Or,{' '}
-              <button
-                onClick={handleLoadExample}
-                className="text-green-400 hover:text-green-300 font-semibold underline focus:outline-none focus:ring-2 focus:ring-green-500 rounded"
-              >
-                try our example deed.
-              </button>
-            </p>
-          </div>
-        )}
-
-        {/* Secondary ways in: no upload required. */}
-        {(onStartFromScratch || onOpenGis) && (
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            {onStartFromScratch && (
-              <button
-                onClick={onStartFromScratch}
-                className="text-sm px-4 py-2 border border-gray-600 text-gray-300 rounded-lg hover:border-green-500 hover:text-green-300 hover:bg-gray-800/60 transition-colors"
-                title="Skip upload and enter bearings/distances by hand in the Boundary Editor"
-              >
-                Skip — start a blank boundary from scratch →
-              </button>
-            )}
-            {onOpenGis && (
-              <button
-                onClick={onOpenGis}
-                className="inline-flex items-center gap-2 text-sm px-4 py-2 border border-gray-600 text-gray-300 rounded-lg hover:border-green-500 hover:text-green-300 hover:bg-gray-800/60 transition-colors"
-                title="Pull the county's tax-parcel boundaries (parcel ID, owner, deed book/page) onto the canvas with the Boundary Agent GIS panel"
-              >
-                <CourthouseIcon className="w-4 h-4" />
-                Look up parcel in GIS →
-              </button>
+                <UploadPrimaryButton onClick={processFiles} disabled={files.length === 0}>
+                  Process {files.length} file{files.length !== 1 && 's'}
+                </UploadPrimaryButton>
+              </UploadActionBar>
             )}
           </div>
         )}
-      </div>
-    </div>
+      </UploadPanel>
+
+      {/* Secondary ways in: no upload required. */}
+      {(onStartFromScratch || onOpenGis) && (
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+          {onStartFromScratch && (
+            <UploadGhostButton
+              onClick={onStartFromScratch}
+              title="Skip upload and enter bearings/distances by hand in the Boundary Editor"
+            >
+              Start a blank boundary instead
+            </UploadGhostButton>
+          )}
+          {onOpenGis && (
+            <UploadGhostButton
+              onClick={onOpenGis}
+              title="Pull the county's tax-parcel boundaries (parcel ID, owner, deed book/page) onto the canvas"
+            >
+              <CourthouseIcon className="h-3.5 w-3.5" />
+              Look up parcel in GIS
+            </UploadGhostButton>
+          )}
+        </div>
+      )}
+    </UploadShell>
   );
 };
 

@@ -11,6 +11,7 @@ import {
   GlobeAltIcon,
 } from './icons.tsx';
 import { useAppState } from '../contexts/AppStateContext.tsx';
+import { UploadShell, UploadPanel, UploadDropzone } from './UploadShell.tsx';
 import {
   bboxAroundPoint,
   classifyArcGisUrl,
@@ -553,7 +554,7 @@ const GisInput: React.FC<GisInputProps> = ({
         <button
           type="submit"
           disabled={isLoadingUrl || isBrowsing || !url}
-          className="px-4 py-2 text-sm font-semibold text-white bg-teal-600 rounded-md hover:bg-teal-700 disabled:bg-gray-600"
+          className="inline-flex h-9 items-center rounded-lg bg-[var(--up-accent)] px-4 text-[12px] font-bold text-[#06101a] transition-[filter] hover:brightness-110 disabled:opacity-40"
         >
           Go
         </button>
@@ -771,28 +772,33 @@ const GisInput: React.FC<GisInputProps> = ({
 
   const renderUploadView = () => (
     <>
-      <p className="text-gray-300 mb-6 max-w-lg">
+      <p className="mb-6 max-w-xl text-[12.5px] leading-relaxed text-slate-300/85">
         Upload a GeoJSON file, or connect to any public ArcGIS server — paste a server root to browse its folders and layers, or a layer URL to load it directly.
       </p>
-      <div
-        className={`w-full cursor-pointer flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg transition-colors duration-300 ${isDragging ? 'border-teal-400 bg-gray-700/50' : 'border-gray-600 hover:border-teal-500'}`}
-        onDragEnter={handleDragEnter} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={handleDrop} onClick={handleClick}
-      >
-        <input id="gis-file-input" type="file" className="hidden" accept=".geojson,.json,application/json" onChange={handleFileChange} />
-        <UploadIcon className="w-12 h-12 mb-4 text-gray-500" />
-        <h2 className="text-xl font-semibold text-white">Drop your GeoJSON file here</h2>
-        <p className="text-gray-400 mt-2">or click to browse</p>
-      </div>
+      <UploadDropzone
+        id="gis-file-input"
+        accept=".geojson,.json,application/json"
+        onFiles={(selected) => {
+          const file = selected?.[0];
+          if (file) handleFile(file);
+        }}
+        onDrop={handleDrop}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        isDragging={isDragging}
+        title="Drop your GeoJSON file here"
+        hint="or click to browse"
+      />
 
-      <div className="my-6 flex items-center w-full max-w-lg">
-          <div className="flex-grow border-t border-gray-600"></div>
-          <span className="flex-shrink mx-4 text-gray-500 font-semibold">OR</span>
-          <div className="flex-grow border-t border-gray-600"></div>
+      <div className="my-5 flex w-full items-center gap-3">
+        <span className="h-px flex-1 bg-white/[0.10]" />
+        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">or</span>
+        <span className="h-px flex-1 bg-white/[0.10]" />
       </div>
 
       <div className="w-full max-w-lg space-y-4">
           <div>
-              <select onChange={handleCatalogChange} defaultValue="" className="w-full p-3 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-teal-500 light-theme:bg-white light-theme:border-gray-300">
+              <select onChange={handleCatalogChange} defaultValue="" className="w-full rounded-lg border border-white/[0.12] bg-white/[0.04] p-2.5 text-[12px] text-slate-200 focus:border-[color:var(--up-accent)] focus:outline-none">
                   <option value="" disabled>Pick from the public GIS data catalog…</option>
                   {ARCGIS_DATA_CATALOG.map(group => (
                     <optgroup key={group.category} label={group.category}>
@@ -804,7 +810,7 @@ const GisInput: React.FC<GisInputProps> = ({
               </select>
           </div>
           <form onSubmit={(e) => { e.preventDefault(); handleFetchFromUrl(url); }} className="flex gap-2">
-            <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="…or paste any ArcGIS server, service, layer, or query URL" className="flex-grow p-3 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-teal-500 light-theme:bg-white light-theme:border-gray-300"/>
+            <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="…or paste any ArcGIS server, service, layer, or query URL" className="flex-grow rounded-lg border border-white/[0.12] bg-white/[0.04] px-3 py-2.5 text-[12px] text-slate-200 placeholder:text-slate-500 focus:border-[color:var(--up-accent)] focus:outline-none"/>
             <button type="submit" disabled={isLoadingUrl || !url} className="px-4 py-2 text-sm font-semibold text-white bg-teal-600 rounded-md hover:bg-teal-700 disabled:bg-gray-600">
               {isLoadingUrl ? <Spinner /> : 'Load'}
             </button>
@@ -812,13 +818,13 @@ const GisInput: React.FC<GisInputProps> = ({
           <div className="flex gap-2">
             <button
               onClick={() => handleFetchFromUrl(url || ARCGIS_DATA_CATALOG[2].sources[0].url)}
-              className="flex-1 py-2 text-sm font-semibold text-white bg-teal-700/60 border border-teal-600 rounded-md hover:bg-teal-700 transition-colors"
+              className="flex-1 rounded-lg border border-white/[0.14] bg-white/[0.04] py-2 text-[11.5px] font-semibold text-slate-200 transition-colors hover:border-[color:var(--up-accent)] hover:text-white"
             >
               Browse a GIS Server
             </button>
             <button
               onClick={() => setView('owner-search')}
-              className="flex-1 py-2 text-sm font-semibold text-white bg-cyan-600 rounded-md hover:bg-cyan-700 transition-colors"
+              className="flex-1 rounded-lg border border-white/[0.14] bg-white/[0.04] py-2 text-[11.5px] font-semibold text-slate-200 transition-colors hover:border-[color:var(--up-accent)] hover:text-white"
             >
               Search by Lot Owner Name
             </button>
@@ -840,26 +846,23 @@ const GisInput: React.FC<GisInputProps> = ({
   );
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-full p-8 text-center">
-       <button onClick={onGoBack} className="absolute top-4 left-4 p-2 text-gray-300 hover:text-white transition-colors" title={backButtonTitle}>
-        <HomeIcon className="w-6 h-6"/>
-      </button>
-      <div className="w-full max-w-2xl flex flex-col items-center">
-        <h1 className="text-5xl sm:text-6xl font-extrabold leading-none tracking-tight text-center mb-4">
-          <span className="text-white">Gis</span><span className="text-teal-400">Agent</span><span className="text-[0.5em]"><span className="text-gray-500">.</span><span className="text-white">Land</span><span className="text-cyan-400">Surv</span><span className="text-green-400">.ai</span></span><sup className="text-xl text-gray-500">™</sup>
-        </h1>
-
-        {loadedGeoJson
-          ? renderFeatureSelection()
-          : view === 'browse'
-            ? renderBrowseView()
-            : view === 'aoi'
-              ? renderAoiView()
-              : view === 'owner-search'
-                ? renderOwnerSearchView()
-                : renderUploadView()}
-      </div>
-    </div>
+    <UploadShell
+      icon={GisAgentIcon}
+      accent="#2dd4bf"
+      title="GIS Agent"
+      onGoBack={onGoBack}
+      backTitle={backButtonTitle}
+    >
+      {loadedGeoJson
+        ? renderFeatureSelection()
+        : view === 'browse'
+          ? renderBrowseView()
+          : view === 'aoi'
+            ? renderAoiView()
+            : view === 'owner-search'
+              ? renderOwnerSearchView()
+              : renderUploadView()}
+    </UploadShell>
   );
 };
 
