@@ -96,6 +96,16 @@ interface CadManagerContextType {
   addCodes: (codes: CodeDefinition[]) => CodeDefinition[];
 
   /**
+   * Update (or create) a layer definition in the loaded standard. Used by the
+   * toolbar layer picker and deterministic chat commands such as
+   * "set layer L-ROAD-CNTR to red dashed". Returns the applied definition.
+   */
+  updateLayerProperties: (
+    name: string,
+    patch: { color?: string; lineType?: string; description?: string },
+  ) => LayerDefinition | null;
+
+  /**
    * Ensure the four boundary/topo special codes exist (DEED, INCLUSION,
    * EXCLUSION, BREAKLINE). No-op for codes already present (case-insensitive).
    * Returns the list of codes that were newly added. v26.05.17.41.
@@ -685,6 +695,64 @@ export const CadManagerProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   }, [state.standard]);
 
   /**
+   * Update or create a LayerDefinition. Color is stored as resolved RGB (the
+   * form the Civil 3D connector compares against) so a chat/picker edit does
+   * not re-diff on every sync. When a linetype changes, every code that uses
+   * the layer as its lineLayer follows so exports and peer agents see the same
+   * value as the layer definition.
+   */
+  const updateLayerProperties = useCallback(
+    (
+      name: string,
+      patch: { color?: string; lineType?: string; description?: string },
+    ): LayerDefinition | null => {
+      const trimmed = (name || '').trim();
+      if (!trimmed) return null;
+
+      const baseStandard: StandardDefinition = state.standard ?? {
+        name: 'Authored Standard',
+        version: '1.0',
+        codes: [],
+        layers: [],
+        lastUpdated: new Date().toISOString(),
+      };
+      const layers = [...(baseStandard.layers ?? [])];
+      const key = trimmed.toUpperCase();
+      const index = layers.findIndex(layer => (layer?.name || '').trim().toUpperCase() === key);
+      const canonicalName = index >= 0 ? layers[index].name : trimmed;
+      const nextLayer: LayerDefinition = {
+        ...(index >= 0 ? layers[index] : { name: canonicalName }),
+        name: canonicalName,
+        ...(patch.color ? { colorRgb: patch.color.toUpperCase() } : {}),
+        ...(patch.lineType ? { lineType: patch.lineType.toUpperCase() } : {}),
+        ...(patch.description ? { description: patch.description } : {}),
+      };
+      if (index >= 0) layers[index] = nextLayer;
+      else layers.push(nextLayer);
+
+      const codes = patch.lineType
+        ? baseStandard.codes.map(code =>
+            code.lineLayer && code.lineLayer.trim().toUpperCase() === key
+              ? { ...code, lineType: patch.lineType!.toUpperCase() }
+              : code,
+          )
+        : baseStandard.codes;
+
+      dispatch({
+        type: 'SET_STANDARD',
+        payload: {
+          ...baseStandard,
+          codes,
+          layers,
+          lastUpdated: new Date().toISOString(),
+        },
+      });
+      return nextLayer;
+    },
+    [state.standard],
+  );
+
+  /**
    * Return the FEMA hatch for a zone string, consulting any custom overrides
    * stored on the current standard first.
    */
@@ -885,6 +953,7 @@ export const CadManagerProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     getLayersContextString,
     getAllLayers,
     addCodes,
+    updateLayerProperties,
     ensureDefaultBoundaryCodes,
     getHatchForZone,
     getHatchContextString,

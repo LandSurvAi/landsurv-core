@@ -38,9 +38,12 @@ import { ParcelPanel } from './components/ParcelPanel.tsx';
 import { CogoPanel } from './components/CogoPanel.tsx';
 // FIX: Changed the import for DrawingCanvas to a named import to match the updated export style of the component.
 import { DrawingCanvas } from './components/DrawingCanvas.tsx';
+import { divideLinesIntoPoints, parseDivideSelectionIntent } from './utils/divideSelection.ts';
 import CutSheetPanel from './components/CutSheetPanel.tsx';
 import FieldbookPanel from './components/FieldbookPanel.tsx';
 import { CadManagerPage } from './components/CadManager/CadManagerPage.tsx';
+import { StandardsEditor } from './components/CadManager/StandardsEditor.tsx';
+import { HatchManagerPanel } from './components/CadManager/HatchManagerPanel.tsx';
 import LinetypeManagerPanel from './components/CadManager/LinetypeManagerPanel.tsx';
 import SheetView from './components/SheetView.tsx';
 import { DraftingStyleLibrary } from './components/CadManager/DraftingStyleLibrary.tsx';
@@ -62,6 +65,9 @@ import { getStaticMap, clearStaticMapsCache } from './services/staticMapsService
 import { clearMapCache } from './utils/mapTileCache.ts';
 import { buildSymbolMatchers, resolveSymbol } from './utils/symbolResolver.ts';
 import { parseSymbolCommand, type SymbolVisibilityCommand } from './utils/symbolCommandParser.ts';
+import { parseLocalChatCommand } from './utils/chatCommandParser.ts';
+import { normalizeCadLayerColor, normalizeCadLayerLinetype, parseCadLayerChatCommand } from './services/cadLayerChatCommands.ts';
+import CadLayerPicker from './components/CadLayerPicker.tsx';
 import { SURVEY_SYMBOL_LIBRARY } from './data/surveySymbolLibrary.ts';
 import { parsePointFile, pointListToString } from './utils/pointFile.ts';
 import { buildTinFromPoints } from './services/TinService.ts';
@@ -71,6 +77,7 @@ import { readContourElevation } from './utils/esriContourAttributes.ts';
 import type { ContourFetchOptions } from './utils/usgsNationalContours.ts';
 import { runClawDirectives, parseClawDirectives } from './utils/clawClient.ts';
 import { sanitizeZoningAnswer, extractZoningJsonBlock } from './utils/zoningRender.ts';
+import { buildZoningSourceLedger } from './utils/zoningCitations.ts';
 import { setBootstrapStatus } from './utils/zoningBootstrap.ts';
 import { extractStreamingPointsAndLines } from './utils/streamingJsonParser.ts';
 import { isDemoApiKey } from './services/proxyGenAI.ts';
@@ -261,7 +268,15 @@ import {
   markPendingA2UICompleted,
 } from './services/a2uiIntake.ts';
 import { buildA2UIInputFormFromNeedsInput, deriveA2UIInputForm } from './services/a2uiInput.ts';
-import { A2UISurface, A2UIHostContext, type A2UIHostContextValue } from './components/A2UISurface.tsx';
+import { A2UISurface, A2UIHostContext, WORKSPACE_TOOL_LABELS, type A2UIHostContextValue } from './components/A2UISurface.tsx';
+import { A2UISurfaceHost } from './components/A2UISurfaceHost.tsx';
+import { A2UIPublicSurfaceLayer } from './components/A2UIPublicSurfaceLayer.tsx';
+import { A2UICacpReview } from './components/A2UICacpReview.tsx';
+import { A2UICacpManifestExplorer } from './components/A2UICacpManifestExplorer.tsx';
+import { openA2UISurface } from './services/a2uiSurfaces.ts';
+import { buildCacpReviewContext, isNotableCacpEntry, retryCacpReviewItem, startCacpSurfaceBridge } from './services/cacpSurfaceBridge.ts';
+import { resolveA2UISurfaceIntent } from './services/a2uiSurfaceIntent.ts';
+import type { A2UICacpReviewContext, A2UIPayload, A2UIWorkspaceToolId } from './types.ts';
 import { exampleHighwayCl } from './assets/example.highway.cl.ts';
 import { CacpBadge } from './components/CacpBadge.tsx';
 import { hashKey } from './utils/hashKey';
@@ -472,7 +487,27 @@ const A2UI_DOCK_TITLES: Record<string, string> = {
     'cad-manager-workspace': 'CAD Manager',
     'cad-standards-table': 'CAD Standards Sheet',
     'zoning-research': 'Zoning Research',
+    'zoning-sources': 'Zoning Sources',
     'input-form': 'Input Form',
+    'settings': 'Project Settings',
+    'cacp-manifests': 'CACP Manifests',
+    'cacp-review': 'CACP Traffic Review',
+    'symbol-manager': 'Symbol Manager',
+    'linetype-manager': 'Linetype Manager',
+    'hatch-manager': 'Hatch Manager',
+    'annotate-manager': 'Annotate Manager',
+    'drafting-style-library': 'Drafting Style Library',
+    'layer-manager': 'Data Visibility & Layers',
+    'compliance-summary': 'Standards Compliance Audit',
+    'title-search-panel': 'Title Search Workspace',
+    'wms-manager': 'WMS & Offline Maps',
+    'file-manager': 'File Manager',
+    'fieldbook-panel': 'Survey Field Book',
+    'cutsheet-panel': 'Stakeout Cut Sheet',
+    'closure-report': 'Closure Reports',
+    'steep-slope-report': 'Steep Slope Report',
+    'legal-writer': 'Legal Description Writer',
+    'sheet-view': 'Sheet View (24×36 Plot Layout)',
 };
 
 
@@ -579,6 +614,8 @@ interface DrawingCanvasHandles {
   isPointInView?: (easting: number, northing: number) => boolean;
   isBboxInView?: (minE: number, maxE: number, minN: number, maxN: number) => boolean;
   getMapOverlayTiles?: () => Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: any; opacity?: number }>;
+  getSelectedLineGeometry?: () => import('./types.ts').SurveyLine[];
+  beginSelectionMode?: () => void;
   beginOtOriginPick?: () => void;
   beginOtLineAlign?: () => void;
 }
@@ -1150,6 +1187,9 @@ const AppContent = () => {
   });
   const [dockedA2UIKey, setDockedA2UIKey] = useState<string | null>(null);
   const [floatingA2UIKey, setFloatingA2UIKey] = useState<string | null>(null);
+  const [dockedA2UIFallback, setDockedA2UIFallback] = useState<ChatMessage | null>(null);
+  const [floatingA2UIFallback, setFloatingA2UIFallback] = useState<ChatMessage | null>(null);
+  const [isSpreadsheetEditorOpen, setIsSpreadsheetEditorOpen] = useState<boolean>(false);
   const [agentChatOpenSignal, setAgentChatOpenSignal] = useState(0);
   
   // REFACTORING NOTE: Application-level state moved to AppStateContext
@@ -1471,8 +1511,12 @@ const AppContent = () => {
     const key = `${payload.agent}:${payload.widgetType}`;
     const willDock = dockedA2UIKey !== key;
     setDockedA2UIKey(willDock ? key : null);
+    setDockedA2UIFallback(willDock ? message : null);
     if (willDock) {
       setFloatingA2UIKey(current => (current === key ? null : current));
+      setFloatingA2UIFallback(current =>
+        current?.a2ui && `${current.a2ui.agent}:${current.a2ui.widgetType}` === key ? null : current
+      );
       setIsToolShelfVisible(true);
     }
   }, [dockedA2UIKey, setIsToolShelfVisible]);
@@ -1482,14 +1526,20 @@ const AppContent = () => {
     const key = `${payload.agent}:${payload.widgetType}`;
     const willFloat = floatingA2UIKey !== key;
     setFloatingA2UIKey(willFloat ? key : null);
+    setFloatingA2UIFallback(willFloat ? message : null);
     if (willFloat) {
       setDockedA2UIKey(current => (current === key ? null : current));
+      setDockedA2UIFallback(current =>
+        current?.a2ui && `${current.a2ui.agent}:${current.a2ui.widgetType}` === key ? null : current
+      );
       setAgentChatOpenSignal(n => n + 1);
     }
   }, [floatingA2UIKey]);
   const handleReturnA2UIToChat = useCallback(() => {
     setDockedA2UIKey(null);
     setFloatingA2UIKey(null);
+    setDockedA2UIFallback(null);
+    setFloatingA2UIFallback(null);
     setAgentChatOpenSignal(n => n + 1);
   }, []);
   /** Bumped each time the user clicks "Align" in the BoundaryEditor. The token
@@ -1581,6 +1631,7 @@ const AppContent = () => {
   // OLD: const [isResizingChat, setIsResizingChat] = useState(false);
 
   const mainContentRef = useRef<HTMLDivElement>(null);
+  const canvasWorkspaceRef = useRef<HTMLDivElement>(null);
   const visualPanelAndEditorContainerRef = useRef<HTMLDivElement>(null);
 
   // --- MISC STATE & REFS ---
@@ -3060,9 +3111,6 @@ const AppContent = () => {
     }));
   }, [setCadLayerVisibility]);
 
-  const handleCadLayerColorChange = useCallback((layerName: string, color: string) => {
-    setCadLayerColors(prev => ({ ...prev, [layerName]: color }));
-  }, [setCadLayerColors]);
   // -------------------------------------------------------------------------
 
   /**
@@ -3119,6 +3167,27 @@ const AppContent = () => {
     }
     return map;
   }, [cadManagerState.standard]);
+
+  /** Standard layer colors merged with the canvas overrides (standard colors win when no override exists). */
+  const cadLayerColorMap = useMemo((): Record<string, string> => {
+    const merged: Record<string, string> = {};
+    for (const layer of cadManagerState.standard?.layers ?? []) {
+      if (layer?.name && layer.colorRgb) merged[layer.name] = layer.colorRgb;
+    }
+    return { ...merged, ...cadLayerColors };
+  }, [cadManagerState.standard, cadLayerColors]);
+
+  /** Linetypes offered by the layer picker: standard library + any layer/code defaults. */
+  const cadLinetypeOptions = useMemo((): string[] => {
+    const names = new Set<string>(['CONTINUOUS']);
+    for (const linetype of cadManagerState.standard?.linetypes ?? []) {
+      if (linetype?.name) names.add(linetype.name.toUpperCase());
+    }
+    for (const name of Object.values(layerLinetypeMap)) {
+      if (name) names.add(name.toUpperCase());
+    }
+    return Array.from(names).sort();
+  }, [cadManagerState.standard, layerLinetypeMap]);
 
   // -- Symbol Library Sync � CAD Standards ? Symbols view (SSOT) --------------
   // Any code in the CAD Manager standard whose `symbol` field is a full
@@ -3206,30 +3275,110 @@ const AppContent = () => {
 
   // REFACTORING: Use custom hook for horizontal tool shelf resizing (Phase 2)
   // The right shelf keeps the dockable tools and resizes from the right edge.
+  // Preview the width through a shared CSS variable so the shelf, canvas edge,
+  // header, and command bar all move together without an App render per frame.
+  const handleToolShelfWidthPreview = useCallback((width: number) => {
+    canvasWorkspaceRef.current?.style.setProperty('--tool-shelf-width', `${width}px`);
+  }, []);
   const { handleChatResizeMouseDown: handleToolShelfResizeMouseDown } = useChatPanelResize(
     isResizingToolShelf,
     setIsResizingToolShelf,
     setToolShelfWidth,
     320,
     400,
-    'right'
+    'right',
+    handleToolShelfWidthPreview
   );
 
-  // Zoning research and CAD Manager are hosted entirely in A2UI surfaces.
-  // Redirect restored/legacy dedicated-panel state to the canvas + chat.
+  // Zoning research, CAD Manager, and workspace managers are hosted in A2UI surfaces
+  // on top of the canvas so the drawing canvas, chat bar, and tool shelf stay active.
   useEffect(() => {
+    const panelToA2UITool: Partial<Record<VisualPanel, { tool: A2UIWorkspaceToolId; agent: AgentType }>> = {
+      symbolmanager: { tool: 'symbol-manager', agent: AgentType.CAD_MANAGER },
+      linetypemanager: { tool: 'linetype-manager', agent: AgentType.CAD_MANAGER },
+      draftstylelib: { tool: 'drafting-style-library', agent: AgentType.CAD_MANAGER },
+      annotatemanager: { tool: 'annotate-manager', agent: AgentType.CIVIL_DRAFTER },
+      layermanager: { tool: 'layer-manager', agent: AgentType.CAD_MANAGER },
+      compliance: { tool: 'compliance-summary', agent: AgentType.STANDARDS_COMPLIANCE },
+      titlesearch: { tool: 'title-search-panel', agent: AgentType.TITLE_SEARCH },
+      wms: { tool: 'wms-manager', agent: AgentType.GIS_AGENT },
+      filemanager: { tool: 'file-manager', agent: AgentType.LSVZ_AGENT },
+      fieldbook: { tool: 'fieldbook-panel', agent: AgentType.FIELD_BOOK },
+      cutsheet: { tool: 'cutsheet-panel', agent: AgentType.GPS_STAKEOUT },
+      closurereport: { tool: 'closure-report', agent: AgentType.DEED_READER },
+      steepslopereport: { tool: 'steep-slope-report', agent: AgentType.STEEP_SLOPE_AGENT },
+      legalwriter: { tool: 'legal-writer', agent: AgentType.DEED_READER },
+    };
+
     if (
       activeVisualPanel === 'zoning' ||
       activeVisualPanel === 'cadmanager' ||
       activeVisualPanel === 'cadstandards'
     ) {
       if (activeVisualPanel === 'cadmanager' || activeVisualPanel === 'cadstandards') {
+        const wasStandards = activeVisualPanel === 'cadstandards';
         setActiveAgent(AgentType.CAD_MANAGER);
+        setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
+        const workspaceMsg: ChatMessage = {
+          role: MessageRole.MODEL,
+          text: 'Your **CAD Manager** workspace is docked in the agent tool shelf. Pop it out over the canvas whenever you need more room.',
+          a2ui: {
+            kind: 'cad-manager',
+            agent: AgentType.CAD_MANAGER,
+            widgetType: 'cad-manager-workspace',
+            status: 'expanded',
+          },
+        };
+        setCadManagerChatHistory(prev => {
+          const hasActiveWorkspace = prev.some(
+            msg => msg.a2ui?.kind === 'cad-manager' && msg.a2ui.status !== 'completed' && msg.a2ui.status !== 'dismissed'
+          );
+          if (hasActiveWorkspace) return prev;
+          return [...markPendingA2UICompleted(prev), workspaceMsg];
+        });
+        setDockedA2UIKey(`${AgentType.CAD_MANAGER}:cad-manager-workspace`);
+        setDockedA2UIFallback(workspaceMsg);
+        setIsToolShelfVisible(true);
+        if (wasStandards) {
+          setIsSpreadsheetEditorOpen(true);
+        }
       }
       setActiveVisualPanel('canvas');
       setIsChatPanelVisible(true);
+      return;
     }
-  }, [activeVisualPanel, setActiveVisualPanel, setIsChatPanelVisible, setActiveAgent]);
+
+    const mappedTool = panelToA2UITool[activeVisualPanel];
+    if (mappedTool) {
+      const label = WORKSPACE_TOOL_LABELS[mappedTool.tool] ?? 'Workspace Tool';
+      const toolMsg: ChatMessage = {
+        role: MessageRole.MODEL,
+        text: `Opened <strong>${label}</strong> as an A2UI surface. You can use it floating over the canvas, dock it into the Agent Tool Shelf, expand it fullscreen, or return it to chat.`,
+        a2ui: {
+          kind: 'workspace-tool',
+          agent: mappedTool.agent,
+          widgetType: mappedTool.tool,
+          workspaceTool: mappedTool.tool,
+          status: 'expanded',
+        },
+      };
+      const key = `${mappedTool.agent}:${mappedTool.tool}`;
+      setFloatingA2UIKey(key);
+      setFloatingA2UIFallback(toolMsg);
+      setDockedA2UIKey(null);
+      setDockedA2UIFallback(null);
+      setActiveVisualPanel('canvas');
+      setIsChatPanelVisible(true);
+    }
+  }, [
+    activeVisualPanel,
+    setActiveVisualPanel,
+    setIsChatPanelVisible,
+    setActiveAgent,
+    setInitializedAgents,
+    setCadManagerChatHistory,
+    setIsToolShelfVisible,
+  ]);
 
   const showView = useCallback((viewToShow: VisualPanel) => {
       // Push current state to history before changing view
@@ -3455,6 +3604,40 @@ const AppContent = () => {
       });
     } catch { /* non-fatal */ }
   }, []);
+
+  const handleCadLayerPropertyChange = useCallback((layerName: string, patch: { color?: string; lineType?: string }) => {
+    const trimmed = layerName.trim();
+    if (!trimmed) return null;
+    const color = patch.color ? normalizeCadLayerColor(patch.color) ?? patch.color : undefined;
+    const lineType = patch.lineType ? normalizeCadLayerLinetype(patch.lineType) : undefined;
+    const updated = cadManagerContext.updateLayerProperties(trimmed, { color, lineType });
+    if (!updated) return null;
+
+    const layerKey = updated.name;
+    if (color || lineType) {
+      setLines(prev => prev.map(line => {
+        if ((line.layer ?? '').trim().toUpperCase() !== layerKey.toUpperCase()) return line;
+        return {
+          ...line,
+          ...(color ? { color } : {}),
+          ...(lineType ? { lineType } : {}),
+        };
+      }));
+    }
+    if (color) {
+      setCadLayerColors(prev => ({ ...prev, [layerKey]: color }));
+    }
+    const changes = [
+      color ? `color ${color}` : '',
+      lineType ? `linetype ${lineType}` : '',
+    ].filter(Boolean).join(', ');
+    logActionToFieldbook(`CAD Manager: layer "${layerKey}" updated${changes ? ` (${changes})` : ''}.`);
+    return updated;
+  }, [cadManagerContext, logActionToFieldbook, setCadLayerColors, setLines]);
+
+  const handleCadLayerColorChange = useCallback((layerName: string, color: string) => {
+    handleCadLayerPropertyChange(layerName, { color });
+  }, [handleCadLayerPropertyChange]);
 
   // Natural-language undo ("undo the last boundary edit") � registers the
   // history_query / history_undo_to CACP skills against the canvas history.
@@ -5971,7 +6154,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             // always sees an answer instead of the "Researching�" placeholder.
             if (!sanitizeZoningAnswer(resp)) {
               try {
-                const synthMsg = '[SYNTHESIS REQUIRED] You exhausted your Claw browser hops or some pages failed (e.g., 403 Cloudflare). Write the FINAL answer NOW from whatever data you have so far. Do NOT emit any more ```claw``` directives. If some numbers could not be verified, say so plainly and cite what you DID find. End with the ```json``` block per schema.';
+                const synthMsg = '[SYNTHESIS REQUIRED] You exhausted your Claw browser hops or some pages failed (e.g., 403 Cloudflare). Write the FINAL answer NOW from whatever data you have so far. Do NOT emit any more ```claw``` directives. If some numbers could not be verified, say so plainly and cite what you DID find. End with the ```json``` block per schema. Every section you cite MUST have a matching citations entry with the exact scraped URL.';
                 let synthResp = '';
                 const synthStream = await newChat.sendMessageStream({ message: synthMsg });
                 for await (const chunk of synthStream) {
@@ -5993,6 +6176,30 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             // without re-asking. Same shape as the inter-agent CACP handler.
             try {
               const parsed = extractZoningJsonBlock(resp);
+              const sourceLedger = buildZoningSourceLedger({
+                answerText: sanitizeZoningAnswer(resp),
+                json: parsed,
+                jurisdiction: [zMuni, zCounty ? `${zCounty} County` : '', zState].filter(Boolean).join(', '),
+              });
+              if (sourceLedger) {
+                setZoningChatHistory(prev => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last && last.role === MessageRole.MODEL) {
+                    next[next.length - 1] = {
+                      ...last,
+                      a2ui: {
+                        kind: 'zoning-sources' as const,
+                        agent: AgentType.ZONING_AGENT,
+                        widgetType: 'zoning-sources' as const,
+                        status: 'expanded' as const,
+                        zoningSources: sourceLedger,
+                      },
+                    };
+                  }
+                  return next;
+                });
+              }
               if (parsed) {
                 interAgentComm.cacheResult(
                   'get_zoning_requirements',
@@ -7132,6 +7339,44 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       };
     });
 
+    // Change layer properties (color / linetype) and optionally make the layer
+    // active. Used by chat commands, peer agents, and the Voice Agent.
+    const unsubSetProps = interAgentComm.onCommand('cad_set_layer_properties', async (message) => {
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const layer = String(d.layer ?? '').trim();
+      if (!layer) {
+        return { requestId: message.id, from: AgentType.CAD_MANAGER, success: false, error: 'Missing layer', timestamp: Date.now() };
+      }
+      const requestedColor = typeof d.color === 'string' ? d.color.trim() : '';
+      const requestedLineType = typeof d.lineType === 'string' ? d.lineType.trim() : '';
+      const color = requestedColor ? normalizeCadLayerColor(requestedColor) : undefined;
+      const lineType = requestedLineType ? normalizeCadLayerLinetype(requestedLineType) : undefined;
+      const makeActive = d.makeActive === true;
+      if ((requestedColor && !color) || (requestedLineType && !lineType)) {
+        return { requestId: message.id, from: AgentType.CAD_MANAGER, success: false, error: 'Unrecognized color or linetype', timestamp: Date.now() };
+      }
+      if (!color && !lineType && !makeActive) {
+        return { requestId: message.id, from: AgentType.CAD_MANAGER, success: false, error: 'Provide color, lineType, or makeActive', timestamp: Date.now() };
+      }
+      const updated = handleCadLayerPropertyChange(layer, { color, lineType });
+      if (!updated) {
+        return { requestId: message.id, from: AgentType.CAD_MANAGER, success: false, error: 'Could not update layer', timestamp: Date.now() };
+      }
+      if (makeActive) setActiveDrawingLayer(updated.name);
+      return {
+        requestId: message.id,
+        from: AgentType.CAD_MANAGER,
+        success: true,
+        data: {
+          layer: updated.name,
+          color: updated.colorRgb ?? null,
+          lineType: updated.lineType ?? null,
+          active: makeActive,
+        },
+        timestamp: Date.now(),
+      };
+    });
+
     const unsubEnsure = interAgentComm.onCommand('cad_ensure_default_layers', async (message) => {
       const added = cadManagerContext.ensureDefaultBoundaryCodes();
       if (added.length > 0) {
@@ -7146,8 +7391,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       };
     });
 
-    return () => { unsubLayer(); unsubBatch(); unsubCtx(); unsubList(); unsubCreate(); unsubEnsure(); };
-  }, [cadManagerContext, logActionToFieldbook]);
+    return () => { unsubLayer(); unsubBatch(); unsubCtx(); unsubList(); unsubCreate(); unsubSetProps(); unsubEnsure(); };
+  }, [cadManagerContext, handleCadLayerPropertyChange, logActionToFieldbook, setActiveDrawingLayer]);
 
   useEffect(() => {
     const unsubRun = interAgentComm.onCommand('standards_run_compliance_audit', async (message) => {
@@ -9423,8 +9668,135 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }
   }, [activeAgent, rawFile, deedFile, dxfFile, clFile, gisFile, generatedFiles, handleFileUploaded, applyDeedSubmission, handleDxfUploaded, handleGisUploaded, handleClFileUploaded, settings.userApiKey, hasConfirmedApiKey, addNotification]);
 
+  /** Open the live CACP manifest explorer as a first-class A2UI surface. */
+  const openCacpManifestSurface = useCallback((initialAgent?: AgentType) => {
+    openA2UISurface({
+      key: 'cacp-manifests',
+      definitionId: 'cacp-manifests',
+      title: 'CACP manifest explorer',
+      subtitle: 'Live agent and skill schemas',
+      category: 'protocol',
+      accent: 'emerald',
+      size: 'wide',
+      source: 'chat:cacp-manifests',
+      content: <A2UICacpManifestExplorer initialAgent={initialAgent} />,
+    });
+  }, []);
+
+  /** Open the CACP traffic review surface from the bridge or chat intent. */
+  const openCacpReviewSurface = useCallback((context: A2UICacpReviewContext) => {
+    openA2UISurface({
+      key: 'cacp-review',
+      definitionId: 'cacp-review',
+      title: 'CACP traffic review',
+      subtitle: 'Blocked, warned, or offered inter-agent traffic',
+      category: 'protocol',
+      accent: 'amber',
+      size: 'wide',
+      source: 'cacp-bridge',
+      content: (
+        <A2UICacpReview
+          context={context}
+          onRetry={retryCacpReviewItem}
+          onInspect={agent => openCacpManifestSurface(agent)}
+        />
+      ),
+    });
+  }, [openCacpManifestSurface]);
+
+  /** Build a review context from the current log when chat asks for it. */
+  const openCacpReviewFromLog = useCallback(() => {
+    const log = interAgentComm.getLog();
+    const notable = log.filter(isNotableCacpEntry);
+    openCacpReviewSurface(buildCacpReviewContext(notable.length > 0 ? notable : log));
+  }, [openCacpReviewSurface]);
+
+  /** Expand an in-chat A2UI payload into its fullscreen presentation. */
+  const handleA2UIFullscreen = useCallback((payload: A2UIPayload) => {
+    if (payload.kind === 'settings' && (!payload.settingsSection || payload.settingsSection === 'all')) {
+      setIsSettingsVisible(true);
+      return;
+    }
+
+    const title =
+      payload.kind === 'cacp-manifests' ? 'CACP manifest explorer' :
+      payload.kind === 'cacp-review' ? 'CACP traffic review' :
+      payload.kind === 'standards-explorer' ? 'CAD standards explorer' :
+      payload.kind === 'zoning-research' ? 'Zoning research' :
+      payload.kind === 'zoning-sources' ? 'Zoning sources' :
+      payload.kind === 'cad-manager' ? 'CAD Manager workspace' :
+      payload.kind === 'settings' ? 'Project Settings' :
+      payload.kind === 'workspace-tool'
+        ? (WORKSPACE_TOOL_LABELS[(payload.workspaceTool ?? payload.widgetType) as A2UIWorkspaceToolId] ?? 'Workspace Tool')
+        : (A2UI_DOCK_TITLES[payload.widgetType] ?? 'A2UI surface');
+
+    openA2UISurface({
+      key: `fullscreen-${payload.kind}-${payload.widgetType}`,
+      definitionId: payload.widgetType,
+      title,
+      subtitle: 'Fullscreen A2UI surface',
+      category:
+        payload.kind === 'cacp-manifests' || payload.kind === 'cacp-review'
+          ? 'protocol'
+          : payload.kind === 'workspace-tool' || payload.kind === 'cad-manager'
+            ? 'workspace'
+            : 'dialog',
+      accent:
+        payload.kind === 'cacp-review' ? 'amber' :
+        payload.kind === 'cacp-manifests' ? 'emerald' :
+        'cyan',
+      size: 'fullscreen',
+      source: 'chat:fullscreen',
+      content: (
+        <A2UISurface
+          payload={payload}
+          presentation="floating"
+          cadManagerContent={
+            payload.kind === 'cad-manager' ? (
+              <CadManagerPage
+                c3dSessionToken={c3dSessionToken}
+                isC3DConnected={isC3DConnected}
+                sendToC3D={sendToC3D}
+                reconnectWebSocket={reconnectWebSocket}
+              />
+            ) : undefined
+          }
+        />
+      ),
+    });
+  }, [c3dSessionToken, isC3DConnected, sendToC3D, reconnectWebSocket]);
+
   const handleSendMessage = useCallback(async (query: string, agentOverride?: AgentType, askPeerDepth = 0, zoningDistrictOverride?: string) => {
     console.log('[handleSendMessage] Called with query:', query, 'activeAgent:', activeAgent, 'override:', agentOverride, 'askPeerDepth:', askPeerDepth);
+
+    // COGO owns dividing lines/arcs. Start with a selection prompt instead of
+    // letting the model guess which entities the user meant.
+    const divideIntent = parseDivideSelectionIntent(query);
+    if (divideIntent && !agentOverride && askPeerDepth === 0) {
+      const count = divideIntent.pointCount;
+      setActiveAgent(AgentType.COGO_AGENT);
+      setCogoChatHistory(prev => [
+        ...markPendingA2UICompleted(prev),
+        { role: MessageRole.USER, text: query },
+        {
+          role: MessageRole.MODEL,
+          text: `Select the lines and arcs to be divided. I’ll place ${count} evenly spaced point${count === 1 ? '' : 's'} on each selected entity.`,
+          a2ui: {
+            kind: 'selection-prompt',
+            agent: AgentType.COGO_AGENT,
+            widgetType: 'selection-prompt',
+            status: 'prompting',
+            selectionPrompt: {
+              title: 'Divide lines and arcs',
+              description: 'Select lines and arcs to be divided on the canvas.',
+              pointCount: count,
+              actionLabel: `Divide selected into ${count} points`,
+            },
+          },
+        },
+      ]);
+      return;
+    }
 
     // Deterministic symbol-visibility intercept: if the user issued a command
     // like "draw tree symbols" or "hide all manholes", toggle the built-in
@@ -9576,6 +9948,115 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
     }
 
+    // Deterministic app commands: "open settings" must open the dialog, not
+    // ask the model to describe where the gear icon is.
+    const localCommand = parseLocalChatCommand(query);
+    if (localCommand?.action === 'open-settings' && !agentOverride && askPeerDepth === 0) {
+      const commandSetHistory = getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
+      const settingsPayload: A2UIPayload = {
+        kind: 'settings',
+        agent: activeAgent || AgentType.LSVZ_AGENT,
+        widgetType: 'settings',
+        status: 'expanded',
+        settingsSummary: {
+          model: currentModelName,
+          units: String(settings.linearUnits),
+          precision: settings.coordinatePrecision,
+          theme: settings.theme,
+        },
+      };
+      commandSetHistory?.(prev => [
+        ...markPendingA2UICompleted(prev),
+        { role: MessageRole.USER, text: query },
+        { role: MessageRole.MODEL, text: localCommand.replyText, a2ui: settingsPayload },
+      ]);
+      setSuggestedQuestions([
+        'What can I change in Project Settings?',
+        'Open the CACP manifests',
+        'Show blocked CACP traffic',
+      ]);
+      return;
+    }
+
+    // Latent A2UI surfaces: construct protocol, settings, and workspace tool
+    // surfaces on demand when the chat request calls for one.
+    if (!agentOverride && askPeerDepth === 0) {
+      const surfaceIntent = resolveA2UISurfaceIntent(query);
+      const surfaceSetHistory = getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
+      if (surfaceIntent && surfaceSetHistory) {
+        let surfacePayload: A2UIPayload;
+        if (surfaceIntent.surface === 'cacp-manifests') {
+          surfacePayload = {
+            kind: 'cacp-manifests',
+            agent: activeAgent || AgentType.LSVZ_AGENT,
+            widgetType: 'cacp-manifests',
+            status: 'expanded',
+            cacpManifests: { initialAgent: surfaceIntent.initialAgent },
+          };
+        } else if (surfaceIntent.surface === 'cacp-review') {
+          const log = interAgentComm.getLog();
+          const notable = log.filter(isNotableCacpEntry);
+          surfacePayload = {
+            kind: 'cacp-review',
+            agent: activeAgent || AgentType.LSVZ_AGENT,
+            widgetType: 'cacp-review',
+            status: 'expanded',
+            cacpReview: buildCacpReviewContext(notable.length > 0 ? notable : log),
+          };
+        } else if (surfaceIntent.surface === 'settings') {
+          surfacePayload = {
+            kind: 'settings',
+            agent: activeAgent || AgentType.LSVZ_AGENT,
+            widgetType: 'settings',
+            status: 'expanded',
+            settingsSection: surfaceIntent.section,
+            settingsSummary: {
+              model: currentModelName,
+              units: String(settings.linearUnits),
+              precision: settings.coordinatePrecision,
+              theme: settings.theme,
+            },
+          };
+        } else if (surfaceIntent.surface === 'workspace-tool') {
+          surfacePayload = {
+            kind: 'workspace-tool',
+            agent: surfaceIntent.agent,
+            widgetType: surfaceIntent.tool,
+            workspaceTool: surfaceIntent.tool,
+            status: 'expanded',
+          };
+        } else {
+          // cad-standards-editor
+          surfacePayload = {
+            kind: 'standards-explorer',
+            agent: AgentType.CAD_MANAGER,
+            widgetType: 'cad-standards-table',
+            status: 'expanded',
+          };
+          if (!cadManagerState.standard) {
+            cadManagerContext.dispatch({
+              type: 'SET_STANDARD',
+              payload: {
+                name: 'Custom CAD Standard',
+                description: 'Created in CAD Standards Spreadsheet Editor',
+                codes: [],
+                layers: [],
+                linetypes: [],
+              },
+            });
+          }
+          setIsSpreadsheetEditorOpen(true);
+        }
+        surfaceSetHistory(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          { role: MessageRole.MODEL, text: surfaceIntent.replyText, a2ui: surfacePayload },
+        ]);
+        setSuggestedQuestions(surfaceIntent.suggestedQuestions);
+        return;
+      }
+    }
+
     // CAD standards questions render a compact, pre-filtered A2UI sheet instead
     // of dumping the whole spreadsheet into the reply.
     if (!agentOverride && askPeerDepth === 0 && cadManagerState.standard) {
@@ -9601,6 +10082,46 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           'Show all layers in the standards',
           'What linetypes are in the standards?',
           'Open CAD standards editor',
+        ]);
+        return;
+      }
+    }
+
+    // Deterministic CAD layer commands: "set layer L-ROAD-CNTR to red dashed"
+    // is applied directly to the CAD standard and canvas instead of being sent
+    // to the model, so it also works without an inference key.
+    if (!agentOverride && askPeerDepth === 0) {
+      const cadLayerAgent = activeAgent || AgentType.CAD_MANAGER;
+      const cadLayerCommand = parseCadLayerChatCommand(query);
+      const cadLayerSetHistory = getSetHistoryForAgent(cadLayerAgent);
+      const supportsCadLayerCommands =
+        cadLayerAgent === AgentType.CAD_MANAGER ||
+        cadLayerAgent === AgentType.DXF_ANALYZER ||
+        cadLayerAgent === AgentType.LSVZ_AGENT;
+      if (cadLayerCommand && cadLayerSetHistory && supportsCadLayerCommands) {
+        const updated = handleCadLayerPropertyChange(cadLayerCommand.layer, {
+          color: cadLayerCommand.color,
+          lineType: cadLayerCommand.lineType,
+        });
+        if (cadLayerCommand.makeActive) setActiveDrawingLayer(cadLayerCommand.layer);
+        const details = [
+          updated?.colorRgb ? `color <strong>${updated.colorRgb}</strong>` : '',
+          updated?.lineType ? `linetype <strong>${updated.lineType}</strong>` : '',
+        ].filter(Boolean);
+        const detailText = details.length > 0 ? ` Updated to ${details.join(' and ')}.` : '';
+        const activeText = cadLayerCommand.makeActive ? ' It is now the active drawing layer.' : '';
+        cadLayerSetHistory(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          {
+            role: MessageRole.MODEL,
+            text: `Layer <strong>${cadLayerCommand.layer}</strong> is ready.${detailText}${activeText}`,
+          },
+        ]);
+        setSuggestedQuestions([
+          `Set layer ${cadLayerCommand.layer} color cyan`,
+          `Set layer ${cadLayerCommand.layer} linetype dashed`,
+          'Show all layers in the standards',
         ]);
         return;
       }
@@ -10496,7 +11017,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         // sees an answer instead of the "Researching�" placeholder.
         if (!stopGenerationRef.current && !sanitizeZoningAnswer(fullResponse)) {
           try {
-            const synthMsg = '[SYNTHESIS REQUIRED] You exhausted your Claw browser hops or some pages failed (e.g., 403 Cloudflare). Write the FINAL answer NOW from whatever data you have so far. Do NOT emit any more ```claw``` directives. If some numbers could not be verified, say so plainly and cite what you DID find. End with the ```json``` block per schema.';
+            const synthMsg = '[SYNTHESIS REQUIRED] You exhausted your Claw browser hops or some pages failed (e.g., 403 Cloudflare). Write the FINAL answer NOW from whatever data you have so far. Do NOT emit any more ```claw``` directives. If some numbers could not be verified, say so plainly and cite what you DID find. End with the ```json``` block per schema. Every section you cite MUST have a matching citations entry with the exact scraped URL.';
             let synthResp = '';
             const synthStream = await chat.sendMessageStream({ message: synthMsg });
             for await (const chunk of synthStream) {
@@ -10807,6 +11328,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
       // Only update history if we didn't already handle it in an early return
       if (!skipFinallyUpdate) {
+        const zoningSourceLedger = agent === AgentType.ZONING_AGENT
+          ? buildZoningSourceLedger({
+              answerText: sanitizeZoningAnswer(finalResultText),
+              json: jsonContentToParse,
+              jurisdiction: [zoningPlace, zoningCounty ? `${zoningCounty} County` : '', zoningState].filter(Boolean).join(', '),
+            })
+          : null;
         setHistory(prev => {
           const newHistory = [...prev];
           const lastMessage = newHistory[newHistory.length - 1];
@@ -10821,7 +11349,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               questionOptions: thinkingClarification?.options.length
                 ? thinkingClarification.options
                 : undefined,
-              a2ui: requestedInputForm
+              a2ui: zoningSourceLedger
+                ? {
+                    kind: 'zoning-sources',
+                    agent,
+                    widgetType: 'zoning-sources',
+                    status: 'expanded',
+                    zoningSources: zoningSourceLedger,
+                  }
+                : requestedInputForm
                 ? {
                     kind: 'input-form',
                     agent,
@@ -13516,6 +14052,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
    * the floating message can resolve on the next render.
    */
   const handleOpenCadWorkspace = useCallback(() => {
+    const workspaceMsg: ChatMessage = {
+      role: MessageRole.MODEL,
+      text: 'Your **CAD Manager** workspace is docked in the agent tool shelf. Pop it out over the canvas whenever you need more room.',
+      a2ui: {
+        kind: 'cad-manager',
+        agent: AgentType.CAD_MANAGER,
+        widgetType: 'cad-manager-workspace',
+        status: 'expanded',
+      },
+    };
     setActiveAgent(AgentType.CAD_MANAGER);
     setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
     setCadManagerChatHistory(prev => {
@@ -13523,27 +14069,34 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         msg => msg.a2ui?.kind === 'cad-manager' && msg.a2ui.status !== 'completed' && msg.a2ui.status !== 'dismissed'
       );
       if (hasActiveWorkspace) return prev;
-      return [
-        ...markPendingA2UICompleted(prev),
-        {
-          role: MessageRole.MODEL,
-          text: 'Your **CAD Manager** workspace is docked in the agent tool shelf. Pop it out over the canvas whenever you need more room.',
-          a2ui: {
-            kind: 'cad-manager',
-            agent: AgentType.CAD_MANAGER,
-            widgetType: 'cad-manager-workspace',
-            status: 'expanded',
-          },
-        },
-      ];
+      return [...markPendingA2UICompleted(prev), workspaceMsg];
     });
     setFloatingA2UIKey(null);
+    setFloatingA2UIFallback(null);
     setDockedA2UIKey(`${AgentType.CAD_MANAGER}:cad-manager-workspace`);
+    setDockedA2UIFallback(workspaceMsg);
     setIsToolShelfVisible(true);
     showView('canvas');
     setIsChatPanelVisible(true);
     setAgentChatOpenSignal(n => n + 1);
   }, [showView, setInitializedAgents, setCadManagerChatHistory, setActiveAgent, setIsChatPanelVisible, setAgentChatOpenSignal, setIsToolShelfVisible]);
+
+  /** Open the full-screen CAD standards spreadsheet editor directly via portal. */
+  const handleOpenSpreadsheetEditor = useCallback(() => {
+    if (!cadManagerState.standard) {
+      cadManagerContext.dispatch({
+        type: 'SET_STANDARD',
+        payload: {
+          name: 'Custom CAD Standard',
+          description: 'Created in CAD Standards Spreadsheet Editor',
+          codes: [],
+          layers: [],
+          linetypes: [],
+        },
+      });
+    }
+    setIsSpreadsheetEditorOpen(true);
+  }, [cadManagerState.standard, cadManagerContext]);
 
   /** Append the live, filterable CAD standards sheet as an A2UI surface. */
   const handleOpenCadStandardsSheet = useCallback(() => {
@@ -15782,6 +16335,72 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setTimeout(() => setError(null), 3000);
       }
   }, [pointLists, settings.pointLabelingSettings, addNotification, logActionToFieldbook]);
+
+  const handleStartDivideSelection = useCallback(() => {
+    canvas2dRef.current?.beginSelectionMode?.();
+  }, []);
+
+  const handleDivideSelectedLines = useCallback((payload: import('./types.ts').A2UIPayload) => {
+    const count = payload.selectionPrompt?.pointCount ?? 0;
+    const selected = canvas2dRef.current?.getSelectedLineGeometry?.() ?? [];
+    if (selected.length === 0) {
+      addNotification({
+        kind: 'general',
+        severity: 'warning',
+        title: 'No lines selected',
+        message: 'Select one or more lines or arcs on the canvas, then choose Divide selected.',
+      });
+      return;
+    }
+
+    const candidates = divideLinesIntoPoints(selected, count);
+    if (candidates.length === 0) {
+      addNotification({
+        kind: 'general',
+        severity: 'warning',
+        title: 'Nothing to divide',
+        message: 'The selected entities do not have usable line or arc geometry.',
+      });
+      return;
+    }
+
+    const taken = new Set(pointLists.flatMap(list => list.points.map(point => String(point.pointNumber).trim().toUpperCase())));
+    let nextNumber = parseInt(nextAvailablePointNumber, 10);
+    if (!Number.isFinite(nextNumber) || nextNumber < 1) nextNumber = 1;
+    let nextLists = pointLists;
+    const created: SurveyPoint[] = [];
+
+    for (const candidate of candidates) {
+      while (taken.has(String(nextNumber))) nextNumber += 1;
+      const point: SurveyPoint = {
+        pointNumber: String(nextNumber),
+        easting: candidate.easting,
+        northing: candidate.northing,
+        description: `COGO DIVIDE ${candidate.sourceLineId}`.trim(),
+      };
+      nextLists = addPointToList(point, nextLists);
+      taken.add(String(nextNumber));
+      created.push(point);
+      nextNumber += 1;
+    }
+
+    setPointLists(nextLists);
+    setNextAvailablePointNumber(String(nextNumber));
+    logActionToFieldbook(`COGO divide: placed ${created.length} point(s) on ${selected.length} selected entit${selected.length === 1 ? 'y' : 'ies'}.`);
+    setCogoChatHistory(prev => [
+      ...prev,
+      {
+        role: MessageRole.MODEL,
+        text: `Placed **${created.length}** evenly spaced point${created.length === 1 ? '' : 's'} on the selected line${selected.length === 1 ? '' : 's'}/arc${selected.length === 1 ? '' : 's'}.`,
+      },
+    ]);
+    addNotification({
+      kind: 'general',
+      severity: 'success',
+      title: 'COGO divide complete',
+      message: `Placed ${created.length} new point${created.length === 1 ? '' : 's'} (PN ${created[0]?.pointNumber}${created.length > 1 ? `–${created[created.length - 1].pointNumber}` : ''}).`,
+    });
+  }, [pointLists, nextAvailablePointNumber, addNotification, logActionToFieldbook]);
   
   const handleUpdatePoint = useCallback((updatedPoint: SurveyPoint) => {
       setPointLists(prev => updatePointInLists(updatedPoint, prev));
@@ -17217,6 +17836,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setPulseProjection(true);
     setTimeout(() => setPulseProjection(false), 3000); // Stop pulsing after 3 seconds
   }, []);
+
+  useEffect(() => {
+    if (!settings.a2ui?.autoOpenCacpReview) return;
+    return startCacpSurfaceBridge({ onOpen: openCacpReviewSurface });
+  }, [settings.a2ui?.autoOpenCacpReview, openCacpReviewSurface]);
   const showAbout = useCallback(() => setIsAboutVisible(true), []);
   const showForwardThinking = useCallback(() => setIsForwardThinkingVisible(true), []);
   const showDisclaimer = useCallback(() => setIsDisclaimerVisible(true), []);
@@ -17255,7 +17879,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         `${msg.a2ui.agent}:${msg.a2ui.widgetType}` === dockedA2UIKey &&
         msg.a2ui.status !== 'completed' &&
         msg.a2ui.status !== 'dismissed'
-      ) ?? null
+      ) ?? (dockedA2UIFallback?.a2ui && `${dockedA2UIFallback.a2ui.agent}:${dockedA2UIFallback.a2ui.widgetType}` === dockedA2UIKey ? dockedA2UIFallback : null)
     : null;
   const floatingA2UIMessage = floatingA2UIKey
     ? [...currentChatHistory].reverse().find(msg =>
@@ -17263,7 +17887,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         `${msg.a2ui.agent}:${msg.a2ui.widgetType}` === floatingA2UIKey &&
         msg.a2ui.status !== 'completed' &&
         msg.a2ui.status !== 'dismissed'
-      ) ?? null
+      ) ?? (floatingA2UIFallback?.a2ui && `${floatingA2UIFallback.a2ui.agent}:${floatingA2UIFallback.a2ui.widgetType}` === floatingA2UIKey ? floatingA2UIFallback : null)
     : null;
   
   // DEBUG: Log chat history and agent
@@ -17407,7 +18031,327 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     return list;
   }, [highlights, deedFile, planFiles, setPdfViewerFiles, showView, appNotifications]);
 
+  const renderWorkspaceTool = useCallback(
+    (toolId: A2UIWorkspaceToolId): React.ReactNode => {
+      switch (toolId) {
+        case 'symbol-manager':
+          return (
+            <SymbolManagerPanel
+              symbols={customSymbols}
+              onAddSymbol={handleAddSymbol}
+              onUpdateSymbol={handleUpdateSymbol}
+              onDeleteSymbol={handleDeleteSymbol}
+              settings={settings}
+              enabledBuiltinSymbolIds={enabledBuiltinSymbolIds}
+              onToggleBuiltinSymbol={(libId, enabled) =>
+                applySymbolVisibilityCommand({ action: enabled ? 'enable' : 'disable', ids: [libId], phrase: libId })
+              }
+              onToggleAllBuiltins={(enabled) =>
+                applySymbolVisibilityCommand({ action: enabled ? 'enable' : 'disable', ids: 'all', phrase: 'all symbols' })
+              }
+            />
+          );
+        case 'linetype-manager':
+          return (
+            <LinetypeManagerPanel
+              isC3DConnected={isC3DConnected}
+              onClose={() => handleReturnA2UIToChat()}
+            />
+          );
+        case 'hatch-manager':
+          return (
+            <HatchManagerPanel
+              customHatches={cadManagerState.standard?.hatches ?? []}
+              onCustomHatchesChange={(hatches) => {
+                if (cadManagerState.standard) {
+                  cadManagerContext.dispatch({
+                    type: 'SET_STANDARD',
+                    payload: { ...cadManagerState.standard, hatches },
+                  });
+                }
+              }}
+            />
+          );
+        case 'annotate-manager':
+          return (
+            <div className="space-y-3 p-2">
+              <AnnotateManagerPanel
+                rules={customAnnotations}
+                onAddRule={handleAddAnnotationRule}
+                onUpdateRule={handleUpdateAnnotationRule}
+                onDeleteRule={handleDeleteAnnotationRule}
+                points={points}
+                globalScale={annotationScale}
+                onChangeGlobalScale={setAnnotationScale}
+                settings={settings}
+                streetLabels={streetLabels}
+                isFetchingStreetLabels={isFetchingStreetLabels}
+                onFetchStreetNames={handleFetchStreetNames}
+                onClearStreetLabels={() => setStreetLabels([])}
+                hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
+              />
+              <div className="border-t border-white/10 pt-3">
+                <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                  Annotation Categories
+                </p>
+                <AnnotationCategoryPanel
+                  categories={annotationCategories}
+                  onChange={setAnnotationCategories}
+                  globalScale={annotationScale}
+                  onChangeGlobalScale={setAnnotationScale}
+                  cadTextStyles={parcelCadTextStyles}
+                />
+              </div>
+            </div>
+          );
+        case 'drafting-style-library':
+          return (
+            <DraftingStyleLibrary
+              entries={draftingStyleLibrary}
+              onChange={setDraftingStyleLibrary}
+            />
+          );
+        case 'layer-manager':
+          return (
+            <LayerManagerPanel
+              pointLists={pointLists}
+              onTogglePointListVisibility={handleTogglePointListVisibility}
+              linesVisible={linesVisible}
+              onSetLinesVisible={setLinesVisible}
+              centerlinesVisible={centerlinesVisible}
+              onSetCenterlinesVisible={setCenterlinesVisible}
+              pointLayers={pointLayers}
+              onLayerToggle={handleLayerToggle}
+              onLayerColorChange={handleLayerColorChange}
+              wmsServices={wmsServices}
+              activeWmsLayers={activeWmsLayers}
+              onToggleWmsLayer={handleToggleWmsLayer}
+              offlineMapAreas={offlineMapAreas}
+              onToggleOfflineMapAreaVisibility={handleToggleOfflineMapAreaVisibility}
+              cadLayers={activeCadLayers}
+              cadLayerVisibility={cadLayerVisibility}
+              cadLayerColors={cadLayerColors}
+              onToggleCadLayer={handleToggleCadLayer}
+              onCadLayerColorChange={handleCadLayerColorChange}
+            />
+          );
+        case 'compliance-summary':
+          return (
+            <StandardsComplianceSummaryPanel
+              report={standardsComplianceLastReport}
+              subjectFileName={standardsComplianceSubjectFile?.name}
+              controlFileName={standardsComplianceControlFile?.name}
+              checks={standardsComplianceChecks}
+              sourceMode={standardsComplianceSourceMode}
+              isRunning={isStandardsComplianceRunning}
+              onChecksChange={setStandardsComplianceChecks}
+              onSourceModeChange={setStandardsComplianceSourceMode}
+              onRunAudit={runStandardsComplianceAudit}
+              onAddFiles={() => setIsAddingData(true)}
+              onOpenChat={() => handleReturnA2UIToChat()}
+            />
+          );
+        case 'title-search-panel':
+          return (
+            <TitleSearchPanel
+              titleData={titleSearchData}
+              onDeedSelect={setSelectedDeedId}
+              onLienSelect={setSelectedLienId}
+              selectedDeedId={selectedDeedId}
+              selectedLienId={selectedLienId}
+            />
+          );
+        case 'wms-manager':
+          return (
+            <WmsPanel
+              services={wmsServices}
+              activeLayers={activeWmsLayers}
+              onConnect={handleConnectWms}
+              onToggleLayer={handleToggleWmsLayer}
+              onUpdateLayer={handleUpdateWmsLayer}
+              onRemoveService={handleRemoveWmsService}
+              onDownloadMapArea={handleDownloadMapArea}
+              onDeleteOfflineMapArea={handleDeleteOfflineMapArea}
+              offlineMapAreas={offlineMapAreas}
+              points={points}
+            />
+          );
+        case 'file-manager':
+          return (
+            <FileManagerPanel
+              rawFile={rawFile}
+              deedFile={deedFile}
+              dxfFile={dxfFile}
+              gisFile={gisFile}
+              planFiles={planFiles}
+              imageFiles={imageFiles}
+              generatedFiles={generatedFiles}
+              pointLists={pointLists}
+              onOpenFileInEditor={handleOpenFileInEditor}
+              onDeleteFile={handleDeleteFile}
+              onToggleDxfTraining={(forTraining) => {
+                if (dxfFile) {
+                  setDxfFile({ ...dxfFile, forTraining });
+                }
+              }}
+            />
+          );
+        case 'fieldbook-panel':
+          return (
+            <FieldbookPanel
+              notes={fieldbookNotes}
+              onNotesChange={setFieldbookNotes}
+              messages={fieldbookLog}
+              onAction={handleFieldbookAction}
+              settings={settings}
+              jobInfo={jobInfo}
+              onExportToNotion={handleExportToNotion}
+            />
+          );
+        case 'cutsheet-panel':
+          return (
+            <CutSheetPanel
+              ref={cutSheetRef}
+              data={cutSheetData}
+              info={cutSheetInfo}
+              setInfo={setCutSheetInfo}
+              settings={settings}
+            />
+          );
+        case 'closure-report':
+          return <ClosureReportPanel reports={closureReports} />;
+        case 'steep-slope-report':
+          return <SteepSlopeReportPanel runs={steepSlopeRuns} tinSurfaces={steepSlopeTinSurfaces} />;
+        case 'legal-writer':
+          return legalWriterState ? (
+            <LegalWriterPanel
+              initialText={legalWriterState.text}
+              fileName={legalWriterState.fileName}
+              initialStylePrefs={legalWriterState.stylePrefs}
+              onRegenerate={handleRegenerateLegal}
+              onBack={() => handleReturnA2UIToChat()}
+            />
+          ) : (
+            <div className="flex h-40 w-full items-center justify-center p-4 text-sm text-gray-400">
+              No legal description generated yet. Open the Boundary Editor and click &ldquo;Write Legal&rdquo;.
+            </div>
+          );
+        case 'sheet-view':
+          return (
+            <SheetView
+              points={points}
+              lines={lines}
+              projectName={jobInfo?.jobName}
+              cadLayerColors={cadLayerColors}
+              profileData={profileData}
+              profileInfo={profileInfo}
+            />
+          );
+        default:
+          return null;
+      }
+    },
+    [
+      customSymbols,
+      handleAddSymbol,
+      handleUpdateSymbol,
+      handleDeleteSymbol,
+      settings,
+      enabledBuiltinSymbolIds,
+      applySymbolVisibilityCommand,
+      isC3DConnected,
+      handleReturnA2UIToChat,
+      cadManagerState.standard,
+      cadManagerContext,
+      customAnnotations,
+      handleAddAnnotationRule,
+      handleUpdateAnnotationRule,
+      handleDeleteAnnotationRule,
+      points,
+      annotationScale,
+      setAnnotationScale,
+      streetLabels,
+      isFetchingStreetLabels,
+      handleFetchStreetNames,
+      setStreetLabels,
+      lines,
+      annotationCategories,
+      setAnnotationCategories,
+      parcelCadTextStyles,
+      draftingStyleLibrary,
+      setDraftingStyleLibrary,
+      pointLists,
+      handleTogglePointListVisibility,
+      linesVisible,
+      setLinesVisible,
+      centerlinesVisible,
+      setCenterlinesVisible,
+      pointLayers,
+      handleLayerToggle,
+      handleLayerColorChange,
+      wmsServices,
+      activeWmsLayers,
+      handleToggleWmsLayer,
+      offlineMapAreas,
+      handleToggleOfflineMapAreaVisibility,
+      activeCadLayers,
+      cadLayerVisibility,
+      cadLayerColors,
+      handleToggleCadLayer,
+      handleCadLayerColorChange,
+      standardsComplianceLastReport,
+      standardsComplianceSubjectFile,
+      standardsComplianceControlFile,
+      standardsComplianceChecks,
+      standardsComplianceSourceMode,
+      isStandardsComplianceRunning,
+      setStandardsComplianceChecks,
+      setStandardsComplianceSourceMode,
+      runStandardsComplianceAudit,
+      setIsAddingData,
+      titleSearchData,
+      setSelectedDeedId,
+      setSelectedLienId,
+      selectedDeedId,
+      selectedLienId,
+      handleConnectWms,
+      handleUpdateWmsLayer,
+      handleRemoveWmsService,
+      handleDownloadMapArea,
+      handleDeleteOfflineMapArea,
+      rawFile,
+      deedFile,
+      dxfFile,
+      gisFile,
+      planFiles,
+      imageFiles,
+      generatedFiles,
+      handleOpenFileInEditor,
+      handleDeleteFile,
+      setDxfFile,
+      fieldbookNotes,
+      setFieldbookNotes,
+      fieldbookLog,
+      handleFieldbookAction,
+      jobInfo,
+      handleExportToNotion,
+      cutSheetData,
+      cutSheetInfo,
+      setCutSheetInfo,
+      closureReports,
+      steepSlopeRuns,
+      steepSlopeTinSurfaces,
+      legalWriterState,
+      handleRegenerateLegal,
+      profileData,
+      profileInfo,
+    ]
+  );
+
   const a2uiHostContextValue = useMemo<A2UIHostContextValue>(() => ({
+    onOpenFullscreen: handleA2UIFullscreen,
+    onRetryCacpItem: retryCacpReviewItem,
+    onInspectCacpAgent: openCacpManifestSurface,
     onPointsUploaded: handlePointsUploaded,
     onPointEditorSessionStart: handlePointEditorSessionStart,
     onRawFileUploaded: handleFileUploaded,
@@ -17454,10 +18398,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     onCadManagerFileUploaded: handleCadManagerFileUploaded,
     onOpenCadStandards: handleOpenCadStandardsSheet,
     onOpenCadWorkspace: handleOpenCadWorkspace,
+    onOpenSpreadsheetEditor: handleOpenSpreadsheetEditor,
+    renderWorkspaceTool,
     onSubmitInput: (message, payload) => {
       void handleSendMessage(message, payload.agent);
     },
+    onStartCanvasSelection: handleStartDivideSelection,
+    onUseCanvasSelection: handleDivideSelectedLines,
   }), [
+    handleA2UIFullscreen,
+    openCacpManifestSurface,
     handlePointsUploaded,
     handlePointEditorSessionStart,
     handleFileUploaded,
@@ -17493,6 +18443,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     handleCadManagerFileUploaded,
     handleOpenCadStandardsSheet,
     handleOpenCadWorkspace,
+    handleOpenSpreadsheetEditor,
+    renderWorkspaceTool,
+    handleStartDivideSelection,
+    handleDivideSelectedLines,
   ]);
 
   if (pageMode === null) {
@@ -17522,10 +18476,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     if (landingContentWithComponent.component && landingContentWithComponent.isFullPage) {
       const ComponentPage = landingContentWithComponent.component;
       return (
-        <div className="flex flex-col min-h-screen">
-          <EnvironmentBanner />
-          <ComponentPage />
-        </div>
+        <A2UIPublicSurfaceLayer>
+          <div className="flex flex-col min-h-screen">
+            <EnvironmentBanner />
+            <ComponentPage />
+          </div>
+        </A2UIPublicSurfaceLayer>
       );
     }
     
@@ -17533,12 +18489,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     const ContentComponent = landingContent.content;
     return (
         <Suspense fallback={<LoadingFallback />}>
+        <A2UIPublicSurfaceLayer>
         <div className="flex flex-col min-h-screen">
           <EnvironmentBanner />
           <LandingPage title={landingContent.title}>
               <ContentComponent activeAgent={AgentType.RAW_CRAWLER} />
           </LandingPage>
         </div>
+        </A2UIPublicSurfaceLayer>
         </Suspense>
     );
   }
@@ -18455,6 +19413,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 </button>
                 <button
                   type="button"
+                  onClick={() => handleA2UIFullscreen(dockedA2UIPayload)}
+                  className="rounded border border-cyan-500/30 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400/60 hover:bg-cyan-500/10"
+                >
+                  Fullscreen
+                </button>
+                <button
+                  type="button"
                   onClick={handleReturnA2UIToChat}
                   className="rounded border border-white/[0.08] px-2 py-0.5 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06]"
                 >
@@ -18997,7 +19962,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 )}
               </div>
             ) : (
-                <div className="flex flex-1 min-h-0 relative">
+                <div
+                    ref={canvasWorkspaceRef}
+                    className="flex flex-1 min-h-0 relative"
+                    style={{ '--tool-shelf-width': `${toolShelfWidth}px` } as React.CSSProperties}
+                >
                     <div
                         ref={visualPanelAndEditorContainerRef}
                         // Above the tool shelf (z-30) so the command bar's Tools
@@ -19005,7 +19974,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         // clipped by it. Kept below the mobile menu (z-40).
                         className="relative z-[35] flex flex-col min-w-0 flex-1"
                         style={{
-                            marginRight: activeVisualPanel === 'canvas' && isToolShelfVisible ? toolShelfWidth : 0,
+                            marginRight: activeVisualPanel === 'canvas' && isToolShelfVisible
+                                ? 'var(--tool-shelf-width)'
+                                : 0,
                         }}
                     >
                         {/* Main Header Bar — overhang the reserved shelf column so the
@@ -19014,8 +19985,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         <div
                             data-canvas-header
                             style={activeVisualPanel === 'canvas' && isToolShelfVisible ? {
-                                width: `calc(100% + ${toolShelfWidth}px)`,
-                                marginRight: -toolShelfWidth,
+                                width: 'calc(100% + var(--tool-shelf-width))',
+                                marginRight: 'calc(-1 * var(--tool-shelf-width))',
                             } : undefined}
                             className="relative z-40 overflow-visible flex-shrink-0 flex items-center gap-1.5 px-2 h-14 bg-[#0a0f16] border-b border-white/[0.06] light-theme:bg-white/60 light-theme:border-gray-300/40"
                         >
@@ -19051,6 +20022,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             
                             {activeVisualPanel === 'canvas' && (
                                 <>
+                                    <CadLayerPicker
+                                        layers={activeCadLayers}
+                                        activeLayer={activeDrawingLayer}
+                                        layerColors={cadLayerColorMap}
+                                        layerLinetypes={layerLinetypeMap}
+                                        linetypeOptions={cadLinetypeOptions}
+                                        onSelectLayer={setActiveDrawingLayer}
+                                        onLayerColorChange={(name, color) => handleCadLayerPropertyChange(name, { color })}
+                                        onLayerLinetypeChange={(name, lineType) => handleCadLayerPropertyChange(name, { lineType })}
+                                    />
                                     <button onClick={() => handleOpenDxfExportModal()} className="p-2 rounded-full hover:bg-gray-700 transition-colors flex items-center gap-1" title="Export DXF"><DownloadIcon className="h-[18px] w-[18px] text-gray-300"/><span className="text-xs font-medium text-gray-300">DXF</span></button>
                                     <button onClick={() => undo()} disabled={!canUndo} className={`p-2 rounded-full transition-colors ${canUndo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canUndo && undoLabel ? `Undo: ${undoLabel} (Ctrl+Z or U)` : 'Nothing to undo'}><UndoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
                                     <button onClick={() => redo()} disabled={!canRedo} className={`p-2 rounded-full transition-colors ${canRedo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canRedo && redoLabel ? `Redo: ${redoLabel} (Ctrl+Y)` : 'Nothing to redo'}><RedoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
@@ -19934,7 +20915,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                     {activeVisualPanel === 'canvas' && (
                       <AgentToolShelf
                         isOpen={isToolShelfVisible}
-                        width={toolShelfWidth}
+                        width={`var(--tool-shelf-width, ${toolShelfWidth}px)`}
                         onResizeStart={handleToolShelfResizeMouseDown}
                         bottomOffset={commandBarHeight}
                         topOffset={56}
@@ -20425,6 +21406,24 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               }}
             />
           )}
+          {isSpreadsheetEditorOpen && (
+            <StandardsEditor
+              standard={
+                cadManagerState.standard ?? {
+                  name: 'Custom CAD Standard',
+                  description: 'Created in CAD Standards Spreadsheet Editor',
+                  codes: [],
+                  layers: [],
+                  linetypes: [],
+                }
+              }
+              onSave={(updated) => {
+                cadManagerContext.dispatch({ type: 'SET_STANDARD', payload: updated });
+                setIsSpreadsheetEditorOpen(false);
+              }}
+              onClose={() => setIsSpreadsheetEditorOpen(false)}
+            />
+          )}
           {floatingA2UIMessage?.a2ui && (
             <FloatingPanel
               key={floatingA2UIKey ?? 'a2ui-floating'}
@@ -20438,6 +21437,34 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               maxHeight="90vh"
               accentBorder="border-cyan-500/40"
             >
+              <div className="mb-2 flex items-center justify-between gap-2 border-b border-white/[0.06] pb-2">
+                <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-slate-500">
+                  Floating from chat
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleA2UIDock(floatingA2UIMessage)}
+                    className="rounded border border-cyan-500/30 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400/60 hover:bg-cyan-500/10"
+                  >
+                    Dock
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => floatingA2UIMessage.a2ui && handleA2UIFullscreen(floatingA2UIMessage.a2ui)}
+                    className="rounded border border-cyan-500/30 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400/60 hover:bg-cyan-500/10"
+                  >
+                    Fullscreen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleReturnA2UIToChat}
+                    className="rounded border border-white/[0.08] px-2 py-0.5 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06]"
+                  >
+                    Return to chat
+                  </button>
+                </div>
+              </div>
               <A2UISurface
                 payload={floatingA2UIMessage.a2ui}
                 presentation="floating"
@@ -21363,6 +22390,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
           {/* CACP inter-agent activity indicator � unobtrusive bottom-left pill */}
           <CacpActivityIndicator enabled={!!settings.showCacpNotifications} />
+          {/* Global A2UI surface stack: chat, dialogs, settings, CACP, and catalog launches */}
+          <A2UISurfaceHost
+            audience="workspace"
+            defaultSize={settings.a2ui?.defaultSize ?? 'standard'}
+          />
           </div>
         </div>
         </A2UIHostContext.Provider>

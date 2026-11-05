@@ -514,6 +514,14 @@ export const homepageAgentCards = [
         actionType: 'agent' as const,
         releaseStage: 'pre-alpha' as ReleaseStage
     },
+    {
+        type: AgentType.LSVZ_AGENT,
+        title: 'LSAI Agent',
+        description: 'Your project assistant — ask anything, and it will handle the work or bring in the right specialist.',
+        icon: LsvzIcon,
+        color: 'cyan',
+        actionType: 'agent' as const
+    },
 ] satisfies readonly AgentCard[];
 
 const QUICK_CHIP_CLASS = 'agent-quick-chip relative inline-flex items-center gap-1 rounded-[5px] border border-slate-600/70 bg-slate-800/40 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-gray-300 transition-colors hover:border-slate-400 hover:bg-slate-700/60 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-400 light-theme:border-gray-300 light-theme:bg-white/70 light-theme:text-gray-600 light-theme:hover:text-gray-900';
@@ -2007,6 +2015,9 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
                  const indexOf = new Map<string, number>();
                  agentOrderHome.forEach((id, i) => indexOf.set(id, i));
                  return [...all].sort((a, b) => {
+                   const aIsDefaultAgent = a.type === AgentType.LSVZ_AGENT;
+                   const bIsDefaultAgent = b.type === AgentType.LSVZ_AGENT;
+                   if (aIsDefaultAgent !== bIsDefaultAgent) return aIsDefaultAgent ? 1 : -1;
                    const ai = indexOf.has(a.type) ? indexOf.get(a.type)! : Number.MAX_SAFE_INTEGER;
                    const bi = indexOf.has(b.type) ? indexOf.get(b.type)! : Number.MAX_SAFE_INTEGER;
                    return ai - bi;

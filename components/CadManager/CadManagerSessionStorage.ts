@@ -41,7 +41,7 @@ export interface CadManagerSession {
   aliases: Record<string, string>;
   
   // UI state
-  standardsTab: 'upload' | 'build' | 'pull';
+  standardsTab: 'upload' | 'build' | 'pull' | 'survey' | 'linetypes' | 'symbols' | 'hatch';
 }
 
 export interface CadManagerSessionSummary {

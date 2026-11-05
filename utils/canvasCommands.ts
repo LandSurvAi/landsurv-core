@@ -69,6 +69,8 @@ export interface CommandContext {
     p2: { easting: number; northing: number },
   ) => number;
   onJoinSelection?: () => number;
+  /** Round the corner between exactly two selected straight lines. */
+  onFilletSelection?: (radius: number) => { ok: boolean; count: number; message: string };
   onExplodeSelection?: () => number;
   onArraySelection?: (rows: number, columns: number, rowSpacing: number, columnSpacing: number, angleDegrees?: number) => number;
   onPolarArraySelection?: (
@@ -182,6 +184,8 @@ const COMMAND_ALIASES: Record<string, string> = {
   t: 'trim',
   tr: 'trim',
   trim: 'trim',
+  f: 'fillet',
+  fillet: 'fillet',
   cp: 'copy',
   copy: 'copy',
   os: 'offset',
@@ -273,6 +277,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
   copy: 'Copy the selection',
   offset: 'Offset a line, polyline, arc or circle',
   trim: 'Trim to a cutting edge',
+  fillet: 'Round a corner between two selected lines',
   extend: 'Extend to a boundary',
   select: 'Pick entities',
   box: 'Window / box selection',
@@ -319,6 +324,7 @@ export const HELP_GROUPS: HelpGroup[] = [
       { command: 'S / SELECT', description: 'Pick entities on the canvas' },
       { command: 'B / BOX', description: 'Window or crossing box selection' },
       { command: 'T / TRIM', description: 'Trim to a cutting edge' },
+      { command: 'F / FILLET', description: 'Round a corner between two selected lines', note: 'radius' },
       { command: 'EX / EXTEND', description: 'Extend to a boundary' },
       { command: 'CP / COPY', description: 'Copy with a snapped base point' },
       { command: 'OS / OFFSET', description: 'Offset a line, arc, circle or polyline', note: 'distance' },
@@ -530,6 +536,17 @@ const applyDistance = (args: string[]): CommandResult => {
   };
 };
 
+const applyFillet = (radius: number, ctx: CommandContext): CommandResult => {
+  if (ctx.selectionCount !== undefined && ctx.selectionCount !== 2) {
+    return { status: 'error', message: 'FILLET: Select exactly two straight lines.' };
+  }
+  if (!ctx.onFilletSelection) {
+    return { status: 'error', message: 'FILLET: Filleting is unavailable in this view.' };
+  }
+  const result = ctx.onFilletSelection(radius);
+  return { status: result.ok ? 'ok' : 'error', message: result.message };
+};
+
 /** Hard ceiling shared by rectangular-array validation and its live preview. */
 export const MAX_RECTANGULAR_ARRAY_ITEMS = 20_000;
 
@@ -616,6 +633,43 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
     case 'trim':
       ctx.onStartTrim?.();
       return { status: 'ok', message: 'TRIM: Click segments to cut at intersections [Esc to exit]' };
+
+    case 'fillet': {
+      const blocked = selectionRequired(cmd, ctx, 'FILLET');
+      if (blocked) return blocked;
+      if (args.length > 1) {
+        return { status: 'error', message: 'FILLET: Type F radius — e.g. F 10.' };
+      }
+      if (args.length === 1) {
+        const radius = numberFrom(args[0]);
+        if (radius === null || radius <= 0) {
+          return { status: 'error', message: 'FILLET: Radius must be a positive number (e.g. F 10).' };
+        }
+        return applyFillet(radius, ctx);
+      }
+      if (!ctx.onPrompt) {
+        return { status: 'error', message: 'FILLET: Type F radius — e.g. F 10.' };
+      }
+      ctx.onPrompt({
+        id: 'fillet',
+        title: 'Fillet',
+        hint: 'Enter the corner radius, then press Enter.',
+        fields: [
+          { key: 'radius', shortLabel: 'RADIUS', label: 'Fillet radius', kind: 'number', unit: ctx.linearUnitLabel, placeholder: '10' },
+        ],
+        submit: values => {
+          const radius = numberFrom(values.radius);
+          if (radius === null || radius <= 0) {
+            return { status: 'error', message: 'FILLET: Radius must be a positive number.' };
+          }
+          return applyFillet(radius, ctx);
+        },
+      });
+      return {
+        status: 'info',
+        message: 'FILLET: Enter the radius in the arrow pad or on the command line, then press Enter.',
+      };
+    }
 
     case 'extend':
       ctx.onStartExtend?.();
@@ -1047,7 +1101,7 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
         message: [
           'Commands:',
           'DRAW — L/PLINE (line), C (circle), REC (rectangle), POL (polygon: click center, drag/type radius, scroll or [ ] sides), P (point), I (inclusion).',
-          'MODIFY — S (select), B (box), T (trim), EX (extend), CP (copy), OS (offset [distance]), M (move — bare M picks a snapped base point and destination with a live ghost preview, M dx,dy moves immediately), RO / R (rotate — bare RO or the R key picks a base point with snaps and a live ghost preview, then takes a clicked point or typed angle (Shift snaps to 15°); RO angle [pivot] rotates immediately), SC (scale — bare SC picks a snapped reference point with a live ghost preview, then takes a clicked point or typed factor; SC factor [pivot] scales immediately), MI (mirror — bare MI picks two snapped axis points with a live ghost preview, MI x1,y1 x2,y2 mirrors immediately), J (join), X (explode), E (erase).',
+          'MODIFY — S (select), B (box), T (trim), F (fillet — select exactly two straight lines, then type the radius; bare F opens the radius pad), EX (extend), CP (copy), OS (offset [distance]), M (move — bare M picks a snapped base point and destination with a live ghost preview, M dx,dy moves immediately), RO / R (rotate — bare RO or the R key picks a base point with snaps and a live ghost preview, then takes a clicked point or typed angle (Shift snaps to 15°); RO angle [pivot] rotates immediately), SC (scale — bare SC picks a snapped reference point with a live ghost preview, then takes a clicked point or typed factor; SC factor [pivot] scales immediately), MI (mirror — bare MI picks two snapped axis points with a live ghost preview, MI x1,y1 x2,y2 mirrors immediately), J (join), X (explode), E (erase).',
           'ARRAYS — AR rows cols rowSpacing colSpacing (rectangular), PA count fillAngle [center] (polar; default selection center). Typing bare AR opens a UCS-style X/Y manipulator: drag a handle for spacing, Shift-drag for quantity, Alt-drag for span, or type any value. The direction ring sets the array angle. The unused axis keeps its preloaded 1 quantity / 0 spacing, so you only enter the axis you need. Typing bare PA opens the compact ring manipulator.',
           'SELECTION — run a modify/array command with nothing selected and it waits for picks: left-click entities, drag a window to box select, MMB pans, Enter applies, Esc cancels.',
           'UTILITY — ZE (zoom extents), U (undo), REDO, ALL (select all), DS (deselect), DI x1,y1 x2,y2 (distance), KEY, CLEAR, PROP / PROPERTIES (selection properties panel).',

@@ -19,6 +19,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Activity,
   AlertTriangle,
@@ -52,6 +53,9 @@ import {
 } from '../../contexts/types/CadManager.types';
 import { StandardUpload } from './StandardUpload';
 import { StandardsBuilder, ChatMessage } from './StandardsBuilder';
+import { SurveyUpload } from './SurveyUpload';
+import { LinetypeUpload } from './LinetypeUpload';
+import { SymbolLibraryPanel } from './SymbolLibraryPanel';
 import { ReviewModal } from './ReviewModal';
 import { generateLinetypesFromCodes } from '../../utils/markdownTableParser';
 import { StandardsEditor } from './StandardsEditor';
@@ -72,7 +76,7 @@ import {
   CadManagerChatMessage,
 } from './CadManagerSessionStorage';
 
-type StandardsTab = 'upload' | 'build' | 'pull' | 'hatch';
+type StandardsTab = 'upload' | 'build' | 'pull' | 'survey' | 'linetypes' | 'symbols' | 'hatch';
 
 interface Phase {
   name: string;
@@ -281,6 +285,27 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
     setHasUnsavedChanges(true);
     setIsEditorOpen(false);
   };
+
+  /**
+   * Open the full-screen spreadsheet editor, initializing an empty standard if
+   * the user hasn't loaded or generated one yet so they can author from scratch.
+   */
+  const handleOpenSpreadsheetEditor = useCallback(() => {
+    if (!currentStandard) {
+      const starter: StandardDefinition = state.standard ?? {
+        name: currentSessionName && currentSessionName !== 'Untitled Session'
+          ? currentSessionName
+          : 'Custom CAD Standard',
+        description: 'Created in CAD Standards Spreadsheet Editor',
+        codes: [],
+        layers: [],
+        linetypes: [],
+      };
+      setCurrentStandard(starter);
+      dispatch({ type: 'SET_STANDARD', payload: starter });
+    }
+    setIsEditorOpen(true);
+  }, [currentStandard, state.standard, currentSessionName, dispatch]);
 
   /**
    * Export standards to Civil 3D via MCP
@@ -1332,6 +1357,15 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
               {hasUnsavedChanges && <span className="h-1.5 w-1.5 rounded-full bg-amber-400" title="Unsaved changes" />}
             </div>
             <button
+              onClick={handleOpenSpreadsheetEditor}
+              data-testid="cad-manager-open-spreadsheet"
+              title="Open Standards Spreadsheet Editor"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-2.5 text-[10.5px] font-semibold text-cyan-200 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/20 hover:text-white"
+            >
+              <Table2 className="h-3.5 w-3.5" />
+              <span>Edit Spreadsheet</span>
+            </button>
+            <button
               onClick={handleNewSession}
               title="Start a new session"
               className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.025] px-2.5 text-[10.5px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.05] hover:text-white"
@@ -1421,6 +1455,9 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
                 { id: 'build', label: 'AI Build', icon: Sparkles },
                 { id: 'upload', label: 'Import', icon: Upload },
                 { id: 'pull', label: 'Pull from C3D', icon: PlugZap },
+                { id: 'survey', label: 'Match Survey CSV', icon: KeyRound },
+                { id: 'linetypes', label: 'Linetypes', icon: ListTree },
+                { id: 'symbols', label: 'Symbols', icon: Table2 },
                 { id: 'hatch', label: 'Hatches', icon: LayoutGrid },
               ] as const).map(({ id, label, icon: Icon }) => {
                 const active = standardsTab === id;
@@ -1445,7 +1482,7 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
               </span>
             </div>
 
-            <div className="h-[min(58vh,560px)] min-h-[420px]">
+            <div className="h-[min(58vh,560px)] min-h-[420px] overflow-y-auto">
               {standardsTab === 'upload' ? (
                 <StandardUpload onStandardParsed={handleStandardParsed} />
               ) : standardsTab === 'build' ? (
@@ -1454,6 +1491,42 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
                   initialChatHistory={chatHistory.length > 0 ? chatHistory : undefined}
                   onChatHistoryChange={handleChatHistoryUpdate}
                 />
+              ) : standardsTab === 'survey' ? (
+                <div className="p-4">
+                  <SurveyUpload
+                    standard={currentStandard ?? state.standard}
+                    onCodesExtracted={handleCodesExtracted}
+                  />
+                </div>
+              ) : standardsTab === 'linetypes' ? (
+                <div className="p-4">
+                  <LinetypeUpload
+                    isC3DConnected={isC3DConnected}
+                    onLinetypesParsed={(ltFile: LinetypeFile) => {
+                      const base = currentStandard ?? state.standard;
+                      if (base) {
+                        const next = { ...base, linetypes: ltFile.linetypes };
+                        setCurrentStandard(next);
+                        dispatch({ type: 'SET_STANDARD', payload: next });
+                      }
+                    }}
+                    onPushToC3D={
+                      isC3DConnected && sendToC3D
+                        ? async (linetypes: LinetypeDefinition[]) => {
+                            await sendToC3D('load_linetypes', {
+                              linetypes,
+                              saveToFile: true,
+                              fileName: 'cad_manager_linetypes.lin',
+                            });
+                          }
+                        : undefined
+                    }
+                  />
+                </div>
+              ) : standardsTab === 'symbols' ? (
+                <div className="p-4">
+                  <SymbolLibraryPanel />
+                </div>
               ) : standardsTab === 'hatch' ? (
                 <HatchManagerPanel
                   customHatches={state.standard?.hatches ?? []}
@@ -1649,27 +1722,29 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
           </section>
 
           {/* Actions */}
+          <section className="grid gap-2 sm:grid-cols-2">
+            <button
+              onClick={handleOpenSpreadsheetEditor}
+              className="group flex items-center justify-between gap-3 rounded-xl border border-cyan-400/25 bg-cyan-400/[0.07] px-3 py-2.5 text-left transition-colors hover:border-cyan-300/45 hover:bg-cyan-400/[0.12] sm:col-span-2"
+            >
+              <span className="flex min-w-0 items-center gap-2.5">
+                <span className="grid h-8 w-8 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-400/10 text-cyan-300">
+                  <Table2 className="h-4 w-4" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-[11.5px] font-semibold text-white">Open standards editor</span>
+                  <span className="block truncate text-[9.5px] text-slate-500">Codes, layers, linetypes, symbols, F2F settings, Team Codes, and shared text styles</span>
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <span className="rounded-md border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-slate-300">{totalCodes}</span>
+                <ArrowUpRight className="h-3.5 w-3.5 text-cyan-300/70 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+              </span>
+            </button>
+          </section>
+
           {currentStandard && currentStandard.codes.length > 0 ? (
             <section className="grid gap-2 sm:grid-cols-2">
-              <button
-                onClick={() => setIsEditorOpen(true)}
-                className="group flex items-center justify-between gap-3 rounded-xl border border-cyan-400/25 bg-cyan-400/[0.07] px-3 py-2.5 text-left transition-colors hover:border-cyan-300/45 hover:bg-cyan-400/[0.12] sm:col-span-2"
-              >
-                <span className="flex min-w-0 items-center gap-2.5">
-                  <span className="grid h-8 w-8 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-400/10 text-cyan-300">
-                    <Table2 className="h-4 w-4" />
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-[11.5px] font-semibold text-white">Open standards editor</span>
-                    <span className="block truncate text-[9.5px] text-slate-500">Codes, layers, linetypes, symbols, and aliases</span>
-                  </span>
-                </span>
-                <span className="flex shrink-0 items-center gap-1.5">
-                  <span className="rounded-md border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-slate-300">{totalCodes}</span>
-                  <ArrowUpRight className="h-3.5 w-3.5 text-cyan-300/70 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
-                </span>
-              </button>
-
               <div className="rounded-xl border border-white/[0.08] bg-[#0a111c] p-3 sm:col-span-2">
                 <div className="mb-2.5 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -1767,35 +1842,61 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
         </div>
       </div>
 
-      {currentStandard && (
-        <ReviewModal
-          isOpen={isReviewOpen}
-          unknownCodes={unknownCodes}
-          standard={currentStandard}
-          previousAliases={state.aliases}
-          onConfirm={handleMatchesConfirmed}
-          onCancel={handleReviewCancel}
-          onAliasChange={handleAliasChange}
-        />
-      )}
+      {currentStandard && isReviewOpen && (typeof document !== 'undefined' && document.body
+        ? createPortal(
+            <ReviewModal
+              isOpen={isReviewOpen}
+              unknownCodes={unknownCodes}
+              standard={currentStandard}
+              previousAliases={state.aliases}
+              onConfirm={handleMatchesConfirmed}
+              onCancel={handleReviewCancel}
+              onAliasChange={handleAliasChange}
+            />,
+            document.body,
+          )
+        : (
+            <ReviewModal
+              isOpen={isReviewOpen}
+              unknownCodes={unknownCodes}
+              standard={currentStandard}
+              previousAliases={state.aliases}
+              onConfirm={handleMatchesConfirmed}
+              onCancel={handleReviewCancel}
+              onAliasChange={handleAliasChange}
+            />
+          ))}
 
       {/* Full-screen Standards Editor */}
-      {currentStandard && isEditorOpen && (
+      {isEditorOpen && (currentStandard || state.standard) && (
         <StandardsEditor
-          standard={currentStandard}
+          standard={(currentStandard || state.standard)!}
           onSave={handleEditorSave}
           onClose={() => setIsEditorOpen(false)}
         />
       )}
 
       {/* Session Manager Modal */}
-      <SessionModal
-        isOpen={isSessionModalOpen}
-        onClose={() => setIsSessionModalOpen(false)}
-        onLoadSession={handleLoadSession}
-        onNewSession={handleNewSession}
-        currentSessionId={currentSessionId}
-      />
+      {isSessionModalOpen && (typeof document !== 'undefined' && document.body
+        ? createPortal(
+            <SessionModal
+              isOpen={isSessionModalOpen}
+              onClose={() => setIsSessionModalOpen(false)}
+              onLoadSession={handleLoadSession}
+              onNewSession={handleNewSession}
+              currentSessionId={currentSessionId}
+            />,
+            document.body,
+          )
+        : (
+            <SessionModal
+              isOpen={isSessionModalOpen}
+              onClose={() => setIsSessionModalOpen(false)}
+              onLoadSession={handleLoadSession}
+              onNewSession={handleNewSession}
+              currentSessionId={currentSessionId}
+            />
+          ))}
     </div>
   );
 };

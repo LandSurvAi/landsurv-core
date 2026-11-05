@@ -1,6 +1,26 @@
 import React, { useMemo, useState } from 'react';
 import { agentRegistry, AgentManifest, SkillSchema } from '../services/AgentRegistry';
 import { AgentType } from '../types';
+import { openA2UISurface } from '../services/a2uiSurfaces.ts';
+import { A2UICacpManifestExplorer } from './A2UICacpManifestExplorer.tsx';
+
+/**
+ * The manifest dialog can hand itself to the global A2UI stack. This keeps the
+ * same live registry content while letting the user keep it open beside chat.
+ */
+function popOutManifestSurface(agent: AgentType, title: string) {
+  openA2UISurface({
+    key: 'cacp-manifests',
+    definitionId: 'cacp-manifests',
+    title: 'CACP manifest explorer',
+    subtitle: title,
+    category: 'protocol',
+    accent: 'emerald',
+    size: 'wide',
+    source: 'dialog:cacp-manifest',
+    content: <A2UICacpManifestExplorer initialAgent={agent} />,
+  });
+}
 
 interface CacpManifestModalProps {
   agent: AgentType;
@@ -110,6 +130,17 @@ const CacpManifestModal: React.FC<CacpManifestModalProps> = ({ agent, onClose })
             )}
           </div>
           <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => {
+                popOutManifestSurface(agent, manifest ? `${manifest.displayName} manifest` : 'Live agent and skill schemas');
+                onClose();
+              }}
+              className="rounded px-2 py-1 text-xs text-gray-400 hover:text-emerald-200"
+              title="Open this manifest in the global A2UI surface stack"
+            >
+              Pop out
+            </button>
             <button
               onClick={() => setView('pretty')}
               className={`text-xs px-2 py-1 rounded ${view === 'pretty' ? 'bg-emerald-700/40 text-emerald-200' : 'text-gray-400 hover:text-gray-200'}`}

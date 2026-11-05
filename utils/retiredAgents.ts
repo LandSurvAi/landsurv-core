@@ -121,6 +121,7 @@ export const HOMEPAGE_AGENT_TYPES = [
   AgentType.FLOOD_AGENT,
   AgentType.STRUCTURES_AGENT,
   AgentType.SOILS_AGENT,
+  AgentType.LSVZ_AGENT,
 ] as const;
 
 export type HomepageAgentType = (typeof HOMEPAGE_AGENT_TYPES)[number];

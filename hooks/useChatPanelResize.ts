@@ -15,6 +15,8 @@ import type React from 'react';
  * @param minWidth - Minimum width for the chat panel (default: 320px)
  * @param maxWidthOffset - Space to keep for main panel (default: 400px)
  * @param side - Edge the panel is docked to; controls which way width grows
+ * @param onPreviewWidth - Applies the live width to layout outside the panel
+ *   (for example the canvas edge) without committing React state mid-drag
  */
 export function useChatPanelResize(
   isResizingChat: boolean,
@@ -22,7 +24,8 @@ export function useChatPanelResize(
   setChatPanelWidth: (width: number) => void,
   minWidth: number = 320,
   maxWidthOffset: number = 400,
-  side: 'left' | 'right' = 'right'
+  side: 'left' | 'right' = 'right',
+  onPreviewWidth?: (width: number) => void
 ) {
   /** The `[data-chat-panel]` element being dragged. */
   const panelRef = useRef<HTMLElement | null>(null);
@@ -31,6 +34,11 @@ export function useChatPanelResize(
   /** Latest width computed on mousemove, applied in the next frame. */
   const pendingWidthRef = useRef<number | null>(null);
   const frameRef = useRef<number | null>(null);
+  const onPreviewWidthRef = useRef(onPreviewWidth);
+
+  useEffect(() => {
+    onPreviewWidthRef.current = onPreviewWidth;
+  }, [onPreviewWidth]);
 
   const flushPendingWidth = useCallback(() => {
     frameRef.current = null;
@@ -38,6 +46,7 @@ export function useChatPanelResize(
     const width = pendingWidthRef.current;
     if (!panel || width === null) return;
     panel.style.width = `${width}px`;
+    onPreviewWidthRef.current?.(width);
   }, []);
 
   const handleChatResizeMouseDown = useCallback((e: React.MouseEvent) => {
@@ -86,6 +95,7 @@ export function useChatPanelResize(
         // Leave the DOM at the final width and commit one state update so the
         // rest of the app (canvas panel, toolbar docking) catches up once.
         panel.style.width = `${width}px`;
+        onPreviewWidthRef.current?.(width);
         setChatPanelWidth(Math.round(width));
       }
     }

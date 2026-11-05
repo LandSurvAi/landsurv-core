@@ -130,11 +130,33 @@ const agentConfig: Partial<Record<AgentType, SidebarAgentEntry>> = {
     [AgentType.AR_AGENT]: { icon: ARIcon, label: 'AR View', color: 'rose' },
     [AgentType.ZONING_AGENT]: { icon: ZoningIcon, label: 'Zoning', color: 'emerald' },
     [AgentType.TITLE_SEARCH]: { icon: TitleSearchIcon, label: 'Title Search', color: 'amber' },
-    [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSAI Agent', color: 'slate' },
     [AgentType.CAD_MANAGER]: { icon: CadManagerIcon, label: 'CAD Manager', color: 'indigo' },
     [AgentType.FLOOD_AGENT]: { icon: FloodIcon, label: 'Flood Zone', color: 'cyan' },
     [AgentType.STRUCTURES_AGENT]: { icon: StructuresIcon, label: 'Structures', color: 'orange' },
     [AgentType.SOILS_AGENT]: { icon: SoilsIcon, label: 'Soils Agent', color: 'stone' },
+    [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSAI Agent', color: 'cyan' },
+};
+
+/**
+ * Sidebar order shared by the expanded menu and collapsed rail. LSAI is always
+ * pinned last so the project assistant closes the list regardless of an
+ * admin-saved custom order.
+ */
+export const getOrderedSidebarAgentKeys = (agentOrderSidebar: string[] | null): AgentType[] => {
+    const keys = Object.keys(agentConfig) as AgentType[];
+    if (!agentOrderSidebar || agentOrderSidebar.length === 0) return keys;
+
+    const indexOf = new Map<string, number>();
+    agentOrderSidebar.forEach((id, i) => indexOf.set(id, i));
+
+    return [...keys].sort((a, b) => {
+        const aIsLast = a === AgentType.LSVZ_AGENT;
+        const bIsLast = b === AgentType.LSVZ_AGENT;
+        if (aIsLast !== bIsLast) return aIsLast ? 1 : -1;
+        const ai = indexOf.get(a) ?? Number.MAX_SAFE_INTEGER;
+        const bi = indexOf.get(b) ?? Number.MAX_SAFE_INTEGER;
+        return ai - bi;
+    });
 };
 
 const agentThemeColors: { [key in AgentType]?: string } = {
@@ -145,7 +167,7 @@ const agentThemeColors: { [key in AgentType]?: string } = {
     [AgentType.POINT_EDITOR]: '#facc15', // yellow-400
     [AgentType.GPS_STAKEOUT]: '#60a5fa', // blue-400
     [AgentType.FIELD_BOOK]: '#fb923c', // orange-400
-    [AgentType.LSVZ_AGENT]: '#94a3b8', // slate-400
+    [AgentType.LSVZ_AGENT]: '#22d3ee', // cyan-400 — LandSurv "Surv"
     [AgentType.CIVIL_PLAN_EXPERT]: '#fb923c', // orange-400
     [AgentType.DXF_ANALYZER]: '#818cf8', // indigo-400
     [AgentType.IMAGE_ANALYZER]: '#f87171', // red-400
@@ -199,13 +221,12 @@ const SidebarButton = ({ agent, isDesktop, isActive, isThinking, onSelect }: {
                     isActive
                         ? 'border-transparent text-white'
                         : 'border-transparent text-slate-400 hover:bg-white/[0.045] hover:text-slate-100 light-theme:text-gray-600 light-theme:hover:bg-black/[0.04] light-theme:hover:text-gray-900'
-                } ${isThinking ? 'animate-pulse-thinking' : ''}`}
+                }`}
                 style={{
                     ...(isActive ? {
                         background: `linear-gradient(90deg, rgba(${rgbColor},0.16), rgba(${rgbColor},0.03))`,
                         boxShadow: `inset 0 0 0 1px rgba(${rgbColor},0.24)`,
                     } : {}),
-                    '--pulse-color': rgbColor,
                 } as React.CSSProperties}
             >
                 {isActive && (
@@ -218,7 +239,7 @@ const SidebarButton = ({ agent, isDesktop, isActive, isThinking, onSelect }: {
                     className="h-[18px] w-[18px] flex-shrink-0"
                     style={{ color: isActive ? hexColor : `rgba(${rgbColor},0.82)` }}
                 />
-                <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''}`}>{config.label}</span>
+                <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''} ${isThinking ? 'animate-thinking-red-text' : ''}`}>{config.label}</span>
                 {isActive && (
                     <span
                         className="ml-auto hidden h-1.5 w-1.5 flex-shrink-0 rounded-full lg:block"
@@ -588,27 +609,9 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                     <div className="hidden px-2 pb-1 pt-1 text-[9px] font-bold uppercase tracking-[0.2em] text-slate-500 lg:block">Agent Workspaces</div>
                     <div className={!props.isDesktop ? 'flex flex-wrap justify-center gap-2' : ''}>
                         {(() => {
-                            const keys = Object.keys(agentConfig);
-                            // Apply admin-controlled ordering if present. Known agent
-                            // ids in `agentOrderSidebar` come first (in that order);
-                            // any agents missing from the saved order fall through to
-                            // the static default order at the end.
-                            const ordered = (() => {
-                                if (!agentOrderSidebar || agentOrderSidebar.length === 0) return keys;
-                                const indexOf = new Map<string, number>();
-                                agentOrderSidebar.forEach((id, i) => indexOf.set(id, i));
-                                return [...keys].sort((a, b) => {
-                                    const ai = indexOf.has(a) ? indexOf.get(a)! : Number.MAX_SAFE_INTEGER;
-                                    const bi = indexOf.has(b) ? indexOf.get(b)! : Number.MAX_SAFE_INTEGER;
-                                    return ai - bi;
-                                });
-                            })();
+                            const ordered = getOrderedSidebarAgentKeys(agentOrderSidebar);
                             return ordered.map(agentKey => {
                                 const agent = agentKey as AgentType;
-                                // Hide LSVZ agent when no session is active
-                                if ((agent === AgentType.LSVZ_AGENT) && !isSessionActive) {
-                                    return null;
-                                }
                                 // Hide retired agents from the sidebar
                                 if (retiredAgents.includes(agent)) {
                                     return null;
@@ -826,17 +829,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
         if (isCollapsed) {
             // Collapsed rail: agent glyphs only — one click to any workspace, with
             // the same agent colors as the expanded menu so the rail still reads.
-            const railOrder = (() => {
-                const keys = Object.keys(agentConfig) as AgentType[];
-                if (!agentOrderSidebar || agentOrderSidebar.length === 0) return keys;
-                const indexOf = new Map<string, number>();
-                agentOrderSidebar.forEach((id, i) => indexOf.set(id, i));
-                return [...keys].sort((a, b) => {
-                    const ai = indexOf.has(a) ? indexOf.get(a)! : Number.MAX_SAFE_INTEGER;
-                    const bi = indexOf.has(b) ? indexOf.get(b)! : Number.MAX_SAFE_INTEGER;
-                    return ai - bi;
-                });
-            })();
+            const railOrder = getOrderedSidebarAgentKeys(agentOrderSidebar);
 
             return (
                 <aside className="relative flex w-12 flex-shrink-0 flex-col items-center border-r border-white/[0.07] bg-[#0a0f16] light-theme:border-gray-300 light-theme:bg-gray-100">
@@ -852,7 +845,6 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                     <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto scrollbar-hide px-1.5 py-2">
                         {railOrder.map(agentKey => {
                             if (retiredAgents.includes(agentKey)) return null;
-                            if (agentKey === AgentType.LSVZ_AGENT && !isSessionActive) return null;
                             const config = agentConfig[agentKey];
                             if (!config) return null;
                             const Icon = config.icon;
@@ -895,6 +887,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                 className="relative flex w-20 flex-shrink-0 flex-col border-r border-white/[0.07] bg-[#0a0f16] lg:w-[var(--sidebar-width)] light-theme:border-gray-300 light-theme:bg-gray-100"
             >
                 <div
+                    data-testid="agent-sidebar-resize-handle"
                     role="separator"
                     aria-orientation="vertical"
                     aria-label="Resize agent panel"
@@ -903,10 +896,19 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                     className="group absolute -right-[3px] top-0 z-30 hidden h-full w-[7px] cursor-col-resize lg:block"
                 >
                     <span
-                        className={`absolute left-1/2 top-0 h-full w-px -translate-x-1/2 transition-colors ${
-                            isResizingSidebar ? 'bg-cyan-400/80' : 'bg-transparent group-hover:bg-cyan-400/50'
+                        aria-hidden="true"
+                        className={`pointer-events-none absolute left-1/2 top-1/2 flex w-[5px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-[0_2px_10px_rgba(0,0,0,0.5)] transition-all duration-150 light-theme:bg-white ${
+                            isResizingSidebar
+                                ? 'h-16 border-cyan-300/70 bg-cyan-400/20'
+                                : 'h-14 border-white/15 bg-[#0b1119]/90 group-hover:h-16 group-hover:border-cyan-300/60 group-hover:bg-cyan-400/15'
                         }`}
-                    />
+                    >
+                        <span
+                            className={`h-7 w-px rounded-full transition-colors light-theme:bg-gray-400 ${
+                                isResizingSidebar ? 'bg-cyan-200' : 'bg-white/35 group-hover:bg-cyan-200/90'
+                            }`}
+                        />
+                    </span>
                 </div>
                 {sidebarContent}
             </aside>

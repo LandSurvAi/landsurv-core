@@ -4,15 +4,20 @@ import {
   Building2,
   CheckCircle2,
   ExternalLink,
+  Eye,
   FileText,
   Loader2,
   MapPin,
   Search,
+  ShieldCheck,
   Sparkles,
 } from 'lucide-react';
 import type { A2UIZoningContext } from '../types';
 import { knowledgeBase, type KnowledgeFact } from '../services/KnowledgeBase';
 import { subscribeBootstrap, stageLabel, type BootstrapStatus } from '../utils/zoningBootstrap';
+import { subscribeClawEvents, type ClawCallEvent } from '../utils/clawClient';
+import { openSourcePolicyExplainer } from './PermissiveSourcesExplainer';
+import ArcGISZoningMap from './ArcGISZoningMap';
 
 interface Props {
   context: A2UIZoningContext;
@@ -28,6 +33,8 @@ interface ResearchSummary {
   sourceCount?: number;
   dropped?: string[];
   narrative?: string;
+  candidatesConsidered?: number;
+  candidatesVerified?: number;
 }
 
 interface DistrictEntry {
@@ -38,6 +45,7 @@ interface DistrictEntry {
 interface RequirementEntry {
   label: string;
   value: string;
+  source?: string;
 }
 
 const ACTIVE_STAGES: BootstrapStatus['stage'][] = [
@@ -52,6 +60,28 @@ const ACTIVE_STAGES: BootstrapStatus['stage'][] = [
 function hostOf(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
+function isPdfUrl(url?: string): boolean {
+  return Boolean(url && /\.pdf(\?|#|$)/i.test(url));
+}
+
+function arcgisServiceOf(url?: string): string | null {
+  if (!url) return null;
+  const match = url.match(/^(https?:\/\/[^?#]*?\/MapServer)(?:\/\d+)?(?:[/?#]|$)/i);
+  return match ? match[1] : null;
+}
+
+function proxiedUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return url;
+    if (typeof window !== 'undefined' && parsed.origin === window.location.origin) return url;
+    return `/api/proxy-fetch?url=${encodeURIComponent(parsed.toString())}`;
   } catch {
     return url;
   }
@@ -119,6 +149,10 @@ export const A2UIZoningResearch: React.FC<Props> = ({
   );
   const [bootstrap, setBootstrap] = useState<BootstrapStatus | null>(null);
   const [selectedDistrict, setSelectedDistrict] = useState(context.district ?? '');
+  const [manualDistrictInput, setManualDistrictInput] = useState('');
+  const [activeClawCall, setActiveClawCall] = useState<ClawCallEvent | null>(null);
+  const [lastClawCall, setLastClawCall] = useState<ClawCallEvent | null>(null);
+  const [showEmbeddedViewer, setShowEmbeddedViewer] = useState(false);
 
   useEffect(
     () => knowledgeBase.onChange(() =>
@@ -128,6 +162,19 @@ export const A2UIZoningResearch: React.FC<Props> = ({
   );
 
   useEffect(() => subscribeBootstrap(status => setBootstrap(status)), []);
+
+  useEffect(
+    () =>
+      subscribeClawEvents(evt => {
+        if (evt.status === 'running') {
+          setActiveClawCall(evt);
+        } else {
+          setActiveClawCall(prev => (prev && prev.id === evt.id ? null : prev));
+          setLastClawCall(evt);
+        }
+      }),
+    []
+  );
 
   const data = useMemo(() => {
     const placeKey = context.place.trim().toLowerCase();
@@ -186,14 +233,19 @@ export const A2UIZoningResearch: React.FC<Props> = ({
     ];
     const requirements = requirementDefs
       .map(([label, predicate]): RequirementEntry | null => {
-        const value = displayValue(getRequirement(predicate));
-        return value ? { label, value } : null;
+        const fact = getRequirement(predicate);
+        const value = displayValue(fact);
+        if (!value) return null;
+        const src = typeof fact?.source === 'string' && /^https?:\/\//i.test(fact.source)
+          ? fact.source
+          : undefined;
+        return { label, value, source: src };
       })
       .filter((requirement): requirement is RequirementEntry => Boolean(requirement));
 
     const usesValue = getRequirement('permittedUses')?.value;
     const uses = Array.isArray(usesValue)
-      ? usesValue.map(normalizeUse).filter(Boolean).slice(0, 10)
+      ? usesValue.map(normalizeUse).filter(Boolean).slice(0, 12)
       : [];
 
     return {
@@ -210,7 +262,10 @@ export const A2UIZoningResearch: React.FC<Props> = ({
   }, [facts, context.place, context.district, selectedDistrict]);
 
   const [mapImgFailed, setMapImgFailed] = useState(false);
-  useEffect(() => setMapImgFailed(false), [data.mapImg]);
+  useEffect(() => {
+    setMapImgFailed(false);
+    setShowEmbeddedViewer(false);
+  }, [data.mapImg, data.mapUrl]);
 
   const countyLabel = context.county
     ? (/\bcounty$/i.test(context.county) ? context.county : `${context.county} County`)
@@ -223,6 +278,8 @@ export const A2UIZoningResearch: React.FC<Props> = ({
   const districtLabel = selectedDistrict || data.districtLabel;
   const hasMap = Boolean(data.mapUrl || data.mapImg);
   const hasDistrictData = data.districts.length > 0;
+  const arcgisServiceUrl = arcgisServiceOf(data.mapUrl);
+  const canEmbedViewer = Boolean(data.mapUrl && (isPdfUrl(data.mapUrl) || data.mapKind === 'pdf' || data.mapKind === 'gis'));
 
   const askQuestion = (question: string) => {
     onAskQuestion?.(question);
@@ -238,6 +295,14 @@ export const A2UIZoningResearch: React.FC<Props> = ({
       `Tell me about the ${district.code}${district.name ? ` (${district.name})` : ''} zoning district`
       + `${jurisdiction ? ` in ${jurisdiction}` : ''} — permitted uses, setbacks, height limit, and lot coverage. Cite the section number(s).`
     );
+  };
+
+  const handleManualDistrictSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = manualDistrictInput.trim();
+    if (!code) return;
+    setManualDistrictInput('');
+    handleDistrictClick({ code });
   };
 
   const quickQuestions = ['Setbacks', 'Permitted uses', 'Height limit', 'Lot coverage'];
@@ -262,6 +327,17 @@ export const A2UIZoningResearch: React.FC<Props> = ({
             {districtLabel && (
               <span className="rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-px text-[9px] font-semibold text-amber-200">
                 {districtLabel}
+              </span>
+            )}
+            {activeClawCall && (
+              <span className="inline-flex items-center gap-1 rounded border border-emerald-400/40 bg-emerald-500/15 px-1.5 py-px font-mono text-[8.5px] font-semibold text-emerald-200">
+                <span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400" />
+                {activeClawCall.tool}
+              </span>
+            )}
+            {!activeClawCall && lastClawCall && (
+              <span className="inline-flex items-center gap-1 rounded border border-white/[0.08] bg-white/[0.03] px-1.5 py-px font-mono text-[8.5px] text-slate-400">
+                {lastClawCall.status === 'ok' ? '✓' : '!'} {lastClawCall.tool}
               </span>
             )}
           </div>
@@ -306,9 +382,32 @@ export const A2UIZoningResearch: React.FC<Props> = ({
               <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-200">
                 Official map
               </span>
-              {hasMap && <CheckCircle2 className="ml-auto h-3 w-3 text-emerald-400" />}
+              {canEmbedViewer && !arcgisServiceUrl && (
+                <button
+                  type="button"
+                  onClick={() => setShowEmbeddedViewer(v => !v)}
+                  className="ml-auto inline-flex items-center gap-1 rounded border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-cyan-200 hover:border-cyan-400/60"
+                >
+                  <Eye className="h-2.5 w-2.5" />
+                  {showEmbeddedViewer ? 'Hide preview' : 'Preview inline'}
+                </button>
+              )}
+              {hasMap && !canEmbedViewer && <CheckCircle2 className="ml-auto h-3 w-3 text-emerald-400" />}
             </div>
-            {data.mapImg && !mapImgFailed ? (
+
+            {arcgisServiceUrl ? (
+              <div className="mb-2 h-40 w-full overflow-hidden rounded-md border border-white/10">
+                <ArcGISZoningMap serviceUrl={arcgisServiceUrl} place={context.place} />
+              </div>
+            ) : showEmbeddedViewer && data.mapUrl ? (
+              <div className="mb-2 h-44 w-full overflow-hidden rounded-md border border-white/10 bg-slate-950">
+                <iframe
+                  src={proxiedUrl(data.mapUrl) ?? data.mapUrl}
+                  title={`Official zoning map for ${context.place || 'municipality'}`}
+                  className="h-full w-full border-0"
+                />
+              </div>
+            ) : data.mapImg && !mapImgFailed ? (
               <img
                 src={data.mapImg}
                 alt={`Zoning map for ${context.place}`}
@@ -321,6 +420,7 @@ export const A2UIZoningResearch: React.FC<Props> = ({
                 <MapPin className="h-4 w-4 text-slate-600" />
               </div>
             )}
+
             {data.mapUrl ? (
               <a
                 href={data.mapUrl}
@@ -360,7 +460,11 @@ export const A2UIZoningResearch: React.FC<Props> = ({
                     type="button"
                     onClick={() => handleDistrictClick(district)}
                     aria-label={`Research ${district.code} zoning district`}
-                    className="min-w-0 rounded-md border border-violet-700/30 bg-gradient-to-br from-slate-900/60 to-slate-900/30 px-2 py-1.5 text-left transition-colors hover:border-violet-400/60 hover:bg-violet-500/10"
+                    className={`min-w-0 rounded-md border px-2 py-1.5 text-left transition-colors ${
+                      selectedDistrict === district.code
+                        ? 'border-amber-400/60 bg-amber-500/15'
+                        : 'border-violet-700/30 bg-gradient-to-br from-slate-900/60 to-slate-900/30 hover:border-violet-400/60 hover:bg-violet-500/10'
+                    }`}
                   >
                     <span className="block truncate text-[11px] font-bold text-violet-200">
                       {district.code}
@@ -378,11 +482,25 @@ export const A2UIZoningResearch: React.FC<Props> = ({
                 </p>
               </div>
             )}
-            {!hasDistrictData && !isWorking && (
-              <p className="mt-1 text-[9.5px] text-gray-600">
-                Ask the chat for the district list and I will populate this card.
-              </p>
-            )}
+
+            {/* Manual District Entry (ZoningPanel parity) */}
+            <form onSubmit={handleManualDistrictSubmit} className="mt-2 flex items-center gap-1">
+              <input
+                type="text"
+                value={manualDistrictInput}
+                onChange={e => setManualDistrictInput(e.target.value)}
+                placeholder="Enter district code (e.g. R-1, C-2)…"
+                aria-label="Enter custom zoning district code"
+                className="min-w-0 flex-1 rounded border border-white/[0.09] bg-[#060d16] px-2 py-1 text-[10px] text-slate-200 placeholder:text-slate-500 focus:border-violet-400/50 focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={!manualDistrictInput.trim()}
+                className="shrink-0 rounded border border-violet-500/40 bg-violet-500/15 px-2 py-1 text-[9.5px] font-semibold text-violet-200 transition-colors hover:border-violet-400 hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Research
+              </button>
+            </form>
           </div>
         </div>
 
@@ -407,6 +525,17 @@ export const A2UIZoningResearch: React.FC<Props> = ({
                     <p className="truncate text-[11px] font-semibold text-emerald-100">
                       {requirement.value}
                     </p>
+                    {requirement.source && (
+                      <a
+                        href={requirement.source}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-0.5 inline-flex max-w-full items-center gap-0.5 text-[8.5px] text-emerald-400/80 hover:text-emerald-300"
+                      >
+                        <ExternalLink className="h-2 w-2 shrink-0" />
+                        <span className="truncate">{hostOf(requirement.source)}</span>
+                      </a>
+                    )}
                   </div>
                 ))}
               </div>
@@ -476,7 +605,7 @@ export const A2UIZoningResearch: React.FC<Props> = ({
           <div className="border-t border-white/[0.06] pt-2">
             <p className="mb-1 text-[9px] uppercase tracking-wider text-gray-500">Sources</p>
             <div className="flex flex-wrap gap-1">
-              {data.sources.slice(0, 5).map(source => (
+              {data.sources.slice(0, 6).map(source => (
                 <a
                   key={source}
                   href={source}
@@ -513,12 +642,23 @@ export const A2UIZoningResearch: React.FC<Props> = ({
           </div>
         )}
 
-        <p className="text-[9px] text-gray-600">
-          Preliminary research for review — verify with the municipality before relying on it.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.05] pt-1.5">
+          <p className="text-[9px] text-gray-600">
+            Preliminary research for review — verify with the municipality before relying on it.
+          </p>
+          <button
+            type="button"
+            onClick={() => openSourcePolicyExplainer()}
+            className="inline-flex items-center gap-1 text-[9px] text-gray-500 transition-colors hover:text-emerald-300"
+          >
+            <ShieldCheck className="h-2.5 w-2.5" />
+            Permissive-source policy
+          </button>
+        </div>
       </div>
     </div>
   );
 };
 
 export default A2UIZoningResearch;
+

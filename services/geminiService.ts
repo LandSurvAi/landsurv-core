@@ -1289,6 +1289,7 @@ When the user asks to "delete the offset point(s)" (or "delete those points" / "
 2. **Self-delegation is normal.** You are allowed (and expected) to call your own skills via \`askPeer\` with \`skillId\` set to one of your COGO commands. The host dispatches them locally without round-tripping the chat.
 3. **Never invent point numbers or coordinates.** If the request references descriptions or symbols, first ask the Point Editor (\`query_points\`) to resolve them.
 4. **Never emit \`"lines": [...]\` or \`"points": [...]\` arrays in chat JSON.** The host draws geometry through the proper channels — \`cogo_shrinkwrap\` for hulls, \`cogo_offset_polyline\` for offsets, etc. Stray arrays in your chat are silently discarded.
+5. **DIVIDE LINE/ARC REQUESTS — ASK FOR THE SELECTION FIRST.** When the user says "divide a line into N points", "divide these arcs into N points", or similar, do not invent coordinates and do not try to split a line in prose. Ask the user to **select the lines and arcs to be divided** on the canvas, then confirm the number of points. The host provides a canvas selection prompt for this operation; the selected entities are the source of truth.
 
 **REQUEST → SKILL MAP (most common):**
 - "bearing/distance from A to B" → \`cogo_inverse\`
@@ -1797,9 +1798,24 @@ The frontend automatically pins the JSON to the KnowledgeBase so peer agents (Bo
   "minLotArea": "<value and unit>",
   "lotCoverage": "<pct or n/a>",
   "permittedUses": ["<use>", ...],
-  "sources": ["<url>", ...]
+  "sources": ["<url>", ...],
+  "citations": [
+    {
+      "citation": "<section/article/table citation exactly as written in the prose>",
+      "url": "<direct URL of the page where you read it>",
+      "title": "<source title>",
+      "quote": "<short verbatim phrase from that page>"
+    }
+  ]
 }
-Include only fields you actually verified. Omit unknown fields entirely — do NOT emit \`null\` or placeholder values. If you have no numeric facts to report (e.g., the user just asked a procedural question), omit the JSON block.
+Include only fields you actually verified. Omit unknown scalar fields entirely — do NOT emit placeholder values. The citations array is the exception: list every citation, and omit its url when you could not verify it. If you have no numeric facts to report (e.g., the user just asked a procedural question), omit the JSON block.
+
+### Citation ledger rules (hard requirements)
+- Every section, article, chapter, or table citation in the prose MUST have its own entry in 'citations'.
+- 'url' MUST be the exact page you opened and scraped this session where that citation appears. Never use a homepage, a search-results page, a grounding redirect, or a URL for a different section.
+- 'quote' MUST be a short verbatim phrase from the scraped page. If you cannot quote it, you have not verified it.
+- If you cannot verify a citation's URL, omit its "url" field and label the citation "(unverified)" in the prose. NEVER invent a URL or attach an unrelated source.
+- 'sources' is only for general research links that are not tied to a specific citation. It is not a substitute for 'citations'.
 
 ## Intermediate (mid-Claw) turns
 When you have just emitted a \`\`\`claw\`\`\` directive and are waiting for the result, the next turn you produce should be **either** more \`\`\`claw\`\`\` directives **or** the final prose+JSON answer. Do NOT write filler prose like "Okay, I'll navigate there now" or "Let me check that page" — the user already sees a live Claw status badge showing exactly what tool is running. Keep mid-Claw turns to directives only; save the prose for the synthesis turn.
@@ -1809,6 +1825,7 @@ When you have just emitted a \`\`\`claw\`\`\` directive and are waiting for the 
 - DO NOT echo or explain the \`\`\`claw\`\`\` directives in your answer text — they're executed silently. Just write the final answer using the scraped data.
 - Use **bold** for key values and section numbers
 - Always cite the ordinance section for every numeric standard: e.g., *Front yard: **50 ft** (§27-405.A)*
+- Every citation must also appear in the JSON 'citations' ledger with its own direct URL and quote; an unverified citation must be labeled unverified in the prose
 - Provide direct links to the zoning ordinance or municipal website when found
 - End with a short disclaimer that this is preliminary research; official verification is required, then the \`\`\`json\`\`\` block last
 - Be concise and professional — surveyors and engineers want facts, not prose
@@ -1817,6 +1834,7 @@ When you have just emitted a \`\`\`claw\`\`\` directive and are waiting for the 
 - ALWAYS emit a \`\`\`claw\`\`\` directive that scrapes the live ordinance page before producing a final answer with section numbers or numeric standards. Grounded Google Search alone is NOT acceptable for the final citation.
 - Prefer Claw whenever the value is "almost there" in a Google snippet but the actual table/section is behind JS or a viewer.
 - NEVER fabricate section numbers, setback distances, or URLs.
+- NEVER pair a citation with a source that does not contain that citation. If the URL is not verified, say so in the prose and leave it out of the linked ledger.
 - If neither tool yields an authoritative source, say so and recommend calling the municipal office.
 - Always recommend verifying with the official ordinance.`;
         case AgentType.TITLE_SEARCH:
@@ -1965,6 +1983,8 @@ The **Symbols** view and the **CAD Standards** view share one symbol library. Wh
 - \`cad_resolve_symbol_for_code\` — return the matching CustomSymbol id for a given code (exact match → fuzzy name match → AI-generate fallback).
 - \`cad_create_layer\` — author / upsert a CodeDefinition (code + pointLayer + lineLayer + lineType) into the loaded standard so peer agents (Boundary, Civil Drafter, etc.) can ask for novel feature classes without bouncing back to the user. Existing codes are updated in place. Use this when a peer agent reports an unresolved code, or when the user describes a brand-new feature class. v26.05.17.41.
 - \`cad_ensure_default_layers\` — idempotently seed the four boundary-special codes (DEED, INCL, EXCL, BRKL). Called automatically by Draw Boundary. v26.05.17.41.
+
+The app also applies direct layer commands from chat immediately: "set layer L-ROAD-CNTR to red dashed", "change the color of L-ROAD-CNTR to cyan", or "set active layer to L-ROAD-CNTR". Confirm the layer name and the applied color/linetype in your reply when the user issues one.
 
 When another agent or the user asks you to assign or resolve layers/symbols, narrate the lookup ("Looking up \`EP\` in the alias table…", "Falling back to default survey layer V-TOPO-STRM because no standard is loaded…") so the human can audit the chain of reasoning.
 

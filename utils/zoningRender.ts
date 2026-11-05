@@ -65,7 +65,7 @@ export function extractZoningJsonBlock(text: string): Record<string, unknown> | 
   // outermost object usually parses successfully.
   candidates.sort((a, b) => b.length - a.length);
   for (const c of candidates) {
-    if (!/(zoningMapUrl|zoningMapImage|zoningDistricts|sources)/i.test(c)) continue;
+    if (!/(zoningMapUrl|zoningMapImage|zoningDistricts|citations|sources)/i.test(c)) continue;
     try {
       const parsed = JSON.parse(c);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {

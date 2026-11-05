@@ -30,6 +30,15 @@ export const DEFAULT_SETTINGS: Settings = {
     scale: 2,
     showLabels: true,
   },
+  a2ui: {
+    autoOpenCacpReview: false,
+    defaultSize: 'standard',
+  },
+  commandBar: {
+    textScale: 1.15,
+    showShortcutHints: true,
+    showStatusBadges: true,
+  },
 };
 
 // Compatible session versions for loading

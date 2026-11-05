@@ -168,6 +168,19 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
   const handleSettingChange = (key: keyof Settings, value: any) => {
     onSettingsChange(prev => ({ ...prev, [key]: value }));
   };
+
+  const handleCommandBarChange = (patch: Partial<NonNullable<Settings['commandBar']>>) => {
+    onSettingsChange(prev => ({
+      ...prev,
+      commandBar: {
+        textScale: 1.15,
+        showShortcutHints: true,
+        showStatusBadges: true,
+        ...prev.commandBar,
+        ...patch,
+      },
+    }));
+  };
   
   const handleDefaultInfoChange = (key: keyof Settings['defaultCutSheetInfo'], value: string) => {
     onSettingsChange(prev => ({
@@ -536,6 +549,70 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                 </span>
                             </span>
                         </label>
+                    </div>
+                </div>
+            </div>
+            {/* Command Bar Section */}
+            <div>
+                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Command Bar</h3>
+                <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 grid grid-cols-1 sm:grid-cols-2 gap-4 light-theme:bg-gray-100 light-theme:border-gray-300">
+                    <div>
+                        <label htmlFor="command-bar-scale" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Text Scale</label>
+                        <select
+                            id="command-bar-scale"
+                            value={settings.commandBar?.textScale ?? 1.15}
+                            onChange={e => handleCommandBarChange({ textScale: Number(e.target.value) })}
+                            className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
+                        >
+                            <option value={0.9}>Compact (90%)</option>
+                            <option value={1}>Standard (100%)</option>
+                            <option value={1.15}>Comfortable (115%)</option>
+                            <option value={1.3}>Large (130%)</option>
+                            <option value={1.45}>Extra large (145%)</option>
+                        </select>
+                        <p className="text-xs text-gray-500 mt-1 light-theme:text-gray-600">
+                            Scales text in the docked command bar. The default is 15% larger than standard.
+                        </p>
+                    </div>
+                    <div className="space-y-3">
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={settings.commandBar?.showShortcutHints ?? true}
+                                onChange={e => handleCommandBarChange({ showShortcutHints: e.target.checked })}
+                                className={`mt-0.5 h-4 w-4 rounded border-gray-500 bg-gray-700 ${themeAccent} focus:ring-2 ${themeFocusRing}`}
+                            />
+                            <span>
+                                <span className="block text-sm font-medium text-gray-300 light-theme:text-gray-700">Show Shortcut Hints</span>
+                                <span className="block text-xs text-gray-500 mt-0.5 light-theme:text-gray-600">
+                                    Keeps the Space / Shift+Space prompts visible on the resting command rows.
+                                </span>
+                            </span>
+                        </label>
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={settings.commandBar?.showStatusBadges ?? true}
+                                onChange={e => handleCommandBarChange({ showStatusBadges: e.target.checked })}
+                                className={`mt-0.5 h-4 w-4 rounded border-gray-500 bg-gray-700 ${themeAccent} focus:ring-2 ${themeFocusRing}`}
+                            />
+                            <span>
+                                <span className="block text-sm font-medium text-gray-300 light-theme:text-gray-700">Show SNAP / ORTHO Status</span>
+                                <span className="block text-xs text-gray-500 mt-0.5 light-theme:text-gray-600">
+                                    Shows the running-snap and ortho badges at the right of the command history row.
+                                </span>
+                            </span>
+                        </label>
+                    </div>
+                    <div className="sm:col-span-2">
+                        <span className="block text-xs font-medium uppercase tracking-wider text-gray-500 mb-1 light-theme:text-gray-600">Preview</span>
+                        <div
+                            className="rounded-md border border-gray-600 bg-gray-800/70 px-3 py-2 font-mono text-gray-300 light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-800"
+                            style={{ fontSize: `${12 * (settings.commandBar?.textScale ?? 1.15)}px` }}
+                        >
+                            <span className="text-cyan-400">CAD</span> &gt; Press Space
+                            <span className="ml-3 text-emerald-400">AI</span> &gt; Shift+Space
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1035,6 +1112,65 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                 </div>
             </div>
             
+            {/* A2UI behavior — surfaces are constructed on demand in chat. */}
+            <div>
+                <h3 className="text-lg font-semibold text-cyan-400 mb-2">A2UI &amp; Agent Surfaces</h3>
+                <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-3">
+                    <p className="text-sm text-gray-400">
+                        Surfaces are built by the agents when a request calls for one — there is no separate
+                        catalog or launcher in the workspace. These controls only tune how those surfaces behave.
+                    </p>
+
+                    <div className="flex items-start justify-between gap-4 border-t border-gray-600 pt-3">
+                        <div>
+                            <h4 className="font-semibold text-gray-200">Auto-open CACP review</h4>
+                            <p className="text-sm text-gray-400 mt-0.5">
+                                Raise an A2UI review surface when inter-agent traffic is blocked by policy, errors out,
+                                or needs a routing decision. Re-dispatch always runs through the CACP policy gate.
+                            </p>
+                        </div>
+                        <label className="inline-flex shrink-0 items-center gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={settings.a2ui?.autoOpenCacpReview === true}
+                                onChange={event => onSettingsChange(prev => ({
+                                    ...prev,
+                                    a2ui: { ...prev.a2ui, autoOpenCacpReview: event.target.checked },
+                                }))}
+                                className="h-4 w-4 accent-emerald-500"
+                                aria-label="Auto-open the CACP traffic review surface"
+                            />
+                            <span className="text-sm text-gray-300">Enabled</span>
+                        </label>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-4 border-t border-gray-600 pt-3">
+                        <div>
+                            <h4 className="font-semibold text-gray-200">Default surface size</h4>
+                            <p className="text-sm text-gray-400 mt-0.5">New surfaces open at this width; the size button in the surface header cycles it.</p>
+                        </div>
+                        <select
+                            value={settings.a2ui?.defaultSize ?? 'standard'}
+                            onChange={event => onSettingsChange(prev => ({
+                                ...prev,
+                                a2ui: { ...prev.a2ui, defaultSize: event.target.value as 'compact' | 'standard' | 'wide' | 'fullscreen' },
+                            }))}
+                            aria-label="Default A2UI surface size"
+                            className="rounded-md border border-gray-600 bg-gray-800 px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-cyan-400/60"
+                        >
+                            <option value="compact">Compact</option>
+                            <option value="standard">Standard</option>
+                            <option value="wide">Wide</option>
+                            <option value="fullscreen">Fullscreen</option>
+                        </select>
+                    </div>
+
+                    <p className="border-t border-gray-600 pt-3 text-xs text-gray-500">
+                        Try asking in chat: “show the CACP manifests” or “review blocked CACP traffic”.
+                    </p>
+                </div>
+            </div>
+
             {/* Session Reset Section */}
             <div>
                 <h3 className="text-lg font-semibold text-red-400 mb-2">Danger Zone</h3>

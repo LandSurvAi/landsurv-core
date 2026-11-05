@@ -1,12 +1,16 @@
-import React, { useMemo } from 'react';
-import { PanelRight, Table2 } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Edit3, PanelRight, Table2 } from 'lucide-react';
 import { useCadManager } from '../contexts/CadManagerContext.tsx';
+import type { StandardDefinition } from '../contexts/types/CadManager.types.ts';
+import { StandardsEditor } from './CadManager/StandardsEditor.tsx';
 
 interface A2UICadManagerProps {
   /** Float the workspace (or dock it from the surface header). */
   onOpenWorkspace?: () => void;
   /** Append the live, filterable standards sheet to the chat. */
   onOpenStandards?: () => void;
+  /** Open the full-screen CAD standards spreadsheet editor directly. */
+  onOpenSpreadsheetEditor?: () => void;
 }
 
 function symbolName(symbol: unknown): string {
@@ -22,15 +26,18 @@ function symbolName(symbol: unknown): string {
  *
  * The chat card is a launch pad and status summary. Popping it out (or docking
  * it into the agent tool shelf) presents the full CadManagerPage inside the
- * same A2UI surface, so the workspace never needs a dedicated canvas view.
+ * same A2UI surface, and "Edit spreadsheet" opens the full portaled
+ * StandardsEditor directly.
  */
 export const A2UICadManager: React.FC<A2UICadManagerProps> = ({
   onOpenWorkspace,
   onOpenStandards,
+  onOpenSpreadsheetEditor,
 }) => {
-  const { state, getAllLayers } = useCadManager();
+  const { state, dispatch, getAllLayers } = useCadManager();
   const standard = state.standard;
   const codes = standard?.codes ?? [];
+  const [isSpreadsheetOpen, setIsSpreadsheetOpen] = useState(false);
 
   const layers = useMemo(() => getAllLayers(), [getAllLayers]);
   const counts = useMemo(() => {
@@ -50,6 +57,24 @@ export const A2UICadManager: React.FC<A2UICadManagerProps> = ({
       symbols,
     };
   }, [codes, layers.length, standard?.linetypes?.length, state.aliases]);
+
+  const handleOpenSpreadsheet = () => {
+    if (!standard && typeof dispatch === 'function') {
+      const starter: StandardDefinition = {
+        name: 'Custom CAD Standard',
+        description: 'Created in CAD Standards Spreadsheet Editor',
+        codes: [],
+        layers: [],
+        linetypes: [],
+      };
+      dispatch({ type: 'SET_STANDARD', payload: starter });
+    }
+    if (onOpenSpreadsheetEditor) {
+      onOpenSpreadsheetEditor();
+    } else {
+      setIsSpreadsheetOpen(true);
+    }
+  };
 
   return (
     <div
@@ -113,10 +138,38 @@ export const A2UICadManager: React.FC<A2UICadManagerProps> = ({
             Standards sheet
           </button>
         )}
+        <button
+          type="button"
+          onClick={handleOpenSpreadsheet}
+          data-testid="a2ui-cad-manager-edit-spreadsheet"
+          className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[10.5px] font-semibold text-emerald-200 transition-colors hover:border-emerald-400 hover:bg-emerald-500/20 hover:text-white"
+        >
+          <Edit3 className="h-3 w-3" />
+          Edit spreadsheet
+        </button>
         <span className="ml-auto text-[9.5px] text-slate-500">
           Dock for sessions, editing, and Civil 3D exports
         </span>
       </div>
+
+      {isSpreadsheetOpen && (
+        <StandardsEditor
+          standard={
+            standard ?? {
+              name: 'Custom CAD Standard',
+              description: 'Created in CAD Standards Spreadsheet Editor',
+              codes: [],
+              layers: [],
+              linetypes: [],
+            }
+          }
+          onSave={updated => {
+            dispatch?.({ type: 'SET_STANDARD', payload: updated });
+            setIsSpreadsheetOpen(false);
+          }}
+          onClose={() => setIsSpreadsheetOpen(false)}
+        />
+      )}
     </div>
   );
 };

@@ -17,6 +17,7 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { CodeDefinition, StandardDefinition, FieldToFinishSettings as F2FSettings, DEFAULT_F2F_SETTINGS, SymbolDefinition, SurveyorCodeSession, SurveyorCodeMatch, normalizeSurveyorAliases, type CadTextStyleDefinition } from '../../contexts/types/CadManager.types';
 import { checkAliasConflict, type AliasConflict } from '../../utils/codeDomainClassifier';
 import { FieldToFinishSettings } from './FieldToFinishSettings';
@@ -30,6 +31,8 @@ interface StandardsEditorProps {
   standard: StandardDefinition;
   onSave: (standard: StandardDefinition) => void;
   onClose: () => void;
+  /** Optional sub-modal to open immediately when the editor mounts. */
+  initialModal?: 'f2f' | 'team-codes' | 'auto-assign' | null;
 }
 
 interface EditingCell {
@@ -54,13 +57,14 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
   standard,
   onSave,
   onClose,
+  initialModal = null,
 }) => {
   // Settings context for API key
   const { settings } = useSettings();
   const { reportError } = useErrorReporter();
   
   // State
-  const [codes, setCodes] = useState<CodeDefinition[]>([...standard.codes]);
+  const [codes, setCodes] = useState<CodeDefinition[]>([...(standard.codes ?? [])]);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -71,7 +75,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [hasChanges, setHasChanges] = useState(false);
   const [copiedRows, setCopiedRows] = useState<CodeDefinition[]>([]);
-  const [showF2FSettings, setShowF2FSettings] = useState(false);
+  const [showF2FSettings, setShowF2FSettings] = useState(initialModal === 'f2f');
   const [f2fSettings, setF2FSettings] = useState<F2FSettings>(() => standard.f2fSettings ?? DEFAULT_F2F_SETTINGS);
   const [textStyles, setTextStyles] = useState<CadTextStyleDefinition[]>(() =>
     (standard.textStyles ?? []).map(style => ({ ...style }))
@@ -79,7 +83,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
   
   // Surveyor code matching state — hydrated from the standard so adding a
   // surveyor (or accepting matches) survives editor close / app reload.
-  const [showSurveyorMatcher, setShowSurveyorMatcher] = useState(false);
+  const [showSurveyorMatcher, setShowSurveyorMatcher] = useState(initialModal === 'team-codes');
   const [surveyorSession, setSurveyorSession] = useState<SurveyorCodeSession>(
     () => standard.surveyorCodeSession ?? createEmptySurveyorSession()
   );
@@ -843,6 +847,12 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
     setShowAutoAssign(true);
   }, [codes, computeAutoAssignMatches]);
 
+  useEffect(() => {
+    if (initialModal === 'auto-assign') {
+      handleAutoAssignOpen();
+    }
+  }, [initialModal, handleAutoAssignOpen]);
+
   /**
    * Apply selected auto-assign matches
    */
@@ -871,8 +881,8 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
     setAutoAssignResults([]);
   }, [autoAssignResults, codes, saveToUndo]);
 
-  return (
-    <div className="fixed inset-0 z-[100] bg-[#070d16] flex flex-col">
+  const editorTree = (
+    <div data-testid="cad-standards-spreadsheet-editor" className="fixed inset-0 z-[9960] bg-[#070d16] flex flex-col">
       {/* Header */}
       <div className="flex-shrink-0 bg-[#0b1420] border-b border-white/[0.07] px-4 py-3">
         <div className="flex items-center justify-between">
@@ -1854,4 +1864,9 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
       )}
     </div>
   );
+
+  if (typeof document !== 'undefined' && document.body) {
+    return createPortal(editorTree, document.body);
+  }
+  return editorTree;
 };

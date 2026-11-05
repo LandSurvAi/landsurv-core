@@ -194,6 +194,49 @@ export interface A2UIStandardsFilter {
 
 export type A2UIInputFieldType = 'text' | 'number' | 'textarea' | 'select';
 
+/** Presentation size for a globally-hosted A2UI surface window. */
+export type A2UISurfaceSize = 'compact' | 'standard' | 'wide' | 'fullscreen';
+
+export interface A2UISettingsSummary {
+  model?: string;
+  units?: string;
+  precision?: number;
+  theme?: string;
+}
+
+export type A2UISettingsSection =
+  | 'all'
+  | 'graphics'
+  | 'display'
+  | 'crs'
+  | 'imagery'
+  | 'command-bar'
+  | 'point-labeling'
+  | 'ai-model'
+  | 'geo-ai'
+  | 'ntrip'
+  | 'cutsheet'
+  | 'notion'
+  | 'a2ui';
+
+export type A2UIWorkspaceToolId =
+  | 'symbol-manager'
+  | 'linetype-manager'
+  | 'hatch-manager'
+  | 'annotate-manager'
+  | 'drafting-style-library'
+  | 'layer-manager'
+  | 'compliance-summary'
+  | 'title-search-panel'
+  | 'wms-manager'
+  | 'file-manager'
+  | 'fieldbook-panel'
+  | 'cutsheet-panel'
+  | 'closure-report'
+  | 'steep-slope-report'
+  | 'legal-writer'
+  | 'sheet-view';
+
 export interface A2UIInputField {
   id: string;
   label: string;
@@ -221,6 +264,7 @@ export interface A2UIInputFormSpec {
 
 export type A2UIWidgetType =
   | 'input-form'
+  | 'selection-prompt'
   | 'point-upload'
   | 'deed-upload'
   | 'raw-upload'
@@ -236,7 +280,16 @@ export type A2UIWidgetType =
   | 'cad-manager-intake'
   | 'cad-manager-workspace'
   | 'cad-standards-table'
-  | 'zoning-research';
+  | 'zoning-research'
+  | 'zoning-sources'
+  | 'surface-console'
+  | 'cacp-review'
+  | 'cacp-manifests'
+  | 'cacp-inspector'
+  | 'settings'
+  | 'help'
+  | 'page-guide'
+  | A2UIWorkspaceToolId;
 
 export interface A2UIZoningContext {
   place: string;
@@ -247,9 +300,82 @@ export interface A2UIZoningContext {
   startedAt?: number;
 }
 
+export interface A2UIZoningCitation {
+  /** Section, article, chapter, or table citation as it appears in the answer. */
+  citation: string;
+  /** Direct page URL supplied with this specific citation. */
+  url?: string;
+  title?: string;
+  /** Short verbatim phrase from the linked page, when the agent supplied one. */
+  quote?: string;
+  /** Linked means a URL was supplied; it is not a claim that the page was crawled. */
+  status: 'linked' | 'unverified';
+  note?: string;
+}
+
+export interface A2UIZoningSourceLink {
+  url: string;
+  title?: string;
+}
+
+export interface A2UIZoningSourceLedger {
+  citations: A2UIZoningCitation[];
+  sources?: A2UIZoningSourceLink[];
+  jurisdiction?: string;
+  note?: string;
+}
+
+export interface A2UICacpReviewItem {
+  id: string;
+  command: string;
+  from: string;
+  to: string;
+  phase: 'send' | 'handler' | 'response' | 'error' | 'no-handler';
+  summary: string;
+  preview: string;
+  timestamp: number;
+  policyStatus?: 'pass' | 'warn' | 'blocked';
+  policyWarnings?: string[];
+  traceId?: string;
+  success?: boolean;
+  latencyMs?: number;
+  data?: unknown;
+}
+
+export interface A2UICacpReviewContext {
+  items: A2UICacpReviewItem[];
+  title?: string;
+  focusTraceId?: string;
+}
+
+export interface A2UISelectionPromptSpec {
+  title?: string;
+  description?: string;
+  target?: 'lines-and-arcs';
+  actionLabel?: string;
+  /** Number of equally spaced points to place on each selected line/arc. */
+  pointCount?: number;
+}
+
 export interface A2UIPayload {
-  /** Surface kind: inquisitive prompt, upload/intake widget, or data explorer. */
-  kind: 'intake-prompt' | 'upload-widget' | 'standards-explorer' | 'zoning-research' | 'cad-manager' | 'input-form';
+  /** Surface kind: inquisitive prompt, upload/intake widget, data explorer, or bridge surface. */
+  kind:
+    | 'intake-prompt'
+    | 'upload-widget'
+    | 'selection-prompt'
+    | 'standards-explorer'
+    | 'zoning-research'
+    | 'zoning-sources'
+    | 'cad-manager'
+    | 'input-form'
+    | 'surface-console'
+    | 'cacp-review'
+    | 'cacp-manifests'
+    | 'cacp-inspector'
+    | 'settings'
+    | 'workspace-tool'
+    | 'help'
+    | 'page-guide';
   /** The agent that owns this A2UI surface */
   agent: AgentType;
   /** Which interactive upload/intake widget to render */
@@ -262,8 +388,24 @@ export interface A2UIPayload {
   standardsFilter?: A2UIStandardsFilter;
   /** Jurisdiction bound to a chat-hosted zoning research surface. */
   zoningContext?: A2UIZoningContext;
+  /** Citation-to-source ledger for a specific zoning answer. */
+  zoningSources?: A2UIZoningSourceLedger;
   /** Typed fields for collecting values an agent explicitly asked for. */
   inputForm?: A2UIInputFormSpec;
+  /** Canvas entity-selection prompt (used by COGO for divide operations). */
+  selectionPrompt?: A2UISelectionPromptSpec;
+  /** Notable CACP traffic surfaced for review. */
+  cacpReview?: A2UICacpReviewContext;
+  /** Public page or subdomain bound to a page-guide surface. */
+  pageGuide?: { subdomain: string; title?: string };
+  /** Lightweight settings snapshot for an in-chat settings surface. */
+  settingsSummary?: A2UISettingsSummary;
+  /** Specific settings section focused inside the interactive settings surface. */
+  settingsSection?: A2UISettingsSection;
+  /** Specific workspace manager/tool mounted inside the surface. */
+  workspaceTool?: A2UIWorkspaceToolId;
+  /** Initial manifest selection for an in-chat CACP explorer. */
+  cacpManifests?: { initialAgent?: AgentType };
 }
 
 export interface ChatMessage {
@@ -981,12 +1123,33 @@ export interface Settings {
        * 'cloud' (Google Cloud Run on-demand scale-to-zero).
        * Default: 'local' when available, otherwise 'cloud'.
        */
-      geoAiMode?: 'local' | 'cloud';
-      /**
-       * Local desktop Geospatial AI daemon endpoint.
-       * Default: 'http://127.0.0.1:8765'.
-       */
+      geoAiMode?: 'local' | 'cloud';    /**
+     * Local desktop Geospatial AI daemon endpoint.
+     * Default: 'http://127.0.0.1:8765'.
+     */
       localGeoAiEndpoint?: string;
+      /**
+       * A2UI surface platform preferences. The global surface bus is always
+       * available to code; these switches control the visible affordances.
+       */
+      a2ui?: {
+        /** Auto-open the CACP review surface for blocked or notable traffic. */
+        autoOpenCacpReview?: boolean;
+        /** Default size for newly-opened global surfaces. */
+        defaultSize?: A2UISurfaceSize;
+      };
+      /**
+       * Docked command bar preferences. Optional so saved sessions that
+       * predate these controls fall back to the defaults.
+       */
+      commandBar?: {
+        /** Text size multiplier for the docked command bar. Default: 1.15. */
+        textScale?: number;
+        /** Show the Space / Shift+Space prompts on the resting command rows. */
+        showShortcutHints?: boolean;
+        /** Show SNAP / ORTHO status badges in the history row. */
+        showStatusBadges?: boolean;
+      };
 }
 
 export interface SessionSaveOptions {

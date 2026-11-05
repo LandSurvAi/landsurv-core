@@ -3,8 +3,8 @@ import React, { useEffect, useState } from 'react';
 interface AgentToolShelfProps {
   /** Whether the drawer should be open. */
   isOpen: boolean;
-  /** Sidebar width in pixels. */
-  width: number;
+  /** Sidebar width in pixels, or a CSS width expression. */
+  width: number | string;
   /** Starts the left-border width drag. */
   onResizeStart?: React.MouseEventHandler<HTMLDivElement>;
   /** Pixels to keep clear at the bottom so the shelf rests on the command bar. */
@@ -53,7 +53,7 @@ export const AgentToolShelf: React.FC<AgentToolShelfProps> = ({
       aria-hidden={!isVisible}
       className="absolute right-0 z-30 overflow-hidden shadow-[-18px_0_50px_rgba(0,0,0,0.55)]"
       style={{
-        width,
+        width: typeof width === 'number' ? `${width}px` : width,
         top: Math.max(0, topOffset),
         bottom: Math.max(0, bottomOffset),
         maxWidth: '92vw',
@@ -66,18 +66,26 @@ export const AgentToolShelf: React.FC<AgentToolShelfProps> = ({
         data-testid="agent-tool-shelf-panel"
         className="relative flex h-full w-full flex-col border-l border-white/[0.07] bg-[#0a0f16] transition-transform duration-300 ease-out light-theme:border-gray-300"
         style={{
-          transform: isVisible ? 'translateY(0)' : 'translateY(100%)',
+          transform: isVisible ? 'none' : 'translateY(100%)',
         }}
       >
         {onResizeStart && (
           <div
+            data-testid="agent-tool-shelf-resize-handle"
             onMouseDown={onResizeStart}
-            className="absolute left-0 top-0 z-40 h-full w-2 cursor-col-resize bg-transparent transition-colors hover:bg-cyan-400/40"
+            className="group absolute left-0 top-0 z-40 flex h-full w-2.5 cursor-col-resize items-center justify-center"
             title="Drag to resize Agent Tools"
             aria-label="Resize Agent Tools"
             role="separator"
             aria-orientation="vertical"
-          />
+          >
+            <span
+              aria-hidden="true"
+              className="pointer-events-none flex h-14 w-[5px] items-center justify-center rounded-full border border-white/15 bg-[#0b1119]/90 shadow-[0_2px_10px_rgba(0,0,0,0.5)] transition-all duration-150 group-hover:h-16 group-hover:border-cyan-300/60 group-hover:bg-cyan-400/15"
+            >
+              <span className="h-7 w-px rounded-full bg-white/35 transition-colors group-hover:bg-cyan-200/90" />
+            </span>
+          </div>
         )}
         <div className="flex h-full min-h-0 w-full flex-col">{children}</div>
       </div>

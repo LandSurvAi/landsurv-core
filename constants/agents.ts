@@ -63,7 +63,7 @@ export const agentConfig: { [key in AgentType]?: AgentConfig } = {
   [AgentType.CONTOURING_AGENT]: { icon: ContourIcon, label: 'Contouring', color: 'amber' },
   [AgentType.STEEP_SLOPE_AGENT]: { icon: SlopeIcon, label: 'Steep Slope', color: 'red' },
   [AgentType.IMAGE_ANALYZER]: { icon: CameraIcon, label: 'Image Analyzer', color: 'red' },
-  [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSAI Agent', color: 'slate' },
+  [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSAI Agent', color: 'cyan' },
   [AgentType.PROFILE_AGENT]: { icon: ProfileIcon, label: 'Profile & XS', color: 'sky' },
   [AgentType.COGO_AGENT]: { icon: CogoIcon, label: 'COGO', color: 'violet' },
   [AgentType.GNSS_AGENT]: { icon: SatelliteIcon, label: 'RINEX', color: 'lime' },
@@ -91,7 +91,7 @@ export const agentThemeColors: { [key in AgentType]?: string } = {
   [AgentType.POINT_EDITOR]: '#facc15', // yellow-400
   [AgentType.GPS_STAKEOUT]: '#60a5fa', // blue-400
   [AgentType.FIELD_BOOK]: '#fb923c', // orange-400
-  [AgentType.LSVZ_AGENT]: '#94a3b8', // slate-400
+  [AgentType.LSVZ_AGENT]: '#22d3ee', // cyan-400 — LandSurv "Surv"
   [AgentType.CIVIL_PLAN_EXPERT]: '#fb923c', // orange-400
   [AgentType.DXF_ANALYZER]: '#818cf8', // indigo-400
   [AgentType.IMAGE_ANALYZER]: '#f87171', // red-400
@@ -110,6 +110,15 @@ export const agentThemeColors: { [key in AgentType]?: string } = {
   [AgentType.FLOOD_AGENT]: '#22d3ee', // cyan-400
   [AgentType.STRUCTURES_AGENT]: '#fb923c', // orange-400
   [AgentType.SOILS_AGENT]: '#a8a29e', // stone-400 (earthy, distinct)
+};
+
+/**
+ * Secondary highlight color used alongside an agent's primary accent.
+ * LSAI uses the LandSurv.ai wordmark palette: cyan for the "LS" half and
+ * emerald for the "AI" half, mirroring cyan "Surv" and green ".ai".
+ */
+export const agentSecondaryThemeColors: { [key in AgentType]?: string } = {
+  [AgentType.LSVZ_AGENT]: '#34d399', // emerald-400 — LandSurv ".ai"
 };
 
 // ============================================================================
@@ -158,7 +167,7 @@ export const agentGradientClasses: { [key in AgentType]?: string } = {
   [AgentType.POINT_EDITOR]: 'from-yellow-500 to-amber-600',
   [AgentType.GPS_STAKEOUT]: 'from-blue-500 to-indigo-600',
   [AgentType.FIELD_BOOK]: 'from-orange-500 to-red-600',
-  [AgentType.LSVZ_AGENT]: 'from-slate-500 to-gray-600',
+  [AgentType.LSVZ_AGENT]: 'from-cyan-500 to-emerald-500',
   [AgentType.CIVIL_PLAN_EXPERT]: 'from-orange-500 to-amber-600',
   [AgentType.DXF_ANALYZER]: 'from-indigo-500 to-violet-600',
   [AgentType.IMAGE_ANALYZER]: 'from-red-500 to-orange-600',

@@ -181,7 +181,7 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
             <p className="mt-1 max-w-[260px] text-xs leading-relaxed text-slate-500">
               {floatingItems.length > 0
                 ? 'Your agent dialogs are currently floating over the canvas. Click below or use the Dock icon on any floating dialog header to dock it back into this station.'
-                : 'Press ~ (tilde) to chat with this agent in the unified Command Bar below, or launch a tool dialog to dock it here.'}
+                : 'Press Shift+Space to chat with this agent in the unified Command Bar below, or launch a tool dialog to dock it here.'}
             </p>
             {floatingItems.length > 0 && (
               <div className="mt-4 flex flex-wrap justify-center gap-2">

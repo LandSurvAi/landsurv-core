@@ -2,6 +2,14 @@
 
 const releases = [
     {
+        version: "26.11.05.01",
+        date: "November 5, 2026",
+        highlights: [
+            "🗂️ Layer Picker Beside DXF: The canvas toolbar now carries a **Layers** picker immediately left of DXF instead of making you open CAD Manager to change the drafting layer. It searches the loaded standard, shows each layer's point/line role and linetype, makes any layer the active manual drawing layer, and edits the active layer's color and linetype in place. Properties are written to the standard as `colorRgb` / `lineType`, description-key line layers follow a new linetype, and linework already on that layer restyles immediately. New `components/CadLayerPicker.tsx`.",
+            "💬 Layer Commands From Chat: CAD Manager, DXF Agent and LSAI chat now apply layer commands deterministically — `set layer L-ROAD-CNTR`, `set active layer to L-ROAD-CNTR`, `set layer L-ROAD-CNTR to red dashed`, `change the color of L-ROAD-CNTR to cyan` and `set layer L-ROAD-CNTR linetype hidden`. Commands run before the model and API-key gate, create a missing layer definition, update existing linework and log to the fieldbook. A new CACP action, `cad_set_layer_properties`, lets peer and Voice agents apply color, linetype and active-layer changes through the registry. New `services/cadLayerChatCommands.ts`.",
+        ],
+    },
+    {
         version: "26.11.04.01",
         date: "November 4, 2026",
         highlights: [

@@ -867,6 +867,47 @@ agentRegistry.register({
       ],
     },
     {
+      id: 'cad_set_layer_properties',
+      name: 'Set Layer Properties',
+      type: 'action' as const,
+      description:
+        "Updates a layer's color and/or linetype in the loaded CAD standard, creating the layer " +
+        'definition when it does not exist yet. Optionally makes that layer the active manual drawing layer. ' +
+        'Color accepts an AutoCAD color name ("red", "cyan") or a #RRGGBB hex value; lineType accepts an ' +
+        'AutoCAD linetype name ("CONTINUOUS", "DASHED", "HIDDEN", …). Use this for direct layer commands from ' +
+        'chat, the Voice Agent, or any peer that needs to restyle an existing layer.',
+      inputs: {
+        layer: {
+          type: 'string',
+          required: true,
+          description: 'Layer name to update (e.g. "L-ROAD-CNTR").',
+        },
+        color: {
+          type: 'string',
+          description: 'New layer color: color name ("red") or #RRGGBB hex.',
+        },
+        lineType: {
+          type: 'string',
+          description: 'New layer linetype name (e.g. "DASHED", "HIDDEN").',
+        },
+        makeActive: {
+          type: 'boolean',
+          default: false,
+          description: 'When true, also make this the active manual drawing layer.',
+        },
+      },
+      outputs: {
+        layer: { type: 'string', required: true, description: 'Canonical layer name that was updated.' },
+        color: { type: 'string', description: 'Applied #RRGGBB color, or null when unchanged.' },
+        lineType: { type: 'string', description: 'Applied linetype, or null when unchanged.' },
+        active: { type: 'boolean', description: 'True when the layer was made active.' },
+      },
+      examples: [
+        'Chat command: “set layer L-ROAD-CNTR to red dashed” → cad_set_layer_properties({ layer:"L-ROAD-CNTR", color:"red", lineType:"DASHED" }).',
+        'Voice Agent: cad_set_layer_properties({ layer:"L-BUILDING", color:"cyan", makeActive:true }).',
+      ],
+    },
+    {
       id: 'cad_ensure_default_layers',
       name: 'Ensure Default Boundary Layers',
       type: 'action' as const,

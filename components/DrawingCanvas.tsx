@@ -41,6 +41,7 @@ import {
 import type { LinetypeDefinition } from '../contexts/types/CadManager.types.ts';
 import { calculateCenterlineLength, calculateCurveGeometry, calculatePointFromStationOffset, formatStation } from '../utils/stationing.ts';
 import { parseBearingToRadians, parseDistance, direct, inverse, formatBearing, calculateClosure, directCurve, calculateChordDistance } from '../utils/cogo.ts';
+import { computeLineFillet } from '../utils/filletGeometry.ts';
 import { solveRigidCornerAlign } from '../utils/cornerAlign.ts';
 import { buildSymbolMatchers, resolveSymbol } from '../utils/symbolResolver.ts';
 import { findMatchingSymbol, libraryToSymbolDefinition } from '../data/surveySymbolLibrary.ts';
@@ -166,6 +167,10 @@ export interface DrawingCanvasHandles {
   isBboxInView?: (minE: number, maxE: number, minN: number, maxN: number) => boolean;
   getViewportBboxWorld?: () => { minE: number; maxE: number; minN: number; maxN: number; minX: number; maxX: number; minY: number; maxY: number };
   getMapOverlayTiles?: () => Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: WorldQuad; opacity?: number }>;
+  /** Snapshot of the currently selected lines/arcs with resolved endpoints. */
+  getSelectedLineGeometry?: () => SurveyLine[];
+  /** Enter canvas entity-selection mode for an agent-driven operation. */
+  beginSelectionMode?: () => void;
   /** Arms the Orientation Tuple pivot-origin picker from the toolbar instrument. */
   beginOtOriginPick: () => void;
   /** Arms the Orientation Tuple align-to-line picker from the toolbar instrument. */
@@ -2082,6 +2087,104 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setIsSelectionMode(false);
         return addLines.length;
     }, [getSelectedLineEntities, commitLineBatch]);
+
+    /** FILLET: replace two straight selected lines with trimmed segments and a tangent arc. */
+    const filletSelectionCommand = useCallback((radiusInput: number): { ok: boolean; count: number; message: string } => {
+        const entities = getSelectedLineEntities().filter(entity => !entity.isCircle && !entity.line.isCurve);
+        if (entities.length !== 2) {
+            return { ok: false, count: 0, message: 'FILLET: Select exactly two straight lines.' };
+        }
+
+        const radiusWorld = convertLinearUnits(radiusInput, settings.linearUnits || 'usSurveyFoot', 'foot');
+        if (!(radiusWorld > 0) || !Number.isFinite(radiusWorld)) {
+            return { ok: false, count: 0, message: 'FILLET: Radius must be a positive number.' };
+        }
+
+        const result = computeLineFillet(
+            { start: entities[0].ends.p1, end: entities[0].ends.p2 },
+            { start: entities[1].ends.p1, end: entities[1].ends.p2 },
+            radiusWorld,
+        );
+        if ('error' in result) {
+            return { ok: false, count: 0, message: result.error };
+        }
+
+        const fillet = result.geometry;
+        const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        const makeTrimmed = (entity: typeof entities[number], segment: { start: { x: number; y: number }; end: { x: number; y: number } }, index: number): SurveyLine => ({
+            ...entity.line,
+            id: undefined,
+            from: `FILLET_${stamp}_${index}_A`,
+            to: `FILLET_${stamp}_${index}_B`,
+            fromPt: { x: segment.start.x, y: segment.start.y, z: 0 },
+            toPt: { x: segment.end.x, y: segment.end.y, z: 0 },
+            isCurve: false,
+            isCircle: false,
+            circleCenter: undefined,
+            curveRadius: undefined,
+            arcLength: undefined,
+            curveDirection: undefined,
+            tangentBearing: undefined,
+            chordBearing: undefined,
+            chordDistance: undefined,
+            bearing: undefined,
+            distance: undefined,
+            labelOffset: undefined,
+            labelRotation: undefined,
+        });
+
+        const chordX = fillet.tangent2.x - fillet.tangent1.x;
+        const chordY = fillet.tangent2.y - fillet.tangent1.y;
+        const chordAz = (Math.atan2(chordX, chordY) + Math.PI * 2) % (Math.PI * 2);
+        const radialX = fillet.tangent1.x - fillet.center.x;
+        const radialY = fillet.tangent1.y - fillet.center.y;
+        const tangentX = fillet.isLeftCurve ? -radialY : radialY;
+        const tangentY = fillet.isLeftCurve ? radialX : -radialX;
+        const tangentAz = (Math.atan2(tangentX, tangentY) + Math.PI * 2) % (Math.PI * 2);
+        const sharedPolylineId = entities[0].line.polylineId && entities[0].line.polylineId === entities[1].line.polylineId
+            ? entities[0].line.polylineId
+            : undefined;
+
+        const arc: SurveyLine = {
+            ...entities[0].line,
+            id: undefined,
+            from: `FILLET_${stamp}_ARC_A`,
+            to: `FILLET_${stamp}_ARC_B`,
+            fromPt: { x: fillet.tangent1.x, y: fillet.tangent1.y, z: 0 },
+            toPt: { x: fillet.tangent2.x, y: fillet.tangent2.y, z: 0 },
+            circleCenter: { x: fillet.center.x, y: fillet.center.y, z: 0 },
+            isCurve: true,
+            isCircle: false,
+            curveRadius: fillet.radius,
+            arcLength: fillet.radius * fillet.centralAngle,
+            curveDirection: fillet.isLeftCurve ? 'left' : 'right',
+            tangentBearing: formatBearing(tangentAz),
+            chordBearing: formatBearing(chordAz),
+            chordDistance: Math.hypot(chordX, chordY),
+            bearing: undefined,
+            distance: undefined,
+            polylineId: sharedPolylineId,
+            labelOffset: undefined,
+            labelRotation: undefined,
+        };
+
+        commitLineBatch(
+            entities.map(entity => entity.selectionId),
+            [
+                makeTrimmed(entities[0], fillet.trimmed1, 0),
+                arc,
+                makeTrimmed(entities[1], fillet.trimmed2, 1),
+            ],
+        );
+        setSelectedLineIds(new Set());
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        return {
+            ok: true,
+            count: 3,
+            message: `FILLET: R ${radiusInput} corner created with a ${(fillet.centralAngle * 180 / Math.PI).toFixed(2)}° tangent arc.`,
+        };
+    }, [getSelectedLineEntities, settings.linearUnits, commitLineBatch]);
 
     const explodeSelectionCommand = useCallback((): number => {
         const entities = getSelectedLineEntities().filter(entity => entity.line.polylineId);
@@ -5368,6 +5471,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         getTransform: () => transformRef.current,
         setTransform: (newTransform: { scale: number; offsetX: number; offsetY: number }) => {
             setTransform(newTransform);
+        },
+        getSelectedLineGeometry: () => getSelectedLineEntities().map(entity => ({
+            ...entity.line,
+            fromPt: { x: entity.ends.p1.x, y: entity.ends.p1.y, z: 0 },
+            toPt: { x: entity.ends.p2.x, y: entity.ends.p2.y, z: 0 },
+        })),
+        beginSelectionMode: () => {
+            setDrawingMode('none');
+            setIsSelectionMode(true);
+            setIsBoxSelectMode(false);
+            setIsTrimmingLines(false);
+            setIsExtendingLines(false);
+            setIsDeletingLines(false);
+            setSelectedLineIds(new Set());
         },
         beginOtOriginPick: () => {
             setIsPickingOtOrigin(true);
@@ -14764,6 +14881,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         commandPromptOpenedRef.current = false;
         const result = executeCanvasCommand(parseCanvasCommand(pending.raw), {
             hasSelection: true,
+            selectionCount: selectedLineIds.size,
             onStartCopy: startCopyMode,
             onStartRotate: startRotateMode,
             onStartScale: startScaleMode,
@@ -14775,6 +14893,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             onScaleSelection: scaleSelectionCommand,
             onMirrorSelection: mirrorSelectionCommand,
             onJoinSelection: joinSelectionCommand,
+            onFilletSelection: filletSelectionCommand,
             onExplodeSelection: explodeSelectionCommand,
             onArraySelection: arraySelectionCommand,
             onPolarArraySelection: polarArraySelectionCommand,
@@ -14793,7 +14912,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setCommandFocusRequest(n => n + 1);
         }
         requestAnimationFrame(() => drawRef.current?.());
-    }, [pendingSelectionCommand, selectedLineIds.size, startCopyMode, eraseSelectionCommand, moveSelectionCommand, rotateSelectionCommand, scaleSelectionCommand, mirrorSelectionCommand, joinSelectionCommand, explodeSelectionCommand, arraySelectionCommand, polarArraySelectionCommand, openCommandPrompt, beginSelectionForCommand, startRotateMode, startMirrorMode, startMoveMode, startScaleMode, settings.linearUnits]);
+    }, [pendingSelectionCommand, selectedLineIds.size, startCopyMode, eraseSelectionCommand, moveSelectionCommand, rotateSelectionCommand, scaleSelectionCommand, mirrorSelectionCommand, joinSelectionCommand, filletSelectionCommand, explodeSelectionCommand, arraySelectionCommand, polarArraySelectionCommand, openCommandPrompt, beginSelectionForCommand, startRotateMode, startMirrorMode, startMoveMode, startScaleMode, settings.linearUnits]);
 
     useEffect(() => {
         runPendingSelectionCommandRef.current = runPendingSelectionCommand;
@@ -17839,6 +17958,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     onScaleSelection: scaleSelectionCommand,
                     onMirrorSelection: mirrorSelectionCommand,
                     onJoinSelection: joinSelectionCommand,
+                    onFilletSelection: filletSelectionCommand,
                     onExplodeSelection: explodeSelectionCommand,
                     onArraySelection: arraySelectionCommand,
                     onPolarArraySelection: polarArraySelectionCommand,
@@ -18123,6 +18243,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 chatToolDialogs={props.chatToolDialogs}
                 agentChatOpenSignal={props.agentChatOpenSignal}
                 boundaryQuickActions={props.boundaryQuickActions}
+                textScale={props.settings.commandBar?.textScale ?? 1.15}
+                showShortcutHints={props.settings.commandBar?.showShortcutHints ?? true}
+                showStatusBadges={props.settings.commandBar?.showStatusBadges ?? true}
                 onHeightChange={handleCommandBarHeightChange}
                 rightExtension={props.commandBarRightExtension ?? 0}
             />

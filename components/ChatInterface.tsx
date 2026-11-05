@@ -69,7 +69,7 @@ const themeClasses: { [key in AgentType]?: { gradient: string; accent: string; }
     [AgentType.POINT_EDITOR]: { gradient: 'from-yellow-500 to-amber-600', accent: 'accent-yellow-500' },
     [AgentType.GPS_STAKEOUT]: { gradient: 'from-blue-500 to-indigo-600', accent: 'accent-blue-500' },
     [AgentType.IMAGE_ANALYZER]: { gradient: 'from-red-500 to-orange-600', accent: 'accent-red-500' },
-    [AgentType.LSVZ_AGENT]: { gradient: 'from-slate-500 to-gray-600', accent: 'accent-slate-500' },
+    [AgentType.LSVZ_AGENT]: { gradient: 'from-cyan-500 to-emerald-500', accent: 'accent-cyan-500' },
     [AgentType.COGO_AGENT]: { gradient: 'from-violet-500 to-purple-600', accent: 'accent-violet-500' },
 };
 
@@ -221,11 +221,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               )}
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
-                  <span className="truncate text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-200 light-theme:text-gray-800">{agentLabel}</span>
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <span aria-hidden="true" className="h-px w-3 shrink-0 rounded-full" style={{ backgroundColor: accentColor, boxShadow: `0 0 8px ${accentColor}66` }} />
+                    <span className="truncate text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: accentColor, textShadow: `0 0 14px ${accentColor}55` }}>{agentLabel}</span>
+                    <span aria-hidden="true" className="shrink-0 text-[9px]" style={{ color: `${accentColor}cc` }}>✦</span>
+                  </span>
                   {isLoading && (
                     <span
-                      className="flex items-center gap-1 rounded-full border px-1.5 py-[1px] text-[8px] font-bold uppercase tracking-[0.12em]"
-                      style={{ borderColor: `${accentColor}40`, color: accentColor, backgroundColor: `${accentColor}14` }}
+                      className="flex items-center gap-1 rounded-full border border-white/25 bg-white/[0.06] px-1.5 py-[1px] text-[8px] font-bold uppercase tracking-[0.12em] text-white/75"
                     >
                       <span className="h-1 w-1 animate-pulse rounded-full" style={{ backgroundColor: accentColor }} />
                       Working
@@ -245,7 +248,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   disabled={messages.length === 0}
                   className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40 light-theme:hover:bg-gray-100 light-theme:hover:text-gray-900 ${
                     copyStatus === 'copied'
-                      ? 'text-emerald-400'
+                      ? 'text-white/80'
                       : copyStatus === 'error'
                         ? 'text-red-400'
                         : 'text-slate-500 hover:bg-white/[0.06] hover:text-slate-200 light-theme:text-gray-500'
@@ -292,7 +295,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               )}
             </div>
             <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-slate-500">Agent Workspace</p>
-            <h2 className="mt-1.5 text-[15px] font-semibold text-slate-100 light-theme:text-gray-900">{agentLabel}</h2>
+            <h2
+              className="mt-1.5 text-[15px] font-black uppercase tracking-[0.14em]"
+              style={{ color: accentColor, textShadow: `0 0 18px ${accentColor}55` }}
+            >
+              {agentLabel}
+            </h2>
             <p className="mt-1 max-w-[250px] text-[11px] leading-relaxed text-slate-500 light-theme:text-gray-500">
               Ready for a task — ask a question, paste notes, or attach a file to begin.
             </p>
@@ -313,13 +321,28 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         )}
         {messages.map((msg, index) => (
           <div key={index} className={`flex min-w-0 flex-col gap-1 ${msg.role === MessageRole.USER ? 'items-end' : 'items-start'}`}>
-            <span className="px-1 text-[9px] font-bold uppercase tracking-[0.16em] text-slate-600 light-theme:text-gray-400">
-              {msg.role === MessageRole.USER ? 'You' : agentLabel}
-            </span>
+            {msg.role === MessageRole.USER ? (
+              <span className="px-1 text-[9px] font-bold uppercase tracking-[0.16em] text-white/40 light-theme:text-gray-400">You</span>
+            ) : (
+              <span className="inline-flex items-center gap-2 px-1">
+                <span
+                  aria-hidden="true"
+                  className="h-[2px] w-5 rounded-full bg-white/80"
+                  style={{ boxShadow: '0 0 8px rgba(255,255,255,0.3)' }}
+                />
+                <span
+                  className="text-[10px] font-black uppercase leading-none tracking-[0.22em]"
+                  style={{ color: accentColor, textShadow: `0 0 14px ${accentColor}66` }}
+                >
+                  {agentLabel}
+                </span>
+                <span aria-hidden="true" className="text-[9px] leading-none" style={{ color: `${accentColor}cc` }}>✦</span>
+              </span>
+            )}
             <div className={`min-w-0 max-w-[94%] md:max-w-xl p-3 rounded-lg overflow-hidden ${msg.role === MessageRole.USER ? 'bg-[#1a2431] text-slate-100 rounded-br-none border border-white/[0.08]' : 'bg-[#0f1620] text-slate-200 rounded-bl-none border border-white/[0.07] light-theme:bg-gray-200 light-theme:text-gray-800'}`}>
               {msg.role === MessageRole.MODEL && formatModelDisplay(msg.model || currentModelName) && (
-                <div className="mb-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide bg-purple-900/30 text-purple-300 border border-purple-500/20 light-theme:bg-purple-100 light-theme:text-purple-700 light-theme:border-purple-300">
-                    <SparklesIcon className="w-3 h-3 text-purple-400" />
+                <div className="mb-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide bg-white/[0.05] text-white/70 border border-white/15 light-theme:bg-gray-100 light-theme:text-gray-600 light-theme:border-gray-300">
+                    <SparklesIcon className="w-3 h-3 text-white/55" />
                     <span>{formatModelDisplay(msg.model || currentModelName)}</span>
                 </div>
               )}
@@ -358,7 +381,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               {msg.questionOptions && msg.questionOptions.length > 0 && (
                 <div className="mt-3 pt-2.5 border-t border-gray-700/60 light-theme:border-gray-300/60">
                   <div className="text-[11px] font-semibold text-gray-400 mb-2 flex items-center gap-1.5 light-theme:text-gray-600">
-                    <LightbulbIcon className="w-3.5 h-3.5 text-yellow-400" />
+                    <LightbulbIcon className="w-3.5 h-3.5 text-white/60" />
                     <span>Select an option:</span>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -367,7 +390,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         key={optIdx}
                         onClick={() => onSendMessage(opt)}
                         disabled={isLoading}
-                        className="text-xs px-3 py-1.5 rounded-md font-medium text-left transition-all bg-fuchsia-950/40 text-fuchsia-200 border border-fuchsia-500/40 hover:bg-fuchsia-900/60 hover:border-fuchsia-400 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed light-theme:bg-fuchsia-50 light-theme:text-fuchsia-800 light-theme:border-fuchsia-300 light-theme:hover:bg-fuchsia-100 shadow-sm"
+                        className="text-xs px-3 py-1.5 rounded-md font-medium text-left transition-all bg-white/[0.04] text-white/80 border border-white/15 hover:bg-white/[0.08] hover:border-white/30 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed light-theme:bg-white light-theme:text-gray-700 light-theme:border-gray-300 light-theme:hover:bg-gray-100 shadow-sm"
                       >
                         {opt}
                       </button>
@@ -380,7 +403,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               {msg.sources && msg.sources.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-gray-600">
                   <details className="group">
-                    <summary className="cursor-pointer text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
+                    <summary className="cursor-pointer text-xs text-white/70 hover:text-white flex items-center gap-1">
                       <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
@@ -393,7 +416,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             href={source.url} 
                             target="_blank" 
                             rel="noopener noreferrer"
-                            className="text-blue-400 hover:text-blue-300 hover:underline flex items-center gap-1"
+                            className="text-white/70 hover:text-white hover:underline flex items-center gap-1"
                           >
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -479,7 +502,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             {suggestedQuestions.length > 0 && (
                 <button 
                   onClick={() => setShowSuggestions(p => !p)} 
-                  className={`p-2 text-yellow-400 hover:bg-yellow-500/10 rounded-full ${!showSuggestions ? 'animate-pulse-yellow-glow' : ''}`} 
+                  className={`p-2 text-white/60 hover:bg-white/[0.06] rounded-full ${!showSuggestions ? 'animate-pulse' : ''}`}
                   title="Suggested Questions"
                 >
                     <LightbulbIcon className="w-5 h-5"/>

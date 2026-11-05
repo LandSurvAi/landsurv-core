@@ -249,14 +249,23 @@
     animation: command-rail-sheen 9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
   }
 
-  /* Quick Thought: drift through overflowing copy instead of leaving it clipped. */
-  @keyframes quick-thought-drift {
-    from { transform: translateY(0); }
-    to   { transform: translateY(calc(-100% + 52px)); }
+  @keyframes command-thinking-sweep {
+    0%   { transform: translateX(-160%); opacity: 0; }
+    10%  { opacity: 0.95; }
+    85%  { opacity: 0.95; }
+    100% { transform: translateX(620%); opacity: 0; }
   }
-  .quick-thought-drift {
-    animation: quick-thought-drift 18s ease-in-out 600ms infinite alternate;
-    will-change: transform;
+  .command-thinking-sweep {
+    animation: command-thinking-sweep 1.35s linear infinite;
+    filter: drop-shadow(0 0 2px rgba(239, 68, 68, 0.85));
+  }
+
+  @keyframes thinking-red-text {
+    0%, 100% { color: rgba(248, 113, 113, 0.7); text-shadow: 0 0 0 transparent; }
+    50%      { color: #ef4444; text-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }
+  }
+  .animate-thinking-red-text {
+    animation: thinking-red-text 1.15s ease-in-out infinite;
   }
 
   @keyframes command-status-pulse {
@@ -277,12 +286,18 @@
 
   @media (prefers-reduced-motion: reduce) {
     .command-rail-sheen,
+    .command-thinking-sweep,
     .command-status-dot,
-    .command-caret {
+    .command-caret,
+    .animate-thinking-red-text {
       animation: none;
     }
-    .command-rail-sheen {
+    .command-rail-sheen,
+    .command-thinking-sweep {
       opacity: 0;
+    }
+    .animate-thinking-red-text {
+      color: #f87171;
     }
   }
 
@@ -376,3 +391,14 @@
     }
   }
 }
+
+/* Command Bar text scale (Settings -> Command Bar). The compact rows publish
+   --command-bar-text-scale on the terminal root so layout boxes stay fixed. */
+.command-bar-rows .text-xs {
+  font-size: calc(0.75rem * var(--command-bar-text-scale, 1.15));
+  line-height: calc(1rem * var(--command-bar-text-scale, 1.15));
+}
+.command-bar-rows .text-\[10px\] { font-size: calc(0.625rem * var(--command-bar-text-scale, 1.15)); }
+.command-bar-rows .text-\[11px\] { font-size: calc(0.6875rem * var(--command-bar-text-scale, 1.15)); }
+.command-bar-rows .text-\[9px\]  { font-size: calc(0.5625rem * var(--command-bar-text-scale, 1.15)); }
+.command-bar-rows .text-\[8px\]  { font-size: calc(0.5rem * var(--command-bar-text-scale, 1.15)); }

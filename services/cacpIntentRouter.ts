@@ -49,6 +49,11 @@ export interface IntentRoute {
  * sync with the registry. Keep entries lowercase; matching is case-insensitive.
  */
 const AGENT_CAPABILITY_PHRASES: Partial<Record<AgentType, string[]>> = {
+  [AgentType.COGO_AGENT]: [
+    'divide line', 'divide a line', 'divide lines', 'divide arc', 'divide an arc',
+    'divide selected line', 'divide selected arc', 'divide into points',
+    'divide into segments', 'subdivide line', 'segment a line', 'points along a line',
+  ],
   [AgentType.CIVIL_DRAFTER]: [
     'road', 'roadway', 'street', 'alignment', 'centerline profile', 'curb', 'gutter',
     'sidewalk', 'pipe', 'sewer', 'storm', 'drain', 'culvert', 'utility trench',
@@ -216,6 +221,22 @@ function scoreAgent(request: string, manifest: AgentManifest): IntentMatch {
  * (isMismatched) so the caller can hand off or ask around before acting.
  */
 export function routeIntent(request: string, currentAgent?: AgentType): IntentRoute {
+  // Dividing a line/arc is a COGO operation, not a point-management task. The
+  // generic "point" keywords would otherwise outscore COGO in the normal table.
+  if (/\bdivide\b[\s\S]*\b(?:line|lines|arc|arcs|polyline|polylines)\b/i.test(request)) {
+    return {
+      primary: {
+        agent: AgentType.COGO_AGENT,
+        displayName: 'COGO',
+        score: 99,
+        matchedOn: ['divide line/arc'],
+      },
+      alternates: [],
+      isMismatched: currentAgent !== undefined && currentAgent !== AgentType.COGO_AGENT,
+      explanation: 'Divide line/arc request routed to COGO.',
+    };
+  }
+
   const manifests = agentRegistry.listCacpEnabled();
   const matches = manifests
     .map(m => scoreAgent(request, m))
