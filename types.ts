@@ -192,7 +192,35 @@ export interface A2UIStandardsFilter {
   facet?: A2UIStandardsFacet;
 }
 
+export type A2UIInputFieldType = 'text' | 'number' | 'textarea' | 'select';
+
+export interface A2UIInputField {
+  id: string;
+  label: string;
+  type?: A2UIInputFieldType;
+  placeholder?: string;
+  hint?: string;
+  required?: boolean;
+  options?: string[];
+  /** Optional visual grouping heading inside the form. */
+  group?: string;
+  /** Unit suffix shown inside the input. */
+  unit?: string;
+  /** Use 2 for a full-width field in the two-column form grid. */
+  span?: 1 | 2;
+}
+
+export interface A2UIInputFormSpec {
+  title?: string;
+  description?: string;
+  fields: A2UIInputField[];
+  submitLabel?: string;
+  /** At least one of these field-id groups must be complete. */
+  requireOneOf?: string[][];
+}
+
 export type A2UIWidgetType =
+  | 'input-form'
   | 'point-upload'
   | 'deed-upload'
   | 'raw-upload'
@@ -206,11 +234,22 @@ export type A2UIWidgetType =
   | 'image-upload'
   | 'centerline-upload'
   | 'cad-manager-intake'
-  | 'cad-standards-table';
+  | 'cad-manager-workspace'
+  | 'cad-standards-table'
+  | 'zoning-research';
+
+export interface A2UIZoningContext {
+  place: string;
+  county?: string;
+  state?: string;
+  district?: string;
+  /** Timestamp used to distinguish a fresh research run from older chat cards. */
+  startedAt?: number;
+}
 
 export interface A2UIPayload {
   /** Surface kind: inquisitive prompt, upload/intake widget, or data explorer. */
-  kind: 'intake-prompt' | 'upload-widget' | 'standards-explorer';
+  kind: 'intake-prompt' | 'upload-widget' | 'standards-explorer' | 'zoning-research' | 'cad-manager' | 'input-form';
   /** The agent that owns this A2UI surface */
   agent: AgentType;
   /** Which interactive upload/intake widget to render */
@@ -221,6 +260,10 @@ export interface A2UIPayload {
   completedSummary?: string;
   /** Pre-set query/facet for the compact CAD-standards explorer. */
   standardsFilter?: A2UIStandardsFilter;
+  /** Jurisdiction bound to a chat-hosted zoning research surface. */
+  zoningContext?: A2UIZoningContext;
+  /** Typed fields for collecting values an agent explicitly asked for. */
+  inputForm?: A2UIInputFormSpec;
 }
 
 export interface ChatMessage {
@@ -234,6 +277,8 @@ export interface ChatMessage {
   model?: string;
   /** Interactive clarifying question options or quick reply choices presented by the model */
   questionOptions?: string[];
+  /** A failed tool action is waiting for one missing value before it can retry. */
+  needsInput?: boolean;
   /** A2UI (Agent-to-UI) interactive surface embedded directly in the chat message */
   a2ui?: A2UIPayload;
   sources?: any[];

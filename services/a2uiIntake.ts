@@ -42,7 +42,7 @@ export type A2UICustomActionId =
   | 'centerline-example'
   | 'centerline-blank'
   | 'open-image-gallery'
-  | 'open-zoning-panel'
+  | 'open-zoning-intake'
   | 'open-title-search-panel'
   | 'open-compliance-panel'
   | 'decline-upload';
@@ -233,7 +233,7 @@ export function buildA2UIIntakeGreeting(
     case AgentType.CAD_MANAGER:
       if (ctx.cadStandardsLoaded) {
         detail =
-          'Welcome to the drawing canvas! Your CAD standard is loaded and active. Would you like to upload a standards file (<strong>.lay</strong>, <strong>.dsc</strong>, <strong>.lin</strong>, <strong>.json</strong>), open the CAD Standards Editor, or match survey codes and layers right here in chat?';
+          'Welcome to the drawing canvas! Your CAD standard is loaded and active. Would you like to upload a standards file (<strong>.lay</strong>, <strong>.dsc</strong>, <strong>.lin</strong>, <strong>.json</strong>), open the CAD Manager workspace, or match survey codes and layers right here in chat?';
         questionOptions = [
           'Yes, upload a standards file',
           'Show standards spreadsheet',
@@ -242,7 +242,7 @@ export function buildA2UIIntakeGreeting(
         ];
       } else {
         detail =
-          'Welcome to the drawing canvas! Would you like to upload an existing CAD standards file (<strong>.lay</strong>, <strong>.dsc</strong>, <strong>.lin</strong>, or <strong>.json</strong>) to get started, or open the CAD Standards Editor to create a new standard?';
+          'Welcome to the drawing canvas! Would you like to upload an existing CAD standards file (<strong>.lay</strong>, <strong>.dsc</strong>, <strong>.lin</strong>, or <strong>.json</strong>) to get started, or open the CAD Manager workspace to create a new standard?';
         questionOptions = [
           'Yes, upload a standards file',
           'Start new standards session',
@@ -317,7 +317,6 @@ export function buildA2UIIntakeGreeting(
         'Welcome to the drawing canvas! Would you like to set your property jurisdiction (or autofill from GPS) so I can research the official zoning map, districts, and setbacks?';
       questionOptions = [
         'Yes, set jurisdiction & research zoning',
-        'Open Zoning Results Panel',
         'Ask a zoning question in chat',
       ];
       break;
@@ -524,7 +523,7 @@ export function classifyA2UIIntakeReply(
       action: 'custom-action',
       customActionId: 'open-cad-standards',
       replyText:
-        'Opening the <strong>CAD Standards Editor</strong> so you can author layers, description keys, linetypes, and symbols.',
+        'Opening the <strong>CAD Manager workspace</strong> as an A2UI surface so you can author layers, description keys, linetypes, and symbols. Pop it out or dock it into the agent tool shelf.',
       suggestedQuestions: getDefaultSuggestedQuestions(AgentType.CAD_MANAGER),
     };
   }
@@ -598,11 +597,11 @@ export function classifyA2UIIntakeReply(
     };
   }
 
-  if (/^open\s+zoning\s+results\s+panel$/i.test(trimmed)) {
+  if (/^(?:open|show)\s+zoning\s+(?:research|results)(?:\s+(?:panel|in\s+chat))?$/i.test(trimmed)) {
     return {
       action: 'custom-action',
-      customActionId: 'open-zoning-panel',
-      replyText: 'Opening the <strong>Zoning Results Panel</strong>.',
+      customActionId: 'open-zoning-intake',
+      replyText: 'Opening the <strong>zoning jurisdiction picker</strong> here in the chat.',
       suggestedQuestions: getDefaultSuggestedQuestions(AgentType.ZONING_AGENT),
     };
   }
@@ -717,6 +716,9 @@ export function markPendingA2UICompleted(
 ): ChatMessage[] {
   return history.map((msg) => {
     if (!msg.a2ui) return msg;
+    if (msg.a2ui.kind !== 'intake-prompt' && msg.a2ui.kind !== 'upload-widget') {
+      return msg;
+    }
     if (msg.a2ui.status === 'completed' || msg.a2ui.status === 'dismissed') {
       return msg;
     }

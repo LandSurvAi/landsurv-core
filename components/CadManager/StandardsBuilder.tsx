@@ -20,6 +20,7 @@ import { startGeminiChat } from '../../services/geminiService';
 import { useSettings, AgentType, type Chat, type Settings } from '../../types';
 import { parseMarkdownToStandard, extractMarkdownTable, generateLinetypesFromCodes } from '../../utils/markdownTableParser';
 import { LightbulbIcon } from '../icons';
+import { Copy, Download, Loader2, SlidersHorizontal, Sparkles, Table2, X, Zap } from 'lucide-react';
 import { validateStandardLayers, type ValidationSummary } from '../../utils/aecLayerValidation';
 
 // Export the Message interface for external use
@@ -89,34 +90,34 @@ const ThinkingAnimation: React.FC = () => {
 
   return (
     <div className="flex justify-start">
-      <div className="bg-gradient-to-r from-indigo-900/50 via-purple-900/50 to-pink-900/50 border border-indigo-500/30 rounded-xl px-5 py-4 max-w-md shadow-lg shadow-indigo-500/10">
+      <div className="max-w-md rounded-xl border border-cyan-400/20 bg-[#0b1420] px-5 py-4 shadow-lg shadow-black/20">
         {/* Animated gradient bar */}
-        <div className="h-1 w-full bg-gradient-to-r from-cyan-400 via-indigo-500 to-purple-500 rounded-full mb-3 overflow-hidden">
+        <div className="h-1 w-full bg-gradient-to-r from-cyan-400 via-cyan-500/50 to-transparent rounded-full mb-3 overflow-hidden">
           <div className="h-full w-1/3 bg-white/40 rounded-full animate-shimmer" />
         </div>
         
         {/* Spinner and status */}
         <div className="flex items-center gap-3 mb-2">
           <div className="relative">
-            <div className="w-6 h-6 border-2 border-indigo-400/30 rounded-full"></div>
-            <div className="absolute inset-0 w-6 h-6 border-2 border-transparent border-t-cyan-400 border-r-indigo-500 rounded-full animate-spin"></div>
+            <div className="w-6 h-6 border-2 border-cyan-400/20 rounded-full"></div>
+            <div className="absolute inset-0 w-6 h-6 border-2 border-transparent border-t-cyan-400 border-r-cyan-400/60 rounded-full animate-spin"></div>
           </div>
-          <span className="text-sm font-medium bg-gradient-to-r from-cyan-400 to-indigo-400 bg-clip-text text-transparent">
+          <span className="text-sm font-medium text-cyan-300">
             AI Thinking{dots}
           </span>
         </div>
 
         {/* Rambling message */}
-        <p className="text-sm text-gray-300 italic transition-all duration-300">
+        <p className="text-sm text-slate-300 italic transition-all duration-300">
           "{THINKING_MESSAGES[messageIndex]}"
         </p>
 
         {/* Pulsing orbs */}
         <div className="flex gap-1.5 mt-3 justify-center">
           <div className="w-2 h-2 bg-cyan-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-          <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-          <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-          <div className="w-2 h-2 bg-pink-400 rounded-full animate-bounce" style={{ animationDelay: '450ms' }}></div>
+          <div className="w-2 h-2 bg-cyan-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+          <div className="w-2 h-2 bg-cyan-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+          <div className="w-2 h-2 bg-cyan-400/50 rounded-full animate-bounce" style={{ animationDelay: '450ms' }}></div>
         </div>
       </div>
     </div>
@@ -1218,7 +1219,7 @@ You can now:
 
 To edit standards in the spreadsheet, you first need to create some:
 
-1. **Quick Generate** - Click "⚡ Quick Generate" to have AI create 150+ comprehensive codes
+1. **Quick Generate** - Click "Quick Generate" to have AI create 150+ comprehensive codes
 2. **Custom Request** - Describe your specific needs in the chat below
 3. **Upload** - Switch to the "Upload" tab to load existing standards files
 
@@ -1232,64 +1233,66 @@ Once you have standards, click the spreadsheet button to edit them.`,
   return (
     <div className="standards-builder flex flex-col h-full">
       {/* Header */}
-      <div className="flex-shrink-0 px-4 py-3 border-b border-gray-700 bg-gradient-to-r from-indigo-900 to-purple-900">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              <span>🤖</span> AI Standards Builder
-            </h2>
-            <p className="text-indigo-300 text-sm">Describe your needs or use Quick Generate</p>
+      <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-white/[0.07] bg-[#080e17]/60 px-3 py-2.5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-cyan-400/20 bg-cyan-400/10 text-cyan-300">
+            <Sparkles className="h-3.5 w-3.5" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="truncate text-[11.5px] font-semibold text-slate-100">AI Standards Builder</h2>
+            <p className="truncate text-[9.5px] text-slate-500">Describe the firm, or generate a baseline set</p>
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowQuestionnaire(!showQuestionnaire)}
-              className={`px-3 py-1.5 ${showQuestionnaire ? 'bg-purple-600' : 'bg-gray-700'} hover:bg-purple-700 text-white text-sm rounded-lg font-medium transition-colors`}
-              title="Configure standards generation options"
-            >
-              ⚙️ Configure
-            </button>
-            <button
-              onClick={handleQuickGenerate}
-              disabled={loading}
-              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white text-sm rounded-lg font-medium transition-colors"
-              title="Generate 150+ comprehensive codes via AI"
-            >
-              {loading ? '⏳ Generating...' : '⚡ Quick Generate'}
-            </button>
-            <button
-              onClick={handleEditSpreadsheet}
-              disabled={!previewStandard || previewStandard.codes.length === 0}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 text-white text-sm rounded-lg font-medium transition-colors"
-              title={previewStandard && previewStandard.codes.length > 0 ? "Edit codes in spreadsheet view" : "Generate standards first"}
-            >
-              📊 Spreadsheet
-            </button>
-          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            onClick={() => setShowQuestionnaire(!showQuestionnaire)}
+            className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-[10px] font-semibold transition-colors ${showQuestionnaire ? 'border-cyan-400/35 bg-cyan-400/10 text-cyan-200' : 'border-white/[0.08] bg-white/[0.025] text-slate-400 hover:border-white/[0.16] hover:text-white'}`}
+            title="Configure standards generation options"
+          >
+            <SlidersHorizontal className="h-3 w-3" /> Configure
+          </button>
+          <button
+            onClick={handleQuickGenerate}
+            disabled={loading}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-cyan-400/35 bg-cyan-400/10 px-2 text-[10px] font-semibold text-cyan-200 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/20 hover:text-white disabled:opacity-40"
+            title="Generate 150+ comprehensive codes via AI"
+          >
+            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+            {loading ? 'Generating…' : 'Quick Generate'}
+          </button>
+          <button
+            onClick={handleEditSpreadsheet}
+            disabled={!previewStandard || previewStandard.codes.length === 0}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.025] px-2 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.05] hover:text-white disabled:opacity-40"
+            title={previewStandard && previewStandard.codes.length > 0 ? "Edit codes in spreadsheet view" : "Generate standards first"}
+          >
+            <Table2 className="h-3 w-3" /> Spreadsheet
+          </button>
         </div>
       </div>
 
       {/* Configuration Questionnaire Panel */}
       {showQuestionnaire && (
-        <div className="flex-shrink-0 border-b border-gray-700 bg-gray-800/80 max-h-[50vh] overflow-y-auto scrollbar-hide" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+        <div className="flex-shrink-0 border-b border-white/[0.07] bg-[#0b1420]/95 max-h-[50vh] overflow-y-auto scrollbar-hide" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
           <div className="p-4">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-bold text-white">⚙️ Standards Configuration</h3>
-              <button
-                onClick={() => setShowQuestionnaire(false)}
-                className="text-gray-400 hover:text-white"
-              >
-                ✕
-              </button>
+            <div className="flex justify-between items-center mb-4">                    <h3 className="text-[13px] font-semibold text-white">Standards configuration</h3>
+                    <button
+                      onClick={() => setShowQuestionnaire(false)}
+                      className="grid h-6 w-6 place-items-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-white"
+                      title="Close configuration"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {/* Project Type */}
               <div className="space-y-3">
-                <h4 className="font-semibold text-purple-400 text-sm uppercase tracking-wide">Project Type</h4>
+                <h4 className="font-semibold text-cyan-300 text-sm uppercase tracking-wide">Project Type</h4>
                 <select
                   value={stdConfig.projectType}
                   onChange={(e) => setStdConfig(prev => ({ ...prev, projectType: e.target.value as any }))}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm"
+                  className="w-full px-3 py-2 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm"
                 >
                   <option value="subdivision">Residential Subdivision</option>
                   <option value="commercial">Commercial Site</option>
@@ -1299,11 +1302,11 @@ Once you have standards, click the spreadsheet button to edit them.`,
                   <option value="mixed">Mixed-Use Development</option>
                 </select>
                 
-                <h4 className="font-semibold text-purple-400 text-sm uppercase tracking-wide mt-4">Standards Framework</h4>
+                <h4 className="font-semibold text-cyan-300 text-sm uppercase tracking-wide mt-4">Standards Framework</h4>
                 <select
                   value={stdConfig.standardsFramework}
                   onChange={(e) => setStdConfig(prev => ({ ...prev, standardsFramework: e.target.value as any }))}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm"
+                  className="w-full px-3 py-2 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm"
                 >
                   <option value="aec">A/E/C CAD Standard (USACE/DoD 6.2)</option>
                   <option value="custom">Custom/Other</option>
@@ -1319,70 +1322,70 @@ Once you have standards, click the spreadsheet button to edit them.`,
                     type="checkbox"
                     checked={stdConfig.calcLayers}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, calcLayers: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-cyan-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-cyan-500"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Include Calc Layers</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Include Calc Layers</span>
                 </label>
-                <p className="text-xs text-gray-500 ml-6">C-CALC-xxxx for design computations</p>
+                <p className="text-xs text-slate-500 ml-6">C-CALC-xxxx for design computations</p>
                 
                 <label className="flex items-center gap-2 cursor-pointer group">
                   <input
                     type="checkbox"
                     checked={stdConfig.surfaceLayers}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, surfaceLayers: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-cyan-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-cyan-500"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Include Surface Layers</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Include Surface Layers</span>
                 </label>
-                <p className="text-xs text-gray-500 ml-6">Inclusion, exclusion, breaklines</p>
+                <p className="text-xs text-slate-500 ml-6">Inclusion, exclusion, breaklines</p>
                 
                 <label className="flex items-center gap-2 cursor-pointer group">
                   <input
                     type="checkbox"
                     checked={stdConfig.individualSymbolLayers}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, individualSymbolLayers: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-cyan-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-cyan-500"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Individual Symbol Layers</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Individual Symbol Layers</span>
                 </label>
-                <p className="text-xs text-gray-500 ml-6">Separate layer per symbol type</p>
+                <p className="text-xs text-slate-500 ml-6">Separate layer per symbol type</p>
                 
                 <label className="flex items-center gap-2 cursor-pointer group">
                   <input
                     type="checkbox"
                     checked={stdConfig.individualAnnoLayers}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, individualAnnoLayers: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-cyan-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-cyan-500"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Annotation Layers</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Annotation Layers</span>
                 </label>
                 {stdConfig.individualAnnoLayers && (
                   <div className="ml-6 flex items-center gap-2">
-                    <span className="text-xs text-gray-500">Suffix:</span>
+                    <span className="text-xs text-slate-500">Suffix:</span>
                     <input
                       type="text"
                       value={stdConfig.annotationSuffix}
                       onChange={(e) => setStdConfig(prev => ({ ...prev, annotationSuffix: e.target.value || '_A' }))}
-                      className="w-16 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm font-mono"
+                      className="w-16 px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm font-mono"
                       placeholder="_A"
                     />
                   </div>
                 )}
-                <p className="text-xs text-gray-500 ml-6">Text/label layers for structures</p>
+                <p className="text-xs text-slate-500 ml-6">Text/label layers for structures</p>
               </div>
               
               {/* Existing vs Proposed */}
               <div className="space-y-3">
-                <h4 className="font-semibold text-orange-400 text-sm uppercase tracking-wide">Existing Features</h4>
+                <h4 className="font-semibold text-slate-400 text-sm uppercase tracking-wide">Existing Features</h4>
                 
                 <label className="flex items-center gap-2 cursor-pointer group">
                   <input
                     type="checkbox"
                     checked={stdConfig.separateExistingLayers}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, separateExistingLayers: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-orange-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-cyan-400"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Separate Existing Layers</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Separate Existing Layers</span>
                 </label>
                 {stdConfig.separateExistingLayers && (
                   <div className="ml-6 space-y-2">
@@ -1390,7 +1393,7 @@ Once you have standards, click the spreadsheet button to edit them.`,
                       <select
                         value={stdConfig.existingModifier}
                         onChange={(e) => setStdConfig(prev => ({ ...prev, existingModifier: e.target.value as 'prefix' | 'suffix' }))}
-                        className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-xs"
+                        className="px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-xs"
                       >
                         <option value="suffix">Suffix</option>
                         <option value="prefix">Prefix</option>
@@ -1399,11 +1402,11 @@ Once you have standards, click the spreadsheet button to edit them.`,
                         type="text"
                         value={stdConfig.existingValue}
                         onChange={(e) => setStdConfig(prev => ({ ...prev, existingValue: e.target.value || '-E' }))}
-                        className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm font-mono"
+                        className="w-20 px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm font-mono"
                         placeholder="-E"
                       />
                     </div>
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-slate-500">
                       Example: C-STRM-STRC{stdConfig.existingModifier === 'suffix' ? stdConfig.existingValue : ''}{stdConfig.existingModifier === 'prefix' ? ` → ${stdConfig.existingValue}C-STRM-STRC` : ''}
                     </p>
                   </div>
@@ -1414,9 +1417,9 @@ Once you have standards, click the spreadsheet button to edit them.`,
                     type="checkbox"
                     checked={stdConfig.separateDesignLayers}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, separateDesignLayers: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-orange-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-cyan-400"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Separate Design/Proposed Layers</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Separate Design/Proposed Layers</span>
                 </label>
                 {stdConfig.separateDesignLayers && (
                   <div className="ml-6 space-y-2">
@@ -1424,7 +1427,7 @@ Once you have standards, click the spreadsheet button to edit them.`,
                       <select
                         value={stdConfig.designModifier}
                         onChange={(e) => setStdConfig(prev => ({ ...prev, designModifier: e.target.value as 'prefix' | 'suffix' }))}
-                        className="px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-xs"
+                        className="px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-xs"
                       >
                         <option value="suffix">Suffix</option>
                         <option value="prefix">Prefix</option>
@@ -1433,11 +1436,11 @@ Once you have standards, click the spreadsheet button to edit them.`,
                         type="text"
                         value={stdConfig.designValue}
                         onChange={(e) => setStdConfig(prev => ({ ...prev, designValue: e.target.value || '-P' }))}
-                        className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm font-mono"
+                        className="w-20 px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm font-mono"
                         placeholder="-P"
                       />
                     </div>
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-slate-500">
                       Example: C-STRM-STRC{stdConfig.designModifier === 'suffix' ? stdConfig.designValue : ''}{stdConfig.designModifier === 'prefix' ? ` → ${stdConfig.designValue}C-STRM-STRC` : ''}
                     </p>
                   </div>
@@ -1448,32 +1451,32 @@ Once you have standards, click the spreadsheet button to edit them.`,
                     type="checkbox"
                     checked={stdConfig.existingItalicized}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, existingItalicized: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-orange-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-cyan-400"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Italicize Existing Text</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Italicize Existing Text</span>
                 </label>
                 {stdConfig.existingItalicized && (
                   <div className="ml-6 flex items-center gap-2">
-                    <span className="text-xs text-gray-500">Oblique angle:</span>
+                    <span className="text-xs text-slate-500">Oblique angle:</span>
                     <input
                       type="number"
                       value={stdConfig.existingItalicPercent}
                       onChange={(e) => setStdConfig(prev => ({ ...prev, existingItalicPercent: parseInt(e.target.value) || 25 }))}
-                      className="w-16 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm"
+                      className="w-16 px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm"
                       min={0}
                       max={45}
                     />
-                    <span className="text-xs text-gray-500">%</span>
+                    <span className="text-xs text-slate-500">%</span>
                   </div>
                 )}
-                <p className="text-xs text-gray-500 ml-6">
+                <p className="text-xs text-slate-500 ml-6">
                   <em style={{ fontStyle: 'oblique' }}>Italic text</em> for linetype text & symbols
                 </p>
               </div>
               
               {/* Utilities */}
               <div className="space-y-3">
-                <h4 className="font-semibold text-green-400 text-sm uppercase tracking-wide">Utilities to Include</h4>
+                <h4 className="font-semibold text-cyan-300 text-sm uppercase tracking-wide">Utilities to Include</h4>
                 
                 <div className="grid grid-cols-2 gap-2">
                   {[
@@ -1490,9 +1493,9 @@ Once you have standards, click the spreadsheet button to edit them.`,
                         type="checkbox"
                         checked={(stdConfig as any)[util.key]}
                         onChange={(e) => setStdConfig(prev => ({ ...prev, [util.key]: e.target.checked }))}
-                        className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-green-500"
+                        className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-cyan-400"
                       />
-                      <span className="text-xs text-gray-300 group-hover:text-white">{util.label}</span>
+                      <span className="text-xs text-slate-300 group-hover:text-white">{util.label}</span>
                     </label>
                   ))}
                 </div>
@@ -1500,21 +1503,21 @@ Once you have standards, click the spreadsheet button to edit them.`,
               
               {/* Vegetation */}
               <div className="space-y-3">
-                <h4 className="font-semibold text-lime-400 text-sm uppercase tracking-wide">Vegetation</h4>
+                <h4 className="font-semibold text-slate-400 text-sm uppercase tracking-wide">Vegetation</h4>
                 
                 <label className="flex items-center gap-2 cursor-pointer group">
                   <input
                     type="checkbox"
                     checked={stdConfig.includeTrees}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, includeTrees: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-lime-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-lime-500"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Include Trees</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Include Trees</span>
                 </label>
                 
                 {stdConfig.includeTrees && (
                   <div className="ml-6 space-y-1">
-                    <span className="text-xs text-gray-500">Caliper sizes (inches):</span>
+                    <span className="text-xs text-slate-500">Caliper sizes (inches):</span>
                     <input
                       type="text"
                       value={stdConfig.treeCaliberSizes.join(', ')}
@@ -1522,7 +1525,7 @@ Once you have standards, click the spreadsheet button to edit them.`,
                         const sizes = e.target.value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
                         setStdConfig(prev => ({ ...prev, treeCaliberSizes: sizes.length > 0 ? sizes : [6, 12, 24, 36] }));
                       }}
-                      className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm"
+                      className="w-full px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm"
                       placeholder="6, 12, 24, 36"
                     />
                   </div>
@@ -1531,38 +1534,38 @@ Once you have standards, click the spreadsheet button to edit them.`,
               
               {/* Environmental */}
               <div className="space-y-3">
-                <h4 className="font-semibold text-blue-400 text-sm uppercase tracking-wide">Environmental</h4>
+                <h4 className="font-semibold text-slate-400 text-sm uppercase tracking-wide">Environmental</h4>
                 
                 <label className="flex items-center gap-2 cursor-pointer group">
                   <input
                     type="checkbox"
                     checked={stdConfig.includeWetlands}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, includeWetlands: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-blue-500"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Wetlands/Waters</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Wetlands/Waters</span>
                 </label>
-                <p className="text-xs text-gray-500 ml-6">OHWM, regulated waters, wetland delineation</p>
+                <p className="text-xs text-slate-500 ml-6">OHWM, regulated waters, wetland delineation</p>
                 
                 <label className="flex items-center gap-2 cursor-pointer group">
                   <input
                     type="checkbox"
                     checked={stdConfig.includeFloodplain}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, includeFloodplain: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-blue-500"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Floodplain</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Floodplain</span>
                 </label>
-                <p className="text-xs text-gray-500 ml-6">100-yr, 500-yr, base flood elevation</p>
+                <p className="text-xs text-slate-500 ml-6">100-yr, 500-yr, base flood elevation</p>
               </div>
               
               {/* Line Drafting Controls (F2F) */}
               <div className="space-y-3">
-                <h4 className="font-semibold text-pink-400 text-sm uppercase tracking-wide">Line Drafting (F2F)</h4>
+                <h4 className="font-semibold text-slate-400 text-sm uppercase tracking-wide">Line Drafting (F2F)</h4>
                 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-xs text-gray-500">Begin Line</label>
+                    <label className="text-xs text-slate-500">Begin Line</label>
                     <input
                       type="text"
                       value={stdConfig.lineDrafting.beginLine}
@@ -1570,12 +1573,12 @@ Once you have standards, click the spreadsheet button to edit them.`,
                         ...prev, 
                         lineDrafting: { ...prev.lineDrafting, beginLine: e.target.value || 'B' }
                       }))}
-                      className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm font-mono"
+                      className="w-full px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm font-mono"
                       placeholder="B"
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500">End Line</label>
+                    <label className="text-xs text-slate-500">End Line</label>
                     <input
                       type="text"
                       value={stdConfig.lineDrafting.endLine}
@@ -1583,12 +1586,12 @@ Once you have standards, click the spreadsheet button to edit them.`,
                         ...prev, 
                         lineDrafting: { ...prev.lineDrafting, endLine: e.target.value || 'E' }
                       }))}
-                      className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm font-mono"
+                      className="w-full px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm font-mono"
                       placeholder="E"
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500">Close Polygon</label>
+                    <label className="text-xs text-slate-500">Close Polygon</label>
                     <input
                       type="text"
                       value={stdConfig.lineDrafting.closeLine}
@@ -1596,12 +1599,12 @@ Once you have standards, click the spreadsheet button to edit them.`,
                         ...prev, 
                         lineDrafting: { ...prev.lineDrafting, closeLine: e.target.value || 'C' }
                       }))}
-                      className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm font-mono"
+                      className="w-full px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm font-mono"
                       placeholder="C"
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500">Start Curve (PC)</label>
+                    <label className="text-xs text-slate-500">Start Curve (PC)</label>
                     <input
                       type="text"
                       value={stdConfig.lineDrafting.startCurve}
@@ -1609,12 +1612,12 @@ Once you have standards, click the spreadsheet button to edit them.`,
                         ...prev, 
                         lineDrafting: { ...prev.lineDrafting, startCurve: e.target.value || 'PC' }
                       }))}
-                      className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm font-mono"
+                      className="w-full px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm font-mono"
                       placeholder="PC"
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500">End Curve (PT)</label>
+                    <label className="text-xs text-slate-500">End Curve (PT)</label>
                     <input
                       type="text"
                       value={stdConfig.lineDrafting.endCurve}
@@ -1622,7 +1625,7 @@ Once you have standards, click the spreadsheet button to edit them.`,
                         ...prev, 
                         lineDrafting: { ...prev.lineDrafting, endCurve: e.target.value || 'PT' }
                       }))}
-                      className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm font-mono"
+                      className="w-full px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm font-mono"
                       placeholder="PT"
                     />
                   </div>
@@ -1635,27 +1638,27 @@ Once you have standards, click the spreadsheet button to edit them.`,
                           ...prev, 
                           lineDrafting: { ...prev.lineDrafting, caseSensitive: e.target.checked }
                         }))}
-                        className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-pink-500"
+                        className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-pink-500"
                       />
-                      <span className="text-xs text-gray-300">Case Sensitive</span>
+                      <span className="text-xs text-slate-300">Case Sensitive</span>
                     </label>
                   </div>
                 </div>
-                <p className="text-xs text-gray-500">Field codes: EP {stdConfig.lineDrafting.beginLine} (begin), EP {stdConfig.lineDrafting.endLine} (end), EP {stdConfig.lineDrafting.closeLine} (close)</p>
+                <p className="text-xs text-slate-500">Field codes: EP {stdConfig.lineDrafting.beginLine} (begin), EP {stdConfig.lineDrafting.endLine} (end), EP {stdConfig.lineDrafting.closeLine} (close)</p>
               </div>
               
               {/* Wildcards (F2F) */}
               <div className="space-y-3">
-                <h4 className="font-semibold text-violet-400 text-sm uppercase tracking-wide">Wildcards (F2F)</h4>
+                <h4 className="font-semibold text-slate-400 text-sm uppercase tracking-wide">Wildcards (F2F)</h4>
                 
                 <label className="flex items-center gap-2 cursor-pointer group">
                   <input
                     type="checkbox"
                     checked={stdConfig.wildcardEnabled}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, wildcardEnabled: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-violet-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-violet-500"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Enable Wildcards</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Enable Wildcards</span>
                 </label>
                 
                 {stdConfig.wildcardEnabled && (
@@ -1665,27 +1668,27 @@ Once you have standards, click the spreadsheet button to edit them.`,
                         type="checkbox"
                         checked={stdConfig.wildcardNumericSuffix}
                         onChange={(e) => setStdConfig(prev => ({ ...prev, wildcardNumericSuffix: e.target.checked }))}
-                        className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-violet-500"
+                        className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-violet-500"
                       />
-                      <span className="text-xs text-gray-300 group-hover:text-white">Numeric suffix (EP1, EP2, TC99)</span>
+                      <span className="text-xs text-slate-300 group-hover:text-white">Numeric suffix (EP1, EP2, TC99)</span>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer group">
                       <input
                         type="checkbox"
                         checked={stdConfig.wildcardAlphaSuffix}
                         onChange={(e) => setStdConfig(prev => ({ ...prev, wildcardAlphaSuffix: e.target.checked }))}
-                        className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-violet-500"
+                        className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-violet-500"
                       />
-                      <span className="text-xs text-gray-300 group-hover:text-white">Alpha suffix (EPA, EPB, TCZ)</span>
+                      <span className="text-xs text-slate-300 group-hover:text-white">Alpha suffix (EPA, EPB, TCZ)</span>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer group">
                       <input
                         type="checkbox"
                         checked={stdConfig.wildcardUnderscore}
                         onChange={(e) => setStdConfig(prev => ({ ...prev, wildcardUnderscore: e.target.checked }))}
-                        className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-violet-500"
+                        className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-violet-500"
                       />
-                      <span className="text-xs text-gray-300 group-hover:text-white">Underscore prefix (_EP, _TC)</span>
+                      <span className="text-xs text-slate-300 group-hover:text-white">Underscore prefix (_EP, _TC)</span>
                     </label>
                   </div>
                 )}
@@ -1693,31 +1696,31 @@ Once you have standards, click the spreadsheet button to edit them.`,
               
               {/* Surface Settings (F2F) */}
               <div className="space-y-3">
-                <h4 className="font-semibold text-teal-400 text-sm uppercase tracking-wide">Surface Settings</h4>
+                <h4 className="font-semibold text-slate-400 text-sm uppercase tracking-wide">Surface Settings</h4>
                 
                 <label className="flex items-center gap-2 cursor-pointer group">
                   <input
                     type="checkbox"
                     checked={stdConfig.autoDetectBreaklines}
                     onChange={(e) => setStdConfig(prev => ({ ...prev, autoDetectBreaklines: e.target.checked }))}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-teal-500"
+                    className="w-4 h-4 rounded bg-white/[0.055] border-white/[0.1] text-teal-500"
                   />
-                  <span className="text-sm text-gray-300 group-hover:text-white">Auto-detect Breaklines</span>
+                  <span className="text-sm text-slate-300 group-hover:text-white">Auto-detect Breaklines</span>
                 </label>
-                <p className="text-xs text-gray-500 ml-6">Automatically identify breakline codes</p>
+                <p className="text-xs text-slate-500 ml-6">Automatically identify breakline codes</p>
                 
                 {stdConfig.autoDetectBreaklines && (
                   <div className="ml-6 flex items-center gap-2">
-                    <span className="text-xs text-gray-500">Elevation threshold:</span>
+                    <span className="text-xs text-slate-500">Elevation threshold:</span>
                     <input
                       type="number"
                       value={stdConfig.breaklineElevationThreshold}
                       onChange={(e) => setStdConfig(prev => ({ ...prev, breaklineElevationThreshold: parseFloat(e.target.value) || 0.5 }))}
-                      className="w-16 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-gray-200 text-sm"
+                      className="w-16 px-2 py-1 bg-white/[0.055] border border-white/[0.1] rounded text-slate-200 text-sm"
                       step={0.1}
                       min={0}
                     />
-                    <span className="text-xs text-gray-500">ft</span>
+                    <span className="text-xs text-slate-500">ft</span>
                   </div>
                 )}
               </div>
@@ -1727,16 +1730,16 @@ Once you have standards, click the spreadsheet button to edit them.`,
             <div className="mt-6 flex justify-end gap-3">
               <button
                 onClick={() => setShowQuestionnaire(false)}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm"
+                className="px-4 py-2 bg-white/[0.055] hover:bg-white/[0.09] text-slate-300 rounded-lg text-sm"
               >
                 Cancel
               </button>
               <button
                 onClick={handleQuickGenerate}
                 disabled={loading}
-                className="px-6 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white rounded-lg text-sm font-medium"
+                className="px-6 py-2 bg-cyan-500/90 hover:bg-cyan-400 disabled:bg-white/[0.09] text-white rounded-lg text-sm font-medium"
               >
-                {loading ? '⏳ Generating...' : '⚡ Generate with These Settings'}
+                {loading ? 'Generating…' : 'Generate with these settings'}
               </button>
             </div>
           </div>
@@ -1744,7 +1747,7 @@ Once you have standards, click the spreadsheet button to edit them.`,
       )}
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto scrollbar-hide p-4 space-y-4 bg-gray-900/50" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+      <div className="flex-1 overflow-y-auto scrollbar-hide p-4 space-y-4 bg-[#070d16]/60" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
         {messages.map((message) => (
           <div
             key={message.id}
@@ -1753,8 +1756,8 @@ Once you have standards, click the spreadsheet button to edit them.`,
             <div
               className={`max-w-[80%] rounded-lg px-4 py-3 ${
                 message.role === 'user'
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-800 text-gray-200 border border-gray-700'
+                  ? 'bg-cyan-500/90 text-white'
+                  : 'bg-[#0b1420] text-slate-200 border border-white/[0.07]'
               }`}
             >
               <div className="text-sm whitespace-pre-wrap"
@@ -1777,17 +1780,17 @@ Once you have standards, click the spreadsheet button to edit them.`,
 
       {/* Starter Prompts - collapsible, toggled by lightbulb */}
       {showSuggestions && (
-        <div className="flex-shrink-0 px-4 pb-4 bg-gray-900/50">
+        <div className="flex-shrink-0 px-4 pb-4 bg-[#070d16]/60">
           <div className="flex items-center gap-2 mb-3">
-            <LightbulbIcon className="w-5 h-5 text-yellow-400 flex-shrink-0" />
-            <h3 className="font-semibold text-gray-400 text-sm">Suggested prompts:</h3>
+            <LightbulbIcon className="w-5 h-5 text-amber-300 flex-shrink-0" />
+            <h3 className="font-semibold text-slate-400 text-sm">Suggested prompts:</h3>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {STARTER_PROMPTS.map((prompt, idx) => (
               <button
                 key={idx}
                 onClick={() => { handleStarterPrompt(prompt); setShowSuggestions(false); }}
-                className="p-3 text-left text-gray-300 bg-gray-900/50 rounded-lg transition-colors duration-200 border border-gray-700 hover:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                className="p-3 text-left text-slate-300 bg-[#070d16]/60 rounded-lg transition-colors duration-200 border border-white/[0.07] hover:border-cyan-400/50 focus:outline-none focus:ring-2 focus:ring-cyan-400/40 text-sm"
               >
                 <p className="font-medium">"{prompt}"</p>
               </button>
@@ -1798,66 +1801,66 @@ Once you have standards, click the spreadsheet button to edit them.`,
 
       {/* Preview Panel */}
       {showPreview && generatedMarkdown && (
-        <div className="flex-shrink-0 border-t border-gray-700 bg-gray-800/50 p-4">
+        <div className="flex-shrink-0 border-t border-white/[0.07] bg-[#0b1420]/60 p-4">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="font-bold text-gray-200">📄 Generated Standards</h3>
+            <h3 className="text-[11px] font-semibold text-slate-200">Generated standards</h3>
             <div className="flex gap-2">
               <button
                 onClick={handleCopyMarkdown}
-                className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
+                className="text-xs px-2 py-1 bg-white/[0.055] hover:bg-white/[0.09] text-slate-300 rounded transition-colors"
                 title="Copy to clipboard"
               >
-                📋 Copy
+                <Copy className="mr-1 inline h-3 w-3" /> Copy
               </button>
               <button
                 onClick={handleDownloadMarkdown}
-                className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
+                className="text-xs px-2 py-1 bg-white/[0.055] hover:bg-white/[0.09] text-slate-300 rounded transition-colors"
                 title="Download .md file"
               >
-                ⬇️ Download
+                <Download className="mr-1 inline h-3 w-3" /> Download
               </button>
               <button
                 onClick={() => setShowPreview(false)}
-                className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
+                className="text-xs px-2 py-1 bg-white/[0.055] hover:bg-white/[0.09] text-slate-300 rounded transition-colors"
               >
-                ✕ Close
+                <X className="mr-1 inline h-3 w-3" /> Close
               </button>
             </div>
           </div>
-          <div className="bg-gray-950 text-gray-100 p-3 rounded text-xs font-mono max-h-48 overflow-y-auto scrollbar-hide border border-gray-700" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+          <div className="bg-[#050a12] text-slate-100 p-3 rounded text-xs font-mono max-h-48 overflow-y-auto scrollbar-hide border border-white/[0.07]" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
             <pre className="whitespace-pre-wrap">{generatedMarkdown}</pre>
           </div>
           <div className="mt-3 flex gap-2">
             <button
               onClick={handleApplyStandard}
               disabled={loading}
-              className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors disabled:bg-gray-600"
+              className="flex-1 px-4 py-2 bg-cyan-500/90 hover:bg-cyan-400 text-white rounded-lg font-medium transition-colors disabled:bg-white/[0.09]"
             >
-              ✓ Apply These Standards
+              <Sparkles className="mr-1 inline h-3.5 w-3.5" /> Apply these standards
             </button>
             <button
               onClick={handleOpenSpreadsheet}
               disabled={loading}
-              className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-lg font-medium transition-colors disabled:bg-gray-600"
+              className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-cyan-300 hover:from-cyan-400 hover:to-cyan-300 text-white rounded-lg font-medium transition-colors disabled:bg-white/[0.09]"
               title="View and edit as spreadsheet"
             >
-              📊 View Spreadsheet
+              <Table2 className="mr-1 inline h-3.5 w-3.5" /> View spreadsheet
             </button>
             <button
               onClick={() => {
                 setInput("Let's modify this - ");
                 inputRef.current?.focus();
               }}
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg font-medium transition-colors"
+              className="px-4 py-2 bg-white/[0.055] hover:bg-white/[0.09] text-slate-300 rounded-lg font-medium transition-colors"
             >
-              ✏️ Modify
+              Modify
             </button>
           </div>
         </div>
       )}
 
       {/* Input Area */}
-      <div className="flex-shrink-0 p-4 border-t border-gray-700 bg-gray-800/30">
+      <div className="flex-shrink-0 p-4 border-t border-white/[0.07] bg-[#080e17]">
         <div className="flex gap-2">
           <div className="relative flex-1">
             <textarea
@@ -1868,12 +1871,12 @@ Once you have standards, click the spreadsheet button to edit them.`,
               placeholder="Describe your CAD standards requirements..."
               disabled={loading}
               rows={2}
-              className="w-full px-4 py-2 pr-12 bg-gray-900 border border-gray-700 text-gray-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:bg-gray-800 placeholder-gray-500"
+              className="w-full px-4 py-2 pr-12 bg-[#070d16] border border-white/[0.07] text-slate-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-cyan-400/40 focus:border-transparent disabled:bg-[#0b1420] placeholder:text-slate-600"
             />
             {/* Lightbulb button - always available */}
             <button
               onClick={() => setShowSuggestions(p => !p)}
-              className={`absolute right-3 top-3 p-1.5 text-yellow-400 hover:bg-yellow-500/10 rounded-full transition-colors ${showSuggestions ? 'bg-yellow-500/20' : ''}`}
+              className={`absolute right-3 top-3 p-1.5 text-amber-300 hover:bg-amber-400/10 rounded-full transition-colors ${showSuggestions ? 'bg-amber-400/15' : ''}`}
               title="Suggested Prompts"
             >
               <LightbulbIcon className="w-5 h-5" />
@@ -1883,25 +1886,25 @@ Once you have standards, click the spreadsheet button to edit them.`,
             <button
               onClick={handleSendMessage}
               disabled={!input.trim() || loading}
-              className={`px-6 py-2 ${turboMode ? 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600' : 'bg-indigo-600 hover:bg-indigo-700'} text-white rounded-lg font-medium transition-colors disabled:bg-gray-600 disabled:cursor-not-allowed`}
+              className={`px-6 py-2 ${turboMode ? 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600' : 'bg-cyan-500/90 hover:bg-cyan-400'} text-white rounded-lg font-medium transition-colors disabled:bg-white/[0.09] disabled:cursor-not-allowed`}
             >
-              {turboMode ? '⚡ Send' : 'Send'}
+              Send
             </button>
             <button
               onClick={() => setTurboMode(!turboMode)}
               className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                 turboMode 
                   ? 'bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/50 text-amber-300 hover:from-amber-500/30 hover:to-orange-500/30' 
-                  : 'bg-gray-700/50 border border-gray-600 text-gray-400 hover:bg-gray-700 hover:text-gray-300'
+                  : 'bg-white/[0.05] border border-white/[0.1] text-slate-400 hover:bg-white/[0.09] hover:text-slate-200'
               }`}
               title={turboMode ? 'Turbo Mode ON: Using Gemini 3.7 Flash (deeper reasoning profile)' : 'Turbo Mode OFF: Using Gemini 3.7 Flash (balanced profile)'}
             >
-              {turboMode ? '⚡ TURBO' : '💤 Normal'}
+              {turboMode ? 'Turbo' : 'Normal'}
             </button>
           </div>
         </div>
-        <p className="text-xs text-gray-500 mt-2">
-          Press Enter to send, Shift+Enter for new line • {turboMode ? '⚡ Turbo: Gemini 3.7 Flash (deeper reasoning profile)' : '💤 Normal: Gemini 3.7 Flash (balanced profile)'}
+        <p className="text-xs text-slate-500 mt-2">
+          Press Enter to send, Shift+Enter for a new line • {turboMode ? 'Turbo: deeper reasoning profile' : 'Normal: balanced profile'}
         </p>
       </div>
 

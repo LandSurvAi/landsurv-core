@@ -32,7 +32,8 @@ interface CurveLeg {
   type: 'curve';
   direction: 'left' | 'right';
   radius: number;
-  delta: number;
+  /** Decimal degrees or a DMS string copied from the user's description. */
+  delta: number | string;
   unit?: string;
 }
 
@@ -87,6 +88,53 @@ function normAz(az: number): number {
   return ((az % TWO_PI) + TWO_PI) % TWO_PI;
 }
 
+/**
+ * Parse a curve deflection angle from a decimal number or a DMS / decimal
+ * string. Models sometimes copy the surveyor's "45°00'00\"" straight into
+ * the payload even though the schema asks for decimal degrees.
+ */
+function parseDeltaDegrees(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== 'string' || !value.trim()) return null;
+  // Parse decimal degrees or DMS without normalising: a 450° input is still
+  // invalid, not the equivalent 90° curve.
+  const normalized = value
+    .trim()
+    .toUpperCase()
+    .replace(/(\d)\s*[DMS]/g, '$1 ')
+    .replace(/[°"″′'“”‘’]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const parts = normalized.split(' ').filter(Boolean).map(parseFloat);
+  if (parts.length === 0 || parts.length > 3 || parts.some(part => !Number.isFinite(part))) {
+    return null;
+  }
+  const degrees = parts[0] + (parts[1] ?? 0) / 60 + (parts[2] ?? 0) / 3600;
+  return Number.isFinite(degrees) ? degrees : null;
+}
+
+function formatAngleInput(value: unknown): string {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return `${value}°`;
+  return '(missing or non-numeric)';
+}
+
+/**
+ * A failed CACP action should ask for the one value it needs instead of
+ * dead-ending the conversation. The host turns this payload into a normal
+ * chat question so the agent can collect the answer and retry.
+ */
+function askForInput(
+  field: string,
+  question: string,
+  hint: string,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { needsInput: { field, question, hint, ...extra } };
+}
+
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
@@ -107,12 +155,30 @@ export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkill
         const startN = typeof d.startNorthing === 'number' ? d.startNorthing : null;
         const startE = typeof d.startEasting === 'number' ? d.startEasting : null;
         if (startN === null || startE === null) {
-          return respond(message, false, undefined, 'startNorthing and startEasting are required.');
+          return respond(
+            message,
+            false,
+            askForInput(
+              'start',
+              'Where should this alignment begin?',
+              'Give me the point of beginning as a northing and easting (or the point number I should use).',
+            ),
+            'startNorthing and startEasting are required.',
+          );
         }
 
         const legsRaw = d.legs;
         if (!Array.isArray(legsRaw) || legsRaw.length === 0) {
-          return respond(message, false, undefined, 'legs array is required and must not be empty.');
+          return respond(
+            message,
+            false,
+            askForInput(
+              'legs',
+              'What tangents and curves define this alignment?',
+              'Describe each straight run with a bearing and distance, and each curve with a direction, radius, and delta angle.',
+            ),
+            'legs array is required and must not be empty.',
+          );
         }
         const legs = legsRaw as CLLeg[];
 
@@ -145,8 +211,13 @@ export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkill
                 return respond(
                   message,
                   false,
-                  undefined,
-                  `${legLabel}: could not parse bearing "${leg.bearing}". Use quadrant form (e.g. "N 45°00'00" E") or decimal degrees.`,
+                  askForInput(
+                    'bearing',
+                    `What bearing should ${legLabel} use?`,
+                    `Use quadrant form such as N 45°00'00" E, a decimal azimuth, or a compass direction.`,
+                    { legIndex: legIdx + 1, legLabel },
+                  ),
+                  `${legLabel}: could not parse bearing "${leg.bearing}". Use quadrant form (e.g. N 45°00'00" E) or decimal degrees.`,
                 );
               }
               curAzRad = az;
@@ -155,7 +226,12 @@ export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkill
               return respond(
                 message,
                 false,
-                undefined,
+                askForInput(
+                  'bearing',
+                  `What bearing starts ${legLabel}?`,
+                  'The first straight run needs a bearing; later runs can inherit it.',
+                  { legIndex: legIdx + 1, legLabel },
+                ),
                 `${legLabel}: no bearing established. The first tangent leg must include a bearing.`,
               );
             }
@@ -165,7 +241,12 @@ export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkill
               return respond(
                 message,
                 false,
-                undefined,
+                askForInput(
+                  'distance',
+                  `How long is ${legLabel}?`,
+                  'Enter a positive distance with a unit such as ft, m, mi, ch, or lk.',
+                  { legIndex: legIdx + 1, legLabel },
+                ),
                 `${legLabel}: distance must be a positive number (got ${leg.distance} ${leg.unit ?? 'ft'}).`,
               );
             }
@@ -179,7 +260,12 @@ export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkill
               return respond(
                 message,
                 false,
-                undefined,
+                askForInput(
+                  'bearing',
+                  `What bearing leads into ${legLabel}?`,
+                  'A curve needs the bearing of the straight run before it.',
+                  { legIndex: legIdx + 1, legLabel },
+                ),
                 `${legLabel}: cannot place a curve without a prior tangent bearing.`,
               );
             }
@@ -189,20 +275,31 @@ export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkill
               return respond(
                 message,
                 false,
-                undefined,
+                askForInput(
+                  'radius',
+                  `What radius should ${legLabel} use?`,
+                  'Enter a positive radius with a unit such as ft or m.',
+                  { legIndex: legIdx + 1, legLabel },
+                ),
                 `${legLabel}: radius must be a positive number (got ${leg.radius} ${leg.unit ?? 'ft'}).`,
               );
             }
 
-            const deltaRad = leg.delta * RAD_PER_DEG;
-            if (!Number.isFinite(deltaRad) || deltaRad <= 0 || deltaRad >= Math.PI) {
+            const deltaDegrees = parseDeltaDegrees(leg.delta);
+            if (deltaDegrees === null || deltaDegrees <= 0 || deltaDegrees >= 180) {
               return respond(
                 message,
                 false,
-                undefined,
-                `${legLabel}: delta must be between 0 and 180 degrees exclusive (got ${leg.delta}°).`,
+                askForInput(
+                  'delta',
+                  `What deflection angle should ${legLabel} use?`,
+                  'Enter an angle between 0° and 180° (exclusive). Decimal degrees and DMS are both accepted.',
+                  { legIndex: legIdx + 1, legLabel, received: leg.delta },
+                ),
+                `${legLabel}: delta must be between 0 and 180 degrees exclusive (got ${formatAngleInput(leg.delta)}).`,
               );
             }
+            const deltaRad = deltaDegrees * RAD_PER_DEG;
 
             // T = tangent length from PC to PI (and from PI to PT)
             const T = R * Math.tan(deltaRad / 2);
@@ -233,7 +330,12 @@ export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkill
             return respond(
               message,
               false,
-              undefined,
+              askForInput(
+                'type',
+                `Is ${legLabel} a tangent or a curve?`,
+                'Choose the leg type so I can recompute the alignment.',
+                { legIndex: legIdx + 1, legLabel, options: ['Tangent', 'Curve'] },
+              ),
               `${legLabel}: unknown type "${(leg as { type?: unknown }).type ?? '?'}". Must be "tangent" or "curve".`,
             );
           }

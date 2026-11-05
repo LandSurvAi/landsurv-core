@@ -13,6 +13,7 @@
  */
 
 import React, { useState } from 'react';
+import { AlertTriangle, CheckCircle2, Download, FileText, Loader2, Upload, X } from 'lucide-react';
 import { useMirrorError } from '../../hooks/useMirrorError';
 import { StandardDefinition } from '../../contexts/types/CadManager.types';
 import { InferenceService } from '../../services/InferenceService';
@@ -168,131 +169,118 @@ export const StandardUpload: React.FC<StandardUploadProps> = ({
   const fileSizeKB = selectedFile ? (selectedFile.size / 1024).toFixed(1) : '0';
 
   return (
-    <div className="standard-upload-container p-6">
-      <h2 className="text-xl font-bold mb-4 text-gray-200 light-theme:text-gray-800">Upload Standards or Codes</h2>
+    <div className="standard-upload-container p-4">
+      <div className="mb-4 flex items-start gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-cyan-400/20 bg-cyan-400/10 text-cyan-300">
+          <Upload className="h-4 w-4" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-[13px] font-semibold text-white">Import a standards file</h2>
+          <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-500">
+            Markdown, CSV, XML, JSON, Trimble FXL, or Carlson FCL. The agent parses the file into editable codes.
+          </p>
+        </div>
+      </div>
 
-      {/* File Input */}
-      <div className="mb-6">
-        <label className="block text-sm font-medium text-gray-300 mb-2 light-theme:text-gray-700">
-          Select File (any format)
-        </label>
+      <label
+        className={`flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-white/[0.12] bg-white/[0.02] px-4 py-7 text-center transition-colors hover:border-cyan-400/35 hover:bg-cyan-400/[0.04] ${
+          loading ? 'pointer-events-none opacity-50' : ''
+        }`}
+      >
+        <span className="grid h-9 w-9 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.04] text-cyan-300">
+          <Upload className="h-4 w-4" />
+        </span>
+        <span className="text-[11.5px] font-semibold text-slate-200">Choose a standards file</span>
+        <span className="text-[9.5px] text-slate-500">.md · .csv · .txt · .xml · .json · .fxl · .fcl</span>
         <input
           type="file"
           accept={SUPPORTED_EXTENSIONS.join(',')}
           onChange={handleFileSelected}
           disabled={loading}
-          className="block w-full text-sm text-gray-400
-            file:mr-4 file:py-2 file:px-4
-            file:rounded-md file:border-0
-            file:text-sm file:font-semibold
-            file:bg-indigo-600 file:text-white
-            hover:file:bg-indigo-700
-            disabled:opacity-50 disabled:cursor-not-allowed"
+          className="sr-only"
         />
-      </div>
+      </label>
 
-      {/* File Info */}
       {selectedFile && (
-        <div className="mb-6 p-3 bg-indigo-900/30 rounded border border-indigo-500/30">
-          <p className="text-sm text-indigo-200">
-            <strong>Selected:</strong> {selectedFile.name} ({fileSizeKB} KB)
-          </p>
+        <div className="mt-3 flex items-center gap-2.5 rounded-lg border border-cyan-400/20 bg-cyan-400/[0.05] px-3 py-2">
+          <FileText className="h-4 w-4 shrink-0 text-cyan-300" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[10.5px] font-medium text-slate-200">{selectedFile.name}</p>
+            <p className="text-[9px] text-slate-500">{fileSizeKB} KB</p>
+          </div>
+          <button
+            onClick={handleClear}
+            disabled={loading}
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-200 disabled:opacity-40"
+            title="Clear selected file"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 
-      {/* Preview */}
       {preview && (
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-300 mb-2 light-theme:text-gray-700">
-            Preview:
-          </label>
-          <div className="bg-gray-900 border border-gray-700 rounded p-4 max-h-64 overflow-y-auto light-theme:bg-white light-theme:border-gray-300">
-            <pre className="text-xs text-gray-300 whitespace-pre-wrap break-words font-mono light-theme:text-gray-600">
-              {preview}
-            </pre>
+        <div className="mt-3">
+          <label className="mb-1.5 block text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Preview</label>
+          <div className="max-h-52 overflow-y-auto rounded-lg border border-white/[0.07] bg-[#050a12] p-2.5">
+            <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-slate-400">{preview}</pre>
           </div>
         </div>
       )}
 
-      {/* Error Message */}
       {error && (
-        <div className="mb-6 p-4 bg-red-900/30 rounded border border-red-500/30">
-          <p className="text-sm text-red-300">
-            <strong>Error:</strong> {error}
-          </p>
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/[0.07] px-3 py-2 text-[10.5px] text-red-300">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span><strong className="font-semibold">Error:</strong> {error}</span>
         </div>
       )}
 
-      {/* Success Message */}
       {success && (
-        <div className="mb-6 p-4 bg-green-900/30 rounded border border-green-500/30">
-          <p className="text-sm text-green-300">
-            <strong>{success}</strong>
-          </p>
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.07] px-3 py-2 text-[10.5px] text-emerald-300">
+          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{success}</span>
         </div>
       )}
 
-      {/* Loading Indicator */}
       {loading && (
-        <div className="mb-6 p-4 bg-yellow-900/30 rounded border border-yellow-500/30">
-          <p className="text-sm text-yellow-300">
-            <strong>Parsing...</strong> Please wait while we analyze the standards file.
-          </p>
+        <div className="mt-3 flex items-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-400/[0.05] px-3 py-2 text-[10.5px] text-cyan-200">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Parsing the standards file…
         </div>
       )}
 
-            {/* Action Buttons */}
-      <div className="flex flex-wrap gap-3">
+      <div className="mt-3 flex flex-wrap gap-1.5">
         {selectedFile?.name.toLowerCase().endsWith('.fcl') && (
           <button
             onClick={handleFclExport}
             disabled={loading}
-            className="px-6 py-2 bg-emerald-600 text-white rounded-md font-medium
-              hover:bg-emerald-700 disabled:bg-gray-600 disabled:cursor-not-allowed
-              transition-colors duration-200 flex items-center gap-2"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.025] px-2.5 text-[10.5px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.05] hover:text-white disabled:opacity-40"
           >
-            📥 Export to Trimble CSV
+            <Download className="h-3.5 w-3.5" />
+            Export Trimble CSV
           </button>
         )}
         <button
           onClick={handleParseClick}
           disabled={!selectedFile || !fileContent || loading}
-          className="px-6 py-2 bg-indigo-600 text-white rounded-md font-medium
-            hover:bg-indigo-700 disabled:bg-gray-600 disabled:cursor-not-allowed
-            transition-colors duration-200"
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-cyan-400/35 bg-cyan-400/10 px-2.5 text-[10.5px] font-semibold text-cyan-200 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {loading ? 'Parsing...' : 'Parse Standard'}
+          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+          {loading ? 'Parsing…' : 'Parse standard'}
         </button>
         <button
           onClick={handleClear}
           disabled={loading}
-          className="px-6 py-2 bg-gray-700 text-gray-300 rounded-md font-medium
-            hover:bg-gray-600 disabled:bg-gray-700 disabled:cursor-not-allowed
-            transition-colors duration-200"
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.025] px-2.5 text-[10.5px] font-semibold text-slate-400 transition-colors hover:border-white/[0.16] hover:bg-white/[0.05] hover:text-white disabled:opacity-40"
         >
+          <X className="h-3.5 w-3.5" />
           Clear
         </button>
       </div>
 
-      {/* Info Text */}
-      <p className="text-xs text-gray-500 mt-4 mb-2">
-        <strong>Supported formats:</strong> .md, .csv, .txt, .xml, .json, .fxl, .fcl
+      <p className="mt-3 text-[9px] leading-relaxed text-slate-600">
+        Upload any file containing survey codes, standards definitions, or point code lists. The agent parses and normalizes it regardless of format.
       </p>
-
-      <p className="text-xs text-gray-500 mb-2">
-        Upload any file containing survey codes, standards definitions, or point code lists. 
-        The AI will parse and interpret the content regardless of format.
-      </p>
-      <div className="bg-gray-950 text-gray-100 p-3 rounded text-xs font-mono overflow-x-auto border border-gray-700">
-        <pre>{`Examples:
-• Markdown table with code definitions
-• CSV with point codes (CODE, DESCRIPTION, LAYER...)
-• Plain text list of field codes
-• XML/FXL feature definitions
-• Carlson FCL code libraries (Convert to Trimble CSV)
-• Any structured or unstructured code list`}</pre>
-
-      </div>
     </div>
   );
 };

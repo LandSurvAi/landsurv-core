@@ -365,20 +365,20 @@ Remember:
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-900/50 rounded-lg border border-gray-700">
+    <div className="flex flex-col h-full bg-[#070d16]/60 rounded-lg border border-white/[0.07]">
       {/* Header */}
-      <div className="flex items-center justify-between p-3 border-b border-gray-700">
+      <div className="flex items-center justify-between p-3 border-b border-white/[0.07]">
         <div>
           <h3 className="text-sm font-medium text-white">
             🤖 AI Layer Analysis
           </h3>
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-slate-400">
             Analyzing {layers.length} layers from {drawingName}
           </p>
         </div>
         <button
           onClick={onCancel}
-          className="px-2 py-1 text-gray-400 hover:text-white text-sm"
+          className="px-2 py-1 text-slate-400 hover:text-white text-sm"
         >
           ✕ Cancel
         </button>
@@ -394,8 +394,8 @@ Remember:
             <div
               className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
                 msg.role === 'user'
-                  ? 'bg-cyan-600/30 border border-cyan-500/30 text-gray-100'
-                  : 'bg-gray-800 border border-gray-700 text-gray-200'
+                  ? 'bg-cyan-600/30 border border-cyan-500/30 text-slate-100'
+                  : 'bg-[#0b1420] border border-white/[0.07] text-slate-200'
               }`}
             >
               <div className="whitespace-pre-wrap">{msg.content}</div>
@@ -405,17 +405,17 @@ Remember:
         
         {isLoading && (
           <div className="flex justify-start">
-            <div className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+            <div className="bg-[#0b1420] border border-white/[0.07] rounded-lg px-3 py-2">
               <div className="flex items-center gap-2">
                 <div className="w-4 h-4 border-2 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin" />
-                <span className="text-sm text-gray-400">AI is thinking...</span>
+                <span className="text-sm text-slate-400">AI is thinking...</span>
               </div>
             </div>
           </div>
         )}
         
         {error && (
-          <div className="bg-red-900/30 border border-red-500/30 rounded-lg px-3 py-2">
+          <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
             <p className="text-sm text-red-400">⚠️ {error}</p>
           </div>
         )}
@@ -425,14 +425,14 @@ Remember:
       
       {/* Generated Standard Preview */}
       {generatedStandard && (
-        <div className="p-3 border-t border-gray-700 bg-green-900/20">
+        <div className="p-3 border-t border-white/[0.07] bg-emerald-500/10">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-green-400">
+            <span className="text-sm text-emerald-300">
               ✓ Generated {generatedStandard.codes.length} codes
             </span>
             <button
               onClick={handleAcceptStandard}
-              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium transition-colors"
+              className="px-3 py-1.5 bg-cyan-500/90 hover:bg-cyan-400 text-white rounded text-sm font-medium transition-colors"
             >
               Accept & Use Standard
             </button>
@@ -441,7 +441,7 @@ Remember:
       )}
       
       {/* Input Area */}
-      <div className="p-3 border-t border-gray-700">
+      <div className="p-3 border-t border-white/[0.07]">
         <div className="flex gap-2">
           <textarea
             ref={inputRef}
@@ -449,7 +449,7 @@ Remember:
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Answer the AI's questions or ask your own..."
-            className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 resize-none focus:outline-none focus:border-cyan-500"
+            className="flex-1 bg-[#0b1420] border border-white/[0.07] rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 resize-none focus:outline-none focus:border-cyan-500"
             rows={2}
             disabled={isLoading}
           />
@@ -457,7 +457,7 @@ Remember:
             <button
               onClick={handleSend}
               disabled={!inputValue.trim() || isLoading}
-              className="px-3 py-2 bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-700 disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
+              className="px-3 py-2 bg-cyan-600 hover:bg-cyan-700 disabled:bg-white/[0.06] disabled:opacity-50 text-white rounded-lg text-sm transition-colors"
             >
               Send
             </button>
@@ -465,7 +465,7 @@ Remember:
               <button
                 onClick={handleGenerateNow}
                 disabled={isLoading}
-                className="px-3 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:opacity-50 text-white rounded-lg text-xs transition-colors"
+                className="px-3 py-2 bg-cyan-500/90 hover:bg-cyan-400 disabled:bg-white/[0.06] disabled:opacity-50 text-white rounded-lg text-xs transition-colors"
                 title="Ask AI to generate the standard now"
               >
                 Generate

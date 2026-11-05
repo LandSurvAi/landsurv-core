@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useCadManager } from '../contexts/CadManagerContext.tsx';
+import { scoreStandardsMatch } from '../services/standardsA2UI.ts';
 import type { A2UIStandardsFacet, A2UIStandardsFilter } from '../types.ts';
 
 const SearchGlyph = () => (
@@ -72,30 +73,44 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
     [codes]
   );
 
-  const normalized = query.trim().toLowerCase();
-  const matches = (values: Array<string | number | undefined | null>) =>
-    !normalized || values.some(value => String(value ?? '').toLowerCase().includes(normalized));
+  const normalized = query.trim();
+  const rank = (values: Array<string | number | undefined | null>) =>
+    scoreStandardsMatch(values, normalized);
+  const ranked = <T,>(rows: T[], values: (row: T) => Array<string | number | undefined | null>): T[] =>
+    rows
+      .map(row => ({ row, score: rank(values(row)) }))
+      .filter(entry => entry.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(entry => entry.row);
 
-  const filteredCodes = codes.filter(code =>
-    matches([
-      code.code,
-      code.description,
-      code.pointLayer,
-      code.lineLayer,
-      code.lineType,
-      code.category,
-      symbolLabel(code.symbol),
-    ])
-  );
-  const filteredLayers = layers.filter(layer =>
-    matches([layer.name, layer.description, layer.linetype, layer.isPointLayer ? 'point' : '', layer.isLineLayer ? 'line' : ''])
-  );
-  const filteredLinetypes = linetypes.filter(linetype =>
-    matches([linetype.name, linetype.description, linetype.patternLength, linetype.isComplex ? 'complex' : ''])
-  );
-  const filteredSymbols = symbols.filter(code =>
-    matches([code.code, code.description, symbolLabel(code.symbol), code.category])
-  );
+  const filteredCodes = ranked(codes, code => [
+    code.code,
+    code.description,
+    code.pointLayer,
+    code.lineLayer,
+    code.lineType,
+    code.category,
+    symbolLabel(code.symbol),
+  ]);
+  const filteredLayers = ranked(layers, layer => [
+    layer.name,
+    layer.description,
+    layer.linetype,
+    layer.isPointLayer ? 'point' : '',
+    layer.isLineLayer ? 'line' : '',
+  ]);
+  const filteredLinetypes = ranked(linetypes, linetype => [
+    linetype.name,
+    linetype.description,
+    linetype.patternLength,
+    linetype.isComplex ? 'complex' : '',
+  ]);
+  const filteredSymbols = ranked(symbols, code => [
+    code.code,
+    code.description,
+    symbolLabel(code.symbol),
+    code.category,
+  ]);
 
   if (!standard) {
     return (
@@ -184,7 +199,7 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
         ))}
       </div>
 
-      <div className="max-h-56 overflow-y-auto border-t border-white/[0.06]">
+      <div className="max-h-56 overflow-x-auto overflow-y-auto border-t border-white/[0.06]">
         {(facet === 'layers') && (
           <table className="w-full border-collapse">
             <thead>
@@ -285,7 +300,7 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
 
         {resultCount === 0 && (
           <div className="px-3 py-5 text-center text-[10.5px] text-slate-500">
-            No rows match {query.trim() ? `“${query.trim()}”` : 'this filter'}. Adjust the filter above.
+            No rows match {query.trim() ? `“${query.trim()}”` : 'this filter'} — even with related-term search. Adjust the filter above.
           </div>
         )}
       </div>

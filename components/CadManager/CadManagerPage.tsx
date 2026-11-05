@@ -19,6 +19,27 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Activity,
+  AlertTriangle,
+  ArrowUpRight,
+  CheckCircle2,
+  ChevronRight,
+  Download,
+  FolderOpen,
+  KeyRound,
+  Layers,
+  LayoutGrid,
+  ListTree,
+  Loader2,
+  Plus,
+  PlugZap,
+  RefreshCw,
+  Save,
+  Sparkles,
+  Table2,
+  Upload,
+} from 'lucide-react';
 import { useCadManagerContext } from '../../contexts/CadManagerContext';
 import { useMirrorError } from '../../hooks/useMirrorError';
 import { InferenceService } from '../../services/InferenceService';
@@ -1275,20 +1296,28 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
     : null;
 
   return (
-    <div className="w-full h-full bg-gray-900 flex flex-col overflow-hidden light-theme:bg-white">
-      {/* Header */}
-      <header className="flex-shrink-0 p-4 bg-gray-800/40 backdrop-blur border-b border-gray-700/30 light-theme:bg-gray-50/40 light-theme:border-gray-300/30">
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <div>
-              <h3 className="text-xl font-semibold text-gray-200 flex items-center gap-2 light-theme:text-gray-800">
-                CAD Manager
-              </h3>
-              <p className="text-sm text-gray-400 mt-1">Intelligent code matching for Civil 3D surveys</p>
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#070c14] text-slate-200">
+      {/* Workspace header */}
+      <header className="shrink-0 border-b border-white/[0.07] bg-[#0a111c]/90 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-400/10 text-cyan-300">
+              <Table2 className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="truncate text-[13.5px] font-semibold tracking-tight text-white">CAD Manager</h1>
+                <span className="rounded border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.16em] text-cyan-300/80">
+                  A2UI
+                </span>
+              </div>
+              <p className="truncate text-[10.5px] text-slate-500">Standards workspace · codes, layers, and Civil 3D export</p>
             </div>
-            {/* Session Name */}
-            <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-gray-800/50 rounded-lg border border-gray-700">
-              <span className="text-xs text-gray-500">Session:</span>
+          </div>
+
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            <div className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.025] px-2.5 py-1.5">
+              <span className="text-[8.5px] font-bold uppercase tracking-[0.14em] text-slate-500">Session</span>
               <input
                 type="text"
                 value={currentSessionName}
@@ -1296,147 +1325,168 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
                   setCurrentSessionName(e.target.value);
                   setHasUnsavedChanges(true);
                 }}
-                className="bg-transparent text-sm text-gray-200 font-medium border-none focus:outline-none w-40"
+                className="w-32 bg-transparent text-[11px] font-medium text-slate-200 outline-none placeholder:text-slate-600"
                 placeholder="Session name..."
+                aria-label="Session name"
               />
-              {hasUnsavedChanges && (
-                <span className="w-2 h-2 bg-yellow-500 rounded-full" title="Unsaved changes" />
-              )}
+              {hasUnsavedChanges && <span className="h-1.5 w-1.5 rounded-full bg-amber-400" title="Unsaved changes" />}
             </div>
-          </div>
-          <div className="flex items-center gap-2">
             <button
               onClick={handleNewSession}
-              className="px-3 py-2 bg-emerald-600/80 hover:bg-emerald-600 text-white rounded-md text-sm font-medium transition-colors"
               title="Start a new session"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.025] px-2.5 text-[10.5px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.05] hover:text-white"
             >
-              ➕ New
+              <Plus className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">New</span>
             </button>
             <button
               onClick={() => setIsSessionModalOpen(true)}
-              className="px-3 py-2 bg-blue-600/80 hover:bg-blue-600 text-white rounded-md text-sm font-medium transition-colors"
-              title="Manage Sessions"
+              title="Manage sessions"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.025] px-2.5 text-[10.5px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.05] hover:text-white"
             >
-              📁 Sessions
+              <FolderOpen className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Sessions</span>
             </button>
             <button
               onClick={handleSaveSession}
-              className={`px-3 py-2 text-white rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                hasUnsavedChanges 
-                  ? 'bg-green-600 hover:bg-green-700' 
-                  : 'bg-gray-600 hover:bg-gray-500'
-              }`}
               title="Save session (Ctrl+S)"
+              className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[10.5px] font-semibold transition-colors ${
+                hasUnsavedChanges
+                  ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-200 hover:border-cyan-300/60 hover:bg-cyan-400/20 hover:text-white'
+                  : 'border-white/[0.08] bg-white/[0.025] text-slate-400 hover:border-white/[0.16] hover:bg-white/[0.05] hover:text-white'
+              }`}
             >
-              💾 Save
-              {hasUnsavedChanges && <span className="text-xs opacity-70">*</span>}
+              <Save className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Save</span>
+              {hasUnsavedChanges && <span className="h-1 w-1 rounded-full bg-cyan-300" />}
             </button>
           </div>
         </div>
       </header>
 
-      {/* Error Bar */}
-      {error && (
-        <div className="bg-red-900/30 border-b border-red-500/30 px-4 py-2">
-          <p className="text-red-300 text-sm"><strong>Error:</strong> {error}</p>
-        </div>
-      )}
-
-      {/* Progress Steps */}
-      <div className="flex-shrink-0 px-4 py-3 bg-gray-800/30 border-b border-gray-700/30 light-theme:bg-gray-100/30 light-theme:border-gray-300/30">
-        <div className="flex gap-6 flex-wrap">
-          {phases.map((phase, idx) => (
-            <div key={idx} className="flex items-center gap-2">
-              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${phase.complete ? 'bg-green-500 text-white' : 'bg-gray-700 text-gray-400 light-theme:bg-gray-300 light-theme:text-gray-600'}`}>
-                {phase.complete ? '✓' : idx + 1}
-              </div>
-              <div>
-                <p className="font-medium text-sm text-gray-200 light-theme:text-gray-800">{phase.name}</p>
-                <p className="text-xs text-gray-500">{phase.description}</p>
-              </div>
-            </div>
-          ))}
+      {/* Context strip */}
+      <div className="shrink-0 border-b border-white/[0.06] bg-[#080e17] px-4 py-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex min-w-0 items-center gap-1.5 rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-[10px] text-slate-300">
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${currentStandard ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+            <span className="max-w-[220px] truncate font-medium">{currentStandard?.name || 'No standard loaded'}</span>
+          </span>
+          <span className="rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-[10px] tabular-nums text-slate-400">
+            <strong className="font-semibold text-cyan-300">{totalCodes}</strong> codes
+          </span>
+          <span className="hidden rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-[10px] tabular-nums text-slate-400 sm:inline">
+            <strong className="font-semibold text-slate-200">{uniquePointLayers + uniqueLineLayers}</strong> layers
+          </span>
+          <span className="hidden rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-[10px] tabular-nums text-slate-400 md:inline">
+            <strong className="font-semibold text-slate-200">{uniqueLinetypes}</strong> linetypes
+          </span>
+          {isC3DConnected ? (
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-300">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              Civil 3D live
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[10px] font-medium text-amber-300/90">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+              Civil 3D offline
+            </span>
+          )}
+          <div className="ml-auto hidden items-center gap-1 lg:flex">
+            {phases.map((phase, idx) => (
+              <React.Fragment key={phase.name}>
+                {idx > 0 && <ChevronRight className="h-3 w-3 text-slate-700" />}
+                <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[9.5px] font-medium ${phase.complete ? 'text-emerald-300' : 'text-slate-500'}`}>
+                  {phase.complete ? <CheckCircle2 className="h-3 w-3" /> : <span className="grid h-3 w-3 place-items-center rounded-full border border-slate-700 text-[7px]">{idx + 1}</span>}
+                  {phase.name.replace(/^\d+\.\s*/, '')}
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Main Content */}
-      <div className="flex-1 overflow-y-auto p-4 min-h-0">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-full">
-          {/* Left Column: Workflow Steps */}
-          <div className="flex flex-col gap-4 min-h-0">
-            {/* Step 1: Define Standards - Tab Selector */}
-            <div className="bg-gray-800/50 rounded-lg border border-gray-700 overflow-hidden light-theme:bg-gray-100/50 light-theme:border-gray-300 flex-1 flex flex-col min-h-[400px]">
-              <div className="flex border-b border-gray-700 light-theme:border-gray-300 flex-shrink-0">
-                <button
-                  onClick={() => setStandardsTab('upload')}
-                  className={`flex-1 px-3 py-3 text-sm font-medium transition-colors ${standardsTab === 'upload' ? 'bg-gray-700/50 text-indigo-400 border-b-2 border-indigo-400 light-theme:bg-white light-theme:text-indigo-600' : 'bg-gray-800/30 text-gray-400 hover:bg-gray-700/30 light-theme:bg-gray-50 light-theme:text-gray-600'}`}
-                >
-                  📄 Upload
-                </button>
-                <button
-                  onClick={() => setStandardsTab('build')}
-                  className={`flex-1 px-3 py-3 text-sm font-medium transition-colors ${standardsTab === 'build' ? 'bg-gray-700/50 text-indigo-400 border-b-2 border-indigo-400 light-theme:bg-white light-theme:text-indigo-600' : 'bg-gray-800/30 text-gray-400 hover:bg-gray-700/30 light-theme:bg-gray-50 light-theme:text-gray-600'}`}
-                >
-                  🤖 AI Build
-                </button>
-                <button
-                  onClick={() => setStandardsTab('pull')}
-                  className={`flex-1 px-3 py-3 text-sm font-medium transition-colors ${standardsTab === 'pull' ? 'bg-gray-700/50 text-indigo-400 border-b-2 border-indigo-400 light-theme:bg-white light-theme:text-indigo-600' : 'bg-gray-800/30 text-gray-400 hover:bg-gray-700/30 light-theme:bg-gray-50 light-theme:text-gray-600'}`}
-                >
-                  🔗 Pull from C3D
-                </button>
-                <button
-                  onClick={() => setStandardsTab('hatch')}
-                  className={`flex-1 px-3 py-3 text-sm font-medium transition-colors ${standardsTab === 'hatch' ? 'bg-gray-700/50 text-indigo-400 border-b-2 border-indigo-400 light-theme:bg-white light-theme:text-indigo-600' : 'bg-gray-800/30 text-gray-400 hover:bg-gray-700/30 light-theme:bg-gray-50 light-theme:text-gray-600'}`}
-                >
-                  🔲 Hatches
-                </button>
-              </div>
-              
-              <div className="flex-1 min-h-0 overflow-y-auto">
-                {standardsTab === 'upload' ? (
-                  <StandardUpload onStandardParsed={handleStandardParsed} />
-                ) : standardsTab === 'build' ? (
-                  <div className="h-full">
-                    <StandardsBuilder 
-                      onStandardGenerated={handleStandardGenerated}
-                      initialChatHistory={chatHistory.length > 0 ? chatHistory : undefined}
-                      onChatHistoryChange={handleChatHistoryUpdate}
-                    />
-                  </div>
-                ) : standardsTab === 'hatch' ? (
-                  /* Hatch View tab */
-                  <HatchManagerPanel
-                    customHatches={state.standard?.hatches ?? []}
-                    onCustomHatchesChange={(hatches) => {
-                      if (state.standard) {
-                        dispatch({ type: 'SET_STANDARD', payload: { ...state.standard, hatches } });
-                      }
-                    }}
-                  />
-                ) : (
-                  /* Pull from C3D tab */
-                  <div className="p-4 h-full flex flex-col">
-                    <div className="mb-4">
-                      <h3 className="text-lg font-semibold text-gray-200 mb-2">Pull Layers from Civil 3D</h3>
-                      <p className="text-sm text-gray-400">
-                        Adopts the drawing's layer table as a new standard session and makes it current,
-                        so LandSurv.ai and its agents draw on your company layers.
-                      </p>
+      {error && (
+        <div className="shrink-0 border-b border-red-500/25 bg-red-500/[0.07] px-4 py-2">
+          <p className="text-[11px] text-red-300"><strong className="font-semibold">Error:</strong> {error}</p>
+        </div>
+      )}
+
+      {/* Scenario canvas */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-3 p-3 sm:p-4">
+          <section className="overflow-hidden rounded-xl border border-white/[0.08] bg-[#0a111c] shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
+            {/* Scenario picker */}
+            <div className="flex flex-wrap items-center gap-1 border-b border-white/[0.07] bg-[#080e17]/70 p-1.5">
+              {([
+                { id: 'build', label: 'AI Build', icon: Sparkles },
+                { id: 'upload', label: 'Import', icon: Upload },
+                { id: 'pull', label: 'Pull from C3D', icon: PlugZap },
+                { id: 'hatch', label: 'Hatches', icon: LayoutGrid },
+              ] as const).map(({ id, label, icon: Icon }) => {
+                const active = standardsTab === id;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => setStandardsTab(id)}
+                    aria-pressed={active}
+                    className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[10.5px] font-semibold transition-colors ${
+                      active
+                        ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-200'
+                        : 'border-transparent text-slate-500 hover:bg-white/[0.04] hover:text-slate-200'
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {label}
+                  </button>
+                );
+              })}
+              <span className="ml-auto hidden items-center gap-1.5 pr-1 text-[9px] uppercase tracking-[0.14em] text-slate-600 sm:inline-flex">
+                Scenario
+              </span>
+            </div>
+
+            <div className="h-[min(58vh,560px)] min-h-[420px]">
+              {standardsTab === 'upload' ? (
+                <StandardUpload onStandardParsed={handleStandardParsed} />
+              ) : standardsTab === 'build' ? (
+                <StandardsBuilder
+                  onStandardGenerated={handleStandardGenerated}
+                  initialChatHistory={chatHistory.length > 0 ? chatHistory : undefined}
+                  onChatHistoryChange={handleChatHistoryUpdate}
+                />
+              ) : standardsTab === 'hatch' ? (
+                <HatchManagerPanel
+                  customHatches={state.standard?.hatches ?? []}
+                  onCustomHatchesChange={(hatches) => {
+                    if (state.standard) {
+                      dispatch({ type: 'SET_STANDARD', payload: { ...state.standard, hatches } });
+                    }
+                  }}
+                />
+              ) : (
+                <div className="p-4">
+                  <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
+                    <div className="mb-4 flex items-start gap-3">
+                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-cyan-400/20 bg-cyan-400/10 text-cyan-300">
+                        <PlugZap className="h-4 w-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <h2 className="text-[13px] font-semibold text-white">Adopt a drawing layer table</h2>
+                        <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+                          Pull the active Civil 3D drawing's layers into this session and make them the company standard.
+                        </p>
+                      </div>
                     </div>
-                    
+
                     {!isC3DConnected ? (
-                      <div className="flex-1 flex items-center justify-center">
-                        <div className="text-center p-6 bg-gray-800/50 rounded-lg border border-amber-500/30">
-                          <span className="text-4xl mb-3 block">🔌</span>
-                          <p className="text-amber-400 font-medium mb-2">Civil 3D Not Connected</p>
-                          <p className="text-sm text-gray-400">
-                            Connect to Civil 3D using the sidebar panel to pull layers from drawings.
-                          </p>
-                        </div>
+                      <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-amber-500/25 bg-amber-500/[0.05] px-4 py-8 text-center">
+                        <PlugZap className="h-6 w-6 text-amber-300/80" />
+                        <p className="text-[12px] font-semibold text-amber-200">Civil 3D not connected</p>
+                        <p className="max-w-sm text-[10.5px] leading-relaxed text-slate-500">
+                          Connect from the Civil 3D sidebar, then return here to pull layers from the open drawing.
+                        </p>
                       </div>
                     ) : isAnalyzingLayers ? (
-                      /* AI Layer Analysis Chat */
                       <LayerAnalysisChat
                         layers={pulledLayers.map(l => ({
                           name: l.name,
@@ -1449,15 +1499,14 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
                         onCancel={handleCancelLayerAnalysis}
                       />
                     ) : (
-                      <>
-                        {/* Drawing Selector */}
-                        <div className="mb-4">
-                          <label className="block text-sm text-gray-400 mb-2">Select Drawing</label>
-                          <div className="flex gap-2">
+                      <div className="space-y-3">
+                        <div>
+                          <label className="mb-1.5 block text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-500">Source drawing</label>
+                          <div className="flex gap-1.5">
                             <select
                               value={selectedDrawing}
                               onChange={(e) => setSelectedDrawing(e.target.value)}
-                              className="flex-1 px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                              className="h-8 min-w-0 flex-1 rounded-lg border border-white/[0.09] bg-[#070d16] px-2.5 text-[11px] text-slate-200 outline-none focus:border-cyan-400/40"
                             >
                               <option value="">Active Drawing</option>
                               {openDrawings.map((d, i) => (
@@ -1469,55 +1518,52 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
                             <button
                               onClick={handleRefreshDrawings}
                               disabled={isLoadingDrawings}
-                              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-50"
                               title="Refresh drawing list"
+                              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/[0.09] bg-white/[0.025] text-slate-400 transition-colors hover:border-white/[0.16] hover:text-white disabled:opacity-40"
                             >
-                              {isLoadingDrawings ? '⏳' : '🔄'}
+                              <RefreshCw className={`h-3.5 w-3.5 ${isLoadingDrawings ? 'animate-spin' : ''}`} />
                             </button>
                           </div>
                         </div>
-                        
-                        {/* Pull Layers Button */}
+
                         <button
                           onClick={handlePullLayers}
                           disabled={isLoadingDrawings}
-                          className="w-full px-4 py-3 bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-700 text-white rounded-lg font-medium transition-colors mb-4"
+                          className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-cyan-400/35 bg-cyan-400/10 px-3 text-[11px] font-semibold text-cyan-200 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/20 hover:text-white disabled:opacity-40"
                         >
-                          {isLoadingDrawings ? '⏳ Loading...' : '📥 Pull Layers & Use Them'}
+                          {isLoadingDrawings ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                          {isLoadingDrawings ? 'Loading layers…' : 'Pull layers and use them'}
                         </button>
-                        
-                        {/* Pulled Layers Preview */}
-                        {pulledLayers.length > 0 && (
-                          <div className="flex-1 flex flex-col min-h-0">
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-sm text-gray-400">
-                                Using {pulledLayers.length} layers from this drawing
-                              </span>
+
+                        {pulledLayers.length > 0 ? (
+                          <div className="overflow-hidden rounded-lg border border-white/[0.07]">
+                            <div className="flex items-center justify-between gap-2 border-b border-white/[0.07] bg-white/[0.025] px-3 py-2">
+                              <span className="text-[10px] text-slate-400">{pulledLayers.length} layers loaded</span>
                               <button
                                 onClick={handleCreateStandardFromLayers}
-                                className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium transition-colors"
-                                title="Have AI describe and categorize the pulled layers, updating this session"
+                                className="inline-flex h-6 items-center gap-1 rounded-md border border-cyan-400/30 bg-cyan-400/10 px-2 text-[9.5px] font-semibold text-cyan-200 transition-colors hover:bg-cyan-400/20"
                               >
-                                ✨ Refine with AI
+                                <Sparkles className="h-3 w-3" />
+                                Refine with AI
                               </button>
                             </div>
-                            <div className="flex-1 overflow-y-auto bg-gray-900/50 rounded-lg border border-gray-700 p-2">
-                              <table className="w-full text-xs">
-                                <thead className="text-gray-500 border-b border-gray-700">
+                            <div className="max-h-64 overflow-y-auto">
+                              <table className="w-full text-left text-[10.5px]">
+                                <thead className="sticky top-0 bg-[#0a111c] text-[8.5px] uppercase tracking-[0.12em] text-slate-600">
                                   <tr>
-                                    <th className="text-left py-1 px-2">Layer Name</th>
-                                    <th className="text-left py-1 px-2">Linetype</th>
-                                    <th className="text-left py-1 px-2">Color</th>
+                                    <th className="px-3 py-1.5 font-semibold">Layer</th>
+                                    <th className="px-3 py-1.5 font-semibold">Linetype</th>
+                                    <th className="px-3 py-1.5 font-semibold">Color</th>
                                   </tr>
                                 </thead>
-                                <tbody className="text-gray-300">
+                                <tbody className="divide-y divide-white/[0.05] text-slate-300">
                                   {pulledLayers.slice(0, 50).map((layer, idx) => (
-                                    <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800/50">
-                                      <td className="py-1 px-2 font-mono">{layer.name}</td>
-                                      <td className="py-1 px-2">{layer.linetype}</td>
-                                      <td className="py-1 px-2">
-                                        <span 
-                                          className="inline-block w-4 h-4 rounded border border-gray-600"
+                                    <tr key={idx} className="hover:bg-white/[0.03]">
+                                      <td className="px-3 py-1.5 font-mono text-[10px]">{layer.name}</td>
+                                      <td className="px-3 py-1.5 text-slate-400">{layer.linetype}</td>
+                                      <td className="px-3 py-1.5">
+                                        <span
+                                          className="inline-block h-3 w-3 rounded-sm border border-white/20"
                                           style={{ backgroundColor: `#${(layer.colorIndex * 1118481 % 16777215).toString(16).padStart(6, '0')}` }}
                                         />
                                       </td>
@@ -1525,267 +1571,231 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
                                   ))}
                                 </tbody>
                               </table>
-                              {pulledLayers.length > 50 && (
-                                <p className="text-center text-gray-500 text-xs mt-2">
-                                  + {pulledLayers.length - 50} more layers
-                                </p>
-                              )}
                             </div>
+                            {pulledLayers.length > 50 && (
+                              <p className="border-t border-white/[0.05] px-3 py-1.5 text-center text-[9.5px] text-slate-600">
+                                + {pulledLayers.length - 50} more layers
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="rounded-lg border border-dashed border-white/[0.08] px-4 py-8 text-center">
+                            <Layers className="mx-auto mb-2 h-5 w-5 text-slate-600" />
+                            <p className="text-[11px] text-slate-500">Pull layers to preview and adopt the drawing's layer table.</p>
                           </div>
                         )}
-                        
-                        {pulledLayers.length === 0 && !isLoadingDrawings && (
-                          <div className="flex-1 flex items-center justify-center">
-                            <div className="text-center text-gray-500">
-                              <span className="text-3xl mb-2 block">📋</span>
-                              <p>Click "Pull Layers" to adopt this drawing's layers as your active standard</p>
-                            </div>
-                          </div>
-                        )}
-                      </>
+                      </div>
                     )}
                   </div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* Standards intelligence */}
+          <section className="overflow-hidden rounded-xl border border-white/[0.08] bg-[#0a111c]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.07] px-3 py-2">
+              <div className="flex items-center gap-2">
+                <Activity className="h-3.5 w-3.5 text-cyan-400" />
+                <h2 className="text-[11px] font-semibold text-slate-200">Standards intelligence</h2>
+              </div>
+              {layerValidation && layerValidation.totalLayers > 0 && (
+                <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[9.5px] font-semibold ${
+                  layerValidation.compliancePercentage >= 95
+                    ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300'
+                    : layerValidation.compliancePercentage >= 80
+                      ? 'border-amber-500/25 bg-amber-500/10 text-amber-300'
+                      : 'border-red-500/25 bg-red-500/10 text-red-300'
+                }`}>
+                  {layerValidation.compliancePercentage >= 95 ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                  {layerValidation.compliancePercentage}% A/E/C
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-3 divide-x divide-white/[0.06] sm:grid-cols-6">
+              {[
+                ['Codes', totalCodes],
+                ['Matched', totalMatched],
+                ['Unknown', totalUnknown],
+                ['Layers', uniquePointLayers + uniqueLineLayers],
+                ['Linetypes', uniqueLinetypes],
+                ['Symbols', uniqueSymbols],
+              ].map(([label, value]) => (
+                <div key={String(label)} className="px-2 py-2.5 text-center">
+                  <p className="text-base font-bold tabular-nums text-cyan-300">{value}</p>
+                  <p className="text-[8px] font-bold uppercase tracking-[0.12em] text-slate-500">{label}</p>
+                </div>
+              ))}
+            </div>
+            {layerValidation && layerValidation.totalLayers > 0 && (
+              <div className="border-t border-white/[0.06] px-3 py-2.5">
+                <div className="mb-1.5 flex items-center justify-between text-[9.5px] text-slate-500">
+                  <span>A/E/C layer compliance</span>
+                  <span className="tabular-nums text-slate-400">{layerValidation.validLayers}/{layerValidation.totalLayers} layers</span>
+                </div>
+                <div className="h-1 overflow-hidden rounded-full bg-white/[0.06]">
+                  <div
+                    className={`h-full rounded-full ${
+                      layerValidation.compliancePercentage >= 95 ? 'bg-emerald-400' : layerValidation.compliancePercentage >= 80 ? 'bg-amber-400' : 'bg-red-400'
+                    }`}
+                    style={{ width: `${Math.max(2, Math.min(100, layerValidation.compliancePercentage))}%` }}
+                  />
+                </div>
+                {layerValidation.uniqueDisciplines.length > 0 && (
+                  <p className="mt-1.5 text-[9.5px] text-slate-600">Disciplines: {layerValidation.uniqueDisciplines.join(', ')}</p>
                 )}
               </div>
-            </div>
-          </div>
+            )}
+          </section>
 
-          {/* Right Column: Status & Actions */}
-          <div className="flex flex-col gap-3 overflow-y-auto">
-            {/* Compact Stats Row */}
-            <div className="bg-gray-800/50 rounded-lg border border-gray-700 p-3">
-              <div className="grid grid-cols-3 gap-4 text-center">
-                <div>
-                  <p className="text-2xl font-bold text-cyan-400">{totalCodes}</p>
-                  <p className="text-xs text-gray-500">Codes</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-yellow-400">{totalUnknown}</p>
-                  <p className="text-xs text-gray-500">Unknown</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-green-400">{totalMatched}</p>
-                  <p className="text-xs text-gray-500">Matched</p>
-                </div>
-              </div>
-              {currentStandard && (
-                <div className="grid grid-cols-5 gap-4 text-center mt-3 pt-3 border-t border-gray-700">
-                  <div>
-                    <p className="text-xl font-bold text-indigo-400">{uniquePointLayers}</p>
-                    <p className="text-xs text-gray-500">Point Layers</p>
-                  </div>
-                  <div>
-                    <p className="text-xl font-bold text-purple-400">{uniqueLineLayers}</p>
-                    <p className="text-xs text-gray-500">Line Layers</p>
-                  </div>
-                  <div>
-                    <p className="text-xl font-bold text-pink-400">{uniqueSymbols}</p>
-                    <p className="text-xs text-gray-500">Symbols</p>
-                  </div>
-                  <div>
-                    <p className="text-xl font-bold text-orange-400">{lineworkCodes}</p>
-                    <p className="text-xs text-gray-500">F2F Lines</p>
-                  </div>
-                  <div>
-                    <p className="text-xl font-bold text-teal-400">{uniqueLinetypes}</p>
-                    <p className="text-xs text-gray-500">Linetypes</p>
-                  </div>
-                </div>
-              )}
-              {/* A/E/C CAD Standard Compliance Badge */}
-              {layerValidation && layerValidation.totalLayers > 0 && (
-                <div className="mt-3 pt-3 border-t border-gray-700">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-lg ${
-                        layerValidation.compliancePercentage >= 95 ? 'text-green-400' :
-                        layerValidation.compliancePercentage >= 80 ? 'text-yellow-400' : 'text-red-400'
-                      }`}>
-                        {layerValidation.compliancePercentage >= 95 ? '✓' : 
-                         layerValidation.compliancePercentage >= 80 ? '⚠' : '✗'}
-                      </span>
-                      <span className="text-sm text-gray-400">A/E/C Standard</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-sm font-bold ${
-                        layerValidation.compliancePercentage >= 95 ? 'text-green-400' :
-                        layerValidation.compliancePercentage >= 80 ? 'text-yellow-400' : 'text-red-400'
-                      }`}>
-                        {layerValidation.compliancePercentage}%
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        ({layerValidation.validLayers}/{layerValidation.totalLayers} layers)
-                      </span>
-                    </div>
-                  </div>
-                  {layerValidation.uniqueDisciplines.length > 0 && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      Disciplines: {layerValidation.uniqueDisciplines.join(', ')}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Primary Action: Edit Standards */}
-            {currentStandard && currentStandard.codes.length > 0 && (
+          {/* Actions */}
+          {currentStandard && currentStandard.codes.length > 0 ? (
+            <section className="grid gap-2 sm:grid-cols-2">
               <button
                 onClick={() => setIsEditorOpen(true)}
-                className="w-full px-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-lg font-medium transition-all flex items-center justify-center gap-2 shadow-lg hover:shadow-xl"
+                className="group flex items-center justify-between gap-3 rounded-xl border border-cyan-400/25 bg-cyan-400/[0.07] px-3 py-2.5 text-left transition-colors hover:border-cyan-300/45 hover:bg-cyan-400/[0.12] sm:col-span-2"
               >
-                📋 Open Spreadsheet Editor
-                <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{currentStandard.codes.length} codes</span>
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <span className="grid h-8 w-8 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-400/10 text-cyan-300">
+                    <Table2 className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[11.5px] font-semibold text-white">Open standards editor</span>
+                    <span className="block truncate text-[9.5px] text-slate-500">Codes, layers, linetypes, symbols, and aliases</span>
+                  </span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <span className="rounded-md border border-white/[0.08] bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-slate-300">{totalCodes}</span>
+                  <ArrowUpRight className="h-3.5 w-3.5 text-cyan-300/70 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+                </span>
               </button>
-            )}
 
-            {/* Export Actions - Always visible when standards exist */}
-            {currentStandard && currentStandard.codes.length > 0 && (
-              <div className="bg-gray-800/50 rounded-lg border border-gray-700 p-4 flex-1">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-bold text-gray-200 flex items-center gap-2">
-                    🚀 Export to Civil 3D
-                  </h3>
+              <div className="rounded-xl border border-white/[0.08] bg-[#0a111c] p-3 sm:col-span-2">
+                <div className="mb-2.5 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Download className="h-3.5 w-3.5 text-slate-400" />
+                    <h2 className="text-[11px] font-semibold text-slate-200">Export to Civil 3D</h2>
+                  </div>
                   {isC3DConnected ? (
-                    <span className="flex items-center gap-1.5 text-xs text-green-400 bg-green-900/40 px-2 py-1 rounded-full">
-                      <span className="relative flex h-2 w-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                      </span>
-                      C3D Connected
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-semibold text-emerald-300">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                      Connected
                     </span>
                   ) : (
-                    <span className="text-xs text-amber-400 bg-amber-900/40 px-2 py-1 rounded-full">
-                      Connect C3D in sidebar
+                    <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[9px] font-semibold text-amber-300">
+                      Connect in sidebar
                     </span>
                   )}
                 </div>
-                
-                <div className="space-y-2">
-                  {/* Push Layers */}
+                <div className="grid gap-1.5 sm:grid-cols-2">
                   <button
                     onClick={handleExportLayers}
                     disabled={isExporting}
-                    className={`w-full px-3 py-2 ${isC3DConnected ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600/80 hover:bg-blue-700'} disabled:bg-gray-700 text-white rounded-lg font-medium transition-colors flex items-center justify-between text-sm`}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-white/[0.08] bg-white/[0.025] px-2.5 py-2 text-left transition-colors hover:border-cyan-400/30 hover:bg-white/[0.05] disabled:opacity-40"
                   >
-                    <span>{isC3DConnected ? '🚀 Push Layers' : '📁 Export Layers'}</span>
-                    <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{uniquePointLayers + uniqueLineLayers}</span>
+                    <span className="flex items-center gap-2 text-[10.5px] font-medium text-slate-200"><Layers className="h-3.5 w-3.5 text-cyan-300/80" />Export layers</span>
+                    <span className="text-[9px] tabular-nums text-slate-500">{uniquePointLayers + uniqueLineLayers}</span>
                   </button>
-                  
-                  {/* Push Description Keys */}
                   <button
                     onClick={handleExportDescriptionKeys}
                     disabled={isExporting}
-                    className={`w-full px-3 py-2 ${isC3DConnected ? 'bg-green-600 hover:bg-green-700' : 'bg-purple-600/80 hover:bg-purple-700'} disabled:bg-gray-700 text-white rounded-lg font-medium transition-colors flex items-center justify-between text-sm`}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-white/[0.08] bg-white/[0.025] px-2.5 py-2 text-left transition-colors hover:border-cyan-400/30 hover:bg-white/[0.05] disabled:opacity-40"
                   >
-                    <span>{isC3DConnected ? '🚀 Push Description Keys' : '🔑 Export Desc Keys'}</span>
-                    <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{currentStandard.codes.length}</span>
+                    <span className="flex items-center gap-2 text-[10.5px] font-medium text-slate-200"><KeyRound className="h-3.5 w-3.5 text-cyan-300/80" />Description keys</span>
+                    <span className="text-[9px] tabular-nums text-slate-500">{currentStandard.codes.length}</span>
                   </button>
-                  
-                  {/* Code Legend Table */}
-                  <div className="flex flex-col gap-1">
-                    <button
-                      onClick={handleCreateLegend}
-                      disabled={isExporting || !isC3DConnected}
-                      title={!isC3DConnected ? 'Connect to Civil 3D to create code legend table' : 'Create full code legend table with all columns'}
-                      className={`w-full px-3 py-2 ${isC3DConnected ? 'bg-cyan-600 hover:bg-cyan-700' : 'bg-gray-700 cursor-not-allowed'} disabled:bg-gray-700 text-white rounded-lg font-medium transition-colors flex items-center justify-between text-sm`}
-                    >
-                      <span>📋 Create Code Legend Table</span>
-                      <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{currentStandard?.codes.length || 0}</span>
-                    </button>
-                    <label className="flex items-center gap-2 text-xs text-gray-400 ml-1">
-                      <input
-                        type="checkbox"
-                        checked={includeSymbolGeometry}
-                        onChange={(e) => setIncludeSymbolGeometry(e.target.checked)}
-                        className="rounded border-gray-600 bg-gray-800 text-cyan-500 focus:ring-cyan-500"
-                      />
-                      Include symbol geometry in legend
-                    </label>
-                  </div>
-                  
-                  {/* Divider */}
-                  <div className="border-t border-gray-700 my-2"></div>
-                  
-                  {/* Full Export */}
+                  <button
+                    onClick={handleCreateLegend}
+                    disabled={isExporting || !isC3DConnected}
+                    title={!isC3DConnected ? 'Connect to Civil 3D to create the code legend table' : 'Create a full code legend table'}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-white/[0.08] bg-white/[0.025] px-2.5 py-2 text-left transition-colors hover:border-cyan-400/30 hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <span className="flex items-center gap-2 text-[10.5px] font-medium text-slate-200"><ListTree className="h-3.5 w-3.5 text-cyan-300/80" />Code legend table</span>
+                    <span className="text-[9px] tabular-nums text-slate-500">{currentStandard.codes.length}</span>
+                  </button>
                   <button
                     onClick={handleExportToC3D}
                     disabled={isExporting}
-                    className="w-full px-3 py-2 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-700 hover:to-red-700 disabled:from-gray-700 disabled:to-gray-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 text-sm"
+                    className="flex items-center justify-center gap-2 rounded-lg border border-cyan-400/35 bg-cyan-400/10 px-2.5 py-2 text-[10.5px] font-semibold text-cyan-200 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/20 hover:text-white disabled:opacity-40"
                   >
-                    {isExporting ? '⏳ Exporting...' : '📦 Full Export (All-in-One)'}
+                    {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                    {isExporting ? 'Exporting…' : 'Full export'}
                   </button>
                 </div>
-                
+                <label className="mt-2 inline-flex cursor-pointer items-center gap-1.5 text-[9.5px] text-slate-500">
+                  <input
+                    type="checkbox"
+                    checked={includeSymbolGeometry}
+                    onChange={(e) => setIncludeSymbolGeometry(e.target.checked)}
+                    className="h-3 w-3 rounded border-white/20 bg-transparent accent-cyan-400"
+                  />
+                  Include symbol geometry in the legend
+                </label>
                 {exportSuccess && (
-                  <div className="mt-3 p-2 bg-green-900/30 border border-green-500/30 rounded-lg">
-                    <pre className="text-xs text-green-300 whitespace-pre-wrap">{exportSuccess}</pre>
-                  </div>
+                  <pre className="mt-2 whitespace-pre-wrap rounded-lg border border-emerald-500/25 bg-emerald-500/[0.07] p-2 text-[10px] text-emerald-300">{exportSuccess}</pre>
                 )}
               </div>
-            )}
-
-            {/* Getting Started - only when no standards */}
-            {!currentStandard && (
-              <div className="bg-gray-800/50 rounded-lg border border-gray-700 p-4">
-                <h3 className="font-bold text-gray-200 mb-3">🚀 Get Started</h3>
-                <div className="space-y-2 text-sm text-gray-400">
-                  <p className="flex items-start gap-2">
-                    <span className="text-cyan-400 font-bold">1.</span>
-                    Upload existing standards or use the AI builder
-                  </p>
-                  <p className="flex items-start gap-2">
-                    <span className="text-cyan-400 font-bold">2.</span>
-                    Edit codes in the spreadsheet editor
-                  </p>
-                  <p className="flex items-start gap-2">
-                    <span className="text-cyan-400 font-bold">3.</span>
-                    Export layers & description keys to C3D
-                  </p>
-                </div>
+            </section>
+          ) : (
+            <section className="rounded-xl border border-white/[0.08] bg-[#0a111c] p-4">
+              <h2 className="mb-3 flex items-center gap-2 text-[11px] font-semibold text-slate-200">
+                <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
+                Start with a standard
+              </h2>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {[
+                  ['01', 'Build or import', 'Describe your firm, upload a file, or pull a Civil 3D layer table.'],
+                  ['02', 'Review the sheet', 'Edit codes, layers, linetypes, symbols, and aliases.'],
+                  ['03', 'Export to C3D', 'Push layers, description keys, and a code legend.'],
+                ].map(([num, title, detail]) => (
+                  <div key={num} className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-2.5">
+                    <span className="text-[8.5px] font-bold tracking-[0.14em] text-cyan-400/70">{num}</span>
+                    <p className="mt-1 text-[10.5px] font-semibold text-slate-200">{title}</p>
+                    <p className="mt-0.5 text-[9.5px] leading-relaxed text-slate-500">{detail}</p>
+                  </div>
+                ))}
               </div>
-            )}
+            </section>
+          )}
 
-            {/* Success indicator */}
-            {totalMatched > 0 && (
-              <div className="bg-green-900/30 border border-green-500/30 rounded-lg p-3">
-                <p className="text-sm text-green-200 flex items-center gap-2">
-                  ✓ <strong>{totalMatched}</strong> code aliases confirmed
-                </p>
-              </div>
-            )}
-          </div>
+          {totalMatched > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] px-3 py-2 text-[10px] text-emerald-300">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              <strong className="font-semibold">{totalMatched}</strong> code aliases confirmed
+            </div>
+          )}
         </div>
-
-        {currentStandard && (
-          <ReviewModal
-            isOpen={isReviewOpen}
-            unknownCodes={unknownCodes}
-            standard={currentStandard}
-            previousAliases={state.aliases}
-            onConfirm={handleMatchesConfirmed}
-            onCancel={handleReviewCancel}
-            onAliasChange={handleAliasChange}
-          />
-        )}
-
-        {/* Full-screen Standards Editor */}
-        {currentStandard && isEditorOpen && (
-          <StandardsEditor
-            standard={currentStandard}
-            onSave={handleEditorSave}
-            onClose={() => setIsEditorOpen(false)}
-          />
-        )}
-
-        {/* Session Manager Modal */}
-        <SessionModal
-          isOpen={isSessionModalOpen}
-          onClose={() => setIsSessionModalOpen(false)}
-          onLoadSession={handleLoadSession}
-          onNewSession={handleNewSession}
-          currentSessionId={currentSessionId}
-        />
       </div>
+
+      {currentStandard && (
+        <ReviewModal
+          isOpen={isReviewOpen}
+          unknownCodes={unknownCodes}
+          standard={currentStandard}
+          previousAliases={state.aliases}
+          onConfirm={handleMatchesConfirmed}
+          onCancel={handleReviewCancel}
+          onAliasChange={handleAliasChange}
+        />
+      )}
+
+      {/* Full-screen Standards Editor */}
+      {currentStandard && isEditorOpen && (
+        <StandardsEditor
+          standard={currentStandard}
+          onSave={handleEditorSave}
+          onClose={() => setIsEditorOpen(false)}
+        />
+      )}
+
+      {/* Session Manager Modal */}
+      <SessionModal
+        isOpen={isSessionModalOpen}
+        onClose={() => setIsSessionModalOpen(false)}
+        onLoadSession={handleLoadSession}
+        onNewSession={handleNewSession}
+        currentSessionId={currentSessionId}
+      />
     </div>
   );
 };

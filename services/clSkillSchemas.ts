@@ -47,13 +47,14 @@ export const CL_SKILLS: SkillSchema[] = [
           'bearing is required on the first tangent; subsequent tangents inherit the current ' +
           'bearing unless bearing is explicitly supplied. ' +
           'A curve leg: { type:"curve", direction:"right", radius:1000, delta:20, unit:"ft" }. ' +
-          'delta is the total deflection angle in decimal degrees (e.g. 20 for a 20° curve). ' +
+          'delta is the total deflection angle; prefer decimal degrees (e.g. 20 for a 20° curve), ' +
+          'but a DMS string (degrees, minutes, seconds) is also accepted. ' +
           'Supported units: "ft" (default), "m", "mi", "ch" (chains), "lk" (links).',
         items: {
           type: 'object',
           description:
             'Tangent leg: { type:"tangent", bearing?:string, distance:number, unit?:string } ' +
-            '| Curve leg: { type:"curve", direction:"left"|"right", radius:number, delta:number, unit?:string }',
+            '| Curve leg: { type:"curve", direction:"left"|"right", radius:number, delta:number|string, unit?:string }',
         },
       },
     },

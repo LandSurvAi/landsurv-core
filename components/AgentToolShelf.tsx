@@ -7,8 +7,6 @@ interface AgentToolShelfProps {
   width: number;
   /** Starts the left-border width drag. */
   onResizeStart?: React.MouseEventHandler<HTMLDivElement>;
-  /** Active agent accent used for the canvas/agent divider. */
-  accentColor?: string;
   /** Pixels to keep clear at the bottom so the shelf rests on the command bar. */
   bottomOffset?: number;
   /** Pixels to keep clear at the top so the shelf starts below the canvas toolbar. */
@@ -26,7 +24,6 @@ export const AgentToolShelf: React.FC<AgentToolShelfProps> = ({
   isOpen,
   width,
   onResizeStart,
-  accentColor = '#38bdf8',
   bottomOffset = 0,
   topOffset = 0,
   children,
@@ -67,11 +64,8 @@ export const AgentToolShelf: React.FC<AgentToolShelfProps> = ({
     >
       <div
         data-testid="agent-tool-shelf-panel"
-        className="relative flex h-full w-full flex-col bg-[#0a0f16] transition-transform duration-300 ease-out"
+        className="relative flex h-full w-full flex-col border-l border-white/[0.07] bg-[#0a0f16] transition-transform duration-300 ease-out light-theme:border-gray-300"
         style={{
-          borderLeftStyle: 'solid',
-          borderLeftWidth: '1px',
-          borderLeftColor: accentColor,
           transform: isVisible ? 'translateY(0)' : 'translateY(100%)',
         }}
       >

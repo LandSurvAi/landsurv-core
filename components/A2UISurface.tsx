@@ -18,6 +18,9 @@ import ImageInput from './ImageInput.tsx';
 import CenterlineInput from './CenterlineInput.tsx';
 import CadManagerInput from './CadManagerInput.tsx';
 import { A2UIStandardsTable } from './A2UIStandardsTable.tsx';
+import { A2UIZoningResearch } from './A2UIZoningResearch.tsx';
+import { A2UICadManager } from './A2UICadManager.tsx';
+import { A2UIInputForm } from './A2UIInputForm.tsx';
 
 // Lazy-load PDF-backed intake components so pdfjs-dist is only loaded when a PDF intake widget is rendered
 const CivilDrafterFileUpload = lazy(() => import('./CivilDrafterFileUpload.tsx'));
@@ -62,6 +65,8 @@ export interface A2UIHostContextValue {
   getInclusionBboxWgs84?: (boundaryId: string | null) => [number, number, number, number] | null;
   // Zoning Agent
   onZoningSearch?: (searchData: ZoningSearchData) => void;
+  onZoningSelectDistrict?: (district: string) => void;
+  onZoningAskQuestion?: (question: string) => void;
   jobInfo?: JobInfo;
   // Title Search
   onTitleSearchDeedSubmitted?: (file: SessionFile) => void;
@@ -82,6 +87,10 @@ export interface A2UIHostContextValue {
   onCadManagerFileUploaded?: (content: string, fileName: string) => void;
   /** Open the full CAD standards spreadsheet editor. */
   onOpenCadStandards?: () => void;
+  /** Open the CAD Manager workspace inside the A2UI float/dock host. */
+  onOpenCadWorkspace?: () => void;
+  /** Send values collected by an A2UI input form back to the owning agent. */
+  onSubmitInput?: (message: string, payload: A2UIPayload) => void;
 }
 
 export const A2UIHostContext = createContext<A2UIHostContextValue>({});
@@ -90,9 +99,56 @@ interface A2UISurfaceProps {
   payload: A2UIPayload;
   /** Optional: move this surface into the agent tool shelf. */
   onDock?: () => void;
+  /** Optional: move this surface into a floating dialog on the canvas. */
+  onPopOut?: () => void;
+  /** Inline chat card vs. the same surface hosted in a float/dock. */
+  presentation?: 'inline' | 'floating' | 'docked';
+  /** Full CAD Manager workspace rendered by the floating/docked presentation. */
+  cadManagerContent?: React.ReactNode;
 }
 
-export const A2UISurface: React.FC<A2UISurfaceProps> = ({ payload, onDock }) => {
+const SurfaceActions: React.FC<{
+  onPopOut?: () => void;
+  onDock?: () => void;
+}> = ({ onPopOut, onDock }) => {
+  if (!onPopOut && !onDock) return null;
+  const buttonClass =
+    'inline-flex items-center gap-1 rounded border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-100';
+  return (
+    <div className="flex shrink-0 items-center gap-1.5">
+      {onPopOut && (
+        <button
+          type="button"
+          onClick={onPopOut}
+          data-testid="a2ui-popout-button"
+          className={buttonClass}
+          title="Pop this surface out into a floating dialog"
+        >
+          Pop out
+        </button>
+      )}
+      {onDock && (
+        <button
+          type="button"
+          onClick={onDock}
+          data-testid="a2ui-dock-button"
+          className={buttonClass}
+          title="Dock this surface in the agent tool shelf"
+        >
+          Dock
+        </button>
+      )}
+    </div>
+  );
+};
+
+export const A2UISurface: React.FC<A2UISurfaceProps> = ({
+  payload,
+  onDock,
+  onPopOut,
+  presentation = 'inline',
+  cadManagerContent,
+}) => {
   const host = useContext(A2UIHostContext);
   const [isCollapsed, setIsCollapsed] = useState<boolean>(
     payload.status === 'completed' || payload.status === 'dismissed'
@@ -106,6 +162,44 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({ payload, onDock }) => 
     }
   }, [payload.status]);
 
+  if (payload.kind === 'input-form') {
+    if (!payload.inputForm) return null;
+    return (
+      <div data-testid="a2ui-surface-input-form" className="mt-3 w-full">
+        <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
+          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse" />
+            A2UI Input Request
+          </span>
+          <span className="text-[9.5px] text-slate-500">The agent will continue automatically</span>
+        </div>
+        <A2UIInputForm
+          form={payload.inputForm}
+          onSubmit={message => host.onSubmitInput?.(message, payload)}
+        />
+      </div>
+    );
+  }
+
+  if (payload.kind === 'zoning-research') {
+    return (
+      <div data-testid="a2ui-surface-zoning-research" className="mt-3 w-full">
+        <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
+          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
+            A2UI Zoning Research
+          </span>
+          <SurfaceActions onPopOut={onPopOut} onDock={onDock} />
+        </div>
+        <A2UIZoningResearch
+          context={payload.zoningContext ?? { place: '' }}
+          onAskQuestion={host.onZoningAskQuestion}
+          onSelectDistrict={host.onZoningSelectDistrict}
+        />
+      </div>
+    );
+  }
+
   if (payload.kind === 'intake-prompt') {
     return null;
   }
@@ -118,21 +212,43 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({ payload, onDock }) => 
             <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
             A2UI Standards Sheet
           </span>
-          {onDock && (
-            <button
-              type="button"
-              onClick={onDock}
-              data-testid="a2ui-dock-button"
-              className="inline-flex items-center gap-1 rounded border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-100"
-              title="Dock this sheet in the agent tool shelf"
-            >
-              Dock
-            </button>
-          )}
+          <SurfaceActions onPopOut={onPopOut} onDock={onDock} />
         </div>
         <A2UIStandardsTable
           filter={payload.standardsFilter}
-          onOpenEditor={host.onOpenCadStandards}
+          onOpenEditor={host.onOpenCadWorkspace ?? host.onOpenCadStandards}
+        />
+      </div>
+    );
+  }
+
+  if (payload.kind === 'cad-manager') {
+    if (presentation !== 'inline') {
+      return (
+        <div
+          data-testid="a2ui-cad-manager-workspace"
+          className={presentation === 'docked' ? 'h-full min-h-0' : 'h-[76vh] min-h-[520px]'}
+        >
+          {cadManagerContent ?? (
+            <div className="p-4 text-xs text-slate-400">
+              Open the CAD Manager workspace from its chat card to load the full editor.
+            </div>
+          )}
+        </div>
+      );
+    }
+    return (
+      <div data-testid="a2ui-surface-cad-manager-workspace" className="mt-3 w-full">
+        <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
+          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
+            A2UI CAD Manager
+          </span>
+          <SurfaceActions onPopOut={onPopOut} onDock={onDock} />
+        </div>
+        <A2UICadManager
+          onOpenWorkspace={host.onOpenCadWorkspace ?? onDock}
+          onOpenStandards={host.onOpenCadStandards}
         />
       </div>
     );
@@ -393,17 +509,7 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({ payload, onDock }) => 
             A2UI Interactive Surface
           </span>
           <div className="flex shrink-0 items-center gap-2">
-            {onDock && (
-              <button
-                type="button"
-                onClick={onDock}
-                data-testid="a2ui-dock-button"
-                className="inline-flex items-center gap-1 rounded border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-100"
-                title="Dock this tool in the agent tool shelf"
-              >
-                Dock
-              </button>
-            )}
+            <SurfaceActions onPopOut={onPopOut} onDock={onDock} />
             <button
               type="button"
               onClick={handleDismiss}

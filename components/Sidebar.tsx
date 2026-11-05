@@ -109,7 +109,9 @@ const getSelectorModelLabel = (modelName: string): string => (
 
 // FUTURE GEMINI: This object is the single source of truth for agent UI properties.
 // To add or modify an agent's appearance in the sidebar, edit its entry here.
-const agentConfig = {
+type SidebarAgentEntry = { icon: React.FC<any>; label: string; color: string };
+
+const agentConfig: Partial<Record<AgentType, SidebarAgentEntry>> = {
     [AgentType.RAW_CRAWLER]: { icon: BrainCircuitIcon, label: 'RAW Crawler', color: 'cyan' },
     [AgentType.CIVIL_DRAFTER]: { icon: CivilDrafterIcon, label: 'Civil Drafter', color: 'fuchsia' },
     [AgentType.DEED_READER]: { icon: CourthouseIcon, label: 'Boundary Agent', color: 'green' },
@@ -169,6 +171,136 @@ const hexToRgb = (hex: string): string => {
         : '148, 163, 184'; // fallback slate-400
 };
 
+// These rows live at module scope on purpose. Declaring them inside Sidebar
+// gives them a new identity on every render, which remounts the whole agent
+// list and can drop a click that spans a re-render.
+const SidebarButton = ({ agent, isDesktop, isActive, isThinking, onSelect }: {
+    agent: AgentType;
+    isDesktop: boolean;
+    isActive: boolean;
+    isThinking: boolean;
+    onSelect: (agent: AgentType) => void;
+}) => {
+    const config = agentConfig[agent];
+    if (!config) return null;
+
+    const hexColor = agentThemeColors[agent] || '#94a3b8'; // slate-400 fallback
+    const rgbColor = hexToRgb(hexColor);
+    const Icon = config.icon;
+
+    return (
+        <div className="relative has-tooltip">
+            <button
+                type="button"
+                onClick={() => onSelect(agent)}
+                className={`group relative flex w-full items-center gap-1.5 rounded-md border px-1.5 py-[6px] text-left transition-colors duration-150 lg:gap-2.5 lg:px-2.5 ${
+                    isDesktop ? 'justify-center lg:justify-start' : ''
+                } ${
+                    isActive
+                        ? 'border-transparent text-white'
+                        : 'border-transparent text-slate-400 hover:bg-white/[0.045] hover:text-slate-100 light-theme:text-gray-600 light-theme:hover:bg-black/[0.04] light-theme:hover:text-gray-900'
+                } ${isThinking ? 'animate-pulse-thinking' : ''}`}
+                style={{
+                    ...(isActive ? {
+                        background: `linear-gradient(90deg, rgba(${rgbColor},0.16), rgba(${rgbColor},0.03))`,
+                        boxShadow: `inset 0 0 0 1px rgba(${rgbColor},0.24)`,
+                    } : {}),
+                    '--pulse-color': rgbColor,
+                } as React.CSSProperties}
+            >
+                {isActive && (
+                    <span
+                        className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full"
+                        style={{ backgroundColor: hexColor }}
+                    />
+                )}
+                <Icon
+                    className="h-[18px] w-[18px] flex-shrink-0"
+                    style={{ color: isActive ? hexColor : `rgba(${rgbColor},0.82)` }}
+                />
+                <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''}`}>{config.label}</span>
+                {isActive && (
+                    <span
+                        className="ml-auto hidden h-1.5 w-1.5 flex-shrink-0 rounded-full lg:block"
+                        style={{ backgroundColor: hexColor, boxShadow: `0 0 8px rgba(${rgbColor},0.75)` }}
+                    />
+                )}
+            </button>
+            <div className={`tooltip ${isDesktop ? 'invisible absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-gray-900 text-white text-sm rounded-md shadow-lg opacity-0 transform -translate-x-2 transition-all duration-200 md:inline lg:hidden' : 'hidden'} light-theme:bg-gray-700 light-theme:text-gray-100`}>
+                {config.label}
+            </div>
+        </div>
+    );
+};
+
+// Standard View / Action row. Same grid and accent system as the agent rows.
+const NavButton = ({ label, icon: Icon, onClick, isActive, isDesktop }: { label: string, icon: React.FC<any>, onClick: () => void, isActive?: boolean, isDesktop: boolean }) => {
+    return (
+        <div className="relative has-tooltip">
+            <button
+                type="button"
+                onClick={onClick}
+                className={`group relative flex w-full items-center gap-1.5 rounded-md border px-1.5 py-[6px] text-left transition-colors duration-150 lg:gap-2.5 lg:px-2.5 ${
+                    isDesktop ? 'justify-center lg:justify-start' : ''
+                } ${
+                    isActive
+                        ? 'border-cyan-400/25 bg-cyan-400/[0.10] text-white'
+                        : 'border-transparent text-slate-400 hover:bg-white/[0.045] hover:text-slate-100 light-theme:text-gray-600 light-theme:hover:bg-black/[0.04] light-theme:hover:text-gray-900'
+                }`}
+            >
+                {isActive && <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full bg-cyan-300" />}
+                <Icon className="h-[18px] w-[18px] flex-shrink-0" style={{ color: isActive ? '#67e8f9' : 'rgba(148,163,184,0.8)' }} />
+                <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''}`}>{label}</span>
+            </button>
+            <div className={`tooltip ${isDesktop ? 'invisible absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-gray-900 text-white text-sm rounded-md shadow-lg opacity-0 transform -translate-x-2 transition-all duration-200 md:inline lg:hidden' : 'hidden'} light-theme:bg-gray-700 light-theme:text-gray-100`}>
+                {label}
+            </div>
+        </div>
+    );
+};
+
+// C3D Connection Button with pulsing status indicator
+const C3DConnectionButton = ({ onClick, onDebugClick, isConnected, isDesktop, hasToken, version }: { onClick: () => void, onDebugClick?: () => void, isConnected: boolean, isDesktop: boolean, hasToken: boolean, version?: string | null }) => {
+    const label = isConnected
+        ? (version ? `C3D v${version}` : 'C3D Connected')
+        : (hasToken ? 'C3D Ready' : 'Connect C3D');
+    const statusColor = isConnected ? '#34d399' : (hasToken ? '#fbbf24' : '#f87171');
+
+    const handleClick = () => {
+        if (isConnected && onDebugClick) {
+            // When connected, show debug info
+            onDebugClick();
+        } else {
+            // When not connected, open connect panel
+            onClick();
+        }
+    };
+
+    return (
+        <div className="relative has-tooltip">
+            <button
+                type="button"
+                onClick={handleClick}
+                className={`group flex w-full items-center gap-1.5 rounded-md border border-transparent px-1.5 py-[6px] text-left text-slate-400 transition-colors duration-150 hover:bg-white/[0.045] hover:text-slate-100 lg:gap-2.5 lg:px-2.5 ${isDesktop ? 'justify-center lg:justify-start' : ''} light-theme:text-gray-600 light-theme:hover:bg-black/[0.04]`}
+            >
+                <span className="relative flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center">
+                    <C3DLinkIcon className="h-[18px] w-[18px]" style={{ color: isConnected ? '#34d399' : (hasToken ? '#fbbf24' : '#94a3b8') }} />
+                    <span className="absolute -right-0.5 -top-0.5 flex h-2 w-2">
+                        {!isConnected && (
+                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ backgroundColor: statusColor }} />
+                        )}
+                        <span className="relative inline-flex h-2 w-2 rounded-full ring-2 ring-[#0a0f16] light-theme:ring-gray-50" style={{ backgroundColor: statusColor }} />
+                    </span>
+                </span>
+                <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''}`} style={{ color: isConnected ? '#6ee7b7' : (hasToken ? '#fcd34d' : undefined) }}>{label}</span>
+                {isConnected && <span className="ml-auto hidden text-[8px] font-bold uppercase tracking-[0.16em] text-emerald-400/80 lg:inline">Live</span>}
+            </button>
+            <div className={`tooltip ${isDesktop ? 'invisible absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-gray-900 text-white text-sm rounded-md shadow-lg opacity-0 transform -translate-x-2 transition-all duration-200 md:inline lg:hidden' : 'hidden'} light-theme:bg-gray-700 light-theme:text-gray-100`}>
+                {isConnected ? (version ? `Connected: v${version}` : 'Click for connection info') : (hasToken ? 'Token ready - waiting for C3D' : 'Click to connect Civil 3D')}
+            </div>
+        </div>
+    );
+};
 
 export const Sidebar = (props: SidebarProps): React.ReactElement => {
     const { isSessionActive, jobInfo, isLoading } = props;
@@ -321,127 +453,8 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
 
     // NOTE: Job info is hidden from the top of the sidebar; kept in settings if needed.
 
-    const SidebarButton = ({ agent, isDesktop, ...rest }: { agent: AgentType, isDesktop: boolean } & React.ButtonHTMLAttributes<HTMLButtonElement>) => {
-        const config = agentConfig[agent];
-        const isActive = activeAgent === agent;
-        const isThinking = isActive && props.isLoading;
-
-        const hexColor = agentThemeColors[agent] || '#94a3b8'; // slate-400 fallback
-        const rgbColor = hexToRgb(hexColor);
-        const Icon = config.icon;
-
-        return (
-            <div className="relative has-tooltip">
-                <button
-                    onClick={() => onAgentChange(agent)}
-                    className={`group relative flex w-full items-center gap-1.5 rounded-md border px-1.5 py-[6px] text-left transition-colors duration-150 lg:gap-2.5 lg:px-2.5 ${
-                        isDesktop ? 'justify-center lg:justify-start' : ''
-                    } ${
-                        isActive
-                            ? 'border-transparent text-white'
-                            : 'border-transparent text-slate-400 hover:bg-white/[0.045] hover:text-slate-100 light-theme:text-gray-600 light-theme:hover:bg-black/[0.04] light-theme:hover:text-gray-900'
-                    } ${isThinking ? 'animate-pulse-thinking' : ''}`}
-                    style={{
-                        ...(isActive ? {
-                            background: `linear-gradient(90deg, rgba(${rgbColor},0.16), rgba(${rgbColor},0.03))`,
-                            boxShadow: `inset 0 0 0 1px rgba(${rgbColor},0.24)`,
-                        } : {}),
-                        '--pulse-color': rgbColor,
-                    } as React.CSSProperties}
-                    {...rest}
-                >
-                    {isActive && (
-                        <span
-                            className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full"
-                            style={{ backgroundColor: hexColor }}
-                        />
-                    )}
-                    <Icon
-                        className="h-[18px] w-[18px] flex-shrink-0"
-                        style={{ color: isActive ? hexColor : `rgba(${rgbColor},0.82)` }}
-                    />
-                    <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''}`}>{config.label}</span>
-                    {isActive && (
-                        <span
-                            className="ml-auto hidden h-1.5 w-1.5 flex-shrink-0 rounded-full lg:block"
-                            style={{ backgroundColor: hexColor, boxShadow: `0 0 8px rgba(${rgbColor},0.75)` }}
-                        />
-                    )}
-                </button>
-                 <div className={`tooltip ${isDesktop ? 'invisible absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-gray-900 text-white text-sm rounded-md shadow-lg opacity-0 transform -translate-x-2 transition-all duration-200 md:inline lg:hidden' : 'hidden'} light-theme:bg-gray-700 light-theme:text-gray-100`}>
-                    {config.label}
-                </div>
-            </div>
-        );
-    };
-    
     // Standard View / Action row. Same grid and accent system as the agent rows.
-    const NavButton = ({ label, icon: Icon, onClick, isActive, isDesktop }: { label: string, icon: React.FC<any>, onClick: () => void, isActive?: boolean, isDesktop: boolean }) => {
-        return (
-            <div className="relative has-tooltip">
-                <button
-                    onClick={onClick}
-                    className={`group relative flex w-full items-center gap-1.5 rounded-md border px-1.5 py-[6px] text-left transition-colors duration-150 lg:gap-2.5 lg:px-2.5 ${
-                        isDesktop ? 'justify-center lg:justify-start' : ''
-                    } ${
-                        isActive
-                            ? 'border-cyan-400/25 bg-cyan-400/[0.10] text-white'
-                            : 'border-transparent text-slate-400 hover:bg-white/[0.045] hover:text-slate-100 light-theme:text-gray-600 light-theme:hover:bg-black/[0.04] light-theme:hover:text-gray-900'
-                    }`}
-                >
-                    {isActive && <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full bg-cyan-300" />}
-                    <Icon className="h-[18px] w-[18px] flex-shrink-0" style={{ color: isActive ? '#67e8f9' : 'rgba(148,163,184,0.8)' }} />
-                    <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''}`}>{label}</span>
-                </button>
-                 <div className={`tooltip ${isDesktop ? 'invisible absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-gray-900 text-white text-sm rounded-md shadow-lg opacity-0 transform -translate-x-2 transition-all duration-200 md:inline lg:hidden' : 'hidden'} light-theme:bg-gray-700 light-theme:text-gray-100`}>
-                    {label}
-                </div>
-            </div>
-        );
-    }
-
     // C3D Connection Button with pulsing status indicator
-    const C3DConnectionButton = ({ onClick, onDebugClick, isConnected, isDesktop, hasToken, version }: { onClick: () => void, onDebugClick?: () => void, isConnected: boolean, isDesktop: boolean, hasToken: boolean, version?: string | null }) => {
-        const label = isConnected 
-            ? (version ? `C3D v${version}` : 'C3D Connected') 
-            : (hasToken ? 'C3D Ready' : 'Connect C3D');
-        const statusColor = isConnected ? '#34d399' : (hasToken ? '#fbbf24' : '#f87171');
-        
-        const handleClick = () => {
-            if (isConnected && onDebugClick) {
-                // When connected, show debug info
-                onDebugClick();
-            } else {
-                // When not connected, open connect panel
-                onClick();
-            }
-        };
-        
-        return (
-            <div className="relative has-tooltip">
-                <button 
-                    onClick={handleClick} 
-                    className={`group flex w-full items-center gap-1.5 rounded-md border border-transparent px-1.5 py-[6px] text-left text-slate-400 transition-colors duration-150 hover:bg-white/[0.045] hover:text-slate-100 lg:gap-2.5 lg:px-2.5 ${isDesktop ? 'justify-center lg:justify-start' : ''} light-theme:text-gray-600 light-theme:hover:bg-black/[0.04]`}
-                >
-                    <span className="relative flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center">
-                        <C3DLinkIcon className="h-[18px] w-[18px]" style={{ color: isConnected ? '#34d399' : (hasToken ? '#fbbf24' : '#94a3b8') }} />
-                        <span className="absolute -right-0.5 -top-0.5 flex h-2 w-2">
-                            {!isConnected && (
-                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ backgroundColor: statusColor }} />
-                            )}
-                            <span className="relative inline-flex h-2 w-2 rounded-full ring-2 ring-[#0a0f16] light-theme:ring-gray-50" style={{ backgroundColor: statusColor }} />
-                        </span>
-                    </span>
-                    <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''}`} style={{ color: isConnected ? '#6ee7b7' : (hasToken ? '#fcd34d' : undefined) }}>{label}</span>
-                    {isConnected && <span className="ml-auto hidden text-[8px] font-bold uppercase tracking-[0.16em] text-emerald-400/80 lg:inline">Live</span>}
-                </button>
-                <div className={`tooltip ${isDesktop ? 'invisible absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-gray-900 text-white text-sm rounded-md shadow-lg opacity-0 transform -translate-x-2 transition-all duration-200 md:inline lg:hidden' : 'hidden'} light-theme:bg-gray-700 light-theme:text-gray-100`}>
-                    {isConnected ? (version ? `Connected: v${version}` : 'Click for connection info') : (hasToken ? 'Token ready - waiting for C3D' : 'Click to connect Civil 3D')}
-                </div>
-            </div>
-        );
-    };
-    
     const handleInfoMenuClick = (action: () => void) => {
         action();
         setIsInfoOpen(false);
@@ -600,7 +613,16 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                                 if (retiredAgents.includes(agent)) {
                                     return null;
                                 }
-                                return <SidebarButton key={agentKey} agent={agent} isDesktop={props.isDesktop} />;
+                                return (
+                                    <SidebarButton
+                                        key={agentKey}
+                                        agent={agent}
+                                        isDesktop={props.isDesktop}
+                                        isActive={agent === activeAgent}
+                                        isThinking={agent === activeAgent && props.isLoading}
+                                        onSelect={onAgentChange}
+                                    />
+                                );
                             });
                         })()}
                     </div>

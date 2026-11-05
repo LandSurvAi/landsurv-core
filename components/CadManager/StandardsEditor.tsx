@@ -872,14 +872,14 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
   }, [autoAssignResults, codes, saveToUndo]);
 
   return (
-    <div className="fixed inset-0 z-[100] bg-gray-900 flex flex-col">
+    <div className="fixed inset-0 z-[100] bg-[#070d16] flex flex-col">
       {/* Header */}
-      <div className="flex-shrink-0 bg-gray-800 border-b border-gray-700 px-4 py-3">
+      <div className="flex-shrink-0 bg-[#0b1420] border-b border-white/[0.07] px-4 py-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button
               onClick={handleCloseGuarded}
-              className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-400 hover:text-white"
+              className="p-2 hover:bg-white/[0.06] rounded-lg transition-colors text-slate-400 hover:text-white"
               title="Close (Esc)"
             >
               ✕
@@ -887,9 +887,9 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
             <div>
               <h1 className="text-xl font-bold text-white flex items-center gap-2">
                 📋 {standard.name}
-                {hasChanges && <span className="text-yellow-400 text-sm">• Unsaved</span>}
+                {hasChanges && <span className="text-amber-300 text-sm">• Unsaved</span>}
               </h1>
-              <p className="text-sm text-gray-400">
+              <p className="text-sm text-slate-400">
                 {stats.total} codes • {stats.lineworkCodes} with linework • {stats.pointLayers} point layers • {stats.lineLayers} line layers
               </p>
             </div>
@@ -899,7 +899,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
             <button
               onClick={handleUndo}
               disabled={undoStack.length === 0}
-              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-gray-300 rounded-lg text-sm transition-colors"
+              className="px-3 py-2 bg-white/[0.06] hover:bg-white/[0.09] disabled:bg-[#0b1420] disabled:text-slate-400 text-slate-300 rounded-lg text-sm transition-colors"
               title="Undo (Ctrl+Z)"
             >
               ↩️ Undo
@@ -907,12 +907,12 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
             <button
               onClick={handleRedo}
               disabled={redoStack.length === 0}
-              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-gray-300 rounded-lg text-sm transition-colors"
+              className="px-3 py-2 bg-white/[0.06] hover:bg-white/[0.09] disabled:bg-[#0b1420] disabled:text-slate-400 text-slate-300 rounded-lg text-sm transition-colors"
               title="Redo (Ctrl+Y)"
             >
               ↪️ Redo
             </button>
-            <div className="w-px h-6 bg-gray-600 mx-2" />
+            <div className="w-px h-6 bg-white/[0.09] mx-2" />
             <button
               onClick={() => setShowSurveyorMatcher(true)}
               className="px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-sm transition-colors flex items-center gap-1"
@@ -927,31 +927,31 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
             </button>
             <button
               onClick={() => setShowF2FSettings(true)}
-              className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm transition-colors flex items-center gap-1"
+              className="px-3 py-2 bg-cyan-500/90 hover:bg-cyan-400 text-white rounded-lg text-sm transition-colors flex items-center gap-1"
               title="Field-to-Finish Settings"
             >
               ⚙️ F2F Settings
             </button>
-            <div className="w-px h-6 bg-gray-600 mx-2" />
+            <div className="w-px h-6 bg-white/[0.09] mx-2" />
             <button
               onClick={handleExportMarkdown}
-              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors"
+              className="px-3 py-2 bg-white/[0.06] hover:bg-white/[0.09] text-slate-300 rounded-lg text-sm transition-colors"
               title="Export as Markdown"
             >
               📄 .md
             </button>
             <button
               onClick={handleExportCSV}
-              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors"
+              className="px-3 py-2 bg-white/[0.06] hover:bg-white/[0.09] text-slate-300 rounded-lg text-sm transition-colors"
               title="Export as CSV"
             >
               📊 .csv
             </button>
-            <div className="w-px h-6 bg-gray-600 mx-2" />
+            <div className="w-px h-6 bg-white/[0.09] mx-2" />
             <button
               onClick={handleSave}
               disabled={textStyleValidation.hasErrors}
-              className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg font-medium transition-colors"
+              className="px-4 py-2 bg-cyan-500/90 hover:bg-cyan-400 disabled:bg-white/[0.06] disabled:text-slate-500 text-white rounded-lg font-medium transition-colors"
               title="Save (Ctrl+S)"
             >
               💾 Save
@@ -961,42 +961,42 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
       </div>
 
       {/* Toolbar */}
-      <div className="flex-shrink-0 bg-gray-800/50 border-b border-gray-700 px-4 py-2">
+      <div className="flex-shrink-0 bg-[#0b1420]/60 border-b border-white/[0.07] px-4 py-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={handleAddRow}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm font-medium transition-colors"
+              className="px-3 py-1.5 bg-cyan-500/90 hover:bg-cyan-400 text-white rounded text-sm font-medium transition-colors"
             >
               + Add Row
             </button>
             <button
               onClick={handleDeleteRows}
               disabled={selectedRows.size === 0}
-              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-sm font-medium transition-colors"
+              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-white/[0.06] disabled:text-slate-500 text-white rounded text-sm font-medium transition-colors"
             >
               🗑️ Delete ({selectedRows.size})
             </button>
             <button
               onClick={handleCopy}
               disabled={selectedRows.size === 0}
-              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 text-gray-300 rounded text-sm transition-colors"
+              className="px-3 py-1.5 bg-white/[0.06] hover:bg-white/[0.09] disabled:bg-[#0b1420] disabled:text-slate-400 text-slate-300 rounded text-sm transition-colors"
             >
               📋 Copy
             </button>
             <button
               onClick={handlePaste}
-              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded text-sm transition-colors"
+              className="px-3 py-1.5 bg-white/[0.06] hover:bg-white/[0.09] text-slate-300 rounded text-sm transition-colors"
             >
               📥 Paste
             </button>
             
-            <div className="w-px h-6 bg-gray-600 mx-2" />
+            <div className="w-px h-6 bg-white/[0.09] mx-2" />
             
             {/* Auto-assign symbols button */}
             <button
               onClick={handleAutoAssignOpen}
-              className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium transition-colors flex items-center gap-1"
+              className="px-3 py-1.5 bg-cyan-500/90 hover:bg-cyan-400 text-white rounded text-sm font-medium transition-colors flex items-center gap-1"
               title="Auto-assign symbols from library based on code names"
             >
               📚 Auto-Assign Symbols
@@ -1006,7 +1006,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                 disagrees with the master code's domain. */}
             <button
               onClick={() => setIsSanityPanelOpen(true)}
-              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1 ${aliasConflicts.length > 0 ? 'bg-yellow-600 hover:bg-yellow-500 text-gray-900' : 'bg-gray-700 hover:bg-gray-600 text-gray-300'}`}
+              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1 ${aliasConflicts.length > 0 ? 'bg-amber-500/90 hover:bg-amber-500 text-slate-100' : 'bg-white/[0.06] hover:bg-white/[0.09] text-slate-300'}`}
               title={aliasConflicts.length > 0
                 ? `${aliasConflicts.length} alias${aliasConflicts.length === 1 ? '' : 'es'} may be miscategorized — review and confirm or remove`
                 : 'No alias domain conflicts detected'}
@@ -1014,9 +1014,9 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
               {aliasConflicts.length > 0 ? '⚠' : '✓'} Sanity Check{aliasConflicts.length > 0 ? ` (${aliasConflicts.length})` : ''}
             </button>
             
-            <div className="w-px h-6 bg-gray-600 mx-2" />
+            <div className="w-px h-6 bg-white/[0.09] mx-2" />
             
-            <span className="text-sm text-gray-500">
+            <span className="text-sm text-slate-500">
               {selectedRows.size > 0 ? `${selectedRows.size} selected` : 'Click row to select, Shift+click for range'}
             </span>
           </div>
@@ -1027,12 +1027,12 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
               placeholder="Search codes..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-48"
+              className="px-3 py-1.5 bg-[#070d16] border border-white/[0.07] rounded text-sm text-slate-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-48"
             />
             <select
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
-              className="px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="px-3 py-1.5 bg-[#070d16] border border-white/[0.07] rounded text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               {categories.map(cat => (
                 <option key={cat} value={cat}>
@@ -1044,11 +1044,11 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
         </div>
       </div>
 
-      <div className="flex-shrink-0 border-b border-gray-800 bg-gray-900/70 px-4 py-3">
+      <div className="flex-shrink-0 border-b border-white/[0.06] bg-[#070d16]/80 px-4 py-3">
         <div className="flex items-center justify-between gap-3 mb-3">
           <div>
-            <h2 className="text-sm font-semibold text-gray-200">Shared Text Styles</h2>
-            <p className="text-xs text-gray-500">
+            <h2 className="text-sm font-semibold text-slate-200">Shared Text Styles</h2>
+            <p className="text-xs text-slate-500">
               CAD Manager styles used by annotation categories and parcel labels.
             </p>
           </div>
@@ -1062,14 +1062,14 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
         </div>
 
         {textStyles.length === 0 ? (
-          <div className="rounded border border-dashed border-gray-700 px-3 py-4 text-sm text-gray-500">
+          <div className="rounded border border-dashed border-white/[0.07] px-3 py-4 text-sm text-slate-500">
             No shared text styles defined yet.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] border-collapse text-sm">
               <thead>
-                <tr className="text-left text-[11px] uppercase tracking-wide text-gray-500">
+                <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500">
                   <th className="px-2 py-2 font-semibold">Name</th>
                   <th className="px-2 py-2 font-semibold">Font</th>
                   <th className="px-2 py-2 font-semibold">Bold</th>
@@ -1081,16 +1081,16 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
               </thead>
               <tbody>
                 {textStyles.map((style, index) => (
-                  <tr key={`${style.name}-${index}`} className="border-t border-gray-800">
+                  <tr key={`${style.name}-${index}`} className="border-t border-white/[0.06]">
                     <td className="px-2 py-2 align-middle">
                       <input
                         type="text"
                         value={style.name}
                         onChange={e => updateTextStyle(index, { name: e.target.value })}
-                        className={`w-full px-2 py-1.5 bg-gray-800 border rounded text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-cyan-500 ${
+                        className={`w-full px-2 py-1.5 bg-[#0b1420] border rounded text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500 ${
                           textStyleValidation.emptyIndexes.has(index) || textStyleValidation.duplicateIndexes.has(index)
                             ? 'border-red-500'
-                            : 'border-gray-700'
+                            : 'border-white/[0.07]'
                         }`}
                       />
                     </td>
@@ -1098,7 +1098,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                       <select
                         value={style.fontFamily}
                         onChange={e => updateTextStyle(index, { fontFamily: e.target.value })}
-                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                        className="w-full px-2 py-1.5 bg-[#0b1420] border border-white/[0.07] rounded text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
                       >
                         {TEXT_STYLE_FONT_OPTIONS.map(font => (
                           <option key={font} value={font}>{font}</option>
@@ -1110,7 +1110,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                         type="checkbox"
                         checked={!!style.fontBold}
                         onChange={e => updateTextStyle(index, { fontBold: e.target.checked })}
-                        className="h-4 w-4 rounded border-gray-600 bg-gray-800"
+                        className="h-4 w-4 rounded border-white/[0.1] bg-[#0b1420]"
                       />
                     </td>
                     <td className="px-2 py-2 align-middle text-center">
@@ -1118,14 +1118,14 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                         type="checkbox"
                         checked={!!style.fontItalic}
                         onChange={e => updateTextStyle(index, { fontItalic: e.target.checked })}
-                        className="h-4 w-4 rounded border-gray-600 bg-gray-800"
+                        className="h-4 w-4 rounded border-white/[0.1] bg-[#0b1420]"
                       />
                     </td>
                     <td className="px-2 py-2 align-middle">
                       <select
                         value={style.textCase ?? 'original'}
                         onChange={e => updateTextStyle(index, { textCase: e.target.value as CadTextStyleDefinition['textCase'] })}
-                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                        className="w-full px-2 py-1.5 bg-[#0b1420] border border-white/[0.07] rounded text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
                       >
                         <option value="original">Original Case</option>
                         <option value="uppercase">UPPERCASE</option>
@@ -1139,14 +1139,14 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                         step={0.05}
                         value={style.lineSpacing ?? 1.2}
                         onChange={e => updateTextStyle(index, { lineSpacing: Number(e.target.value) })}
-                        className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                        className="w-full px-2 py-1.5 bg-[#0b1420] border border-white/[0.07] rounded text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
                       />
                     </td>
                     <td className="px-2 py-2 align-middle text-right">
                       <button
                         type="button"
                         onClick={() => handleDeleteTextStyle(index)}
-                        className="px-2 py-1.5 bg-red-600/80 hover:bg-red-600 text-white rounded text-xs font-medium transition-colors"
+                        className="px-2 py-1.5 bg-red-500/80 hover:bg-red-600 text-white rounded text-xs font-medium transition-colors"
                       >
                         Delete
                       </button>
@@ -1158,7 +1158,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
           </div>
         )}
         {textStyleValidation.hasErrors && (
-          <div className="mt-2 rounded border border-red-800/70 bg-red-950/30 px-3 py-2 text-xs text-red-200">
+          <div className="mt-2 rounded border border-red-800/70 bg-red-500/10 px-3 py-2 text-xs text-red-200">
             Shared text style names must be non-empty and unique before saving.
           </div>
         )}
@@ -1167,20 +1167,20 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
       {/* Table */}
       <div ref={tableRef} className="flex-1 overflow-auto">
         <table className="w-full border-collapse">
-          <thead className="sticky top-0 bg-gray-800 z-10">
+          <thead className="sticky top-0 bg-[#0b1420] z-10">
             <tr>
-              <th className="w-10 px-2 py-3 text-left text-xs font-semibold text-gray-400 border-b border-gray-700">#</th>
+              <th className="w-10 px-2 py-3 text-left text-xs font-semibold text-slate-400 border-b border-white/[0.07]">#</th>
               {/* Code column header */}
-              <th className="w-24 px-3 py-3 text-left text-xs font-semibold text-gray-400 border-b border-gray-700">
+              <th className="w-24 px-3 py-3 text-left text-xs font-semibold text-slate-400 border-b border-white/[0.07]">
                 Code
               </th>
               {/* Surveyor Alias column header with dropdown */}
               {surveyorSession.surveyors.length > 0 && (
-                <th className="w-28 px-2 py-1 text-left text-xs font-semibold border-b border-gray-700">
+                <th className="w-28 px-2 py-1 text-left text-xs font-semibold border-b border-white/[0.07]">
                   <select
                     value={selectedSurveyorId || ''}
                     onChange={(e) => setSelectedSurveyorId(e.target.value || null)}
-                    className="w-full px-2 py-1.5 bg-gray-700 border border-gray-600 rounded text-xs text-gray-300 focus:border-cyan-500 focus:outline-none"
+                    className="w-full px-2 py-1.5 bg-white/[0.06] border border-white/[0.1] rounded text-xs text-slate-300 focus:border-cyan-500 focus:outline-none"
                   >
                     <option value="">👤 Surveyor</option>
                     {surveyorSession.surveyors.map(s => (
@@ -1193,7 +1193,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
               )}
               {/* Rest of columns (skip code since we rendered it manually) */}
               {COLUMNS.filter(col => col.key !== 'code').map(col => (
-                <th key={col.key} className={`${col.width} px-3 py-3 text-left text-xs font-semibold text-gray-400 border-b border-gray-700`}>
+                <th key={col.key} className={`${col.width} px-3 py-3 text-left text-xs font-semibold text-slate-400 border-b border-white/[0.07]`}>
                   {col.label}
                 </th>
               ))}
@@ -1209,12 +1209,12 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                   key={actualIndex}
                   onClick={(e) => handleRowClick(actualIndex, e)}
                   className={`
-                    cursor-pointer border-b border-gray-800 transition-colors
-                    ${isSelected ? 'bg-indigo-900/50' : 'hover:bg-gray-800/50'}
-                    ${actualIndex % 2 === 0 ? 'bg-gray-900/30' : 'bg-gray-900/10'}
+                    cursor-pointer border-b border-white/[0.06] transition-colors
+                    ${isSelected ? 'bg-cyan-400/10' : 'hover:bg-[#0b1420]/60'}
+                    ${actualIndex % 2 === 0 ? 'bg-[#070d16]/40' : 'bg-[#070d16]/20'}
                   `}
                 >
-                  <td className="px-2 py-2 text-xs text-gray-500 font-mono">
+                  <td className="px-2 py-2 text-xs text-slate-500 font-mono">
                     {actualIndex + 1}
                   </td>
                   
@@ -1230,7 +1230,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                       e.stopPropagation();
                       handleCellDoubleClick(displayIndex, 'code');
                     }}
-                    className="w-24 px-3 py-2 text-sm font-mono font-bold text-cyan-400 cursor-text hover:bg-gray-700/30 hover:ring-1 hover:ring-inset hover:ring-gray-600"
+                    className="w-24 px-3 py-2 text-sm font-mono font-bold text-cyan-400 cursor-text hover:bg-white/[0.04] hover:ring-1 hover:ring-inset hover:ring-gray-600"
                   >
                     {editingCell?.rowIndex === actualIndex && editingCell?.column === 'code' ? (
                       <input
@@ -1243,7 +1243,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                           if (e.key === 'Enter') handleEditComplete();
                           if (e.key === 'Escape') handleEditCancel();
                         }}
-                        className="w-full px-2 py-1 bg-gray-700 border-2 border-indigo-500 rounded text-white text-sm focus:outline-none"
+                        className="w-full px-2 py-1 bg-white/[0.06] border-2 border-cyan-400/50 rounded text-white text-sm focus:outline-none"
                       />
                     ) : (
                       code.code
@@ -1281,7 +1281,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                                   ? `⚠ Sanity check: ${conflict.reason}\n\n${baseTitle}`
                                   : baseTitle}
                               >
-                                {conflict && <span aria-hidden className="text-yellow-300">⚠</span>}
+                                {conflict && <span aria-hidden className="text-amber-300">⚠</span>}
                                 {alias}
                                 <button
                                   onClick={() => removeSurveyorAlias(displayIndex, i)}
@@ -1321,7 +1321,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                                   }
                                 }}
                                 placeholder="code or pattern*"
-                                className="w-24 bg-gray-800 text-white text-xs font-mono px-1.5 py-0.5 rounded border border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                className="w-24 bg-[#0b1420] text-white text-xs font-mono px-1.5 py-0.5 rounded border border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-indigo-400"
                               />
                             ) : (
                               <button
@@ -1329,7 +1329,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                                   setEditingSurveyorAliasRow(displayIndex);
                                   setSurveyorAliasDraft('');
                                 }}
-                                className="inline-flex items-center justify-center w-5 h-5 rounded border border-gray-600 text-gray-400 hover:text-white hover:border-indigo-400 text-xs leading-none"
+                                className="inline-flex items-center justify-center w-5 h-5 rounded border border-white/[0.1] text-slate-400 hover:text-white hover:border-cyan-400/40 text-xs leading-none"
                                 title={`Add ${surveyor?.name ?? 'surveyor'} alias for ${code.code}`}
                                 aria-label={`Add surveyor alias for ${code.code}`}
                               >
@@ -1339,7 +1339,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                           </div>
                         );
                       })() : (
-                        <span className="text-gray-600 text-xs italic">Select ↑</span>
+                        <span className="text-slate-400 text-xs italic">Select ↑</span>
                       )}
                     </td>
                   )}
@@ -1384,9 +1384,9 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                         }}
                         className={`
                           ${col.width} px-3 py-2 text-sm relative group
-                          ${col.key === 'code' ? 'font-mono font-bold text-cyan-400' : isLocked ? 'text-emerald-400 font-medium' : 'text-gray-300'}
+                          ${col.key === 'code' ? 'font-mono font-bold text-cyan-400' : isLocked ? 'text-emerald-400 font-medium' : 'text-slate-300'}
                           ${isLocked ? 'bg-emerald-900/10' : ''}
-                          ${!isEditing ? 'cursor-text hover:bg-gray-700/30 hover:ring-1 hover:ring-inset hover:ring-gray-600' : ''}
+                          ${!isEditing ? 'cursor-text hover:bg-white/[0.04] hover:ring-1 hover:ring-inset hover:ring-gray-600' : ''}
                         `}
                         title={!isEditing ? 'Click or double-click to edit' : undefined}
                       >
@@ -1441,14 +1441,14 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                                   }
                                 }
                               }}
-                              className="w-full px-2 py-1 bg-gray-700 border-2 border-indigo-500 rounded text-white text-sm focus:outline-none shadow-lg"
+                              className="w-full px-2 py-1 bg-white/[0.06] border-2 border-cyan-400/50 rounded text-white text-sm focus:outline-none shadow-lg"
                             />
                             {(col.key === 'pointLayer' || col.key === 'lineLayer' || col.key === 'lineType' || col.key === 'category') && autocompleteSuggestions.length > 0 && (
                               <div
-                                className="absolute left-0 right-0 mt-1 z-50 max-h-56 overflow-y-auto bg-gray-900 border border-indigo-500 rounded shadow-xl text-xs"
+                                className="absolute left-0 right-0 mt-1 z-50 max-h-56 overflow-y-auto bg-[#070d16] border border-cyan-400/50 rounded shadow-xl text-xs"
                                 onMouseDown={(e) => e.preventDefault() /* keep input focus */}
                               >
-                                <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-700 bg-gray-800 sticky top-0">
+                                <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-slate-500 border-b border-white/[0.07] bg-[#0b1420] sticky top-0">
                                   {autocompleteSuggestions.length} match{autocompleteSuggestions.length === 1 ? '' : 'es'} · ↑↓ Enter
                                 </div>
                                 {autocompleteSuggestions.map((suggestion, idx) => (
@@ -1457,7 +1457,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                                     type="button"
                                     onClick={() => commitEditValue(suggestion)}
                                     onMouseEnter={() => setAutocompleteIndex(idx)}
-                                    className={`w-full text-left px-2 py-1 font-mono ${idx === autocompleteIndex ? 'bg-indigo-600 text-white' : 'text-gray-200 hover:bg-gray-800'}`}
+                                    className={`w-full text-left px-2 py-1 font-mono ${idx === autocompleteIndex ? 'bg-cyan-500/90 text-white' : 'text-slate-200 hover:bg-[#0b1420]'}`}
                                   >
                                     {suggestion}
                                   </button>
@@ -1467,7 +1467,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                           </>
                         ) : (
                           <>
-                            <span className={cellValue === '-' ? 'text-gray-600' : ''}>
+                            <span className={cellValue === '-' ? 'text-slate-400' : ''}>
                               {String(cellValue || '-')}
                             </span>
                             {/* AI-Protected indicator (green = user owns this value) */}
@@ -1497,32 +1497,32 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
         </table>
         
         {filteredCodes.length === 0 && (
-          <div className="flex items-center justify-center h-64 text-gray-500">
+          <div className="flex items-center justify-center h-64 text-slate-500">
             <p>No codes match your search</p>
           </div>
         )}
       </div>
 
       {/* Footer Stats */}
-      <div className="flex-shrink-0 bg-gray-800 border-t border-gray-700 px-4 py-2">
-        <div className="flex items-center justify-between text-xs text-gray-500">
+      <div className="flex-shrink-0 bg-[#0b1420] border-t border-white/[0.07] px-4 py-2">
+        <div className="flex items-center justify-between text-xs text-slate-500">
           <div className="flex items-center gap-4">
-            <span>Total: <strong className="text-gray-300">{stats.total}</strong> codes</span>
+            <span>Total: <strong className="text-slate-300">{stats.total}</strong> codes</span>
             <span>•</span>
-            <span>Linework: <strong className="text-orange-400">{stats.lineworkCodes}</strong></span>
+            <span>Linework: <strong className="text-cyan-300">{stats.lineworkCodes}</strong></span>
             <span>•</span>
-            <span>Point-only: <strong className="text-blue-400">{stats.total - stats.lineworkCodes}</strong></span>
+            <span>Point-only: <strong className="text-cyan-300">{stats.total - stats.lineworkCodes}</strong></span>
             <span>•</span>
-            <span>Categories: <strong className="text-gray-300">{stats.categories}</strong></span>
+            <span>Categories: <strong className="text-slate-300">{stats.categories}</strong></span>
             {stats.lockedCells > 0 && (
               <>
                 <span>•</span>
-                <span className="text-emerald-400">🛡️ {stats.lockedCells} AI-protected</span>
+                <span className="text-emerald-400">{stats.lockedCells} AI-protected</span>
               </>
             )}
           </div>
           <div className="flex items-center gap-4">
-            <span>Click or double-click to edit • 🛡️ = AI-protected (you can still edit) • Tab to move • Esc to cancel</span>
+            <span>Click or double-click to edit • AI-protected cells stay editable • Tab to move • Esc to cancel</span>
           </div>
         </div>
       </div>
@@ -1574,21 +1574,21 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
       {/* Auto-Assign Symbols Modal */}
       {showAutoAssign && (
         <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4">
-          <div className="bg-gray-800 rounded-xl shadow-2xl border border-gray-700 w-full max-w-3xl max-h-[80vh] flex flex-col">
+          <div className="bg-[#0b1420] rounded-xl shadow-2xl border border-white/[0.07] w-full max-w-3xl max-h-[80vh] flex flex-col">
             {/* Header */}
-            <div className="flex-shrink-0 px-6 py-4 border-b border-gray-700">
+            <div className="flex-shrink-0 px-6 py-4 border-b border-white/[0.07]">
               <div className="flex justify-between items-center">
                 <div>
                   <h2 className="text-lg font-bold text-white flex items-center gap-2">
                     📚 Auto-Assign Symbols from Library
                   </h2>
-                  <p className="text-sm text-gray-400 mt-1">
+                  <p className="text-sm text-slate-400 mt-1">
                     Found {autoAssignResults.length} codes without symbols that match library entries
                   </p>
                 </div>
                 <button
                   onClick={() => setShowAutoAssign(false)}
-                  className="p-2 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white"
+                  className="p-2 hover:bg-white/[0.06] rounded-lg text-slate-400 hover:text-white"
                 >
                   ✕
                 </button>
@@ -1598,7 +1598,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
             {/* Results List */}
             <div className="flex-1 overflow-y-auto p-4">
               {autoAssignResults.length === 0 ? (
-                <div className="text-center py-12 text-gray-500">
+                <div className="text-center py-12 text-slate-500">
                   <p className="text-4xl mb-4">✓</p>
                   <p>All codes either have symbols or no matches found in the library.</p>
                 </div>
@@ -1614,11 +1614,11 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                     </button>
                     <button
                       onClick={() => setAutoAssignResults(prev => prev.map(r => ({ ...r, selected: false })))}
-                      className="text-gray-400 hover:text-gray-300"
+                      className="text-slate-400 hover:text-slate-300"
                     >
                       Select None
                     </button>
-                    <span className="text-gray-500 ml-auto">
+                    <span className="text-slate-500 ml-auto">
                       {autoAssignResults.filter(r => r.selected).length} selected
                     </span>
                   </div>
@@ -1629,8 +1629,8 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                       className={`
                         flex items-center gap-3 p-3 rounded-lg border transition-colors cursor-pointer
                         ${result.selected 
-                          ? 'bg-purple-900/30 border-purple-600' 
-                          : 'bg-gray-900/50 border-gray-700 hover:border-gray-600'}
+                          ? 'bg-cyan-400/[0.08] border-cyan-400/50'
+                          : 'bg-[#070d16]/60 border-white/[0.07] hover:border-white/[0.1]'}
                       `}
                       onClick={() => {
                         setAutoAssignResults(prev => prev.map((r, i) => 
@@ -1641,7 +1641,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                       {/* Checkbox */}
                       <div className={`
                         w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0
-                        ${result.selected ? 'bg-purple-600 border-purple-600' : 'border-gray-600'}
+                        ${result.selected ? 'bg-cyan-500/90 border-purple-600' : 'border-white/[0.1]'}
                       `}>
                         {result.selected && <span className="text-white text-xs">✓</span>}
                       </div>
@@ -1650,18 +1650,18 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-sm text-cyan-400">{result.code}</span>
-                          <span className="text-gray-500 text-sm truncate">{result.description}</span>
+                          <span className="text-slate-500 text-sm truncate">{result.description}</span>
                         </div>
                       </div>
 
                       {/* Arrow */}
-                      <span className="text-gray-500">→</span>
+                      <span className="text-slate-500">→</span>
 
                       {/* Matched Symbol */}
                       {result.matchedSymbol && (
                         <div className="flex items-center gap-2 flex-shrink-0">
                           <svg
-                            className="w-6 h-6 text-purple-400"
+                            className="w-6 h-6 text-cyan-300"
                             viewBox={result.matchedSymbol.viewBox || '0 0 24 24'}
                             fill="none"
                             stroke="currentColor"
@@ -1669,8 +1669,8 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                           >
                             <path d={result.matchedSymbol.svgPath} strokeLinecap="round" strokeLinejoin="round" />
                           </svg>
-                          <span className="text-sm text-gray-300">{result.matchedSymbol.name}</span>
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-400">
+                          <span className="text-sm text-slate-300">{result.matchedSymbol.name}</span>
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-cyan-400/10 text-cyan-300">
                             {result.matchedSymbol.category}
                           </span>
                         </div>
@@ -1682,21 +1682,21 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
             </div>
 
             {/* Footer */}
-            <div className="flex-shrink-0 px-6 py-4 border-t border-gray-700 flex justify-between items-center">
-              <div className="text-sm text-gray-500">
+            <div className="flex-shrink-0 px-6 py-4 border-t border-white/[0.07] flex justify-between items-center">
+              <div className="text-sm text-slate-500">
                 Library has {SURVEY_SYMBOL_LIBRARY.length} symbols
               </div>
               <div className="flex gap-3">
                 <button
                   onClick={() => setShowAutoAssign(false)}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors"
+                  className="px-4 py-2 bg-white/[0.06] hover:bg-white/[0.09] text-slate-300 rounded-lg text-sm transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleAutoAssignApply}
                   disabled={autoAssignResults.filter(r => r.selected).length === 0}
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg text-sm font-medium transition-colors"
+                  className="px-4 py-2 bg-cyan-500/90 hover:bg-cyan-400 disabled:bg-white/[0.06] disabled:text-slate-500 text-white rounded-lg text-sm font-medium transition-colors"
                 >
                   Apply {autoAssignResults.filter(r => r.selected).length} Symbols
                 </button>
@@ -1771,33 +1771,33 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
           onClick={() => setIsSanityPanelOpen(false)}
         >
           <div
-            className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-3xl w-full max-h-[80vh] flex flex-col"
+            className="bg-[#070d16] border border-white/[0.07] rounded-lg shadow-2xl max-w-3xl w-full max-h-[80vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.07]">
               <div>
                 <h2 className="text-lg font-semibold text-white">Alias Sanity Check</h2>
-                <p className="text-xs text-gray-400">
+                <p className="text-xs text-slate-400">
                   Cross-domain mismatches between surveyor aliases and master codes.
                   Rule-based heuristics — review and act where it matters.
                 </p>
               </div>
               <button
                 onClick={() => setIsSanityPanelOpen(false)}
-                className="px-3 py-1 text-gray-400 hover:text-white text-sm"
+                className="px-3 py-1 text-slate-400 hover:text-white text-sm"
               >
                 ✕
               </button>
             </div>
             <div className="flex-1 overflow-y-auto px-5 py-3">
               {aliasConflicts.length === 0 ? (
-                <div className="text-center py-12 text-gray-400">
+                <div className="text-center py-12 text-slate-400">
                   <div className="text-4xl mb-2">✓</div>
                   <div className="text-sm">No alias domain conflicts detected.</div>
                 </div>
               ) : (
                 <table className="w-full text-sm">
-                  <thead className="text-xs text-gray-500 uppercase">
+                  <thead className="text-xs text-slate-500 uppercase">
                     <tr>
                       <th className="text-left py-2">Surveyor</th>
                       <th className="text-left py-2">Alias</th>
@@ -1808,15 +1808,15 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                   </thead>
                   <tbody>
                     {aliasConflicts.map((c, idx) => (
-                      <tr key={`${c.surveyorId}-${c.masterCode}-${c.aliasTerm}-${idx}`} className="border-t border-gray-800">
-                        <td className="py-2 text-gray-300">{c.surveyorName}</td>
-                        <td className="py-2 font-mono font-bold text-yellow-300">{c.aliasTerm}</td>
+                      <tr key={`${c.surveyorId}-${c.masterCode}-${c.aliasTerm}-${idx}`} className="border-t border-white/[0.06]">
+                        <td className="py-2 text-slate-300">{c.surveyorName}</td>
+                        <td className="py-2 font-mono font-bold text-amber-300">{c.aliasTerm}</td>
                         <td className="py-2">
                           <div className="font-mono font-bold text-white">{c.masterCode}</div>
-                          <div className="text-xs text-gray-400">{c.masterDescription}</div>
+                          <div className="text-xs text-slate-400">{c.masterDescription}</div>
                         </td>
-                        <td className="py-2 text-xs text-gray-300">
-                          <div><span className="text-yellow-300">{c.aliasDomains.join(' / ')}</span> vs <span className="text-cyan-300">{c.masterDomains.join(' / ')}</span></div>
+                        <td className="py-2 text-xs text-slate-300">
+                          <div><span className="text-amber-300">{c.aliasDomains.join(' / ')}</span> vs <span className="text-cyan-300">{c.masterDomains.join(' / ')}</span></div>
                         </td>
                         <td className="py-2 text-right">
                           <button
@@ -1846,7 +1846,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                 </table>
               )}
             </div>
-            <div className="px-5 py-3 border-t border-gray-700 text-xs text-gray-500">
+            <div className="px-5 py-3 border-t border-white/[0.07] text-xs text-slate-500">
               Aliases that don't trigger the lexicon (e.g. project-specific shorthand) are intentionally not flagged.
             </div>
           </div>

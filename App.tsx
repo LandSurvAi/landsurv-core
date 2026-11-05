@@ -10,18 +10,15 @@ import CivilDrafterFileUpload from './components/CivilDrafterFileUpload.tsx';
 import DeedInput from './components/DeedInput.tsx';
 import CenterlineInput from './components/CenterlineInput.tsx';
 import PointEditorInput from './components/PointEditorInput.tsx';
-import CadManagerInput from './components/CadManagerInput.tsx';
 import PlanInput from './components/PlanInput.tsx';
 import DxfInput from './components/DxfInput.tsx';
 import ImageInput from './components/ImageInput.tsx';
 // FIX: Import GisInput for the new GIS Agent.
 import GisInput from './components/GisInput.tsx';
-import ZoningInput from './components/ZoningInput.tsx';
 import StandardsComplianceInput from './components/StandardsComplianceInput.tsx';
 import ClawStatusBadge from './components/ClawStatusBadge.tsx';
 import SourceBlockedNotice from './components/SourceBlockedNotice.tsx';
 import PermissiveSourcesExplainer from './components/PermissiveSourcesExplainer.tsx';
-import ZoningResultsPanel from './components/ZoningResultsPanel.tsx';
 import { TitleSearchPanel } from './components/TitleSearchPanel.tsx';
 // FIX: Changed default import to named import for ChatInterface.
 import { ChatInterface } from './components/ChatInterface.tsx';
@@ -263,6 +260,7 @@ import {
   getUploadPromptCopy,
   markPendingA2UICompleted,
 } from './services/a2uiIntake.ts';
+import { buildA2UIInputFormFromNeedsInput, deriveA2UIInputForm } from './services/a2uiInput.ts';
 import { A2UISurface, A2UIHostContext, type A2UIHostContextValue } from './components/A2UISurface.tsx';
 import { exampleHighwayCl } from './assets/example.highway.cl.ts';
 import { CacpBadge } from './components/CacpBadge.tsx';
@@ -337,7 +335,7 @@ import {
 import { DEFAULT_SETTINGS, COMPATIBLE_VERSIONS, isVersionCompatible } from './utils/sessionDefaults.ts';
 import { mergeSettingsWithDefaults, migrateMessage } from './utils/sessionMigration.ts';
 // FIX: Added ProfileIcon to the imports for the new Profile Agent.
-import { HomeIcon, SheetViewIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, CogIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon, CogoIcon } from './components/icons.tsx';
+import { HomeIcon, SheetViewIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, FloodIcon, StructuresIcon, SoilsIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, CogIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon, CogoIcon } from './components/icons.tsx';
 import { ToolbarStandardsIcon, ToolbarSurfaceIcon, ToolbarLayersIcon } from './components/toolbarIcons.tsx';
 import { suggestedQuestionsText } from './assets/suggested_questions.ts';
 import { userSuggestedQuestionsText } from './assets/user_suggested_questions.ts';
@@ -471,6 +469,10 @@ const A2UI_DOCK_TITLES: Record<string, string> = {
     'image-upload': 'Image Upload',
     'centerline-upload': 'Centerline Upload',
     'cad-manager-intake': 'CAD Standards Intake',
+    'cad-manager-workspace': 'CAD Manager',
+    'cad-standards-table': 'CAD Standards Sheet',
+    'zoning-research': 'Zoning Research',
+    'input-form': 'Input Form',
 };
 
 
@@ -1147,6 +1149,7 @@ const AppContent = () => {
     onShowHistory: () => setIsQuickHistoryOpen(true),
   });
   const [dockedA2UIKey, setDockedA2UIKey] = useState<string | null>(null);
+  const [floatingA2UIKey, setFloatingA2UIKey] = useState<string | null>(null);
   const [agentChatOpenSignal, setAgentChatOpenSignal] = useState(0);
   
   // REFACTORING NOTE: Application-level state moved to AppStateContext
@@ -1468,10 +1471,25 @@ const AppContent = () => {
     const key = `${payload.agent}:${payload.widgetType}`;
     const willDock = dockedA2UIKey !== key;
     setDockedA2UIKey(willDock ? key : null);
-    if (willDock) setIsToolShelfVisible(true);
+    if (willDock) {
+      setFloatingA2UIKey(current => (current === key ? null : current));
+      setIsToolShelfVisible(true);
+    }
   }, [dockedA2UIKey, setIsToolShelfVisible]);
+  const handleToggleA2UIFloat = useCallback((message: ChatMessage) => {
+    const payload = message.a2ui;
+    if (!payload) return;
+    const key = `${payload.agent}:${payload.widgetType}`;
+    const willFloat = floatingA2UIKey !== key;
+    setFloatingA2UIKey(willFloat ? key : null);
+    if (willFloat) {
+      setDockedA2UIKey(current => (current === key ? null : current));
+      setAgentChatOpenSignal(n => n + 1);
+    }
+  }, [floatingA2UIKey]);
   const handleReturnA2UIToChat = useCallback(() => {
     setDockedA2UIKey(null);
+    setFloatingA2UIKey(null);
     setAgentChatOpenSignal(n => n + 1);
   }, []);
   /** Bumped each time the user clicks "Align" in the BoundaryEditor. The token
@@ -2818,6 +2836,8 @@ const AppContent = () => {
 
   const handleUnlockClick = () => {
     if (shouldSuppressApiKeyModal) return;
+    setApiKeyModalTrigger('apikey');
+    setApiKeyModalInitialTab('apikey');
     setShowApiKeyModal(true);
   };
 
@@ -3194,6 +3214,22 @@ const AppContent = () => {
     400,
     'right'
   );
+
+  // Zoning research and CAD Manager are hosted entirely in A2UI surfaces.
+  // Redirect restored/legacy dedicated-panel state to the canvas + chat.
+  useEffect(() => {
+    if (
+      activeVisualPanel === 'zoning' ||
+      activeVisualPanel === 'cadmanager' ||
+      activeVisualPanel === 'cadstandards'
+    ) {
+      if (activeVisualPanel === 'cadmanager' || activeVisualPanel === 'cadstandards') {
+        setActiveAgent(AgentType.CAD_MANAGER);
+      }
+      setActiveVisualPanel('canvas');
+      setIsChatPanelVisible(true);
+    }
+  }, [activeVisualPanel, setActiveVisualPanel, setIsChatPanelVisible, setActiveAgent]);
 
   const showView = useCallback((viewToShow: VisualPanel) => {
       // Push current state to history before changing view
@@ -4348,6 +4384,18 @@ const AppContent = () => {
     }
   }, [showView, startSession, logActionToFieldbook, startChatWithOverride, pushNavigation, setIsAddingData]);
 
+  /**
+   * Quick Thought → Author: start a blank boundary and dock the Boundary Editor
+   * so its first call row is immediately available in the tool shelf.
+   */
+  const handleBoundaryAuthorFromQuickThought = useCallback(() => {
+    handleDeedStartFromScratch();
+    setIsBoundaryDialogDocked(true);
+    setIsBoundaryDialogMinimized(false);
+    setActiveBoundaryDockedTab('dialog');
+    setIsToolShelfVisible(true);
+  }, [handleDeedStartFromScratch]);
+
   const handlePlansSubmitted = useCallback((files: SessionFile[]) => {
     try {
         const summaryLabel = files.map(f => f.name).join(', ');
@@ -5418,7 +5466,8 @@ const AppContent = () => {
       setZoningCounty(zCounty);
       setZoningPlace(zMuni);
       setZoningPlaceType('municipality');
-      if (zDistrict) setZoningDistrict(zDistrict);
+      setZoningDistrict(zDistrict);
+      setZoningMapUrl(undefined);
       setZoningAddress(`${zMuni}, ${zCounty} County, ${zState}`);
 
       logActionToFieldbook(`Zoning Agent: ${zMuni}, ${zCounty} County, ${zState}${zDistrict ? ` � District ${zDistrict}` : ''}${zUse ? ` � Use: ${zUse}` : ''}`);
@@ -5436,23 +5485,41 @@ const AppContent = () => {
 
 Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
+      const researchContext = {
+        place: zMuni,
+        county: zCounty,
+        state: zState,
+        district: zDistrict,
+        startedAt: Date.now(),
+      };
       setZoningChatHistory(prev => [
         ...markPendingA2UICompleted(prev, `${zMuni}, ${zState}`),
-        { role: MessageRole.MODEL, text: opening }
+        {
+          role: MessageRole.MODEL,
+          text: opening,
+          a2ui: {
+            kind: 'zoning-research' as const,
+            agent: AgentType.ZONING_AGENT,
+            widgetType: 'zoning-research' as const,
+            status: 'expanded' as const,
+            zoningContext: researchContext,
+          },
+        }
       ]);
       setActiveAgent(AgentType.ZONING_AGENT);
       setInitializedAgents(prev => new Set(prev).add(AgentType.ZONING_AGENT));
       setIsInitialScreen(false);
-      showView('zoning');
-      setIsChatPanelVisible(false);
+      showView('canvas');
+      setIsChatPanelVisible(true);
+      setAgentChatOpenSignal(n => n + 1);
 
       // -------------------------------------------------------------------
       // SILENT BOOTSTRAP � always runs as soon as the jurisdiction is loaded.
       // Asks the agent for the zoning district map URL + a full list of
       // districts in the municipality, then pins both to the KnowledgeBase so
-      // the ZoningResultsPanel can render the Map & Districts card. No chat
-      // history entries are added � the user sees the map card populate
-      // instead of a redundant Q&A bubble.
+      // the chat-hosted A2UI zoning research card can render the map and
+      // districts. No chat history entries are added � the user watches the
+      // A2UI card populate instead of getting a redundant Q&A bubble.
       // -------------------------------------------------------------------
       let bootstrapPromise: Promise<void> | null = null;
       if (newChat) {
@@ -9356,7 +9423,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }
   }, [activeAgent, rawFile, deedFile, dxfFile, clFile, gisFile, generatedFiles, handleFileUploaded, applyDeedSubmission, handleDxfUploaded, handleGisUploaded, handleClFileUploaded, settings.userApiKey, hasConfirmedApiKey, addNotification]);
 
-  const handleSendMessage = useCallback(async (query: string, agentOverride?: AgentType, askPeerDepth = 0) => {
+  const handleSendMessage = useCallback(async (query: string, agentOverride?: AgentType, askPeerDepth = 0, zoningDistrictOverride?: string) => {
     console.log('[handleSendMessage] Called with query:', query, 'activeAgent:', activeAgent, 'override:', agentOverride, 'askPeerDepth:', askPeerDepth);
 
     // Deterministic symbol-visibility intercept: if the user issued a command
@@ -9452,7 +9519,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               handleOpenBoundaryGis();
               break;
             case 'open-cad-standards':
-              handleCadManagerSessionStart('cadstandards');
+              handleOpenCadWorkspace();
               break;
             case 'civil-drafter-existing-points':
               handleCivilDrafterUseExistingPoints();
@@ -9472,9 +9539,29 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             case 'open-image-gallery':
               showView('imageanalyzer');
               break;
-            case 'open-zoning-panel':
-              showView('zoning');
+            case 'open-zoning-intake': {
+              const zoningWidgetType = getAgentA2UIWidgetType(AgentType.ZONING_AGENT);
+              if (zoningWidgetType) {
+                setZoningChatHistory(prev => [
+                  ...markPendingA2UICompleted(prev),
+                  {
+                    role: MessageRole.MODEL,
+                    text: getUploadPromptCopy(AgentType.ZONING_AGENT, zoningWidgetType),
+                    a2ui: {
+                      kind: 'upload-widget',
+                      agent: AgentType.ZONING_AGENT,
+                      widgetType: zoningWidgetType,
+                      status: 'expanded',
+                    },
+                  },
+                ]);
+              }
+              setActiveAgent(AgentType.ZONING_AGENT);
+              showView('canvas');
+              setIsChatPanelVisible(true);
+              setAgentChatOpenSignal(n => n + 1);
               break;
+            }
             case 'open-title-search-panel':
               showView('titlesearch');
               break;
@@ -10264,7 +10351,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       // For Zoning Agent: inject jurisdiction context so Google Search grounding has proper scope
       if (agent === AgentType.ZONING_AGENT) {
         const jurisdiction = [zoningPlace, zoningCounty ? `${zoningCounty} County` : null, zoningState].filter(Boolean).join(', ');
-        const districtCtx = zoningDistrict ? ` Zoning district: ${zoningDistrict}.` : '';
+        const districtForQuery = zoningDistrictOverride ?? zoningDistrict;
+        const districtCtx = districtForQuery ? ` Zoning district: ${districtForQuery}.` : '';
         queryToSend = `${context}Jurisdiction: ${jurisdiction}.${districtCtx}\n\nUser question: ${query}`;
       }
       
@@ -10708,6 +10796,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
 
 
+      const requestedInputForm = !jsonContentToParse
+        ? deriveA2UIInputForm(
+            [thinkingClarification?.question, finalResultText, thinking]
+              .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+              .join('\n\n'),
+            { agent },
+          )
+        : null;
+
       // Only update history if we didn't already handle it in an early return
       if (!skipFinallyUpdate) {
         setHistory(prev => {
@@ -10723,6 +10820,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               model: currentModelName,
               questionOptions: thinkingClarification?.options.length
                 ? thinkingClarification.options
+                : undefined,
+              a2ui: requestedInputForm
+                ? {
+                    kind: 'input-form',
+                    agent,
+                    widgetType: 'input-form',
+                    status: 'prompting',
+                    inputForm: requestedInputForm,
+                  }
                 : undefined,
             };
           }
@@ -10910,11 +11016,60 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                     return;
                   }
 
+                  const needsInput = peerResponse?.data?.needsInput as
+                    | { question?: unknown; hint?: unknown; options?: unknown }
+                    | undefined;
+                  const needsInputForm = needsInput
+                    ? buildA2UIInputFormFromNeedsInput(needsInput)
+                    : null;
+                  if (needsInput && typeof needsInput.question === 'string' && needsInput.question.trim()) {
+                    const question = needsInput.question.trim();
+                    const hint = typeof needsInput.hint === 'string' && needsInput.hint.trim()
+                      ? needsInput.hint.trim()
+                      : '';
+                    const options = Array.isArray(needsInput.options)
+                      ? needsInput.options
+                          .filter((option): option is string => typeof option === 'string' && option.trim().length > 0)
+                          .map(option => option.trim())
+                      : [];
+                    const promptText = hint
+                      ? `${question}\n\nHint: ${hint}\n\nThe rest of the request is preserved — answer with this value and I’ll retry.`
+                      : `${question}\n\nThe rest of the request is preserved — answer with this value and I’ll retry.`;
+                    setHistory(prev => {
+                      const newHist = [...prev];
+                      const last = newHist[newHist.length - 1];
+                      if (last && last.role === MessageRole.MODEL) {
+                        newHist[newHist.length - 1] = {
+                          ...last,
+                          text: promptText,
+                          result: promptText,
+                          questionOptions: options.length > 0 ? options : undefined,
+                          needsInput: true,
+                          thinking: undefined,
+                          a2ui: needsInputForm
+                            ? {
+                                kind: 'input-form',
+                                agent,
+                                widgetType: 'input-form',
+                                status: 'prompting',
+                                inputForm: needsInputForm,
+                              }
+                            : undefined,
+                        };
+                      }
+                      return newHist;
+                    });
+                    if (options.length > 0) setSuggestedQuestions(options);
+                    logActionToFieldbook(`${agent}: CACP ${skillId} needs input — asked for the missing value.`);
+                    skipFinallyUpdate = true;
+                    return;
+                  }
+
                   // Peer failed — re-run with an error note so the agent can respond gracefully.
                   // CACP failure is logged in the DevOps CACP Activity Log; no chat noise here.
                   const errDetail = peerResponse ? (peerResponse.error ?? 'no data returned') : 'no agent owns this skill';
                   const followUp = isActionSkill
-                    ? `[CACP FAILED — ${skillId}: ${errDetail}]\n\nThe action could not be completed. Please inform the user of this failure. Do NOT retry askPeer.`
+                    ? `[CACP FAILED — ${skillId}: ${errDetail}]\n\nThe action could not be completed. Do not merely report the failure. Identify the single missing or invalid input, then ask the user one concise question to collect it. Keep the rest of the request intact so you can retry after their answer. Do NOT retry askPeer until the user answers.`
                     : `[CACP FAILED — ${skillId}: ${errDetail}]\n\nThe peer agent could not fulfill the "${skillId}" request. Please handle this gracefully and complete the user's original request as best you can without the external data: ${query}`;
                   setTimeout(() => { void handleSendMessage(followUp, agent, askPeerDepth + 1); }, 0);
                   skipFinallyUpdate = true;
@@ -13312,7 +13467,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, [gpsStakeoutChat, handleSendMessage, settings.projection, logActionToFieldbook, settings.coordinatePrecision, pointLists]);
 
 
-  const handleCadManagerSessionStart = useCallback((targetView?: VisualPanel) => {
+  const handleCadManagerSessionStart = useCallback(() => {
     try {
         startSession();
         logActionToFieldbook('Started a new CAD Manager session.');
@@ -13323,8 +13478,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           setCadManagerChatHistory([{
             role: MessageRole.MODEL,
             text:
-              "Hi � I'm the **CAD Manager Agent**. Open the **CAD Standards** view (View tab ? CAD Standards) " +
-              "to author description keys, layers, linetypes, and the shared symbol library. Ask me anything " +
+              "Hi � I'm the **CAD Manager Agent**. Your CAD Manager workspace lives in chat as an A2UI surface. " +
+              "Pop it out or dock it into the agent tool shelf to author description keys, layers, linetypes, and symbols. Ask me anything " +
               "about CAD standards, layer naming, symbol strategy, or why a specific code isn't resolving. " +
               "I'm also the CACP source-of-truth other agents call when they need a layer or symbol for a code.",
           }]);
@@ -13332,16 +13487,85 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           console.warn('[CAD Manager] Failed to initialize chat:', chatErr);
         }
         setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
-        if (targetView) {
-          showView(targetView);
-        } else if (activeVisualPanel !== 'sheetview' && activeVisualPanel !== 'draftstylelib' && activeVisualPanel !== 'linetypemanager') {
-          showView('cadstandards');
-        }
-    } catch (err) {
+        setCadManagerChatHistory(prev => [
+          ...prev,
+          {
+            role: MessageRole.MODEL,
+            text: 'The **CAD Manager** workspace is ready. Use **Open workspace**, **Pop out**, or **Dock** to launch it. The card stays here so you can return to chat at any time.',
+            a2ui: {
+              kind: 'cad-manager',
+              agent: AgentType.CAD_MANAGER,
+              widgetType: 'cad-manager-workspace',
+              status: 'expanded',
+            },
+          },
+        ]);
+        setActiveAgent(AgentType.CAD_MANAGER);
+        showView('canvas');
+        setIsChatPanelVisible(true);
+        setAgentChatOpenSignal(n => n + 1);
+      } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Failed to initialize CAD Manager.';
         setError(`Initialization Error: ${errorMessage}`);
-    }
-  }, [showView, startSession, logActionToFieldbook, startChatWithOverride, setCadManagerChat, setCadManagerChatHistory, activeVisualPanel]);
+      }
+  }, [showView, startSession, logActionToFieldbook, startChatWithOverride, setCadManagerChat, setCadManagerChatHistory, setInitializedAgents, setActiveAgent, setIsChatPanelVisible, setAgentChatOpenSignal]);
+
+  /**
+   * Open the CAD Manager workspace in the A2UI float/dock host without creating
+   * a dedicated canvas view. If the card does not exist yet, add it first so
+   * the floating message can resolve on the next render.
+   */
+  const handleOpenCadWorkspace = useCallback(() => {
+    setActiveAgent(AgentType.CAD_MANAGER);
+    setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
+    setCadManagerChatHistory(prev => {
+      const hasActiveWorkspace = prev.some(
+        msg => msg.a2ui?.kind === 'cad-manager' && msg.a2ui.status !== 'completed' && msg.a2ui.status !== 'dismissed'
+      );
+      if (hasActiveWorkspace) return prev;
+      return [
+        ...markPendingA2UICompleted(prev),
+        {
+          role: MessageRole.MODEL,
+          text: 'Your **CAD Manager** workspace is docked in the agent tool shelf. Pop it out over the canvas whenever you need more room.',
+          a2ui: {
+            kind: 'cad-manager',
+            agent: AgentType.CAD_MANAGER,
+            widgetType: 'cad-manager-workspace',
+            status: 'expanded',
+          },
+        },
+      ];
+    });
+    setFloatingA2UIKey(null);
+    setDockedA2UIKey(`${AgentType.CAD_MANAGER}:cad-manager-workspace`);
+    setIsToolShelfVisible(true);
+    showView('canvas');
+    setIsChatPanelVisible(true);
+    setAgentChatOpenSignal(n => n + 1);
+  }, [showView, setInitializedAgents, setCadManagerChatHistory, setActiveAgent, setIsChatPanelVisible, setAgentChatOpenSignal, setIsToolShelfVisible]);
+
+  /** Append the live, filterable CAD standards sheet as an A2UI surface. */
+  const handleOpenCadStandardsSheet = useCallback(() => {
+    setActiveAgent(AgentType.CAD_MANAGER);
+    setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
+    setCadManagerChatHistory(prev => [
+      ...markPendingA2UICompleted(prev),
+      {
+        role: MessageRole.MODEL,
+        text: 'Here is the live **CAD Standards** sheet. Filter it here, or open the full workspace to edit and export it.',
+        a2ui: {
+          kind: 'standards-explorer',
+          agent: AgentType.CAD_MANAGER,
+          widgetType: 'cad-standards-table',
+          status: 'expanded',
+        },
+      },
+    ]);
+    showView('canvas');
+    setIsChatPanelVisible(true);
+    setAgentChatOpenSignal(n => n + 1);
+  }, [showView, setInitializedAgents, setCadManagerChatHistory, setActiveAgent, setIsChatPanelVisible, setAgentChatOpenSignal]);
 
   const handleCadManagerFileUploaded = useCallback(async (content: string, fileName: string) => {
     try {
@@ -13382,6 +13606,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           role: MessageRole.MODEL,
           text: `I have loaded the CAD standard <strong>"${parsedStandard.name}"</strong> from <strong>"${fileName}"</strong> (<strong>${parsedStandard.codes?.length ?? 0}</strong> codes, <strong>${parsedStandard.layers?.length ?? 0}</strong> layers). All agents on the canvas will now resolve layers and symbols against this standard!`,
           questionOptions: ['Open CAD Standards Editor', 'Match survey codes in chat'],
+        },
+        {
+          role: MessageRole.MODEL,
+          text: 'The uploaded standard is ready as an A2UI sheet. Filter it here, or open the workspace to edit and export it.',
+          a2ui: {
+            kind: 'standards-explorer',
+            agent: AgentType.CAD_MANAGER,
+            widgetType: 'cad-standards-table',
+            status: 'expanded',
+          },
         },
       ]);
       setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
@@ -13506,6 +13740,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // Defer one tick so the session/view updates land before the panel docks.
     setTimeout(() => { handleOpenParcelGisFromUpload(); }, 0);
   }, [initializedAgents, handleDeedStartFromScratch, handleAgentChange, handleOpenParcelGisFromUpload]);
+
+  /** Quick Thought → GIS: close the deed intake and focus the county parcel panel. */
+  const handleBoundaryGisFromQuickThought = useCallback(() => {
+    setDeedChatHistory(prev => markPendingA2UICompleted(prev, 'County GIS'));
+    handleOpenBoundaryGis();
+  }, [handleOpenBoundaryGis]);
 
   handleAgentChangeRef.current = handleAgentChange;
   
@@ -17017,6 +17257,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         msg.a2ui.status !== 'dismissed'
       ) ?? null
     : null;
+  const floatingA2UIMessage = floatingA2UIKey
+    ? [...currentChatHistory].reverse().find(msg =>
+        msg.a2ui &&
+        `${msg.a2ui.agent}:${msg.a2ui.widgetType}` === floatingA2UIKey &&
+        msg.a2ui.status !== 'completed' &&
+        msg.a2ui.status !== 'dismissed'
+      ) ?? null
+    : null;
   
   // DEBUG: Log chat history and agent
   useEffect(() => {
@@ -17183,15 +17431,32 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     hasInclusionLines: lines.some((l: SurveyLine) => l.type === 'inclusion'),
     getInclusionBboxWgs84,
     onZoningSearch: handleZoningSearch,
+    onZoningSelectDistrict: (district) => {
+      setZoningDistrict(district);
+      const jurisdiction = [zoningPlace, zoningCounty ? `${zoningCounty} County` : null, zoningState]
+        .filter(Boolean)
+        .join(', ');
+      handleSendMessage(
+        `Tell me about the ${district} zoning district${jurisdiction ? ` in ${jurisdiction}` : ''} — permitted uses, setbacks, height limit, and lot coverage. Cite the section number(s).`,
+        undefined,
+        0,
+        district
+      );
+    },
+    onZoningAskQuestion: (question) => handleSendMessage(question),
     jobInfo,
     onTitleSearchDeedSubmitted: handleTitleSearchDeedSubmitted,
     onStandardsComplianceSessionStart: handleStandardsComplianceSessionStart,
     onImagesSubmitted: handleImagesSubmitted,
     onCenterlineSessionStart: handleCenterlineSessionStart,
     onClFileUploaded: handleClFileUploaded,
-    onCadManagerSessionStart: () => handleCadManagerSessionStart('cadstandards'),
+    onCadManagerSessionStart: handleCadManagerSessionStart,
     onCadManagerFileUploaded: handleCadManagerFileUploaded,
-    onOpenCadStandards: () => handleCadManagerSessionStart('cadstandards'),
+    onOpenCadStandards: handleOpenCadStandardsSheet,
+    onOpenCadWorkspace: handleOpenCadWorkspace,
+    onSubmitInput: (message, payload) => {
+      void handleSendMessage(message, payload.agent);
+    },
   }), [
     handlePointsUploaded,
     handlePointEditorSessionStart,
@@ -17214,6 +17479,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     lines,
     getInclusionBboxWgs84,
     handleZoningSearch,
+    handleSendMessage,
+    zoningPlace,
+    zoningCounty,
+    zoningState,
     jobInfo,
     handleTitleSearchDeedSubmitted,
     handleStandardsComplianceSessionStart,
@@ -17222,6 +17491,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     handleClFileUploaded,
     handleCadManagerSessionStart,
     handleCadManagerFileUploaded,
+    handleOpenCadStandardsSheet,
+    handleOpenCadWorkspace,
   ]);
 
   if (pageMode === null) {
@@ -18154,6 +18425,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </FloatingPanel>
   );
 
+  const cadManagerA2UIContent = (
+    <CadManagerPage
+      c3dSessionToken={c3dSessionToken}
+      isC3DConnected={isC3DConnected}
+      sendToC3D={sendToC3D}
+      reconnectWebSocket={reconnectWebSocket}
+    />
+  );
   const dockedA2UIPayload = dockedA2UIMessage?.a2ui ?? null;
   const dockedA2UIToolItem: DockableToolItem[] = dockedA2UIPayload
     ? [{
@@ -18166,16 +18445,29 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-slate-500">
                 Docked from chat
               </span>
-              <button
-                type="button"
-                onClick={handleReturnA2UIToChat}
-                className="rounded border border-white/[0.08] px-2 py-0.5 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06]"
-              >
-                Return to chat
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => dockedA2UIMessage && handleToggleA2UIFloat(dockedA2UIMessage)}
+                  className="rounded border border-cyan-500/30 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400/60 hover:bg-cyan-500/10"
+                >
+                  Pop out
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReturnA2UIToChat}
+                  className="rounded border border-white/[0.08] px-2 py-0.5 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06]"
+                >
+                  Return to chat
+                </button>
+              </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-              <A2UISurface payload={dockedA2UIPayload} />
+            <div className={dockedA2UIPayload.kind === 'cad-manager' ? 'min-h-0 flex-1 overflow-hidden' : 'min-h-0 flex-1 overflow-y-auto px-3 pb-3'}>
+              <A2UISurface
+                payload={dockedA2UIPayload}
+                presentation="docked"
+                cadManagerContent={cadManagerA2UIContent}
+              />
             </div>
           </div>
         ),
@@ -18636,7 +18928,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                           }
                           setIsInitialScreen(false);
                           setActiveAgent(AgentType.CAD_MANAGER);
-                          handleCadManagerSessionStart('cadstandards');
+                          handleOpenCadWorkspace();
                         }}
                         onOpenGpsStakeout={() => {
                           if (!hasLegalSignature && !hasSignedLegalAgreement()) {
@@ -18696,13 +18988,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                     {activeAgent === AgentType.CIVIL_PLAN_EXPERT && <PlanInput onPlansSubmitted={handlePlansSubmitted} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.DXF_ANALYZER && <DxfInput onDxfUploaded={handleDxfUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.GIS_AGENT && <GisInput onGisUploaded={handleGisUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} inclusionBoundaries={inclusionBoundaries} activeInclusionBoundaryId={activeInclusionBoundaryId} hasInclusionLines={lines.some((l: SurveyLine) => l.type === 'inclusion')} getInclusionBboxWgs84={getInclusionBboxWgs84} />}
-                    {activeAgent === AgentType.ZONING_AGENT && <ZoningInput onZoningSearch={handleZoningSearch} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} jobInfo={jobInfo} />}
                     {activeAgent === AgentType.TITLE_SEARCH && <DeedInput onDeedSubmitted={handleTitleSearchDeedSubmitted} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Add More Deeds" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.STANDARDS_COMPLIANCE && <StandardsComplianceInput onSessionStart={handleStandardsComplianceSessionStart} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.IMAGE_ANALYZER && <ImageInput onImagesSubmitted={handleImagesSubmitted} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.CENTERLINE_STATIONING && <CenterlineInput onSessionStart={handleCenterlineSessionStart} onClFileUploaded={handleClFileUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.POINT_EDITOR && <PointEditorInput onSessionStart={handlePointEditorSessionStart} onPointsUploaded={handlePointsUploaded} onGoBack={handleGoBackFromUpload} autoOpenUpload={autoOpenPointUpload} onAutoOpenHandled={() => setAutoOpenPointUpload(false)} />}
-                    {activeAgent === AgentType.CAD_MANAGER && <CadManagerInput onSessionStart={handleCadManagerSessionStart} onGoBack={handleGoBackFromUpload} />}
                   </>
                 )}
               </div>
@@ -18710,13 +19000,25 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 <div className="flex flex-1 min-h-0 relative">
                     <div
                         ref={visualPanelAndEditorContainerRef}
-                        className="flex flex-col min-w-0 flex-1"
+                        // Above the tool shelf (z-30) so the command bar's Tools
+                        // tab straddles the shelf's bottom edge instead of being
+                        // clipped by it. Kept below the mobile menu (z-40).
+                        className="relative z-[35] flex flex-col min-w-0 flex-1"
                         style={{
                             marginRight: activeVisualPanel === 'canvas' && isToolShelfVisible ? toolShelfWidth : 0,
                         }}
                     >
-                        {/* Main Header Bar */}
-                        <div data-canvas-header className="relative z-40 overflow-visible flex-shrink-0 flex items-center gap-1.5 px-2 h-14 bg-[#0a0f16] border-b border-white/[0.06] light-theme:bg-white/60 light-theme:border-gray-300/40">
+                        {/* Main Header Bar — overhang the reserved shelf column so the
+                            bar meets the viewport edge instead of leaving a dead strip
+                            above the tool shelf. The drawing area below stays inset. */}
+                        <div
+                            data-canvas-header
+                            style={activeVisualPanel === 'canvas' && isToolShelfVisible ? {
+                                width: `calc(100% + ${toolShelfWidth}px)`,
+                                marginRight: -toolShelfWidth,
+                            } : undefined}
+                            className="relative z-40 overflow-visible flex-shrink-0 flex items-center gap-1.5 px-2 h-14 bg-[#0a0f16] border-b border-white/[0.06] light-theme:bg-white/60 light-theme:border-gray-300/40"
+                        >
                             <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 md:hidden"><Bars3Icon className="h-[18px] w-[18px]"/></button>
                             {!isDesktop && canGoBack && (
                                 <button 
@@ -18761,9 +19063,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                     </button>
                                     {/* Canvas tools promoted from the floating toolbar */}
                                     <button
-                                        onClick={() => showView('cadstandards')}
+                                        onClick={() => handleOpenCadWorkspace()}
                                         className="p-2 rounded-full transition-colors hover:bg-gray-700 text-gray-300"
-                                        title="CAD Standards — open the standards editor"
+                                        title="CAD Standards — open the A2UI workspace"
                                         aria-label="CAD Standards"
                                     >
                                         <ToolbarStandardsIcon className="h-[18px] w-[18px]" />
@@ -18903,8 +19205,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         chatPanelWidth={toolShelfWidth}
                                         isChatResizing={isResizingToolShelf}
                                         dockedA2UIKey={dockedA2UIMessage ? dockedA2UIKey : null}
+                                        floatingA2UIKey={floatingA2UIMessage ? floatingA2UIKey : null}
                                         onToggleA2UIDock={handleToggleA2UIDock}
+                                        onToggleA2UIFloat={handleToggleA2UIFloat}
                                         agentChatOpenSignal={agentChatOpenSignal}
+                                        boundaryQuickActions={
+                                            activeAgent === AgentType.DEED_READER
+                                                ? {
+                                                    onUpload: handleOpenDeedUpload,
+                                                    onAuthor: handleBoundaryAuthorFromQuickThought,
+                                                    onGis: handleBoundaryGisFromQuickThought,
+                                                }
+                                                : undefined
+                                        }
                                         keyInfo={{
                                             label: activeKeyStatusLabel,
                                             detail: activeKeyStatusDetail,
@@ -18914,9 +19227,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                             isInferenceEnabled,
                                             onClick: isSuperUser
                                                 ? handleSuperUserReset
-                                                : hasApiKey
-                                                  ? () => setIsSettingsVisible(true)
-                                                  : handleUnlockClick,
+                                                : hasServiceAndInference
+                                                  ? handleUnlockClick
+                                                  : hasApiKey
+                                                    ? () => setIsSettingsVisible(true)
+                                                    : handleUnlockClick,
                                         }}
                                         initialTransform={canvasTransform}
                                         points={streamPreviewPoints.length > 0 ? [...points, ...streamPreviewPoints.filter(sp => !points.some(p => p.pointNumber === sp.pointNumber))] : points} 
@@ -19469,15 +19784,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         selectedDeedId={selectedDeedId}
                                         selectedLienId={selectedLienId}
                                     />
-                                ) : activeVisualPanel === 'zoning' ? (
-                                    <ZoningResultsPanel
-                                        chatHistory={zoningChatHistory}
-                                        place={zoningPlace}
-                                        county={zoningCounty}
-                                        state={zoningState}
-                                        district={zoningDistrict}
-                                        onAskQuestion={handleSendMessage}
-                                    />
                                 ) : activeVisualPanel === 'symbolmanager' ? (
                                     <SymbolManagerPanel
                                         symbols={customSymbols}
@@ -19589,13 +19895,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                       onAddFiles={() => setIsAddingData(true)}
                                       onOpenChat={() => showView('canvas')}
                                     />
-                                ) : activeVisualPanel === 'cadmanager' || activeVisualPanel === 'cadstandards' ? (
-                                    <CadManagerPage 
-                                      c3dSessionToken={c3dSessionToken}
-                                      isC3DConnected={isC3DConnected}
-                                      sendToC3D={sendToC3D}
-                                      reconnectWebSocket={reconnectWebSocket}
-                                    />
                                 ) : activeVisualPanel === 'sheetview' ? (
                                     <SheetView
                                       points={points}
@@ -19637,7 +19936,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         isOpen={isToolShelfVisible}
                         width={toolShelfWidth}
                         onResizeStart={handleToolShelfResizeMouseDown}
-                        accentColor={hexColor}
                         bottomOffset={commandBarHeight}
                         topOffset={56}
                       >
@@ -20126,6 +20424,26 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 }
               }}
             />
+          )}
+          {floatingA2UIMessage?.a2ui && (
+            <FloatingPanel
+              key={floatingA2UIKey ?? 'a2ui-floating'}
+              title={A2UI_DOCK_TITLES[floatingA2UIMessage.a2ui.widgetType] || 'A2UI Tool'}
+              isDocked={false}
+              onToggleDock={() => handleToggleA2UIDock(floatingA2UIMessage)}
+              onClose={handleReturnA2UIToChat}
+              initialX={typeof window !== 'undefined' ? Math.max(24, window.innerWidth / 2 - 380) : 80}
+              initialY={72}
+              width={floatingA2UIMessage.a2ui.kind === 'cad-manager' ? 'min(1180px, 96vw)' : 'min(760px, 94vw)'}
+              maxHeight="90vh"
+              accentBorder="border-cyan-500/40"
+            >
+              <A2UISurface
+                payload={floatingA2UIMessage.a2ui}
+                presentation="floating"
+                cadManagerContent={floatingA2UIMessage.a2ui.kind === 'cad-manager' ? cadManagerA2UIContent : undefined}
+              />
+            </FloatingPanel>
           )}
           {isFloodPanelVisible && !dockedTools.flood && (
             <FloatingPanel

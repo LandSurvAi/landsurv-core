@@ -67,12 +67,12 @@ function HatchCard({ hatch, selected, onSelect, onDelete, onExport }: HatchCardP
       onClick={onSelect}
       className={`relative flex flex-col items-center gap-1 p-2 rounded-lg border cursor-pointer transition-all select-none
         ${selected
-          ? 'border-indigo-500 bg-indigo-900/30 ring-1 ring-indigo-500'
-          : 'border-gray-700 bg-gray-800/60 hover:border-gray-500 hover:bg-gray-700/40'
-        } light-theme:bg-gray-100 light-theme:border-gray-300`}
+          ? 'border-cyan-400/50 bg-cyan-400/10 ring-1 ring-cyan-400/30'
+          : 'border-white/[0.07] bg-[#0b1420]/80 hover:border-white/[0.14] hover:bg-white/[0.04]'
+        } light-theme:bg-[#0b1420] light-theme:border-white/[0.12]`}
     >
       <HatchPreviewCanvas hatch={hatch} size={56} />
-      <span className="text-xs text-gray-300 font-mono text-center leading-tight light-theme:text-gray-700 max-w-[72px] truncate" title={hatch.name}>
+      <span className="text-xs text-slate-300 font-mono text-center leading-tight light-theme:text-slate-300 max-w-[72px] truncate" title={hatch.name}>
         {hatch.name}
       </span>
       {hatch.femaZone && (
@@ -83,16 +83,16 @@ function HatchCard({ hatch, selected, onSelect, onDelete, onExport }: HatchCardP
           {onExport && (
             <button
               onClick={(e) => { e.stopPropagation(); onExport(); }}
-              className="w-4 h-4 text-[10px] text-gray-400 hover:text-cyan-400 transition-colors"
+              className="w-4 h-4 text-[10px] text-slate-400 hover:text-cyan-400 transition-colors"
               title="Export .PAT"
-            >⬇</button>
+            >↓</button>
           )}
           {onDelete && (
             <button
               onClick={(e) => { e.stopPropagation(); onDelete(); }}
-              className="w-4 h-4 text-[10px] text-gray-400 hover:text-red-400 transition-colors"
+              className="w-4 h-4 text-[10px] text-slate-400 hover:text-red-400 transition-colors"
               title="Delete"
-            >✕</button>
+            >×</button>
           )}
         </div>
       )}
@@ -232,41 +232,41 @@ export function HatchManagerPanel({ customHatches, onCustomHatchesChange }: Hatc
 
   // ── Tab button class helper ─────────────────────────────────────────────────
   const tabCls = (active: boolean) =>
-    `px-3 py-2 text-xs font-medium rounded-t-md transition-colors cursor-pointer border-b-2 ${
+    `inline-flex cursor-pointer items-center border-b-2 px-2.5 py-2 text-[10px] font-semibold transition-colors ${
       active
-        ? 'text-indigo-400 border-indigo-500 bg-gray-800/70'
-        : 'text-gray-400 border-transparent hover:text-gray-200 hover:bg-gray-700/30'
-    } light-theme:${active ? 'text-indigo-600 border-indigo-500 bg-white' : 'text-gray-500 hover:text-gray-700'}`;
+        ? 'border-cyan-400/60 bg-cyan-400/[0.07] text-cyan-200'
+        : 'border-transparent text-slate-500 hover:bg-white/[0.03] hover:text-slate-200'
+    }`;
 
   // ── Selected hatch detail overlay ───────────────────────────────────────────
   const renderDetail = () => {
     if (!selected) return null;
     return (
-      <div className="mt-4 p-3 bg-gray-800/80 rounded-lg border border-gray-700 light-theme:bg-gray-50 light-theme:border-gray-300">
+      <div className="mt-4 p-3 bg-[#0b1420]/95 rounded-lg border border-white/[0.07] light-theme:bg-[#0a111c] light-theme:border-white/[0.12]">
         <div className="flex items-start gap-3">
           <HatchPreviewCanvas hatch={selected} size={80} />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-gray-100 font-mono light-theme:text-gray-800">{selected.name}</p>
-            <p className="text-xs text-gray-400 mt-0.5 light-theme:text-gray-600">{selected.description}</p>
+            <p className="text-sm font-semibold text-slate-100 font-mono light-theme:text-slate-100">{selected.name}</p>
+            <p className="text-xs text-slate-400 mt-0.5 light-theme:text-slate-400">{selected.description}</p>
             {selected.femaZone && (
               <p className="text-xs text-cyan-400 mt-1">FEMA Zone: <strong>{selected.femaZone}</strong></p>
             )}
             {selected.usage && (
-              <p className="text-xs text-gray-500 mt-1 italic">{selected.usage}</p>
+              <p className="text-xs text-slate-500 mt-1 italic">{selected.usage}</p>
             )}
             <div className="mt-2 flex gap-2">
               <button
                 onClick={() => handleExportOne(selected)}
-                className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors"
+                className="text-xs px-2 py-1 bg-white/[0.06] hover:bg-white/[0.09] text-slate-200 rounded transition-colors"
               >
-                ⬇ Export .PAT
+                Export .PAT
               </button>
               {selected.category === 'custom' && (
                 <button
                   onClick={() => handleEditExisting(selected)}
-                  className="text-xs px-2 py-1 bg-indigo-700/50 hover:bg-indigo-700 text-indigo-300 rounded transition-colors"
+                  className="text-xs px-2 py-1 bg-cyan-400/15 hover:bg-cyan-400/30 text-cyan-200 rounded transition-colors"
                 >
-                  ✏ Edit
+                  Edit
                 </button>
               )}
             </div>
@@ -274,11 +274,11 @@ export function HatchManagerPanel({ customHatches, onCustomHatchesChange }: Hatc
         </div>
         {/* PAT source lines */}
         <div className="mt-2 space-y-0.5">
-          <p className="text-[10px] text-gray-500 font-mono">PAT Lines:</p>
+          <p className="text-[10px] text-slate-500 font-mono">PAT Lines:</p>
           {selected.lines.length === 0
-            ? <p className="text-[10px] text-gray-500 italic">No fill (Zone X unshaded)</p>
+            ? <p className="text-[10px] text-slate-500 italic">No fill (Zone X unshaded)</p>
             : selected.lines.map((l, i) => (
-              <code key={i} className="block text-[10px] text-green-400 bg-gray-900 px-2 py-0.5 rounded">
+              <code key={i} className="block text-[10px] text-emerald-300 bg-[#070d16] px-2 py-0.5 rounded">
                 {[l.angle, l.originX, l.originY, l.deltaX, l.deltaY, ...(l.dashes ?? [])].join(', ')}
               </code>
             ))
@@ -292,8 +292,8 @@ export function HatchManagerPanel({ customHatches, onCustomHatchesChange }: Hatc
   const renderEditor = () => (
     <div className="p-4 space-y-4">
       <div className="flex items-center gap-2 mb-2">
-        <button onClick={() => setSection('custom')} className="text-xs text-gray-400 hover:text-gray-200">← Back</button>
-        <h3 className="text-sm font-semibold text-gray-200 light-theme:text-gray-800">
+        <button onClick={() => setSection('custom')} className="text-xs text-slate-400 hover:text-slate-200">← Back</button>
+        <h3 className="text-sm font-semibold text-slate-200 light-theme:text-slate-100">
           {customHatches.some(h => h.name === editing.name) ? `Edit: ${editing.name}` : 'New Hatch Pattern'}
         </h3>
       </div>
@@ -303,22 +303,22 @@ export function HatchManagerPanel({ customHatches, onCustomHatchesChange }: Hatc
         <HatchPreviewCanvas hatch={editing} size={96} />
         <div className="flex-1 space-y-2">
           <div>
-            <label className="text-xs text-gray-400 block mb-0.5">Name (PAT identifier) *</label>
+            <label className="text-xs text-slate-400 block mb-0.5">Name (PAT identifier) *</label>
             <input
               type="text"
               value={editing.name}
               onChange={e => setEditing(p => ({ ...p, name: e.target.value.toUpperCase() }))}
-              className="w-full px-2 py-1 bg-gray-800 border border-gray-600 rounded text-sm text-gray-200 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 light-theme:bg-white light-theme:text-gray-800"
+              className="w-full px-2 py-1 bg-[#0b1420] border border-white/[0.1] rounded text-sm text-slate-200 font-mono focus:outline-none focus:ring-2 focus:ring-cyan-400/50 light-theme:bg-white light-theme:text-slate-100"
               placeholder="MY_PATTERN"
             />
           </div>
           <div>
-            <label className="text-xs text-gray-400 block mb-0.5">Description</label>
+            <label className="text-xs text-slate-400 block mb-0.5">Description</label>
             <input
               type="text"
               value={editing.description}
               onChange={e => setEditing(p => ({ ...p, description: e.target.value }))}
-              className="w-full px-2 py-1 bg-gray-800 border border-gray-600 rounded text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 light-theme:bg-white light-theme:text-gray-800"
+              className="w-full px-2 py-1 bg-[#0b1420] border border-white/[0.1] rounded text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-400/50 light-theme:bg-white light-theme:text-slate-100"
               placeholder="My custom pattern"
             />
           </div>
@@ -327,56 +327,56 @@ export function HatchManagerPanel({ customHatches, onCustomHatchesChange }: Hatc
 
       {/* FEMA zone designation (optional) */}
       <div>
-        <label className="text-xs text-gray-400 block mb-0.5">FEMA Zone (optional, e.g. AE, V, FLOODWAY)</label>
+        <label className="text-xs text-slate-400 block mb-0.5">FEMA Zone (optional, e.g. AE, V, FLOODWAY)</label>
         <input
           type="text"
           value={editing.femaZone ?? ''}
           onChange={e => setEditing(p => ({ ...p, femaZone: e.target.value || undefined }))}
-          className="w-48 px-2 py-1 bg-gray-800 border border-gray-600 rounded text-sm text-gray-200 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-48 px-2 py-1 bg-[#0b1420] border border-white/[0.1] rounded text-sm text-slate-200 font-mono focus:outline-none focus:ring-2 focus:ring-cyan-400/50"
           placeholder="AE"
         />
       </div>
 
       {/* Pattern lines table */}
       <div>
-        <p className="text-xs text-gray-400 mb-1">
-          Pattern Lines — <span className="text-gray-500">angle, originX, originY, deltaX, deltaY[, dashes…]</span>
+        <p className="text-xs text-slate-400 mb-1">
+          Pattern Lines — <span className="text-slate-500">angle, originX, originY, deltaX, deltaY[, dashes…]</span>
         </p>
         <div className="space-y-2">
           {editing.lines.map((line, idx) => (
-            <div key={idx} className="flex items-center gap-1 bg-gray-900/50 rounded p-2 text-xs">
+            <div key={idx} className="flex items-center gap-1 bg-[#070d16]/60 rounded p-2 text-xs">
               {(['angle', 'originX', 'originY', 'deltaX', 'deltaY'] as (keyof HatchPatternLine)[]).map(field => (
                 <div key={field} className="flex flex-col items-center">
-                  <span className="text-gray-500 text-[10px] mb-0.5">{field}</span>
+                  <span className="text-slate-500 text-[10px] mb-0.5">{field}</span>
                   <input
                     type="number"
                     step="any"
                     value={(line[field] as number) ?? 0}
                     onChange={e => updateEditLine(idx, field, e.target.value)}
-                    className="w-16 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    className="w-16 px-1 py-0.5 bg-[#0b1420] border border-white/[0.07] rounded text-slate-200 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-cyan-400/50"
                   />
                 </div>
               ))}
               <div className="flex flex-col items-start ml-1">
-                <span className="text-gray-500 text-[10px] mb-0.5">dashes (,)</span>
+                <span className="text-slate-500 text-[10px] mb-0.5">dashes (,)</span>
                 <input
                   type="text"
                   value={line.dashes?.join(', ') ?? ''}
                   onChange={e => updateEditLine(idx, 'dashes', e.target.value)}
-                  className="w-28 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-200 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="w-28 px-1 py-0.5 bg-[#0b1420] border border-white/[0.07] rounded text-slate-200 font-mono text-[11px] focus:outline-none focus:ring-1 focus:ring-cyan-400/50"
                   placeholder=".125, -.125"
                 />
               </div>
               <button
                 onClick={() => removeEditLine(idx)}
-                className="ml-1 text-gray-500 hover:text-red-400 transition-colors"
-              >✕</button>
+                className="ml-1 text-slate-500 hover:text-red-400 transition-colors"
+              >×</button>
             </div>
           ))}
         </div>
         <button
           onClick={addEditLine}
-          className="mt-2 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+          className="mt-2 text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
         >
           + Add Line
         </button>
@@ -387,13 +387,13 @@ export function HatchManagerPanel({ customHatches, onCustomHatchesChange }: Hatc
       <div className="flex gap-2">
         <button
           onClick={handleSaveEdit}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition-colors"
+          className="px-4 py-2 bg-cyan-500/90 hover:bg-cyan-400 text-white rounded-lg text-sm font-medium transition-colors"
         >
           Save Pattern
         </button>
         <button
           onClick={() => setSection('custom')}
-          className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg text-sm transition-colors"
+          className="px-4 py-2 bg-white/[0.06] hover:bg-white/[0.09] text-slate-200 rounded-lg text-sm transition-colors"
         >
           Cancel
         </button>
@@ -405,12 +405,12 @@ export function HatchManagerPanel({ customHatches, onCustomHatchesChange }: Hatc
   return (
     <div className="flex flex-col h-full min-h-0 text-sm">
       {/* Sub-tabs */}
-      <div className="flex gap-0 border-b border-gray-700 px-3 pt-2 flex-shrink-0 light-theme:border-gray-300">
-        <button className={tabCls(section === 'fema')}    onClick={() => setSection('fema')}>🌊 FEMA Zones</button>
-        <button className={tabCls(section === 'standard')} onClick={() => setSection('standard')}>📐 ACAD Standard</button>
-        <button className={tabCls(section === 'custom')}   onClick={() => setSection('custom')}>⚙ Custom</button>
+      <div className="flex gap-0 border-b border-white/[0.07] px-3 pt-2 flex-shrink-0 light-theme:border-white/[0.12]">
+        <button className={tabCls(section === 'fema')}    onClick={() => setSection('fema')}>FEMA Zones</button>
+        <button className={tabCls(section === 'standard')} onClick={() => setSection('standard')}>ACAD Standard</button>
+        <button className={tabCls(section === 'custom')}   onClick={() => setSection('custom')}>Custom</button>
         {section === 'editor' && (
-          <button className={tabCls(true)}>✏ Editor</button>
+          <button className={tabCls(true)}>Editor</button>
         )}
       </div>
 
@@ -419,7 +419,7 @@ export function HatchManagerPanel({ customHatches, onCustomHatchesChange }: Hatc
         {/* ── FEMA Zone hatches ─────────────────────────────────────────── */}
         {section === 'fema' && (
           <div>
-            <p className="text-xs text-gray-400 mb-3 light-theme:text-gray-600">
+            <p className="text-xs text-slate-400 mb-3 light-theme:text-slate-400">
               FEMA FIRM flood zone hatch patterns — DWG/DXF compatible. Agents use
               <code className="mx-1 text-cyan-400">getHatchForZone()</code>to retrieve these for polygon fills.
             </p>
@@ -441,7 +441,7 @@ export function HatchManagerPanel({ customHatches, onCustomHatchesChange }: Hatc
         {/* ── ACAD Standard hatches ─────────────────────────────────────── */}
         {section === 'standard' && (
           <div>
-            <p className="text-xs text-gray-400 mb-3 light-theme:text-gray-600">
+            <p className="text-xs text-slate-400 mb-3 light-theme:text-slate-400">
               AutoCAD standard hatch patterns (ACAD.PAT / ISO.PAT). DXF-exportable.
             </p>
             <div className="grid grid-cols-4 gap-2 mb-2">
@@ -463,25 +463,25 @@ export function HatchManagerPanel({ customHatches, onCustomHatchesChange }: Hatc
         {section === 'custom' && (
           <div>
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs text-gray-400 light-theme:text-gray-600">
+              <p className="text-xs text-slate-400 light-theme:text-slate-400">
                 Project-specific patterns stored in your CAD standard (.lsvz).
               </p>
               <div className="flex gap-2">
                 {customHatches.length > 0 && (
                   <button
                     onClick={handleExportAll}
-                    className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors"
+                    className="text-xs px-2 py-1 bg-white/[0.06] hover:bg-white/[0.09] text-slate-200 rounded transition-colors"
                   >
-                    ⬇ Export All .PAT
+                    Export All .PAT
                   </button>
                 )}
-                <label className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors cursor-pointer">
+                <label className="text-xs px-2 py-1 bg-white/[0.06] hover:bg-white/[0.09] text-slate-200 rounded transition-colors cursor-pointer">
                   📁 Import .PAT
                   <input ref={importRef} type="file" accept=".pat,.PAT" className="hidden" onChange={handleImportFile} />
                 </label>
                 <button
                   onClick={handleStartNew}
-                  className="text-xs px-2 py-1 bg-indigo-700/60 hover:bg-indigo-600 text-indigo-200 rounded transition-colors"
+                  className="text-xs px-2 py-1 bg-cyan-400/20 hover:bg-cyan-400/25 text-cyan-100 rounded transition-colors"
                 >
                   + New Pattern
                 </button>
@@ -495,18 +495,18 @@ export function HatchManagerPanel({ customHatches, onCustomHatchesChange }: Hatc
             {customHatches.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <span className="text-4xl mb-3">📐</span>
-                <p className="text-gray-400 text-sm mb-1">No custom patterns yet</p>
-                <p className="text-gray-500 text-xs mb-4">
+                <p className="text-slate-400 text-sm mb-1">No custom patterns yet</p>
+                <p className="text-slate-500 text-xs mb-4">
                   Create a pattern manually or import an AutoCAD .PAT file.
                 </p>
                 <div className="flex gap-2">
                   <button
                     onClick={handleStartNew}
-                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-medium transition-colors"
+                    className="px-3 py-1.5 bg-cyan-500/90 hover:bg-cyan-400 text-white rounded text-xs font-medium transition-colors"
                   >
                     + New Pattern
                   </button>
-                  <label className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded text-xs cursor-pointer transition-colors">
+                  <label className="px-3 py-1.5 bg-white/[0.06] hover:bg-white/[0.09] text-slate-200 rounded text-xs cursor-pointer transition-colors">
                     📁 Import .PAT
                     <input type="file" accept=".pat,.PAT" className="hidden" onChange={handleImportFile} />
                   </label>

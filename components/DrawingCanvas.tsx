@@ -2,7 +2,7 @@
 // - Pay close attention to the `draw` function. This is where all points, lines, and symbols are rendered.
 // - The `transform` state (scale, offsetX, offsetY) controls the user's viewport (pan and zoom).
 // - Event handlers (`handleWheel`, `handleMouseDown`, etc.) manage user interaction. When modifying them, be very careful with dependency arrays in `useCallback` to avoid stale closures.
-// - The floating toolbar at the bottom-left is a standard UI element. Preserve its contents and functionality unless specifically asked to change it.
+// - The floating toolbar's default seat is the right edge, directly below the north arrow. Preserve its contents and functionality unless specifically asked to change it.
 
 import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle, useMemo } from 'react';
 import {
@@ -57,6 +57,7 @@ import { useDocumentScrollLock } from '../hooks/useDocumentScrollLock.ts';
 import { StandardsEditor } from './CadManager/StandardsEditor.tsx';
 import type { StandardDefinition } from '../contexts/types/CadManager.types';
 import { convertLinearUnits, getLinearUnitAbbreviation, type LinearUnit } from '../utils/linearUnits.ts';
+import { placeFlippingMenu, type FlippingMenuPlacement } from '../utils/floatingMenuPosition.ts';
 import { LayersIcon, RedrawIcon, ZoomExtentsIcon, ScaleIcon, AttributeScaleIcon, DownloadIcon, ZoomToPointIcon, XMarkIcon, EyeIcon, PencilSquareIcon, BreaklineIcon, InclusionLineIcon, ExclusionLineIcon, ScissorsIcon, UndoIcon, RedoIcon, ExtendIcon, PolylineIcon, ListBulletIcon, CircleIcon, CrosshairsIcon, TrashIcon, DocumentDuplicateIcon } from './icons.tsx';
 import {
     ToolbarZoomIcon,
@@ -455,6 +456,12 @@ interface DrawingCanvasProps {
     chatToolDialogs?: import('./AgentToolDock.tsx').DockableToolItem[];
     /** Increment to pull the command bar's agent feed back open (e.g. Return to chat). */
     agentChatOpenSignal?: number;
+    /** Boundary Agent deed-intake choices for the command bar quick thought. */
+    boundaryQuickActions?: {
+        onUpload: () => void;
+        onAuthor: () => void;
+        onGis: () => void;
+    };
     /** Reports the command bar height so overlay drawers can rest on its top edge. */
     onCommandBarHeightChange?: (height: number) => void;
     /** Pixels the command bar extends right, underneath the open agent tool shelf. */
@@ -510,6 +517,43 @@ export interface ViewToolbarPosition {
     x?: number;
     y?: number;
     isDocked?: boolean;
+}
+
+const NORTH_ARROW_SIZE: Record<'classic' | 'modern' | 'elegant', { width: number; height: number }> = {
+    classic: { width: 40, height: 78 },
+    modern: { width: 40, height: 40 },
+    elegant: { width: 45, height: 45 },
+};
+
+export const NORTH_ARROW_TOP_INSET = 16;
+export const NORTH_ARROW_RIGHT_INSET = 16;
+export const NORTH_ARROW_TOOLBAR_GAP = 12;
+
+/**
+ * Default floating-toolbar seat: flush with the right edge, directly below the
+ * north arrow. The y position is clamped so the toolbar still clears the
+ * command bar on short canvases.
+ */
+export function calculateDefaultToolbarPosition(params: {
+    containerWidth: number;
+    containerHeight: number;
+    toolbarWidth: number;
+    toolbarHeight: number;
+    commandBarInset: number;
+    northArrowHeight: number;
+}): { x: number; y: number } {
+    const {
+        containerWidth,
+        containerHeight,
+        toolbarWidth,
+        toolbarHeight,
+        commandBarInset,
+        northArrowHeight,
+    } = params;
+    const x = Math.max(8, containerWidth - toolbarWidth - NORTH_ARROW_RIGHT_INSET);
+    const belowNorthArrowY = NORTH_ARROW_TOP_INSET + northArrowHeight + NORTH_ARROW_TOOLBAR_GAP;
+    const maxY = Math.max(8, containerHeight - toolbarHeight - commandBarInset - 8);
+    return { x, y: Math.max(8, Math.min(maxY, belowNorthArrowY)) };
 }
 
 /**
@@ -598,6 +642,9 @@ export function calculateToolbarPushOutOfChat(params: {
 }
 
 const RUNNING_OSNAP_STORAGE_KEY = 'landsurv.runningOsnaps.v1';
+const RUNNING_OSNAP_ENABLED_STORAGE_KEY = 'landsurv.runningOsnapsEnabled.v1';
+const OSNP_MENU_WIDTH = 224;
+const OSNP_MENU_MAX_HEIGHT = 440;
 const OSNAP_LABELS: Record<OsnapMode, string> = {
     endpoint: 'Endpoint',
     midpoint: 'Midpoint',
@@ -623,7 +670,7 @@ const NorthArrow: React.FC<{ style: 'classic' | 'modern' | 'elegant', position: 
     const rotationDeg = -(rotationRad * 180) / Math.PI;
 
     const classicArrow = (
-        <svg width="40" height="78" viewBox="0 0 80 155">
+        <svg width={NORTH_ARROW_SIZE.classic.width} height={NORTH_ARROW_SIZE.classic.height} viewBox="0 0 80 155">
             <defs>
                 <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
                     <feDropShadow dx="1" dy="1" stdDeviation="1.5" floodColor="#000000" floodOpacity="0.4"/>
@@ -645,7 +692,7 @@ const NorthArrow: React.FC<{ style: 'classic' | 'modern' | 'elegant', position: 
     );
 
     const modernArrow = (
-         <svg width="40" height="40" viewBox="0 0 100 100">
+         <svg width={NORTH_ARROW_SIZE.modern.width} height={NORTH_ARROW_SIZE.modern.height} viewBox="0 0 100 100">
              <defs>
                 <filter id="shadow-modern" x="-20%" y="-20%" width="140%" height="140%">
                     <feDropShadow dx="1" dy="2" stdDeviation="1.5" floodColor="#000" floodOpacity="0.4"/>
@@ -660,7 +707,7 @@ const NorthArrow: React.FC<{ style: 'classic' | 'modern' | 'elegant', position: 
     );
     
     const elegantArrow = (
-        <svg width="45" height="45" viewBox="0 0 100 100">
+        <svg width={NORTH_ARROW_SIZE.elegant.width} height={NORTH_ARROW_SIZE.elegant.height} viewBox="0 0 100 100">
             <defs>
                 <filter id="shadow-elegant" x="-20%" y="-20%" width="140%" height="140%">
                     <feDropShadow dx="1" dy="2" stdDeviation="1.5" floodColor="#000" floodOpacity="0.3"/>
@@ -1061,8 +1108,15 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return new Set<OsnapMode>(['endpoint', 'midpoint', 'intersection']);
         }
     });
+    const [isRunningOsnapsEnabled, setIsRunningOsnapsEnabled] = useState<boolean>(() => {
+        try {
+            return localStorage.getItem(RUNNING_OSNAP_ENABLED_STORAGE_KEY) !== 'false';
+        } catch {
+            return true;
+        }
+    });
     const [inlineOsnapOverride, setInlineOsnapOverride] = useState<OsnapMode | null>(null);
-    const [inlineOsnapMenuPos, setInlineOsnapMenuPos] = useState<{ x: number; y: number } | null>(null);
+    const [inlineOsnapMenuPos, setInlineOsnapMenuPos] = useState<FlippingMenuPlacement | null>(null);
 
     // Boundary-align tool state — pick a line on one boundary file, a line on
     // another, auto-rotate+translate the first so the picked edges are
@@ -1220,11 +1274,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     });
 
     const toolbarRef = useRef<HTMLDivElement>(null);
-    // Toolbar dragging state — the default is the left edge of the canvas viewport.
-    // The position key is versioned so the new left-side default is picked up once.
+    // Toolbar dragging state — the default is the right edge, below the north arrow.
+    // The position key is versioned so the new right-side default is picked up once.
     const [viewToolbarPosition, setViewToolbarPosition] = useState<ViewToolbarPosition | null>(() => {
         try {
-            const saved = localStorage.getItem('landsurv-canvas-toolbar-position-v2');
+            const saved = localStorage.getItem('landsurv-canvas-toolbar-position-v3');
             if (saved) {
                 const parsed = JSON.parse(saved);
                 if (Number.isFinite(parsed.y) && parsed.y > 0) {
@@ -1289,7 +1343,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             latestToolbarPosRef.current = nextPos;
             setViewToolbarPosition(nextPos);
             try {
-                localStorage.setItem('landsurv-canvas-toolbar-position-v2', JSON.stringify(nextPos));
+                localStorage.setItem('landsurv-canvas-toolbar-position-v3', JSON.stringify(nextPos));
             } catch { /* ignore */ }
         }
     }, [isViewToolbarDragging, isDesktop, isChatPanelVisible, chatPanelWidth, toolbarOrientation]);
@@ -1478,24 +1532,48 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
     }, [runningOsnaps]);
 
+    useEffect(() => {
+        try {
+            localStorage.setItem(RUNNING_OSNAP_ENABLED_STORAGE_KEY, String(isRunningOsnapsEnabled));
+        } catch {
+            // Ignore localStorage failures (private mode / quota).
+        }
+    }, [isRunningOsnapsEnabled]);
+
     const toggleRunningOsnap = useCallback((mode: OsnapMode) => {
         setRunningOsnaps(prev => {
             const next = new Set(prev);
-            if (next.has(mode)) next.delete(mode);
-            else next.add(mode);
+            if (next.has(mode)) {
+                // The global SNAP switch is the way to turn all snapping off;
+                // keep one running type selected so enabling it again works.
+                if (next.size <= 1) return prev;
+                next.delete(mode);
+            } else next.add(mode);
             return next;
         });
     }, []);
 
+    const toggleRunningOsnapsEnabled = useCallback(() => {
+        setIsRunningOsnapsEnabled(prev => !prev);
+    }, []);
+
+    useEffect(() => {
+        if (!isRunningOsnapsEnabled && !inlineOsnapOverride) setActiveOsnapPoint(null);
+    }, [isRunningOsnapsEnabled, inlineOsnapOverride]);
+
     const runningOsnapLabel = useMemo(() => {
+        if (!isRunningOsnapsEnabled) return 'Off';
         const active = OSNAP_ORDER.filter(mode => runningOsnaps.has(mode));
         return active.length > 0 ? active.map(mode => OSNAP_LABELS[mode]).join(', ') : 'None';
-    }, [runningOsnaps]);
+    }, [isRunningOsnapsEnabled, runningOsnaps]);
 
 
     const pointMap = useMemo(() => new Map(points.map(p => [p.pointNumber, p])), [points]);
 
-    const findNearestSurveyPoint = useCallback((screenX: number, screenY: number, thresholdPx: number): SurveyPoint | null => {
+    const findNearestSurveyPoint = useCallback((screenX: number, screenY: number, thresholdPx: number, allowWhenSnapsOff = false): SurveyPoint | null => {
+        // Survey-point snapping is part of the running-snap system. Point
+        // selection and boundary picks can opt out with allowWhenSnapsOff.
+        if (!isRunningOsnapsEnabled && !inlineOsnapOverride && !allowWhenSnapsOff) return null;
         let nearestPoint: SurveyPoint | null = null;
         let minDistSq = thresholdPx * thresholdPx;
         for (const p of points) {
@@ -1508,7 +1586,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
         }
         return nearestPoint;
-    }, [points, worldToScreen]);
+    }, [points, worldToScreen, isRunningOsnapsEnabled, inlineOsnapOverride]);
 
     const makeTempSnapPoint = useCallback((snap: OsnapResult): SurveyPoint => ({
         pointNumber: `SNAP_${snap.mode}_${Date.now()}_${Math.round(snap.easting * 1000)}_${Math.round(snap.northing * 1000)}`,
@@ -2609,6 +2687,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         thresholdPx: number,
         anchorPoint?: { easting: number; northing: number } | null,
     ): OsnapResult | null => {
+        // The global SNAP switch disables running snaps. An inline override is
+        // still a deliberate one-pick snap, so it remains available while off.
+        if (!isRunningOsnapsEnabled && !inlineOsnapOverride) return null;
         if (modes.size === 0) return null;
 
         let best: OsnapResult | null = null;
@@ -3073,7 +3154,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         return best;
-    }, [lines, pointMap, points, transform, worldToScreen, screenToWorld, boundaryFiles]);
+    }, [lines, pointMap, points, transform, worldToScreen, screenToWorld, boundaryFiles, isRunningOsnapsEnabled, inlineOsnapOverride]);
 
     const symbolMatchers = useMemo(() => buildSymbolMatchers(customSymbols), [customSymbols]);
 
@@ -11250,7 +11331,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 if (finalPos) {
                     setViewToolbarPosition(finalPos);
                     try {
-                        localStorage.setItem('landsurv-canvas-toolbar-position-v2', JSON.stringify(finalPos));
+                        localStorage.setItem('landsurv-canvas-toolbar-position-v3', JSON.stringify(finalPos));
                     } catch { /* ignore */ }
                 }
             }
@@ -11575,7 +11656,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
         if (e.shiftKey) {
             e.preventDefault();
-            setInlineOsnapMenuPos({ x: clickX, y: clickY });
+            setInlineOsnapMenuPos(placeFlippingMenu({
+                x: clickX,
+                y: clickY,
+                containerWidth: rect.width,
+                containerHeight: rect.height,
+                menuWidth: OSNP_MENU_WIDTH,
+                menuHeight: OSNP_MENU_MAX_HEIGHT,
+            }));
             return;
         }
 
@@ -12719,7 +12807,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             // Point / CL picks belong to the SELECT tool, not to a command that is
             // still gathering linework (MIRROR, MOVE, ERASE …).
             const allowScenePicks = !pendingSelectionCommand && !isBoxSelectMode;
-            const clickedPoint = allowScenePicks ? findNearestSurveyPoint(clickX, clickY, 10) : null;
+            const clickedPoint = allowScenePicks ? findNearestSurveyPoint(clickX, clickY, 10, true) : null;
             if (clickedPoint) {
                 const pickedPn = clickedPoint.pointNumber;
                 setSelectedPointNumbers(prev => {
@@ -13647,7 +13735,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const anchor = boundaryLineFrom ? { easting: boundaryLineFrom.easting, northing: boundaryLineFrom.northing } : null;
             const snapped = resolveOsnapAtScreen(clickX, clickY, activeModes, clickThreshold, anchor);
             if (inlineOsnapOverride) setInlineOsnapOverride(null);
-            const nearestPoint = snapped?.sourcePoint ?? findNearestSurveyPoint(clickX, clickY, clickThreshold);
+            const nearestPoint = snapped?.sourcePoint ?? findNearestSurveyPoint(clickX, clickY, clickThreshold, true);
 
             if (!boundaryLineFrom) {
                 // First click: must snap to an existing point
@@ -14983,8 +15071,15 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
             {inlineOsnapMenuPos && (
                 <div
+                    data-testid="inline-osnap-menu"
                     className="absolute z-50 w-56 bg-gray-900/95 border border-cyan-500/40 rounded-lg shadow-2xl p-2 text-xs"
-                    style={{ left: inlineOsnapMenuPos.x, top: inlineOsnapMenuPos.y }}
+                    style={{
+                        left: inlineOsnapMenuPos.left,
+                        top: inlineOsnapMenuPos.top,
+                        width: inlineOsnapMenuPos.width,
+                        maxHeight: inlineOsnapMenuPos.maxHeight,
+                        overflowY: 'auto',
+                    }}
                 >
                     <div className="text-cyan-300 font-semibold px-1 pb-1 border-b border-cyan-500/20">
                         Shift+RightClick Snaps
@@ -15014,18 +15109,41 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         </button>
                     </div>
                     <div className="mt-2 pt-2 border-t border-cyan-500/20">
-                        <div className="text-gray-400 px-1 mb-1">Running snaps</div>
-                        {OSNAP_ORDER.map(mode => (
-                            <label key={`running-${mode}`} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-800 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={runningOsnaps.has(mode)}
-                                    onChange={() => toggleRunningOsnap(mode)}
-                                    className="accent-cyan-500"
-                                />
-                                <span className="text-gray-200">{OSNAP_LABELS[mode]}</span>
-                            </label>
-                        ))}
+                        <div className="mb-1 flex items-center justify-between gap-2 px-1">
+                            <span className="text-gray-400">Running snaps</span>
+                            <button
+                                type="button"
+                                data-testid="inline-osnap-global-toggle"
+                                aria-pressed={isRunningOsnapsEnabled}
+                                onClick={toggleRunningOsnapsEnabled}
+                                className={`rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
+                                    isRunningOsnapsEnabled
+                                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                                        : 'border-white/10 bg-white/[0.03] text-gray-500'
+                                }`}
+                            >
+                                {isRunningOsnapsEnabled ? 'On' : 'Off'}
+                            </button>
+                        </div>
+                        {OSNAP_ORDER.map(mode => {
+                            const isLastSelected = runningOsnaps.size === 1 && runningOsnaps.has(mode);
+                            return (
+                                <label
+                                    key={`running-${mode}`}
+                                    className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-800 cursor-pointer"
+                                    title={isLastSelected ? 'Keep one snap type selected, or turn Running snaps off globally.' : undefined}
+                                >
+                                    <input
+                                        type="checkbox"
+                                        checked={runningOsnaps.has(mode)}
+                                        disabled={isLastSelected}
+                                        onChange={() => toggleRunningOsnap(mode)}
+                                        className="accent-cyan-500"
+                                    />
+                                    <span className="text-gray-200">{OSNAP_LABELS[mode]}</span>
+                                </label>
+                            );
+                        })}
                     </div>
                 </div>
             )}
@@ -16124,15 +16242,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const containerH = containerRef.current?.clientHeight ?? (typeof window !== 'undefined' ? window.innerHeight : 800);
                 const toolbarW = toolbarRef.current?.offsetWidth ?? (toolbarOrientation === 'vertical' ? 50 : 380);
                 const toolbarH = toolbarRef.current?.offsetHeight ?? (toolbarOrientation === 'vertical' ? 450 : 50);
-                const effectiveX = isDocked ? (containerW - toolbarW - 16) : (viewToolbarPosition?.x ?? 16);
-                // Fall back to the old offset until CanvasTerminal reports its
-                // measured height, then keep the toolbar's bottom edge pinned to
-                // the top of the command bar (even while the feed is expanded).
+                // Until CanvasTerminal reports its measured height, use the
+                // established fallback. The default seat still clears it.
                 const commandBarInset = commandBarHeight > 0 ? commandBarHeight : 148;
+                const defaultPos = calculateDefaultToolbarPosition({
+                    containerWidth: containerW,
+                    containerHeight: containerH,
+                    toolbarWidth: toolbarW,
+                    toolbarHeight: toolbarH,
+                    commandBarInset,
+                    northArrowHeight: (NORTH_ARROW_SIZE[settings.northArrowStyle] ?? NORTH_ARROW_SIZE.classic).height,
+                });
+                const effectiveX = isDocked ? (containerW - toolbarW - NORTH_ARROW_RIGHT_INSET) : (viewToolbarPosition?.x ?? defaultPos.x);
                 const maxAnchoredY = Math.max(8, containerH - toolbarH - commandBarInset - 8);
-                const defaultY = Math.max(16, containerH - toolbarH - commandBarInset - 12);
                 const effectiveY = viewToolbarPosition?.y === undefined
-                    ? defaultY
+                    ? defaultPos.y
                     : Math.min(viewToolbarPosition.y, maxAnchoredY);
 
                 // Placement must be decided in viewport coordinates, not container
@@ -16193,7 +16317,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ? { left: `${viewToolbarPosition?.x ?? effectiveX}px`, top: `${effectiveY}px` }
                     : isDocked
                     ? { right: '1rem', top: `${effectiveY}px` }
-                    : { left: `${viewToolbarPosition?.x ?? effectiveX}px`, top: `${effectiveY}px` };
+                    : !viewToolbarPosition
+                    ? { right: `${NORTH_ARROW_RIGHT_INSET}px`, top: `${effectiveY}px` }
+                    : { left: `${viewToolbarPosition.x ?? effectiveX}px`, top: `${effectiveY}px` };
 
                 return (
                     <div 
@@ -17961,6 +18087,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     osnapOverride: inlineOsnapOverride ? OSNAP_LABELS[inlineOsnapOverride] : null,
                     isOrthoEnabled,
                 }}
+                snapControls={{
+                    enabled: isRunningOsnapsEnabled,
+                    options: OSNAP_ORDER.map(mode => ({
+                        id: mode,
+                        label: OSNAP_LABELS[mode],
+                        enabled: runningOsnaps.has(mode),
+                    })),
+                    onToggleEnabled: toggleRunningOsnapsEnabled,
+                    onToggleOption: id => {
+                        if (OSNAP_ORDER.includes(id as OsnapMode)) toggleRunningOsnap(id as OsnapMode);
+                    },
+                }}
                 agentDrawMode={agentDrawMode}
                 agentAnnotMode={agentAnnotMode}
                 onCycleAgentDrawMode={onCycleAgentDrawMode}
@@ -17984,6 +18122,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onToggleA2UIDock={props.onToggleA2UIDock}
                 chatToolDialogs={props.chatToolDialogs}
                 agentChatOpenSignal={props.agentChatOpenSignal}
+                boundaryQuickActions={props.boundaryQuickActions}
                 onHeightChange={handleCommandBarHeightChange}
                 rightExtension={props.commandBarRightExtension ?? 0}
             />

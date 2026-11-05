@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
+import React, { useId, useRef, useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { parseCanvasCommand, executeCanvasCommand, describeCommand, type CommandContext, type CommandResult, type HelpGroup } from '../utils/canvasCommands';
 import { CommandHelpView, type CommandReference } from './CommandHelpView';
@@ -42,6 +42,20 @@ export interface TerminalEntry {
   /** Formatted help sections (HELP); when present they replace the plain text. */
   helpGroups?: HelpGroup[];
   helpNotes?: string[];
+}
+
+export interface SnapControlOption {
+  id: string;
+  label: string;
+  enabled: boolean;
+}
+
+export interface SnapControls {
+  /** Master running-snap switch. */
+  enabled: boolean;
+  options: SnapControlOption[];
+  onToggleEnabled: () => void;
+  onToggleOption: (id: string) => void;
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -96,6 +110,8 @@ interface CanvasTerminalProps {
     osnapOverride?: string | null;
     isOrthoEnabled?: boolean;
   };
+  /** Interactive running-snap switch and per-type choices for the SNAP badge. */
+  snapControls?: SnapControls;
   /** Unified Agent Mode props (ported from ChatInterface) */
   activeAgent?: AgentType | null;
   messages?: ChatMessage[];
@@ -116,10 +132,20 @@ interface CanvasTerminalProps {
   /** Optional external callback when the docked agent chat socket is toggled. */
   isAgentChatOpen?: boolean;
   onToggleAgentChat?: () => void;
+  /** Boundary Agent deed-intake choices for the quick-thought card. */
+  boundaryQuickActions?: {
+    onUpload: () => void;
+    onAuthor: () => void;
+    onGis: () => void;
+  };
   /** Key of the A2UI surface currently docked in the agent tool shelf. */
   dockedA2UIKey?: string | null;
+  /** Key of the A2UI surface currently floating on the canvas. */
+  floatingA2UIKey?: string | null;
   /** Toggle an A2UI surface between the chat feed and the agent tool shelf. */
   onToggleA2UIDock?: (message: ChatMessage) => void;
+  /** Toggle an A2UI surface between the chat feed and a floating dialog. */
+  onToggleA2UIFloat?: (message: ChatMessage) => void;
   /** Docked tool panels relevant to the active agent, rendered under the feed. */
   chatToolDialogs?: DockableToolItem[];
   /** Increment to pull the command bar's agent feed back open (e.g. Return to chat). */
@@ -144,6 +170,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   keyInfo,
   incomingMessage,
   statusBadges,
+  snapControls,
   activeAgent,
   messages = [],
   onSendMessage,
@@ -161,8 +188,11 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   onToggleToolDock,
   isAgentChatOpen = false,
   onToggleAgentChat,
+  boundaryQuickActions,
   dockedA2UIKey,
+  floatingA2UIKey,
   onToggleA2UIDock,
+  onToggleA2UIFloat,
   chatToolDialogs = [],
   agentChatOpenSignal,
   onHeightChange,
@@ -174,6 +204,12 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const [inputMode, setInputMode] = useState<'cad' | 'agent'>('cad');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [isSnapMenuOpen, setIsSnapMenuOpen] = useState(false);
+  const snapControlRef = useRef<HTMLDivElement | null>(null);
+  /** The quick-thought body is measured so only overflowing copy drifts. */
+  const thoughtTextRef = useRef<HTMLDivElement | null>(null);
+  const [isThoughtOverflowing, setIsThoughtOverflowing] = useState(false);
+  const [thoughtDriftSeconds, setThoughtDriftSeconds] = useState(8);
   // Single command line: rests as a lightweight "Press Space / Press ~" hint and becomes
   // the focused CAD or Agent input when Space, ~, or a click activates it.
   const [isCommandLineActive, setIsCommandLineActive] = useState(false);
@@ -186,6 +222,8 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   // own box for positioning. Measure an in-bar anchor instead: that keeps the
   // glyph exactly in the bar's socket slot and the raised tab centered on it.
   const socketAnchorRef = useRef<HTMLDivElement | null>(null);
+  // SVG paint servers reject React's raw useId colons, so strip them.
+  const socketTabGradientId = `agent-socket-tab-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const [agentDockPos, setAgentDockPos] = useState<{ left: number; top: number } | null>(null);
   const agentDragStateRef = useRef<{ pointerId: number; startX: number; startY: number; detached: boolean; offsetX: number; offsetY: number } | null>(null);
   const agentDragCleanupRef = useRef<(() => void) | null>(null);
@@ -238,6 +276,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const lastAgentFeedCountRef = useRef(0);
   const lastAgentFeedRoleRef = useRef<MessageRole | null>(null);
   const wasAgentFeedExpandedRef = useRef(false);
+  const wasBottomFeedOpenForThoughtRef = useRef(false);
   const wasToolDockOpenRef = useRef(isToolDockOpen);
   const wasAgentChatOpenRef = useRef(isAgentChatOpen);
   const handledAgentChatOpenSignalRef = useRef(agentChatOpenSignal ?? 0);
@@ -272,13 +311,18 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     inputRef.current?.focus();
   }, []);
 
-  const activateAgentMode = useCallback(() => {
+  const focusAgentCommandLine = useCallback(() => {
     setInputMode('agent');
     setIsCommandLineActive(true);
-    // When the agent line is floating, keep the drawer shut and focus the float.
-    if (!isAgentFloating) setIsExpanded(true);
     agentInputRef.current?.focus();
-  }, [isAgentFloating]);
+  }, []);
+
+  const activateAgentMode = useCallback(() => {
+    focusAgentCommandLine();
+    // The Agent tab and ~ shortcut open the conversation. Clicking the compact
+    // command line only starts typing; the user opens the feed deliberately.
+    if (!isAgentFloating) setIsExpanded(true);
+  }, [focusAgentCommandLine, isAgentFloating]);
 
   // Opens the agent conversation without requiring a second click, optionally at a
   // larger height (used by the thought bubble above the agent socket).
@@ -392,6 +436,23 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     }
   }, [isCommandLineActive, inputMode]);
 
+  useEffect(() => {
+    if (!isSnapMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (snapControlRef.current?.contains(event.target as Node)) return;
+      setIsSnapMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsSnapMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isSnapMenuOpen]);
+
   // Auto-expand Agent Mode feed when an agent starts streaming, asks clarifying questions, or presents an A2UI surface.
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const hasPendingQuestionOptions = Boolean(lastMessage?.questionOptions && lastMessage.questionOptions.length > 0);
@@ -400,17 +461,47 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       lastMessage.a2ui.status !== 'completed' &&
       lastMessage.a2ui.status !== 'dismissed'
   );
+  // The Boundary Agent's intake prompt carries its own Upload / Author / GIS
+  // route choices. Surface those directly instead of the generic review link,
+  // which only opened the chat and made the user hunt for the same controls.
+  const boundaryIntakeActions = (() => {
+    if (
+      effectiveAgent !== AgentType.DEED_READER ||
+      !hasActiveA2UI ||
+      lastMessage?.a2ui?.widgetType !== 'deed-upload' ||
+      !boundaryQuickActions
+    ) {
+      return null;
+    }
+    return [
+      {
+        label: 'Upload',
+        onClick: () => {
+          openAgentConversation(true);
+          boundaryQuickActions.onUpload();
+        },
+      },
+      { label: 'Author', onClick: boundaryQuickActions.onAuthor },
+      { label: 'GIS', onClick: boundaryQuickActions.onGis },
+    ];
+  })();
   // Not every agent emits structured `questionOptions`; LSAI sometimes answers
   // with a numbered choice list in prose. Treat that as a pending question too,
   // otherwise the agent silently starts a Q&A in the open feed with no
-  // notification at the socket.
+  // notification at the socket. A CACP action that needs one missing value sets
+  // `needsInput` directly, even when there are no option pills to render.
   const inlinePromptText = lastMessage?.result || lastMessage?.text || '';
   const hasInlineQuestionPrompt = Boolean(
     lastMessage?.role === MessageRole.MODEL &&
     !hasPendingQuestionOptions &&
     !hasActiveA2UI &&
-    /\b(?:let me know|which|choose|select|specify|tell me)\b/i.test(inlinePromptText) &&
-    /\b1\.\s[\s\S]*\b2\.\s/.test(inlinePromptText)
+    (
+      lastMessage.needsInput ||
+      (
+        /\b(?:let me know|which|choose|select|specify|tell me)\b/i.test(inlinePromptText) &&
+        /\b1\.\s[\s\S]*\b2\.\s/.test(inlinePromptText)
+      )
+    )
   );
   // Questions (option pills), numbered prose choices, and active A2UI prompts
   // all need a deliberate response, so each raises a thought bubble above the
@@ -421,6 +512,16 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     ? `${effectiveAgent}:${messages.length}:${lastMessage.role}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}`
     : null;
   const isThoughtDismissed = thoughtKey !== null && dismissedThoughtKey === thoughtKey;
+
+  // Opening the full agent feed makes the compact quick-thought card redundant.
+  // Dismiss the current notification so closing the feed doesn't resurrect it.
+  useEffect(() => {
+    if (isBottomAgentChatOpen && !wasBottomFeedOpenForThoughtRef.current && thoughtKey) {
+      setDismissedThoughtKey(thoughtKey);
+    }
+    wasBottomFeedOpenForThoughtRef.current = isBottomAgentChatOpen;
+  }, [isBottomAgentChatOpen, thoughtKey]);
+
   const thoughtText = (lastMessage?.result || lastMessage?.text || '')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -433,9 +534,36 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     .replace(/&gt;/gi, '>')
     .replace(/\s+/g, ' ')
     .trim();
-  const thoughtPreview = thoughtText.length > 160
-    ? `${thoughtText.slice(0, 157).trimEnd()}…`
+  // The bubble animates through a generous slice; the full agent response is
+  // still one click away in the conversation.
+  const thoughtScrollText = thoughtText.length > 900
+    ? `${thoughtText.slice(0, 900).trimEnd()}…`
     : thoughtText;
+
+  // Measure the preview after it mounts and whenever its copy or width changes.
+  // Overflowing copy gets a slow CSS drift; short copy stays still and fully
+  // visible. This is deliberately independent of requestAnimationFrame, which
+  // browsers can throttle while the canvas is busy.
+  useLayoutEffect(() => {
+    const el = thoughtTextRef.current;
+    if (!el) {
+      setIsThoughtOverflowing(false);
+      return;
+    }
+    const measure = () => {
+      const overflow = el.scrollHeight - el.clientHeight;
+      setIsThoughtOverflowing(overflow > 2);
+      // Keep the drift near a readable 8px/s even when the preview is very long.
+      setThoughtDriftSeconds(Math.max(4, Math.ceil(overflow / 8)));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    const content = el.firstElementChild;
+    if (content) observer.observe(content);
+    return () => observer.disconnect();
+  }, [thoughtScrollText, hasPendingPrompt, isThoughtDismissed, hasPendingQuestionOptions]);
   const hasExpandedA2UIWidget = Boolean(
     messages.some(
       m => m.a2ui?.kind === 'upload-widget' && m.a2ui.status !== 'completed' && m.a2ui.status !== 'dismissed'
@@ -901,7 +1029,9 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     setIsAgentFloating(false);
     setInputMode('agent');
     setIsCommandLineActive(true);
-    setIsExpanded(true);
+    // Docking returns the glyph to its socket; it should not also expand the
+    // bottom agent chat.
+    setIsExpanded(false);
   };
 
   // Drag the agent glyph/tab. Past the threshold the agent detaches, and the
@@ -1041,16 +1171,30 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   return (
     <div
       ref={terminalRootRef}
-      style={{ touchAction: 'none', right: -rightExtension }}
+      style={{
+        touchAction: 'none',
+        right: -rightExtension,
+        backgroundImage: `radial-gradient(120% 180% at 8% 100%, ${accentColor}12 0%, transparent 44%), linear-gradient(180deg, #0a111a 0%, #080d14 52%, #070b11 100%)`,
+      }}
       onWheel={e => e.stopPropagation()}
       className="absolute bottom-0 left-0 right-0 z-30 select-none bg-[#080d14] shadow-[0_-8px_24px_rgba(0,0,0,0.7)] backdrop-blur-md font-mono text-gray-200 overflow-visible flex flex-col transition-colors"
       data-mode={inputMode}
     >
-      {/* Top accent line — always the active agent color, matching its socket glyph. */}
-      <div
-        className="h-[1px] w-full pointer-events-none"
-        style={{ backgroundColor: accentColor }}
-      />
+      {/* Top accent line — always the active agent color, matching its socket glyph.
+          A slow highlight travels the rail so the bar feels powered without pulsing. */}
+      <div className="relative h-px w-full pointer-events-none">
+        <div
+          className="absolute inset-0"
+          style={{ backgroundColor: accentColor, boxShadow: `0 0 9px ${accentColor}45` }}
+        />
+        <div className="absolute inset-0 overflow-hidden">
+          <div
+            aria-hidden="true"
+            className="command-rail-sheen absolute inset-y-0 left-0 w-1/3"
+            style={{ backgroundImage: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.85) 50%, transparent 100%)' }}
+          />
+        </div>
+      </div>
 
       {/* Right-mounted drawer handle. In the workspace it opens/closes the right
           Agent Tool Shelf; in standalone CAD mode (or when Help expands the command
@@ -1077,7 +1221,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
             ? (isToolDockOpen ? `Close ${agentLabel} tool shelf` : `Open ${agentLabel} tool shelf`)
             : (isExpanded ? 'Collapse command line' : 'Expand command line')
         }
-        className={`group absolute right-4 top-0 z-50 flex h-[20px] w-10 -translate-y-1/2 items-center justify-center rounded-full border bg-[#0a111b] shadow-[0_4px_14px_rgba(0,0,0,0.75)] transition-all duration-200 hover:scale-105 hover:brightness-125 active:scale-95 ${
+        className={`tab-bump group absolute right-4 top-0 z-50 flex h-[20px] w-auto min-w-[40px] -translate-y-1/2 items-center justify-center rounded-[10px] border bg-[#0a111b] px-1.5 transition-all duration-200 hover:brightness-125 active:scale-95 ${
           isCollapsePulsing && isExpanded ? 'animate-pulse ring-2 ring-cyan-400/50' : ''
         }`}
         style={{
@@ -1085,12 +1229,17 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
           color: accentColor,
           boxShadow: (onToggleToolDock ? isToolDockOpen : isExpanded)
             ? `0 4px 14px rgba(0,0,0,0.75), 0 0 14px ${accentColor}38, inset 0 1px 0 ${accentColor}33`
-            : `0 4px 14px rgba(0,0,0,0.75), inset 0 1px 0 rgba(255,255,255,0.08)`,
+            : `0 -4px 14px rgba(0,0,0,0.75), inset 0 1px 0 rgba(255,255,255,0.08)`,
         }}
       >
-        {(onToggleToolDock && !(isCollapsePulsing && isExpanded) ? isToolDockOpen : isExpanded)
-          ? <ChevronDownIcon className="h-3.5 w-3.5 transition-transform duration-200" />
-          : <ChevronUpIcon className="h-3.5 w-3.5 transition-transform duration-200" />}
+        <span className="tab-bump__lift flex items-center justify-center gap-1">
+          {onToggleToolDock && !(isCollapsePulsing && isExpanded) && (
+            <span className="text-[9px] font-bold uppercase tracking-[0.12em]">Tools</span>
+          )}
+          {(onToggleToolDock && !(isCollapsePulsing && isExpanded) ? isToolDockOpen : isExpanded)
+            ? <ChevronDownIcon className="h-3.5 w-3.5 transition-transform duration-200" />
+            : <ChevronUpIcon className="h-3.5 w-3.5 transition-transform duration-200" />}
+        </span>
       </button>
 
       {/* Top resize handle when history / agent feed is expanded */}
@@ -1290,9 +1439,9 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
         <div
           ref={agentFeedScrollRef}
           style={{ height: `${hasExpandedA2UIWidget ? Math.max(effectiveFeedHeight, 380) : effectiveFeedHeight}px` }}
-          className="overflow-y-auto px-3.5 py-3 bg-[#05080d]/95 border-b border-gray-800/80 font-sans text-xs leading-relaxed select-text"
+          className="overflow-x-hidden overflow-y-auto px-3.5 py-3 bg-[#05080d]/95 border-b border-gray-800/80 font-sans text-xs leading-relaxed select-text"
         >
-          <div ref={feedContentRef} className="space-y-3">
+          <div ref={feedContentRef} className="w-full min-w-0 space-y-3">
           {messages.length === 0 && !isLoading && (
             <div className="flex min-h-[150px] flex-col items-center justify-center px-4 text-center">
               <div
@@ -1331,7 +1480,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
             <div
               key={index}
               ref={index === messages.length - 1 ? latestAgentMessageRef : undefined}
-              className={`flex min-w-0 flex-col gap-1 ${msg.role === MessageRole.USER ? 'items-end' : 'items-start'}`}
+              className={`flex w-full min-w-0 flex-col gap-1 ${msg.role === MessageRole.USER ? 'items-end' : 'items-start'}`}
             >
               <span className="px-1 text-[9px] font-bold uppercase tracking-[0.16em] text-slate-500">
                 {msg.role === MessageRole.USER ? 'You' : agentLabel}
@@ -1389,31 +1538,47 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   const a2ui = msg.a2ui;
                   if (!a2ui || a2ui.kind === 'intake-prompt') return null;
                   const a2uiKey = `${a2ui.agent}:${a2ui.widgetType}`;
-                  const isDocked = a2ui.kind === 'upload-widget' && a2uiKey === dockedA2UIKey;
-                  if (isDocked) {
+                  const isDocked = a2uiKey === dockedA2UIKey;
+                  const isFloating = a2uiKey === floatingA2UIKey;
+                  if (isDocked || isFloating) {
                     return (
                       <div
-                        data-testid="a2ui-docked-placeholder"
+                        data-testid={isDocked ? 'a2ui-docked-placeholder' : 'a2ui-floating-placeholder'}
                         className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-[11px] text-cyan-200"
                       >
                         <span className="inline-flex items-center gap-1.5 font-semibold">
                           <ArrowDownOnSquareIcon className="h-3.5 w-3.5" />
-                          Docked in Agent Tools
+                          {isDocked ? 'Docked in Agent Tools' : 'Floating on canvas'}
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => onToggleA2UIDock?.(msg)}
-                          className="shrink-0 rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10.5px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-100"
-                        >
-                          Return to chat
-                        </button>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {isFloating && onToggleA2UIDock && (
+                            <button
+                              type="button"
+                              onClick={() => onToggleA2UIDock(msg)}
+                              className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10.5px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-100"
+                            >
+                              Dock
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => (isDocked ? onToggleA2UIDock?.(msg) : onToggleA2UIFloat?.(msg))}
+                            className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[10.5px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-100"
+                          >
+                            Return to chat
+                          </button>
+                        </div>
                       </div>
                     );
                   }
                   return (
                     <A2UISurface
                       payload={a2ui}
-                      onDock={a2ui.kind === 'upload-widget' && onToggleA2UIDock ? () => {
+                      onPopOut={onToggleA2UIFloat ? () => {
+                        onToggleA2UIFloat(msg);
+                        setIsCollapsePulsing(false);
+                      } : undefined}
+                      onDock={onToggleA2UIDock ? () => {
                         onToggleA2UIDock(msg);
                         setIsExpanded(false);
                         setIsCollapsePulsing(false);
@@ -1509,10 +1674,25 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       )}
 
       {/* Bottom Bar Wrapper: houses the docked Rounded-Square Agent Socket on the left and the two command rows on the right */}
-      <div className="relative flex items-stretch bg-[#080d14] pl-16 pr-3">
+      <div className="relative flex items-stretch bg-transparent pl-16 pr-3">
         <div className="flex min-w-0 flex-1 flex-col border-l border-white/[0.07] pl-1">
           {/* Line 1: Single History / Feedback / Instructional Row */}
-          <div className="flex items-center gap-2 px-3 py-1 bg-[#080d14] text-[10px] leading-none min-h-[22px] overflow-hidden">
+          {/* Reserve room for the right-hand drawer tab so links and SNAP/ORTHO
+              badges never run underneath its label. */}
+          <div
+            data-testid="command-history-row"
+            className={`flex items-center gap-2 py-1 pl-3 bg-transparent text-[10px] leading-none min-h-[22px] ${
+              isSnapMenuOpen ? 'overflow-visible' : 'overflow-hidden'
+            } ${onToggleToolDock && !(isCollapsePulsing && isExpanded) ? 'pr-24' : 'pr-14'}`}
+          >
+            <span
+              aria-hidden="true"
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${isLoading ? 'animate-pulse' : ''}`}
+              style={{
+                backgroundColor: inputMode === 'agent' ? accentColor : '#22d3ee',
+                boxShadow: `0 0 7px ${inputMode === 'agent' ? accentColor : '#22d3ee'}66`,
+              }}
+            />
             {inputMode === 'agent' && !activePrompt ? (
               <span className="truncate font-medium" style={{ color: accentColor }}>
                 <span className="text-gray-400 uppercase tracking-wider mr-1.5">[{agentLabel}]</span>
@@ -1548,10 +1728,12 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
             ) : (
               <span
                 onClick={executeHelp}
-                className="truncate text-gray-400 hover:text-cyan-300 cursor-pointer transition-colors"
+                className="group/help truncate text-gray-400 hover:text-cyan-300 cursor-pointer transition-colors"
                 title="Click to view commands (or type HELP)"
               >
-                Type Help for commands
+                <span className="border-b border-transparent pb-px transition-colors group-hover/help:border-cyan-400/40">
+                  Type Help for commands
+                </span>
               </span>
             )}
 
@@ -1572,30 +1754,12 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
 
             {/* Live Snaps / Ortho Badges in the history line */}
             <div className="ml-auto flex items-center gap-2 shrink-0 text-[10px] border-l border-gray-800/60 pl-2">
-              {hasDockableTools && onToggleToolDock && (
-                <button
-                  type="button"
-                  data-no-drag
-                  onClick={onToggleToolDock}
-                  aria-expanded={isToolDockOpen}
-                  className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-semibold uppercase tracking-wider transition-colors ${
-                    isToolDockOpen
-                      ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-200'
-                      : 'border-white/[0.08] bg-white/[0.03] text-slate-400 hover:border-cyan-500/40 hover:text-cyan-200'
-                  }`}
-                  title={isToolDockOpen ? 'Slide the agent tool shelf down' : 'Slide up the agent tool shelf'}
-                  aria-label={isToolDockOpen ? 'Close agent tool shelf' : 'Open agent tool shelf'}
-                >
-                  <ChevronDownIcon className={`h-3 w-3 transition-transform duration-200 ${isToolDockOpen ? 'rotate-180' : ''}`} />
-                  <span>Tools</span>
-                </button>
-              )}
               {onOpenProperties && (
                 <button
                   type="button"
                   data-no-drag
                   onClick={onOpenProperties}
-                  className="text-cyan-300/90 underline-offset-2 hover:text-cyan-200 hover:underline"
+                  className="rounded px-1 py-0.5 text-cyan-300/85 transition-colors duration-150 hover:bg-cyan-500/10 hover:text-cyan-100"
                   title="Properties — inspect and edit selected entities (or type PROP)"
                 >
                   PROPERTIES
@@ -1606,7 +1770,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   type="button"
                   data-no-drag
                   onClick={onCycleAgentDrawMode}
-                  className="relative inline-flex min-w-[20px] items-center justify-center rounded px-1.5 py-0.5 text-[11px] font-medium leading-none text-cyan-300/90 transition-all duration-150 ease-out hover:z-10 hover:scale-150 hover:bg-cyan-500/10 hover:font-bold hover:text-cyan-100"
+                  className="relative inline-flex min-w-[20px] items-center justify-center rounded px-1.5 py-0.5 text-[11px] font-medium leading-none text-cyan-300/90 transition-all duration-150 ease-out hover:z-10 hover:scale-110 hover:bg-cyan-500/10 hover:font-bold hover:text-cyan-100 hover:shadow-[0_0_10px_rgba(34,211,238,0.16)]"
                   title={`Agent draws: ${agentDrawMode === 'both' ? 'Points & Lines' : agentDrawMode === 'points' ? 'Points only' : 'Lines only'} — click to cycle`}
                 >
                   {agentDrawMode === 'both' ? 'P/L' : agentDrawMode === 'points' ? 'P' : 'L'}
@@ -1617,29 +1781,144 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   type="button"
                   data-no-drag
                   onClick={onCycleAgentAnnotMode}
-                  className="relative inline-flex min-w-[20px] items-center justify-center rounded px-1.5 py-0.5 text-[11px] font-medium leading-none text-cyan-300/90 transition-all duration-150 ease-out hover:z-10 hover:scale-150 hover:bg-cyan-500/10 hover:font-bold hover:text-cyan-100"
+                  className="relative inline-flex min-w-[20px] items-center justify-center rounded px-1.5 py-0.5 text-[11px] font-medium leading-none text-cyan-300/90 transition-all duration-150 ease-out hover:z-10 hover:scale-110 hover:bg-cyan-500/10 hover:font-bold hover:text-cyan-100 hover:shadow-[0_0_10px_rgba(34,211,238,0.16)]"
                   title={`Line annotation: ${agentAnnotMode === 'both' ? 'Bearing & Distance' : agentAnnotMode === 'bearing' ? 'Bearing only' : 'Distance only'} — click to cycle`}
                 >
                   {agentAnnotMode === 'both' ? 'B/D' : agentAnnotMode === 'bearing' ? 'B' : 'D'}
                 </button>
               )}
               {statusBadges?.isOrthoEnabled !== undefined && (
-                <span className={statusBadges.isOrthoEnabled ? 'text-emerald-400 font-bold' : 'text-gray-600'}>
+                <span
+                  className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                    statusBadges.isOrthoEnabled
+                      ? 'border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-300'
+                      : 'border-white/[0.06] bg-white/[0.02] text-gray-600'
+                  }`}
+                  title={`Ortho ${statusBadges.isOrthoEnabled ? 'on' : 'off'}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`h-1 w-1 rounded-full ${statusBadges.isOrthoEnabled ? 'bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.7)]' : 'bg-gray-600'}`}
+                  />
                   ORTHO
                 </span>
               )}
-              {statusBadges?.runningOsnaps && (
-                <span className="text-cyan-400 font-medium truncate max-w-[120px]" title={`Running snaps: ${statusBadges.runningOsnaps}`}>
-                  SNAP
-                </span>
-              )}
+              {statusBadges?.runningOsnaps && (() => {
+                const snapsEnabled = snapControls?.enabled ?? true;
+                const enabledCount = snapControls?.options.filter(option => option.enabled).length ?? 0;
+                return (
+                  <div ref={snapControlRef} className="relative flex shrink-0 items-center">
+                    <div
+                      className={`inline-flex items-stretch overflow-hidden rounded border text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+                        snapsEnabled
+                          ? 'border-cyan-500/25 bg-cyan-500/[0.06] text-cyan-300'
+                          : 'border-white/[0.08] bg-white/[0.02] text-gray-500'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        data-no-drag
+                        data-testid="snap-global-toggle"
+                        aria-pressed={snapsEnabled}
+                        aria-label={snapsEnabled ? 'Turn running snaps off' : 'Turn running snaps on'}
+                        onClick={() => snapControls?.onToggleEnabled()}
+                        title={
+                          snapsEnabled
+                            ? `Running snaps on${statusBadges.runningOsnaps ? `: ${statusBadges.runningOsnaps}` : ''} — click to turn off`
+                            : 'Running snaps off — click to turn on'
+                        }
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 transition-colors hover:bg-cyan-500/10"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`h-1 w-1 shrink-0 rounded-full ${
+                            snapsEnabled ? 'bg-cyan-400 shadow-[0_0_5px_rgba(34,211,238,0.65)]' : 'bg-gray-600'
+                          }`}
+                        />
+                        <span>SNAP</span>
+                      </button>
+                      {snapControls && (
+                        <button
+                          type="button"
+                          data-no-drag
+                          data-testid="snap-settings-toggle"
+                          aria-label="Choose running snap types"
+                          aria-haspopup="menu"
+                          aria-expanded={isSnapMenuOpen}
+                          onClick={() => setIsSnapMenuOpen(open => !open)}
+                          className={`border-l px-1 transition-colors hover:bg-cyan-500/10 ${
+                            isSnapMenuOpen ? 'border-cyan-400/40' : 'border-white/10'
+                          }`}
+                        >
+                          <ChevronDownIcon className={`h-2.5 w-2.5 transition-transform ${isSnapMenuOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                      )}
+                    </div>
+
+                    {isSnapMenuOpen && snapControls && (
+                      <div
+                        data-testid="snap-settings-menu"
+                        role="menu"
+                        className="absolute bottom-full right-0 z-[80] mb-2 w-60 rounded-lg border border-cyan-500/40 bg-[#080e15]/95 p-2 text-[11px] text-gray-200 shadow-2xl backdrop-blur-md"
+                      >
+                        <div className="flex items-start justify-between gap-3 border-b border-cyan-500/20 px-1 pb-1.5">
+                          <div>
+                            <div className="font-semibold text-cyan-200">Running snaps</div>
+                            <div className="mt-0.5 text-[9px] uppercase tracking-wider text-slate-500">
+                              {snapsEnabled ? `${enabledCount} active type${enabledCount === 1 ? '' : 's'}` : 'Globally off'}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            data-testid="snap-menu-global-toggle"
+                            role="switch"
+                            aria-checked={snapsEnabled}
+                            onClick={() => snapControls.onToggleEnabled()}
+                            className={`rounded border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
+                              snapsEnabled
+                                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                                : 'border-white/10 bg-white/[0.03] text-gray-500'
+                            }`}
+                          >
+                            {snapsEnabled ? 'On' : 'Off'}
+                          </button>
+                        </div>
+                        <div className="mt-1.5 space-y-0.5">
+                          {snapControls.options.map(option => {
+                            const isLastSelected = option.enabled && enabledCount <= 1;
+                            return (
+                              <label
+                                key={option.id}
+                                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 transition-colors hover:bg-white/[0.05]"
+                                title={isLastSelected ? 'Keep one snap type selected, or turn running snaps off globally.' : undefined}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={option.enabled}
+                                  disabled={isLastSelected}
+                                  onChange={() => snapControls.onToggleOption(option.id)}
+                                  className="accent-cyan-500"
+                                />
+                                <span>{option.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <p className="mt-2 border-t border-white/[0.06] px-1 pt-1.5 text-[9px] leading-relaxed text-slate-500">
+                          Shift + right-click the canvas for a one-pick snap override.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
           {/* Line 2: Unified Interactive Command Line — Deterministic CAD (Space) or Agent Mode (~) */}
-          <div className="flex h-7 items-center gap-2 px-3 bg-[#080d14]">
+          <div className="relative flex h-7 items-center gap-2 bg-transparent px-3 transition-colors duration-200">
             {isCommandLineActive && inputMode === 'cad' ? (
-              <form onSubmit={handleSubmit} className="flex min-w-0 flex-1 items-center gap-2">
+              <form onSubmit={handleSubmit} className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 -mx-1 transition-colors duration-200 focus-within:bg-cyan-400/[0.035] focus-within:shadow-[inset_0_-1px_0_rgba(34,211,238,0.2)]">
                 <span className="text-emerald-400 font-bold text-xs shrink-0 tracking-tight flex items-center gap-1">
                   <span className="text-cyan-400">CAD</span>
                   <span>&gt;</span>
@@ -1671,7 +1950,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                 ) : null}
               </form>
             ) : isCommandLineActive && inputMode === 'agent' && !isAgentFloating ? (
-              <form onSubmit={handleAgentSubmit} className="flex min-w-0 flex-1 items-center gap-2">
+              <form onSubmit={handleAgentSubmit} className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 -mx-1 transition-colors duration-200 focus-within:bg-white/[0.025] focus-within:shadow-[inset_0_-1px_0_rgba(255,255,255,0.12)]">
                 <span
                   className="font-bold text-xs shrink-0 tracking-tight flex items-center gap-1"
                   style={{ color: accentColor }}
@@ -1735,6 +2014,10 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   <span className="text-emerald-400 font-bold text-xs shrink-0 tracking-tight flex items-center gap-1">
                     <span className="text-cyan-400">CAD</span>
                     <span>&gt;</span>
+                    <span
+                      aria-hidden="true"
+                      className="command-caret h-2.5 w-[2px] rounded-full bg-cyan-400/80 shadow-[0_0_5px_rgba(34,211,238,0.5)]"
+                    />
                   </span>
                   <span className="font-mono text-[10px] text-gray-500 transition-colors group-hover:text-gray-300">
                     Press Space
@@ -1746,7 +2029,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                 <button
                   type="button"
                   data-no-drag
-                  onClick={activateAgentMode}
+                  onClick={focusAgentCommandLine}
                   className="group flex min-w-0 items-center gap-1.5 bg-transparent text-left cursor-pointer"
                   title={`Press ~ (tilde) to talk to ${agentLabel}`}
                   aria-label="Activate agent mode"
@@ -1763,119 +2046,114 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
               </div>
             )}
             {keyInfo?.hasServiceAndInference && (
-              <span
+              <button
+                type="button"
+                data-no-drag
+                data-testid="service-inference-status"
                 onClick={keyInfo.onClick}
-                className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider shrink-0 cursor-pointer hover:underline pr-1 hidden sm:inline"
-                title="Service & inference active | Click to view key details"
+                aria-haspopup="dialog"
+                className="group hidden cursor-pointer shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-emerald-500/25 bg-emerald-500/[0.06] px-2 py-[3px] text-[9px] font-bold uppercase leading-none tracking-[0.12em] text-emerald-300/90 transition-all duration-200 hover:border-emerald-400/45 hover:bg-emerald-500/[0.12] hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/60 active:scale-[0.98] sm:inline-flex"
+                title="Service & inference active — open the key dialog"
               >
-                ● Service &amp; Inference Enabled
-              </span>
+                <span aria-hidden="true" className="command-status-dot h-1 w-1 rounded-full bg-emerald-400" />
+                <span>Service &amp; Inference Enabled</span>
+                <span aria-hidden="true" className="text-emerald-400/60 transition-transform duration-200 group-hover:translate-x-0.5">→</span>
+              </button>
             )}
           </div>
         </div>
 
         {/* Hidden in-bar socket slot on the left. The visible dock is portaled to <body> so
-            the socket and quick-thought card stack above the tool shelf and every
+            the plug and quick-thought card stack above the tool shelf and every
             floating dialog; this anchor keeps that dock at the exact spot the
-            command bar was designed around. It is 44px inside a 50px bar, so the
-            accent rail stays unbroken above it. */}
+            command bar was designed around, with the plug's top rising above the
+            bar for the accent rail to wrap as a socket tab. */}
         <div
           ref={socketAnchorRef}
           aria-hidden="true"
           data-testid="agent-socket-anchor"
-          className="pointer-events-none absolute left-3 bottom-[3px] h-11 w-11"
+          className="pointer-events-none absolute left-1 bottom-[3px] h-14 w-14"
         />
         {typeof document !== 'undefined' && createPortal(
           <div
             data-testid="agent-dock"
             className="pointer-events-none fixed z-[10020] flex items-center"
             style={agentDockPos
-              ? { left: agentDockPos.left, top: agentDockPos.top, width: 44, height: 44 }
-              : { left: 12, bottom: 3 }}
+              ? { left: agentDockPos.left, top: agentDockPos.top, width: 56, height: 56 }
+              : { left: 4, bottom: 3 }}
           >
-        {/* Rounded-Square Agent Socket — seated directly on the left of the command bar.
-            There is no raised tab: the bar's accent line runs straight through the
-            top of the socket, so the dock reads as part of the bar rather than a
-            card stepping up out of it. */}
+        {/* Agent Socket — a raised plug seated into the left of the command bar.
+            The bar's accent rail climbs into a socket tab around its exposed top;
+            the large square face is the draggable plug. */}
         <div className="pointer-events-auto relative flex items-center">
-          {hasPendingPrompt && !isThoughtDismissed && (
-            // A fresh question always raises the notification, even if the feed
-            // is already open — the compact bubble is the prompt, not a duplicate.
-            hasPendingQuestionOptions || hasInlineQuestionPrompt || !isExpanded || inputMode !== 'agent'
-          ) && (
+          {/* The full feed already shows the prompt, so don't duplicate it above the socket. */}
+          {hasPendingPrompt && !isThoughtDismissed && !isBottomAgentChatOpen && (
             <div
               data-testid="agent-thought-bubble"
               role="dialog"
-              aria-label={`${agentLabel} has a suggestion`}
-              className="absolute bottom-full left-0 z-[10030] mb-5 w-[min(360px,calc(100vw-24px))] animate-fade-in-up rounded-2xl border p-0 font-sans text-slate-200 shadow-[0_24px_70px_rgba(0,0,0,0.8)] backdrop-blur-xl"
+              aria-label="Quick thought"
+              className="absolute bottom-full left-0 z-[10030] mb-6 w-[min(372px,calc(100vw-24px))] animate-fade-in-up overflow-visible rounded-[24px] border p-0 font-sans text-slate-200 shadow-[0_24px_70px_rgba(0,0,0,0.8)] backdrop-blur-2xl"
               style={{
-                borderColor: `${accentColor}70`,
-                background: `radial-gradient(130% 120% at 0% 0%, ${accentColor}2e 0%, rgba(9,15,25,0.98) 48%, rgba(6,10,17,0.99) 100%)`,
-                boxShadow: `0 24px 70px rgba(0,0,0,0.8), 0 0 0 1px ${accentColor}22, 0 0 46px ${accentColor}26`,
+                borderColor: `${accentColor}38`,
+                background: `radial-gradient(130% 120% at 0% 0%, ${accentColor}16 0%, rgba(10,16,27,0.985) 46%, rgba(5,9,15,0.995) 100%)`,
+                boxShadow: `0 28px 80px rgba(0,0,0,0.86), 0 0 0 1px ${accentColor}12, 0 0 42px ${accentColor}12`,
               }}
             >
               <span
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 top-0 h-[2px]"
-                style={{ background: `linear-gradient(90deg, transparent, ${accentColor}, transparent)` }}
+                className="pointer-events-none absolute inset-x-0 top-0 h-px"
+                style={{ background: `linear-gradient(90deg, transparent, ${accentColor}aa, transparent)` }}
               />
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute -left-12 -top-14 h-36 w-36 rounded-full blur-2xl"
-                style={{ backgroundColor: `${accentColor}26` }}
-              />
-              <div className="relative p-3.5">
-              <div className="flex items-start gap-2.5">
-                <span
-                  className="relative mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border"
-                  style={{ background: `linear-gradient(145deg, ${accentColor}33, ${accentColor}0d)`, borderColor: `${accentColor}66` }}
-                >
+              <div className="relative p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      aria-hidden="true"
+                      className="inline-flex items-center gap-[3px] rounded-full border border-white/[0.08] bg-white/[0.035] px-2 py-1"
+                    >
+                      <span className="h-1 w-1 rounded-full animate-pulse" style={{ backgroundColor: accentColor, animationDelay: '0ms' }} />
+                      <span className="h-1 w-1 rounded-full animate-pulse" style={{ backgroundColor: accentColor, animationDelay: '160ms' }} />
+                      <span className="h-1 w-1 rounded-full animate-pulse" style={{ backgroundColor: accentColor, animationDelay: '320ms' }} />
+                    </span>
+                    <span className="truncate text-[10px] font-extrabold uppercase tracking-[0.2em] text-slate-300">
+                      Quick Thought
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    data-no-drag
+                    data-testid="dismiss-agent-notification"
+                    onClick={() => {
+                      if (thoughtKey) setDismissedThoughtKey(thoughtKey);
+                    }}
+                    className="-mr-1 -mt-1 shrink-0 rounded-full p-1.5 text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-200"
+                    aria-label="Dismiss quick thought"
+                    title="Dismiss quick thought"
+                  >
+                    <XMarkIcon className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="relative mt-3">
                   <span
                     aria-hidden="true"
-                    className="absolute inset-0 animate-ping rounded-xl opacity-20"
-                    style={{ backgroundColor: `${accentColor}66` }}
-                  />
-                  <SparklesIcon className="relative h-4 w-4" style={{ color: accentColor }} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate text-[9px] font-extrabold uppercase tracking-[0.16em]" style={{ color: accentColor }}>
-                      {agentLabel}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.06] px-1.5 py-[1px] text-[8px] font-bold uppercase tracking-[0.14em] text-slate-300">
-                      <span className="h-1 w-1 animate-pulse rounded-full" style={{ backgroundColor: accentColor }} />
-                      Quick thought
-                    </span>
-                    <div className="ml-auto flex shrink-0 items-center gap-0.5">
-                      <button
-                        type="button"
-                        data-no-drag
-                        onClick={() => openAgentConversation(true)}
-                        className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white"
-                        aria-label="Open agent conversation"
-                      >
-                        Open
-                      </button>
-                      <button
-                        type="button"
-                        data-no-drag
-                        data-testid="dismiss-agent-notification"
-                        onClick={() => {
-                          if (thoughtKey) setDismissedThoughtKey(thoughtKey);
-                        }}
-                        className="rounded p-1 text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-200"
-                        aria-label="Dismiss agent notification"
-                        title="Dismiss notification"
-                      >
-                        <XMarkIcon className="h-3 w-3" />
-                      </button>
+                    className="pointer-events-none absolute -left-0.5 -top-2 font-serif text-3xl leading-none"
+                    style={{ color: `${accentColor}55` }}
+                  >
+                    “
+                  </span>
+                  <div
+                    ref={thoughtTextRef}
+                    data-testid="agent-thought-text"
+                    className="max-h-[52px] overflow-y-auto overscroll-contain pl-4 pr-1 text-[13px] leading-[1.55] text-slate-100 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  >
+                    <div
+                      className={isThoughtOverflowing ? 'quick-thought-drift' : undefined}
+                      style={isThoughtOverflowing ? { animationDuration: `${thoughtDriftSeconds}s` } : undefined}
+                    >
+                      {thoughtScrollText || (hasPendingQuestionOptions ? 'I have a suggestion for the next step.' : 'I have a quick panel ready for you.')}
                     </div>
                   </div>
-                  <p className="mt-2 max-h-[44px] overflow-hidden text-[12.5px] leading-relaxed text-slate-100">
-                    {thoughtPreview || (hasPendingQuestionOptions ? 'I have a suggestion for the next step.' : 'I have a quick panel ready for you.')}
-                  </p>
                 </div>
-              </div>
 
               {hasPendingQuestionOptions ? (
                 <div className="mt-3 flex flex-col gap-1.5">
@@ -1889,17 +2167,30 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                         openAgentConversation(true);
                         onSendMessage?.(opt);
                       }}
-                      className="group flex w-full items-center gap-2 rounded-xl border px-2.5 py-2 text-left text-[11px] font-semibold leading-snug text-slate-100 transition-all hover:translate-x-0.5 hover:brightness-125 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-                      style={{ borderColor: `${accentColor}38`, background: `linear-gradient(90deg, ${accentColor}14, rgba(255,255,255,0.02))` }}
+                      className="group flex w-full items-center gap-2 rounded-[10px] border border-white/[0.07] bg-white/[0.026] px-2.5 py-2.5 text-left text-[11.5px] font-semibold leading-snug text-slate-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] transition-colors hover:border-white/[0.14] hover:bg-white/[0.05] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <span
-                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md border font-mono text-[9px] font-black"
-                        style={{ borderColor: `${accentColor}55`, backgroundColor: `${accentColor}1f`, color: accentColor }}
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] border font-mono text-[9px] font-black"
+                        style={{ borderColor: `${accentColor}40`, backgroundColor: `${accentColor}14`, color: accentColor }}
                       >
                         {String.fromCharCode(65 + optIdx)}
                       </span>
                       <span className="min-w-0 flex-1">{opt}</span>
-                      <span aria-hidden="true" className="shrink-0 transition-transform group-hover:translate-x-0.5" style={{ color: accentColor }}>›</span>
+                      <span aria-hidden="true" className="shrink-0 text-slate-600 transition-all group-hover:translate-x-0.5 group-hover:text-slate-300">›</span>
+                    </button>
+                  ))}
+                </div>
+              ) : boundaryIntakeActions ? (
+                <div data-testid="boundary-intake-actions" className="mt-3.5 grid grid-cols-3 gap-1.5">
+                  {boundaryIntakeActions.map(action => (
+                    <button
+                      key={action.label}
+                      type="button"
+                      data-no-drag
+                      onClick={action.onClick}
+                      className="flex h-9 items-center justify-center rounded-[10px] border border-white/[0.08] bg-white/[0.035] px-2 text-[10px] font-extrabold uppercase tracking-[0.12em] text-slate-200 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06] hover:text-white active:scale-[0.98]"
+                    >
+                      {action.label}
                     </button>
                   ))}
                 </div>
@@ -1908,47 +2199,86 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   type="button"
                   data-no-drag
                   onClick={() => openAgentConversation(true)}
-                  className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-[10px] font-extrabold uppercase tracking-[0.12em] transition-all hover:brightness-125 active:scale-[0.99]"
-                  style={{
-                    borderColor: `${accentColor}66`,
-                    background: `linear-gradient(90deg, ${accentColor}30, ${accentColor}10)`,
-                    color: accentColor,
-                    boxShadow: `inset 0 1px 0 ${accentColor}33`,
-                  }}
+                  className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-[10px] border border-white/[0.08] bg-white/[0.035] px-3 py-2.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-slate-200 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06] hover:text-white active:scale-[0.99]"
                 >
-                  <SparklesIcon className="h-3 w-3" />
-                  Review the panel
-                  <span aria-hidden="true">→</span>
+                  {lastMessage?.needsInput ? 'Answer in chat' : 'Review the panel'}
+                  <span aria-hidden="true" style={{ color: accentColor }}>→</span>
                 </button>
               )}
 
-              <div className="mt-2 flex items-center justify-between text-[8.5px] font-bold uppercase tracking-[0.14em] text-slate-500">
-                <span>Press ~ to continue</span>
-                <button
-                  type="button"
-                  data-no-drag
-                  onClick={() => openAgentConversation(true)}
-                  className="transition-colors hover:text-slate-200"
-                  style={{ color: `${accentColor}b3` }}
-                >
-                  Open conversation →
-                </button>
-              </div>
+              {hasPendingQuestionOptions && (
+                <div className="mt-3 flex items-center justify-end border-t border-white/[0.06] pt-2.5 text-[8.5px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                  <button
+                    type="button"
+                    data-no-drag
+                    onClick={() => openAgentConversation(true)}
+                    className="group inline-flex shrink-0 items-center gap-1 text-slate-400 transition-colors hover:text-slate-100"
+                  >
+                    Open conversation
+                    <span aria-hidden="true" className="transition-transform group-hover:translate-x-0.5" style={{ color: `${accentColor}cc` }}>→</span>
+                  </button>
+                </div>
+              )}
               </div>
 
-              {/* Thought-bubble tail: two dots stepping down toward the left agent socket. */}
+              {/* Thought-bubble tail: dots stepping down toward the left agent socket. */}
               <span
                 aria-hidden="true"
-                className="pointer-events-none absolute -bottom-1.5 left-4 h-2.5 w-2.5 rounded-full border bg-[#0a111b]"
-                style={{ borderColor: `${accentColor}80` }}
+                className="pointer-events-none absolute -bottom-1.5 left-5 h-3 w-3 rounded-full border bg-[#080d15]"
+                style={{ borderColor: `${accentColor}44`, boxShadow: `0 0 14px ${accentColor}16` }}
               />
               <span
                 aria-hidden="true"
-                className="pointer-events-none absolute -bottom-4 left-3 h-1.5 w-1.5 rounded-full border bg-[#0a111b]"
-                style={{ borderColor: `${accentColor}80` }}
+                className="pointer-events-none absolute -bottom-[18px] left-4 h-2 w-2 rounded-full border bg-[#080d15]"
+                style={{ borderColor: `${accentColor}38` }}
+              />
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute -bottom-[25px] left-3 h-1.5 w-1.5 rounded-full border bg-[#080d15]"
+                style={{ borderColor: `${accentColor}30` }}
               />
             </div>
           )}
+          {/* Socket Tab — a single stroked collar wrapping the plug's exposed
+              top. Stroke radius is the plug radius plus the rail gap, so the
+              two curves share a center and stay parallel through the corners. */}
+          <svg
+            aria-hidden="true"
+            data-testid="agent-socket-tab"
+            className="pointer-events-none absolute -left-[6px] -top-[6px] h-[30px] w-[68px] overflow-visible"
+            viewBox="0 0 68 30"
+            fill="none"
+          >
+            <defs>
+              <linearGradient
+                id={socketTabGradientId}
+                x1="34"
+                y1="0"
+                x2="34"
+                y2="30"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0" stopColor={accentColor} stopOpacity="1" />
+                <stop offset="0.55" stopColor={accentColor} stopOpacity="0.9" />
+                <stop offset="0.85" stopColor={accentColor} stopOpacity="0.3" />
+                <stop offset="1" stopColor={accentColor} stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            {/* Gasket: fills the collar's breathing gap with the bar's top
+                color so the horizontal accent rail stops at the collar instead
+                of showing through the gap and crossing the tab line. */}
+            <path
+              d="M18 1H50A17 17 0 0 1 67 18V29H1V18A17 17 0 0 1 18 1Z"
+              fill="#0a111a"
+            />
+            <path
+              d="M2 26V18a16 16 0 0 1 16-16h32a16 16 0 0 1 16 16v8"
+              stroke={`url(#${socketTabGradientId})`}
+              strokeWidth="2"
+              strokeLinecap="round"
+              style={{ filter: `drop-shadow(0 0 4px ${accentColor}55)` }}
+            />
+          </svg>
           <button
             type="button"
             data-no-drag
@@ -1960,35 +2290,28 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
               onToggleAgentChat?.();
             }}
             aria-expanded={isBottomAgentChatOpen}
-            className={`group relative flex h-11 w-11 aspect-square items-center justify-center overflow-hidden rounded-xl border transition-all duration-200 hover:brightness-110 active:scale-[0.97] ${
+            className={`agent-socket ${isBottomAgentChatOpen || isSpecialistPluggedIn ? 'agent-socket--live' : ''} tab-bump group relative flex h-14 w-14 aspect-square cursor-grab flex-col items-center justify-center gap-1 rounded-xl transition-all duration-200 hover:brightness-110 active:cursor-grabbing active:scale-[0.97] ${
               isLoading ? 'animate-pulse' : ''
             }`}
-            style={{
-              // Uniform border on all 4 sides — no raised-tab top highlight.
-              borderColor: isBottomAgentChatOpen ? accentColor : `${accentColor}66`,
-              backgroundImage: `linear-gradient(160deg, ${accentColor}1c 0%, #0a111b 54%, #070c13 100%)`,
-              boxShadow: isBottomAgentChatOpen || isSpecialistPluggedIn
-                ? `0 6px 18px rgba(0,0,0,0.6), 0 0 16px ${accentColor}30`
-                : '0 6px 18px rgba(0,0,0,0.55)',
-            }}
+            style={{ '--socket-accent': accentColor } as React.CSSProperties}
             title={`${isBottomAgentChatOpen ? 'Collapse' : 'Open'} ${agentLabel} chat (drag out to float the command line)`}
             aria-label={`${isBottomAgentChatOpen ? 'Close' : 'Open'} agent chat for ${agentLabel}`}
           >
-            <span className="relative flex flex-col items-center gap-[3px]">
+            {/* Recessed inner rim: inset 3px with a 9px radius so it, too, is
+                concentric with the plug face. */}
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-[3px] rounded-[9px] border"
+              style={{
+                borderColor: `${accentColor}24`,
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), inset 0 -6px 10px rgba(0,0,0,0.35)',
+              }}
+            />
+            <span className="tab-bump__lift relative flex items-center justify-center">
               <AgentIcon
-                className="h-[18px] w-[18px] transition-transform duration-200 group-hover:scale-110"
+                className="h-10 w-10 transition-transform duration-200 group-hover:scale-105"
                 style={{ color: accentColor }}
               />
-              <span className="flex items-center gap-0.5">
-                <span className="text-[7px] font-extrabold uppercase leading-none tracking-[0.16em] text-slate-300 transition-colors group-hover:text-white">
-                  {isBottomAgentChatOpen ? 'Hide' : 'Chat'}
-                </span>
-                <ChevronUpIcon
-                  className={`h-2 w-2 shrink-0 transition-transform duration-200 ${isBottomAgentChatOpen ? 'rotate-180' : ''}`}
-                  style={{ color: `${accentColor}cc` }}
-                  aria-hidden="true"
-                />
-              </span>
             </span>
           </button>
         </div>
