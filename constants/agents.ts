@@ -37,6 +37,7 @@ import {
   StructuresIcon,
   SoilsIcon,
   SlopeIcon,
+  RoadIcon,
 } from '../components/icons.tsx';
 
 // ============================================================================
@@ -76,6 +77,7 @@ export const agentConfig: { [key in AgentType]?: AgentConfig } = {
   [AgentType.FLOOD_AGENT]: { icon: FloodIcon, label: 'Flood Zone', color: 'cyan' },
   [AgentType.STRUCTURES_AGENT]: { icon: StructuresIcon, label: 'Structures', color: 'orange' },
   [AgentType.SOILS_AGENT]: { icon: SoilsIcon, label: 'Soils Agent', color: 'stone' },
+  [AgentType.ROADING_AGENT]: { icon: RoadIcon, label: 'Roading Agent', color: 'amber' },
 };
 
 // ============================================================================
@@ -110,6 +112,7 @@ export const agentThemeColors: { [key in AgentType]?: string } = {
   [AgentType.FLOOD_AGENT]: '#22d3ee', // cyan-400
   [AgentType.STRUCTURES_AGENT]: '#fb923c', // orange-400
   [AgentType.SOILS_AGENT]: '#a8a29e', // stone-400 (earthy, distinct)
+  [AgentType.ROADING_AGENT]: '#f59e0b', // amber-500
 };
 
 /**
@@ -152,6 +155,7 @@ export const agentIcons: { [key in AgentType]?: React.FC<any> } = {
   [AgentType.FLOOD_AGENT]: FloodIcon,
   [AgentType.STRUCTURES_AGENT]: StructuresIcon,
   [AgentType.SOILS_AGENT]: SoilsIcon,
+  [AgentType.ROADING_AGENT]: RoadIcon,
 };
 
 // ============================================================================
@@ -186,6 +190,7 @@ export const agentGradientClasses: { [key in AgentType]?: string } = {
   [AgentType.FLOOD_AGENT]: 'from-cyan-500 to-blue-600',
   [AgentType.STRUCTURES_AGENT]: 'from-orange-500 to-amber-600',
   [AgentType.SOILS_AGENT]: 'from-stone-400 to-amber-700',
+  [AgentType.ROADING_AGENT]: 'from-amber-500 to-orange-600',
 };
 
 // ============================================================================
@@ -206,6 +211,7 @@ export const addDataButtonLabels: { [key in AgentType]?: string } = {
   [AgentType.STANDARDS_COMPLIANCE]: 'Upload Compliance PDFs...',
   [AgentType.CAD_MANAGER]: 'Upload Standards File...',
   [AgentType.ZONING_AGENT]: 'Set Jurisdiction...',
+  [AgentType.ROADING_AGENT]: 'Configure Road...',
 };
 
 // ============================================================================

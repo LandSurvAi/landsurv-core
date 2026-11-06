@@ -19,6 +19,7 @@ import { generateSymbolSvg, generateSymbolDxfBlock } from '../../services/gemini
 import { parseDxfForSymbol } from '../../utils/dxfParser';
 import { BrainCircuitIcon, UploadIcon, EraserIcon, EyeIcon, SparklesIcon, DownloadIcon, BookOpenIcon } from '../icons';
 import { SURVEY_SYMBOL_LIBRARY, findMatchingSymbol, libraryToSymbolDefinition, LibrarySymbol } from '../../data/surveySymbolLibrary';
+import { SymbolSvg } from '../common/SymbolSvg';
 
 interface SymbolCellProps {
   /** Current symbol - can be string (legacy) or SymbolDefinition */
@@ -59,33 +60,18 @@ const hasSymbolSvg = (symbol?: string | SymbolDefinition): symbol is SymbolDefin
  * SVG Preview thumbnail component
  */
 const SymbolThumbnail: React.FC<{ symbol: SymbolDefinition; size?: number }> = ({ symbol, size = 24 }) => {
-  const { svgPath, fillPath, viewBox } = symbol;
+  const { svgPath, fillPath, texts, viewBox } = symbol;
   
   return (
-    <svg
-      width={size}
-      height={size}
+    <SymbolSvg
+      size={size}
+      svgPath={svgPath}
+      fillPath={fillPath}
+      texts={texts}
       viewBox={viewBox || '0 0 24 24'}
       className="flex-shrink-0"
-    >
-      {/* Main outline path */}
-      <path
-        d={svgPath}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {/* Optional fill path */}
-      {fillPath && (
-        <path
-          d={fillPath}
-          fill="currentColor"
-          stroke="none"
-        />
-      )}
-    </svg>
+      strokeWidth={1.5}
+    />
   );
 };
 
@@ -158,15 +144,14 @@ const LibraryQuickPicker: React.FC<LibraryQuickPickerProps> = ({
                 className="flex items-center gap-1.5 px-2 py-1 bg-cyan-900/30 hover:bg-cyan-800/50 border border-cyan-700/50 rounded text-xs text-cyan-300 transition-colors"
                 title={s.description}
               >
-                <svg
+                <SymbolSvg
                   className="w-4 h-4"
+                  svgPath={s.svgPath}
+                  fillPath={s.fillPath}
+                  texts={s.texts}
                   viewBox={s.viewBox || '0 0 24 24'}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                >
-                  <path d={s.svgPath} strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
+                  strokeWidth={1.5}
+                />
                 {s.name}
               </button>
             ))}
@@ -205,16 +190,14 @@ const LibraryQuickPicker: React.FC<LibraryQuickPickerProps> = ({
             className="flex flex-col items-center gap-0.5 p-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs text-gray-300 hover:text-white transition-colors"
             title={`${s.name}\n${s.description}`}
           >
-            <svg
+            <SymbolSvg
               className="w-5 h-5"
+              svgPath={s.svgPath}
+              fillPath={s.fillPath}
+              texts={s.texts}
               viewBox={s.viewBox || '0 0 24 24'}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-            >
-              <path d={s.svgPath} strokeLinecap="round" strokeLinejoin="round" />
-              {s.fillPath && <path d={s.fillPath} fill="currentColor" stroke="none" />}
-            </svg>
+              strokeWidth={1.5}
+            />
             <span className="text-[9px] text-gray-400 truncate w-full text-center">{s.name}</span>
           </button>
         ))}
@@ -284,6 +267,7 @@ export const SymbolCell: React.FC<SymbolCellProps> = ({
         name: codeName,
         svgPath: result.svgPath,
         fillPath: result.fillPath,
+        ...(result.texts && result.texts.length > 0 ? { texts: result.texts } : {}),
         viewBox: result.viewBox,
         source: 'ai',
         createdAt: new Date().toISOString(),
@@ -297,7 +281,7 @@ export const SymbolCell: React.FC<SymbolCellProps> = ({
     } finally {
       setIsGenerating(false);
     }
-  }, [codeName, codeDescription, userApiKey, onSymbolChange, isGenerating]);
+  }, [codeName, codeDescription, userApiKey, onSymbolChange, isGenerating, category]);
 
   /**
    * Handle DXF file upload
@@ -315,14 +299,15 @@ export const SymbolCell: React.FC<SymbolCellProps> = ({
       const text = await file.text();
       const parsed = parseDxfForSymbol(text);
       
-      if (!parsed || !parsed.svgPath) {
+      if (!parsed || (!parsed.svgPath && !parsed.fillPath && (!parsed.texts || parsed.texts.length === 0))) {
         throw new Error('Could not parse symbol from DXF file');
       }
       
       const newSymbol: SymbolDefinition = {
         name: codeName || file.name.replace('.dxf', ''),
         svgPath: parsed.svgPath,
-        // DXF doesn't support fillPath currently
+        fillPath: parsed.fillPath,
+        texts: parsed.texts,
         viewBox: parsed.viewBox || '0 0 24 24',
         source: 'upload',
         dxfContent: text,
@@ -537,7 +522,9 @@ export const SymbolPreviewModal: React.FC<SymbolPreviewModalProps> = ({
       symbol.name || codeName,
       symbol.svgPath,
       symbol.fillPath,
-      1  // scale
+      1,  // scale
+      symbol.texts,
+      symbol.viewBox
     );
     
     const blob = new Blob([dxfContent], { type: 'application/dxf' });
@@ -554,6 +541,7 @@ export const SymbolPreviewModal: React.FC<SymbolPreviewModalProps> = ({
     const pathData = {
       svgPath: symbol.svgPath,
       fillPath: symbol.fillPath,
+      ...(symbol.texts && symbol.texts.length > 0 ? { texts: symbol.texts } : {}),
       viewBox: symbol.viewBox,
     };
     navigator.clipboard.writeText(JSON.stringify(pathData, null, 2));
@@ -585,28 +573,15 @@ export const SymbolPreviewModal: React.FC<SymbolPreviewModalProps> = ({
         
         {/* Large preview */}
         <div className="bg-gray-900 rounded-lg p-8 flex items-center justify-center mb-4">
-          <svg
-            width={120}
-            height={120}
+          <SymbolSvg
+            size={120}
+            svgPath={symbol.svgPath}
+            fillPath={symbol.fillPath}
+            texts={symbol.texts}
             viewBox={symbol.viewBox || '0 0 24 24'}
             className="text-cyan-400"
-          >
-            <path
-              d={symbol.svgPath}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            {symbol.fillPath && (
-              <path
-                d={symbol.fillPath}
-                fill="currentColor"
-                stroke="none"
-              />
-            )}
-          </svg>
+            strokeWidth={1.2}
+          />
         </div>
         
         {/* Info */}

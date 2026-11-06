@@ -5,7 +5,8 @@ import { BrainCircuitIcon, EraserIcon, PencilSquareIcon, PlusIcon, UploadIcon, D
 import { parseDxfForSymbol } from '../utils/dxfParser.ts';
 import { exportSymbolsToDxf } from '../utils/symbolDxf.ts';
 import { useAppState } from '../contexts/AppStateContext.tsx';
-import { SURVEY_SYMBOL_LIBRARY, getSymbolCategories, searchSymbols, getSymbolsByCategory, type LibrarySymbol } from '../data/surveySymbolLibrary.ts';
+import { SURVEY_SYMBOL_LIBRARY, getSymbolCategories, searchSymbols, getSymbolsByCategory, type LibrarySymbol, type SymbolTextElement } from '../data/surveySymbolLibrary.ts';
+import { SymbolSvg } from './common/SymbolSvg.tsx';
 
 
 // FIX: Removed apiKey from props to align with guidelines.
@@ -85,7 +86,7 @@ export const SymbolManagerPanel: React.FC<SymbolManagerPanelProps> = ({ symbols,
   const [terms, setTerms] = useState('');
   const [scale, setScale] = useState(1);
   
-  const [generatedSymbol, setGeneratedSymbol] = useState<{ svgPath: string; fillPath?: string; viewBox: string } | null>(null);
+  const [generatedSymbol, setGeneratedSymbol] = useState<{ svgPath: string; fillPath?: string; texts?: SymbolTextElement[]; viewBox: string } | null>(null);
   const { addNotification } = useAppState();
 
   // Built-in library browser (parity with CAD Manager's Symbol Library).
@@ -190,6 +191,7 @@ export const SymbolManagerPanel: React.FC<SymbolManagerPanelProps> = ({ symbols,
     setGeneratedSymbol({
         svgPath: symbol.svgPath,
         fillPath: symbol.fillPath,
+        texts: symbol.texts,
         viewBox: symbol.viewBox
     });
     setIsCreating(true);
@@ -207,6 +209,7 @@ export const SymbolManagerPanel: React.FC<SymbolManagerPanelProps> = ({ symbols,
                 associatedTerms: terms.split(',').map(t => t.trim().toLowerCase()).filter(Boolean),
                 svgPath: generatedSymbol.svgPath,
                 fillPath: generatedSymbol.fillPath,
+                ...(generatedSymbol.texts && generatedSymbol.texts.length > 0 ? { texts: generatedSymbol.texts } : { texts: undefined }),
                 viewBox: generatedSymbol.viewBox,
                 scale: scale,
             };
@@ -219,6 +222,7 @@ export const SymbolManagerPanel: React.FC<SymbolManagerPanelProps> = ({ symbols,
                 associatedTerms: terms.split(',').map(t => t.trim().toLowerCase()).filter(Boolean),
                 svgPath: generatedSymbol.svgPath,
                 fillPath: generatedSymbol.fillPath,
+                ...(generatedSymbol.texts && generatedSymbol.texts.length > 0 ? { texts: generatedSymbol.texts } : {}),
                 viewBox: generatedSymbol.viewBox,
                 scale: scale,
             };
@@ -291,12 +295,14 @@ export const SymbolManagerPanel: React.FC<SymbolManagerPanelProps> = ({ symbols,
                 {isGenerating || isParsingDxf ? (
                     <div className="w-6 h-6 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin"></div>
                 ) : generatedSymbol ? (
-                    <svg viewBox={generatedSymbol.viewBox} className="w-24 h-24 text-yellow-300">
-                        <path d={generatedSymbol.svgPath} fill="none" stroke="currentColor" strokeWidth="0.5" />
-                        {generatedSymbol.fillPath && (
-                            <path d={generatedSymbol.fillPath} fill="currentColor" stroke="none" />
-                        )}
-                    </svg>
+                    <SymbolSvg
+                        svgPath={generatedSymbol.svgPath}
+                        fillPath={generatedSymbol.fillPath}
+                        texts={generatedSymbol.texts}
+                        viewBox={generatedSymbol.viewBox}
+                        className="w-24 h-24 text-yellow-300"
+                        strokeWidth={1.5}
+                    />
                 ) : <span className="text-xs text-gray-500">Preview</span> }
             </div>
           </div>
@@ -352,12 +358,14 @@ export const SymbolManagerPanel: React.FC<SymbolManagerPanelProps> = ({ symbols,
             {symbols.map(symbol => (
               <div key={symbol.id} className={`p-3 bg-gray-800/50 rounded-lg border border-gray-700 flex flex-col items-center gap-2 transition-opacity ${symbol.hidden ? 'opacity-50' : ''}`}>
                 <div className="w-16 h-16 bg-gray-900 rounded-md flex items-center justify-center p-2">
-                    <svg viewBox={symbol.viewBox} className="w-full h-full text-yellow-300">
-                        <path d={symbol.svgPath} fill="none" stroke="currentColor" strokeWidth="0.5" />
-                        {symbol.fillPath && (
-                            <path d={symbol.fillPath} fill="currentColor" stroke="none" />
-                        )}
-                    </svg>
+                    <SymbolSvg
+                        svgPath={symbol.svgPath}
+                        fillPath={symbol.fillPath}
+                        texts={symbol.texts}
+                        viewBox={symbol.viewBox}
+                        className="w-full h-full text-yellow-300"
+                        strokeWidth={1.5}
+                    />
                 </div>
                 <h4 className="font-semibold text-sm text-gray-200">{symbol.name}</h4>
                 <p className="text-xs text-gray-400 text-center flex-grow">"{symbol.description}"</p>
@@ -448,10 +456,14 @@ export const SymbolManagerPanel: React.FC<SymbolManagerPanelProps> = ({ symbols,
                 return (
                   <div key={symbol.id} className={`p-3 bg-gray-800/50 rounded-lg border border-gray-700 flex flex-col items-center gap-2 transition-opacity ${enabled ? '' : 'opacity-50'}`}>
                     <div className="w-16 h-16 bg-gray-900 rounded-md flex items-center justify-center p-2">
-                      <svg viewBox={symbol.viewBox} className={`w-full h-full ${enabled ? 'text-yellow-300' : 'text-gray-400'}`}>
-                        <path d={symbol.svgPath} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                        {symbol.fillPath && <path d={symbol.fillPath} fill="currentColor" stroke="none" />}
-                      </svg>
+                      <SymbolSvg
+                        svgPath={symbol.svgPath}
+                        fillPath={symbol.fillPath}
+                        texts={symbol.texts}
+                        viewBox={symbol.viewBox}
+                        className={`w-full h-full ${enabled ? 'text-yellow-300' : 'text-gray-400'}`}
+                        strokeWidth={1.5}
+                      />
                     </div>
                     <h4 className="font-semibold text-sm text-gray-200 text-center light-theme:text-gray-700">{symbol.name}</h4>
                     <p className="text-xs text-gray-400 text-center flex-grow">{symbol.description}</p>

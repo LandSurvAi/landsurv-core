@@ -4,6 +4,8 @@ import type { CodeDefinition, StandardDefinition } from '../contexts/types/CadMa
 import { scoreStandardsMatch } from '../services/standardsA2UI.ts';
 import type { A2UIStandardsFacet, A2UIStandardsFilter } from '../types.ts';
 import { StandardsEditor } from './CadManager/StandardsEditor.tsx';
+import { ALL_BUILT_IN_HATCHES, type HatchDefinition } from '../services/hatchLibrary.ts';
+import { HatchSwatch } from './CadManager/HatchCell.tsx';
 
 const SearchGlyph = () => (
   <svg
@@ -25,10 +27,10 @@ interface A2UIStandardsTableProps {
   onOpenSpreadsheetEditor?: () => void;
 }
 
-type EditableCodeField = 'code' | 'description' | 'pointLayer' | 'lineLayer' | 'lineType' | 'category' | 'symbol';
+type EditableCodeField = 'code' | 'description' | 'pointLayer' | 'lineLayer' | 'lineType' | 'hatchPattern' | 'category' | 'symbol';
 
 interface ActiveCellEdit {
-  kind: 'code' | 'layer' | 'linetype';
+  kind: 'code' | 'layer' | 'linetype' | 'hatch';
   key: string;
   field: string;
   value: string;
@@ -40,6 +42,7 @@ const FACET_LABELS: Record<A2UIStandardsFacet, string> = {
   codes: 'Codes',
   linetypes: 'Linetypes',
   symbols: 'Symbols',
+  hatches: 'Hatches',
 };
 
 function symbolLabel(symbol: unknown): string {
@@ -76,7 +79,7 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
   const [undoStack, setUndoStack] = useState<StandardDefinition[]>([]);
   const [redoStack, setRedoStack] = useState<StandardDefinition[]>([]);
   const [localStandardOverride, setLocalStandardOverride] = useState<StandardDefinition | null>(null);
-  const [fullEditorModal, setFullEditorModal] = useState<'editor' | 'f2f' | 'team-codes' | 'auto-assign' | null>(null);
+  const [fullEditorModal, setFullEditorModal] = useState<'editor' | 'f2f' | 'team-codes' | 'auto-assign' | 'hatches' | null>(null);
 
   const effectiveStandard = localStandardOverride ?? standard;
 
@@ -152,6 +155,14 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
   const symbols = useMemo(
     () => codes.filter(code => symbolLabel(code.symbol) !== '—'),
     [codes],
+  );
+  const hatches = useMemo<HatchDefinition[]>(
+    () => [...ALL_BUILT_IN_HATCHES, ...(effectiveStandard?.hatches ?? [])],
+    [effectiveStandard?.hatches],
+  );
+  const availableHatchNames = useMemo(
+    () => hatches.map(h => h.name),
+    [hatches],
   );
 
   const availableLayerNames = useMemo(() => {
@@ -307,7 +318,7 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
     });
   };
 
-  const handleOpenFullSpreadsheet = (modal: 'editor' | 'f2f' | 'team-codes' | 'auto-assign' = 'editor') => {
+  const handleOpenFullSpreadsheet = (modal: 'editor' | 'f2f' | 'team-codes' | 'auto-assign' | 'hatches' = 'editor') => {
     if (!effectiveStandard) {
       commitStandard({
         name: 'Custom CAD Standard',
@@ -343,6 +354,7 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
     code.pointLayer,
     code.lineLayer,
     code.lineType,
+    code.hatchPattern,
     code.category,
     symbolLabel(code.symbol),
   ]);
@@ -364,6 +376,13 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
     code.description,
     symbolLabel(code.symbol),
     code.category,
+  ]);
+  const filteredHatches = ranked(hatches, hatch => [
+    hatch.name,
+    hatch.description,
+    hatch.category,
+    hatch.femaZone,
+    hatch.usage,
   ]);
 
   if (!effectiveStandard) {
@@ -411,6 +430,7 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
     codes: codes.length,
     linetypes: linetypes.length,
     symbols: symbols.length,
+    hatches: hatches.length,
   };
 
   const resultCount =
@@ -420,7 +440,9 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
         ? filteredLinetypes.length
         : facet === 'symbols'
           ? filteredSymbols.length
-          : filteredCodes.length;
+          : facet === 'hatches'
+            ? filteredHatches.length
+            : filteredCodes.length;
 
   const total =
     facet === 'layers'
@@ -429,7 +451,9 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
         ? linetypes.length
         : facet === 'symbols'
           ? symbols.length
-          : codes.length;
+          : facet === 'hatches'
+            ? hatches.length
+            : codes.length;
 
   const cell = 'px-2 py-1 align-top text-[10px] leading-snug';
   const editableCell = `${cell} cursor-pointer transition-colors hover:bg-cyan-500/[0.08]`;
@@ -474,6 +498,11 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
       </datalist>
       <datalist id={`${datalistId}-categories`}>
         {availableCategories.map(name => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
+      <datalist id={`${datalistId}-hatches`}>
+        {availableHatchNames.map(name => (
           <option key={name} value={name} />
         ))}
       </datalist>
@@ -553,7 +582,7 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
             className="w-full rounded-md border border-white/[0.08] bg-white/[0.03] py-1 pl-7 pr-2 text-[10.5px] text-slate-200 placeholder:text-slate-500 focus:border-cyan-500/40 focus:outline-none"
           />
         </div>
-        {(['all', 'layers', 'codes', 'linetypes', 'symbols'] as const).map(option => (
+        {(['all', 'layers', 'codes', 'linetypes', 'symbols', 'hatches'] as const).map(option => (
           <button
             key={option}
             type="button"
@@ -623,6 +652,7 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
                 <th className={head}>Point layer</th>
                 <th className={head}>Line layer</th>
                 <th className={head}>Linetype</th>
+                <th className={head}>Hatch</th>
                 <th className={head}>Category</th>
                 <th className={`${head} w-7 text-right`} aria-label="Row actions" />
               </tr>
@@ -667,6 +697,13 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
                       onClick={() => !isEditing('lineType') && startCodeEdit(code.code, 'lineType', code.lineType || 'CONTINUOUS')}
                     >
                       {isEditing('lineType') ? renderInlineInput(`${datalistId}-linetypes`) : (code.lineType || 'CONTINUOUS')}
+                    </td>
+                    <td
+                      className={`${editableCell} font-mono text-cyan-300`}
+                      title="Click to edit hatch pattern"
+                      onClick={() => !isEditing('hatchPattern') && startCodeEdit(code.code, 'hatchPattern', code.hatchPattern || '')}
+                    >
+                      {isEditing('hatchPattern') ? renderInlineInput(`${datalistId}-hatches`) : (code.hatchPattern || '—')}
                     </td>
                     <td
                       className={`${editableCell} text-slate-500`}
@@ -755,6 +792,33 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        )}
+
+        {facet === 'hatches' && (
+          <table className="w-full border-collapse">
+            <thead>
+              <tr>
+                <th className={head}>Swatch</th>
+                <th className={head}>Pattern</th>
+                <th className={head}>Category</th>
+                <th className={head}>FEMA Zone</th>
+                <th className={head}>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredHatches.map(hatch => (
+                <tr key={hatch.name} className="border-t border-white/[0.04]">
+                  <td className={cell}>
+                    <HatchSwatch hatch={hatch} size={22} />
+                  </td>
+                  <td className={`${cell} font-mono font-semibold text-cyan-200`}>{hatch.name}</td>
+                  <td className={`${cell} capitalize text-slate-400`}>{hatch.category}</td>
+                  <td className={`${cell} font-mono text-cyan-400`}>{hatch.femaZone || '—'}</td>
+                  <td className={`${cell} text-slate-300`}>{hatch.description}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}

@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import type { SurveyLine } from '../types';
+import { createLayerValueLookup, getLayerValue } from '../utils/cadEntityStyle.ts';
 
 export interface PropertiesDialogProps {
   isOpen: boolean;
@@ -8,6 +9,12 @@ export interface PropertiesDialogProps {
   selectedIds: string[];
   lines: SurveyLine[];
   availableLayers?: string[];
+  /** Linetypes from the loaded CAD standard. */
+  availableLinetypes?: string[];
+  /** Layer name → color, used to preview BYLAYER values. */
+  layerColors?: Record<string, string>;
+  /** Layer name → linetype, used to preview BYLAYER values. */
+  layerLinetypes?: Record<string, string>;
   /** Apply a property patch to every selected entity. */
   onUpdateLines: (ids: string[], changes: Partial<SurveyLine>) => void;
   onDeleteLines: (ids: string[]) => void;
@@ -16,7 +23,7 @@ export interface PropertiesDialogProps {
   onConvertToBoundary?: (lines: SurveyLine[]) => void;
 }
 
-const LINETYPES = ['CONTINUOUS', 'DASHED', 'HIDDEN', 'CENTER', 'PHANTOM', 'DOT', 'FENCELINE1'];
+const FALLBACK_LINETYPES = ['CONTINUOUS', 'DASHED', 'HIDDEN', 'CENTER', 'PHANTOM', 'DOT', 'FENCELINE1'];
 
 const lineId = (line: SurveyLine) => line.id || `${line.from}-${line.to}`;
 
@@ -52,6 +59,9 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
   selectedIds,
   lines,
   availableLayers,
+  availableLinetypes = [],
+  layerColors = {},
+  layerLinetypes = {},
   onUpdateLines,
   onDeleteLines,
   onSelectAll,
@@ -79,8 +89,39 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
   );
 
   const layerCommon = commonValue(selected.map(line => line.layer ?? ''));
-  const colorCommon = commonValue(selected.map(line => line.color ?? ''));
-  const linetypeCommon = commonValue(selected.map(line => line.lineType ?? 'CONTINUOUS'));
+  const layerColorLookup = useMemo(() => createLayerValueLookup(layerColors), [layerColors]);
+  const layerLinetypeLookup = useMemo(() => createLayerValueLookup(layerLinetypes), [layerLinetypes]);
+  const activeLayerName = layerCommon?.trim() || '';
+  const layerDefaultColor = getLayerValue(layerColorLookup, activeLayerName);
+  const layerDefaultLinetype = getLayerValue(layerLinetypeLookup, activeLayerName);
+
+  const colorValues = selected.map(line => line.color?.trim() ?? '');
+  const colorsMatch = colorValues.length > 0 && colorValues.every(value => value === colorValues[0]);
+  const colorValue = colorsMatch ? colorValues[0] : '';
+  const colorMixed = selected.length > 0 && !colorsMatch;
+  const colorByLayer = !colorMixed && (!colorValue || colorValue.toUpperCase() === 'BYLAYER');
+
+  const linetypeValues = selected.map(line => line.lineType?.trim() ?? '');
+  const linetypesMatch = linetypeValues.length > 0 && linetypeValues.every(value => value === linetypeValues[0]);
+  const linetypeValue = linetypesMatch ? linetypeValues[0] : '';
+  const linetypeMixed = selected.length > 0 && !linetypesMatch;
+  const linetypeByLayer = !linetypeMixed && (!linetypeValue || linetypeValue.toUpperCase() === 'BYLAYER');
+  const linetypeSelectValue = linetypeMixed ? '__mixed__' : linetypeByLayer ? '' : linetypeValue;
+
+  const linetypeOptions = useMemo(() => {
+    const names = new Set(FALLBACK_LINETYPES);
+    for (const name of availableLinetypes) {
+      if (name?.trim()) names.add(name.trim().toUpperCase());
+    }
+    for (const name of Object.values(layerLinetypes)) {
+      if (name?.trim()) names.add(name.trim().toUpperCase());
+    }
+    if (!linetypeByLayer && !linetypeMixed && linetypeValue) {
+      names.add(linetypeValue.toUpperCase());
+    }
+    return Array.from(names).sort();
+  }, [availableLinetypes, layerLinetypes, linetypeByLayer, linetypeMixed, linetypeValue]);
+
   const scaleCommon = commonValue(selected.map(line => line.lineTypeScale ?? 1));
   const hiddenCommon = commonValue(selected.map(line => !!line.hidden));
 
@@ -226,31 +267,40 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
                 <div className="flex items-center gap-1">
                   <input
                     type="color"
-                    value={colorCommon || '#22d3ee'}
+                    aria-label="Entity color"
+                    value={colorByLayer ? (layerDefaultColor || '#22d3ee') : colorMixed ? '#22d3ee' : colorValue}
                     onChange={event => onUpdateLines(ids, { color: event.target.value })}
                     className="h-8 w-10 cursor-pointer rounded border border-gray-600 bg-gray-800 p-0.5"
-                    title="Entity color"
+                    title="Entity color override"
                   />
                   <button
                     type="button"
                     onClick={() => onUpdateLines(ids, { color: undefined })}
-                    className="rounded border border-gray-600 px-1.5 py-1 text-[10px] text-gray-300 hover:bg-gray-800"
-                    title="Clear explicit color (use layer color)"
+                    className={`rounded border px-1.5 py-1 text-[10px] ${colorByLayer ? 'border-cyan-500/60 bg-cyan-950/50 text-cyan-200' : 'border-gray-600 text-gray-300 hover:bg-gray-800'}`}
+                    title="Use the layer color"
                   >
                     ByLayer
                   </button>
                 </div>
+                <span className="mt-0.5 block truncate text-[9px] text-gray-500" title={colorMixed ? 'Multiple colors' : colorByLayer ? layerDefaultColor || 'Layer color' : colorValue}>
+                  {colorMixed ? 'Mixed' : colorByLayer ? `ByLayer${layerDefaultColor ? ` · ${layerDefaultColor}` : ''}` : colorValue}
+                </span>
               </label>
               <label className="block">
                 <span className="mb-1 block text-[10px] uppercase tracking-wider text-gray-400">Linetype</span>
                 <select
-                  value={linetypeCommon ?? '__mixed__'}
-                  onChange={event => onUpdateLines(ids, { lineType: event.target.value })}
+                  value={linetypeSelectValue}
+                  aria-label="Entity linetype"
+                  onChange={event => onUpdateLines(ids, { lineType: event.target.value || undefined })}
                   className="w-full rounded border border-gray-600 bg-gray-800 px-2 py-1.5 font-mono text-cyan-200 outline-none focus:border-cyan-500"
                 >
-                  {linetypeCommon === undefined && <option value="__mixed__" disabled>(mixed)</option>}
-                  {LINETYPES.map(type => <option key={type} value={type}>{type}</option>)}
+                  {linetypeMixed && <option value="__mixed__" disabled>(mixed)</option>}
+                  <option value="">ByLayer{layerDefaultLinetype ? ` · ${layerDefaultLinetype}` : ''}</option>
+                  {linetypeOptions.map(type => <option key={type} value={type}>{type}</option>)}
                 </select>
+                <span className="mt-0.5 block truncate text-[9px] text-gray-500">
+                  {linetypeMixed ? 'Mixed' : linetypeByLayer ? `Layer default: ${layerDefaultLinetype || 'CONTINUOUS'}` : 'Object override'}
+                </span>
               </label>
             </div>
 

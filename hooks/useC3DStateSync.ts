@@ -321,6 +321,7 @@ export function useC3DStateSync(sessionToken: string | null, sessionState: SyncS
               associatedTerms: s.associatedTerms || [],
               svgPath: s.svgPath,
               fillPath: s.fillPath || null,
+              texts: s.texts || null,
               viewBox: s.viewBox,
               scale: s.scale,
               isDefault: s.isDefault ?? false,

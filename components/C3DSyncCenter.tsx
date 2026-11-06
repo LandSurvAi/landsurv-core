@@ -146,6 +146,8 @@ export const C3DSyncCenter: React.FC<C3DSyncCenterProps> = ({
     symbols: customSymbols.filter(s => !s.hidden).map(s => ({
       name: s.name,
       svgPath: s.svgPath,
+      fillPath: s.fillPath ?? null,
+      texts: s.texts,
       viewBox: s.viewBox,
       scale: s.scale,
     })) satisfies C3DBlockRecord[],

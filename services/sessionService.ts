@@ -89,6 +89,12 @@ export const determineLoadedAgents = (sessionState: SessionState): Set<AgentType
   if (sessionState.cogoChatHistory && sessionState.cogoChatHistory.length > 0) {
     loadedAgents.add(AgentType.COGO_AGENT);
   }
+  if (
+    (sessionState.roadingChatHistory && sessionState.roadingChatHistory.length > 0) ||
+    (sessionState.roadCorridors && sessionState.roadCorridors.length > 0)
+  ) {
+    loadedAgents.add(AgentType.ROADING_AGENT);
+  }
 
   loadedAgents.add(AgentType.POINT_EDITOR);
 

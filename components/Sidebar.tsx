@@ -32,11 +32,12 @@ import {
     ChevronLeftIcon,
 } from './icons.tsx';
 import {
-    AutoRouteIcon,
+    ModelSelectIcon,
     C3DLinkIcon,
     ViewCanvasIcon,
     StyleLibraryIcon,
     LinetypeManagerIcon,
+    HatchManagerIcon,
     FileManagerIcon,
     SymbolManagerIcon,
     AnnotateManagerIcon,
@@ -119,6 +120,7 @@ const agentConfig: Partial<Record<AgentType, SidebarAgentEntry>> = {
     [AgentType.DXF_ANALYZER]: { icon: DxfAnalyzerIcon, label: 'DXF Agent', color: 'indigo' },
     [AgentType.GIS_AGENT]: { icon: GisAgentIcon, label: 'GIS Agent', color: 'teal' },
     [AgentType.CENTERLINE_STATIONING]: { icon: ScaleIcon, label: 'Stationing & CL', color: 'purple' },
+    [AgentType.ROADING_AGENT]: { icon: RoadIcon, label: 'Roading Agent', color: 'amber' },
     [AgentType.POINT_EDITOR]: { icon: PlumbBobIcon, label: 'Point Editor', color: 'yellow' },
     [AgentType.GPS_STAKEOUT]: { icon: CrosshairsIcon, label: 'GPS Rover', color: 'blue' },
     [AgentType.CONTOURING_AGENT]: { icon: ContourIcon, label: 'Contouring', color: 'amber' },
@@ -184,6 +186,7 @@ const agentThemeColors: { [key in AgentType]?: string } = {
     [AgentType.FLOOD_AGENT]: '#22d3ee', // cyan-400
     [AgentType.STRUCTURES_AGENT]: '#fb923c', // orange-400
     [AgentType.SOILS_AGENT]: '#a8a29e', // stone-400
+    [AgentType.ROADING_AGENT]: '#f59e0b', // amber-500
 };
 
 const hexToRgb = (hex: string): string => {
@@ -640,6 +643,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                         <NavButton label="CAD Standards" icon={ToolbarStandardsIcon} onClick={() => showView('cadstandards')} isActive={activeVisualPanel === 'cadstandards' || activeVisualPanel === 'cadmanager'} isDesktop={props.isDesktop} />
                         <NavButton label="Drafting Style Library" icon={StyleLibraryIcon} onClick={() => showView('draftstylelib')} isActive={activeVisualPanel === 'draftstylelib'} isDesktop={props.isDesktop} />
                         <NavButton label="Linetype Manager" icon={LinetypeManagerIcon} onClick={() => showView('linetypemanager')} isActive={activeVisualPanel === 'linetypemanager'} isDesktop={props.isDesktop} />
+                        <NavButton label="Hatch Manager" icon={HatchManagerIcon} onClick={() => showView('hatchmanager')} isActive={activeVisualPanel === 'hatchmanager'} isDesktop={props.isDesktop} />
                         <NavButton label="Sheet View" icon={SheetViewIcon} onClick={() => showView('sheetview')} isActive={activeVisualPanel === 'sheetview'} isDesktop={props.isDesktop} />
                         <NavButton label="AR View" icon={ARIcon} onClick={() => showView('ar')} isActive={activeVisualPanel === 'ar'} isDesktop={props.isDesktop} />
                         <NavButton label="File Manager" icon={FileManagerIcon} onClick={() => showView('filemanager')} isActive={activeVisualPanel === 'filemanager'} isDesktop={props.isDesktop} />
@@ -720,7 +724,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                                 onClick={() => props.setShowQuickModelSelector?.(!props.showQuickModelSelector)}
                                 className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-transparent px-1.5 py-[6px] text-left text-slate-400 transition-colors duration-150 hover:bg-white/[0.045] hover:text-slate-100 lg:gap-2.5 lg:px-2.5 light-theme:text-gray-600 light-theme:hover:bg-black/[0.04] ${props.isDesktop ? 'justify-center lg:justify-start' : ''}`}
                             >
-                                <AutoRouteIcon className="h-[18px] w-[18px] flex-shrink-0 text-violet-300" />
+                                <ModelSelectIcon className="h-[18px] w-[18px] flex-shrink-0 text-violet-300" />
                                 <span className={`truncate text-[12.5px] font-medium leading-none ${props.isDesktop ? 'hidden lg:inline' : ''}`}>
                                     {selectedModelLabel}
                                 </span>

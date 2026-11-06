@@ -21,6 +21,7 @@ export const DEFAULT_SETTINGS: Settings = {
   debugPreflightEstimate: false,
   debugGimbalHud: false,
   enableGeoAiDrafting: false,
+  forceAgent: undefined,
   floodHatch: { style: 'lines', scale: 50, opacity: 0.18 },
   googleMaps: {
     enabled: false,

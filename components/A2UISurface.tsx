@@ -20,8 +20,10 @@ import GisInput from './GisInput.tsx';
 import ZoningInput, { type ZoningSearchData } from './ZoningInput.tsx';
 import ImageInput from './ImageInput.tsx';
 import CenterlineInput from './CenterlineInput.tsx';
+import RoadingInput from './RoadingInput.tsx';
 import CadManagerInput from './CadManagerInput.tsx';
 import { A2UIStandardsTable } from './A2UIStandardsTable.tsx';
+import { A2UIHatchStudio } from './A2UIHatchStudio.tsx';
 import { A2UIZoningResearch } from './A2UIZoningResearch.tsx';
 import { A2UIZoningSources } from './A2UIZoningSources.tsx';
 import { A2UICadManager } from './A2UICadManager.tsx';
@@ -54,6 +56,7 @@ export const WORKSPACE_TOOL_LABELS: Record<A2UIWorkspaceToolId, string> = {
   'steep-slope-report': 'Steep Slope Report',
   'legal-writer': 'Legal Description Writer',
   'sheet-view': 'Sheet View (24×36 Plot Layout)',
+  'roading-panel': 'Roading Studio',
 };
 
 export interface A2UIHostContextValue {
@@ -110,6 +113,23 @@ export interface A2UIHostContextValue {
   // Stationing & CL
   onCenterlineSessionStart?: () => void;
   onClFileUploaded?: (content: string, fileName: string) => void;
+  // Roading Agent
+  centerlineCount?: number;
+  onRoadingSynthesizeExisting?: (opts: {
+    defaultRoadWidthFt: number;
+    rowWidthFt: number;
+    useSurveyPoints: boolean;
+    useBackgroundImagery: boolean;
+  }) => void;
+  onRoadingDesignCorridor?: (opts: {
+    name: string;
+    laneCount: number;
+    laneWidthFt: number;
+    includeCurbAndGutter: boolean;
+    includeSidewalk: boolean;
+    rowWidthFt: number;
+  }) => void;
+  onOpenRoadingStudio?: () => void;
   // CAD Manager
   onCadManagerSessionStart?: () => void;
   onCadManagerFileUploaded?: (content: string, fileName: string) => void;
@@ -119,6 +139,38 @@ export interface A2UIHostContextValue {
   onOpenCadWorkspace?: () => void;
   /** Open the full-screen CAD standards spreadsheet editor directly. */
   onOpenSpreadsheetEditor?: () => void;
+  /** Start interactive Hatch mode on the canvas from A2UI Hatch Studio. */
+  onStartCanvasHatch?: (options: {
+    mode: 'pick-area' | 'select-object';
+    patternName: string;
+    scale: number;
+    angleDeg: number;
+    opacity: number;
+    color?: string;
+    layer?: string;
+  }) => void;
+  /** Apply hatch to currently selected canvas entities from A2UI Hatch Studio. */
+  onApplyHatchToSelection?: (options: {
+    patternName: string;
+    scale: number;
+    angleDeg: number;
+    opacity: number;
+    color?: string;
+    layer?: string;
+  }) => void;
+  /** Hatch every visible circle using the supplied hatch parameters. */
+  onHatchCircles?: (options: {
+    patternName: string;
+    scale: number;
+    angleDeg: number;
+    opacity: number;
+    color?: string;
+    layer?: string;
+  }) => void;
+  /** Count visible circles so a hatch prompt can name the target. */
+  onCountHatchCircles?: () => number;
+  /** Open the Hatch Manager A2UI surface. */
+  onOpenHatchManager?: () => void;
   /** Render a workspace manager/tool panel inside an A2UI surface. */
   renderWorkspaceTool?: (
     toolId: A2UIWorkspaceToolId,
@@ -542,6 +594,32 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
     );
   }
 
+  if (payload.kind === 'hatch-studio') {
+    return (
+      <div data-testid="a2ui-surface-hatch-studio" className="mt-3 w-full">
+        <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
+          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">
+            <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
+            A2UI Hatch Studio
+          </span>
+          <SurfaceActions
+            onPopOut={onPopOut}
+            onDock={onDock}
+            onFullscreen={onFullscreen}
+            onMinimize={onMinimize}
+          />
+        </div>
+        <A2UIHatchStudio
+          spec={payload.hatchStudio}
+          onStartCanvasHatch={host.onStartCanvasHatch}
+          onApplyToSelection={host.onApplyHatchToSelection}
+          onOpenHatchManager={host.onOpenHatchManager}
+          onOpenSpreadsheetEditor={host.onOpenSpreadsheetEditor}
+        />
+      </div>
+    );
+  }
+
   if (payload.kind === 'cad-manager') {
     if (presentation !== 'inline') {
       return (
@@ -815,6 +893,29 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
               setIsCollapsed(true);
             }}
             onGoBack={handleDismiss}
+          />
+        );
+
+      case 'roading-intake':
+      case 'roading-designer':
+        return (
+          <RoadingInput
+            existingPointCount={host.existingPointCount ?? 0}
+            centerlineCount={host.centerlineCount ?? 0}
+            onSynthesizeExisting={(opts) => {
+              host.onRoadingSynthesizeExisting?.(opts);
+              setIsCollapsed(true);
+            }}
+            onDesignCorridor={(opts) => {
+              host.onRoadingDesignCorridor?.(opts);
+              setIsCollapsed(true);
+            }}
+            onOpenRoadingStudio={() => {
+              host.onOpenRoadingStudio?.();
+              setIsCollapsed(true);
+            }}
+            onGoBack={handleDismiss}
+            backButtonTitle="Hide"
           />
         );
 

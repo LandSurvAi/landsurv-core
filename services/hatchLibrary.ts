@@ -61,11 +61,21 @@ export interface HatchDefinition {
 
 export const STANDARD_HATCHES: HatchDefinition[] = [
   {
+    name: 'SOLID',
+    description: 'Solid fill — uniform color region fill',
+    isAcadStandard: true,
+    category: 'standard',
+    usage: 'Solid shaded areas, building footprints, water bodies, thick walls',
+    defaultScale: 1,
+    previewColor: '#38bdf8',
+    lines: [],
+  },
+  {
     name: 'ANSI31',
     description: 'ANSI Iron, Brick & Stone masonry — 45° diagonal lines',
     isAcadStandard: true,
     category: 'standard',
-    usage: 'Steel sections, general material indication',
+    usage: 'Steel sections, buildings, general material indication',
     defaultScale: 1,
     previewColor: '#94a3b8',
     lines: [
@@ -322,6 +332,84 @@ export const STANDARD_HATCHES: HatchDefinition[] = [
     lines: [
       { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 0.25, dashes: [0.25, -0.25] },
       { angle: 0, originX: 0.0625, originY: 0.125, deltaX: 0, deltaY: 0.25, dashes: [0.125, -0.375] },
+    ],
+  },
+  {
+    name: 'ASPHALT',
+    description: 'Bituminous asphalt / AC pavement stipple & dash',
+    isAcadStandard: false,
+    category: 'standard',
+    usage: 'Asphalt roadways, parking lots, bituminous driveways',
+    defaultScale: 1,
+    previewColor: '#64748b',
+    lines: [
+      { angle: 30, originX: 0, originY: 0, deltaX: 0.125, deltaY: 0.125, dashes: [0.0625, -0.1875] },
+      { angle: 120, originX: 0.06, originY: 0.04, deltaX: 0.125, deltaY: 0.125, dashes: [0, -0.125] },
+    ],
+  },
+  {
+    name: 'RIPRAP',
+    description: 'Rip-rap / angular stone slope protection',
+    isAcadStandard: false,
+    category: 'environmental',
+    usage: 'Outfall aprons, channel banks, erosion control stone',
+    defaultScale: 1,
+    previewColor: '#94a3b8',
+    lines: [
+      { angle: 35, originX: 0, originY: 0, deltaX: 0.15, deltaY: 0.15, dashes: [0.15, -0.15] },
+      { angle: 125, originX: 0.05, originY: 0.05, deltaX: 0.15, deltaY: 0.15, dashes: [0.12, -0.18] },
+      { angle: -25, originX: 0.1, originY: 0, deltaX: 0.15, deltaY: 0.15, dashes: [0.1, -0.2] },
+    ],
+  },
+  {
+    name: 'WATER',
+    description: 'Water surface — horizontal dashed ripples',
+    isAcadStandard: false,
+    category: 'environmental',
+    usage: 'Ponds, streams, lakes, detention basins',
+    defaultScale: 1,
+    previewColor: '#38bdf8',
+    lines: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 0.25, deltaY: 0.125, dashes: [0.25, -0.125] },
+      { angle: 0, originX: 0.125, originY: 0.0625, deltaX: 0.25, deltaY: 0.125, dashes: [0.15, -0.225] },
+    ],
+  },
+  {
+    name: 'WOOD',
+    description: 'Wood deck / timber planking',
+    isAcadStandard: false,
+    category: 'standard',
+    usage: 'Decks, boardwalks, timber structures',
+    defaultScale: 1,
+    previewColor: '#d97706',
+    lines: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 0.125 },
+      { angle: 90, originX: 0, originY: 0, deltaX: 0.5, deltaY: 0.5, dashes: [0.125, -0.375] },
+    ],
+  },
+  {
+    name: 'PAVERS',
+    description: 'Interlocking concrete / brick pavers (herringbone)',
+    isAcadStandard: false,
+    category: 'standard',
+    usage: 'Patios, plaza walkways, decorative paver driveways',
+    defaultScale: 1,
+    previewColor: '#f59e0b',
+    lines: [
+      { angle: 45, originX: 0, originY: 0, deltaX: 0.125, deltaY: 0.125, dashes: [0.25, -0.125] },
+      { angle: 135, originX: 0, originY: 0, deltaX: 0.125, deltaY: 0.125, dashes: [0.25, -0.125] },
+    ],
+  },
+  {
+    name: 'BUILDING',
+    description: 'Building footprint hatch — tight 45° diagonal shading',
+    isAcadStandard: false,
+    category: 'standard',
+    usage: 'Building footprints and roof plans on boundary / site surveys',
+    defaultScale: 1,
+    previewColor: '#cbd5e1',
+    lines: [
+      { angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 0.08 },
     ],
   },
 ];
@@ -637,6 +725,18 @@ export function renderHatchPreview(
   }
 
   if (hatch.lines.length === 0) {
+    if (hatch.name.toUpperCase() === 'SOLID') {
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.55;
+      ctx.fillRect(3, 3, width - 6, height - 6);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(2.5, 2.5, width - 5, height - 5);
+      ctx.restore();
+      return;
+    }
     // Zone X unshaded — blank square, just show a border
     ctx.strokeStyle = color;
     ctx.lineWidth = 1;
@@ -698,3 +798,378 @@ export function renderHatchPreview(
   ctx.setLineDash([]);
   ctx.restore();
 }
+
+// ─── Semantic / Code Hatch Resolution ────────────────────────────────────────
+
+export interface ResolvedHatchRecommendation {
+  hatch: HatchDefinition;
+  recommendedLayer: string;
+  recommendedScale: number;
+  recommendedAngle: number;
+  source: 'standard-code' | 'exact-name' | 'fema-zone' | 'semantic-keyword' | 'default';
+  confidence: number;
+}
+
+/**
+ * Resolve the best HatchDefinition and recommended CAD layer/scale for a code,
+ * feature keyword, material name, or FEMA flood zone string.
+ */
+export function resolveHatchForFeatureOrCode(
+  queryOrCode: string,
+  options?: {
+    customHatches?: HatchDefinition[];
+    codes?: Array<{
+      code: string;
+      description?: string;
+      lineLayer?: string;
+      pointLayer?: string;
+      hatchPattern?: string;
+      hatchScale?: number;
+      hatchAngle?: number;
+      hatchLayer?: string;
+    }>;
+  }
+): ResolvedHatchRecommendation {
+  const raw = (queryOrCode || '').trim();
+  const upper = raw.toUpperCase();
+  const lower = raw.toLowerCase();
+  const custom = options?.customHatches ?? [];
+  const codes = options?.codes ?? [];
+
+  // 1. Check loaded standard codes for an explicit hatchPattern or matching code
+  if (codes.length > 0 && raw) {
+    const matchedCode =
+      codes.find(c => c.code.toUpperCase() === upper) ??
+      codes.find(c => c.description && c.description.toLowerCase() === lower) ??
+      codes.find(c => c.description && lower.includes(c.description.toLowerCase()) && c.description.length >= 4);
+    if (matchedCode?.hatchPattern) {
+      const byCode = getHatchByName(matchedCode.hatchPattern, custom);
+      if (byCode) {
+        return {
+          hatch: byCode,
+          recommendedLayer: matchedCode.hatchLayer || matchedCode.lineLayer || matchedCode.pointLayer || 'V-HATCH',
+          recommendedScale: matchedCode.hatchScale ?? byCode.defaultScale ?? 1,
+          recommendedAngle: matchedCode.hatchAngle ?? 0,
+          source: 'standard-code',
+          confidence: 0.98,
+        };
+      }
+    }
+  }
+
+  // 2. Exact pattern name match
+  const exact = getHatchByName(raw, custom);
+  if (exact) {
+    return {
+      hatch: exact,
+      recommendedLayer: exact.category === 'fema' ? 'V-FEMA-HTCH' : exact.category === 'environmental' ? 'V-ENVR-HTCH' : 'V-ANNO-PATT',
+      recommendedScale: exact.defaultScale ?? 1,
+      recommendedAngle: 0,
+      source: 'exact-name',
+      confidence: 1.0,
+    };
+  }
+
+  // 3. FEMA zone match if query mentions FEMA / flood / zone
+  if (/\b(?:fema|flood(?:way|plain)?|zone\s*(?:ae|a|ao|ah|v|ve|x|d))\b/i.test(raw)) {
+    const zoneToken =
+      raw.match(/\b(?:floodway|zone\s*(ae|ao|ah|ve|v|a|x\s*shaded|x|d))\b/i)?.[1] ??
+      (/floodway/i.test(raw) ? 'FLOODWAY' : 'AE');
+    const femaHatch = getHatchForFemaZone(zoneToken);
+    return {
+      hatch: femaHatch,
+      recommendedLayer: 'V-FEMA-HTCH',
+      recommendedScale: femaHatch.defaultScale ?? 1,
+      recommendedAngle: 0,
+      source: 'fema-zone',
+      confidence: 0.92,
+    };
+  }
+
+  // 4. Semantic keyword rules for common survey / civil features
+  const SEMANTIC_MAP: Array<{ pattern: RegExp; hatchName: string; layer: string; scale?: number }> = [
+    { pattern: /\b(?:solid|filled|opaque|shade)\b/i, hatchName: 'SOLID', layer: 'V-ANNO-PATT', scale: 1 },
+    { pattern: /\b(?:bldg|building|house|garage|shed|structure|roof|footprint)\b/i, hatchName: 'ANSI31', layer: 'V-BLDG-PATT', scale: 1 },
+    { pattern: /\b(?:conc|concrete|sidewalk|walkway|curb|pad|slab|apron|footing)\b/i, hatchName: 'AR-CONC', layer: 'V-SITE-PAVE', scale: 1 },
+    { pattern: /\b(?:asphalt|ac\b|bituminous|pavement|parking|road(?:way)?|street|lane)\b/i, hatchName: 'ASPHALT', layer: 'V-ROAD-PATT', scale: 1 },
+    { pattern: /\b(?:gravel|crushed\s*stone|aggregate|stone\s*drive|driveway|dw\b|shoulder)\b/i, hatchName: 'GRAVEL', layer: 'V-SITE-DRIV', scale: 1 },
+    { pattern: /\b(?:brick|masonry|paver|patio|courtyard)\b/i, hatchName: 'AR-BRIK', layer: 'V-SITE-PAVE', scale: 1 },
+    { pattern: /\b(?:wood|deck|timber|boardwalk|shingle)\b/i, hatchName: 'WOOD', layer: 'V-BLDG-DECK', scale: 1 },
+    { pattern: /\b(?:wetland|swamp|marsh|bog|riparian)\b/i, hatchName: 'SWAMP', layer: 'V-WETL-PATT', scale: 1 },
+    { pattern: /\b(?:water|pond|lake|stream|creek|river|basin|detention|retention)\b/i, hatchName: 'WATER', layer: 'V-HYDR-PATT', scale: 1 },
+    { pattern: /\b(?:riprap|rip-rap|erosion|outfall|gabion)\b/i, hatchName: 'RIPRAP', layer: 'C-STRM-RPRP', scale: 1 },
+    { pattern: /\b(?:grass|lawn|turf|sod|landscape|planting|meadow)\b/i, hatchName: 'GRASS', layer: 'V-VEGE-PATT', scale: 1 },
+    { pattern: /\b(?:sand|beach|dune|sandy|granular)\b/i, hatchName: 'SAND', layer: 'V-TOPO-SAND', scale: 1 },
+    { pattern: /\b(?:earth|soil|ground|loam|fill|embankment|cut|slope)\b/i, hatchName: 'EARTH', layer: 'C-TOPO-PATT', scale: 1 },
+    { pattern: /\b(?:mud|sediment|silt|clay)\b/i, hatchName: 'MUDST', layer: 'V-HYDR-PATT', scale: 1 },
+    { pattern: /\b(?:cross|grid|mesh|hatch|checkered)\b/i, hatchName: 'CROSS', layer: 'V-ANNO-PATT', scale: 1 },
+    { pattern: /\b(?:dot|dots|stipple)\b/i, hatchName: 'DOTS', layer: 'V-ANNO-PATT', scale: 1 },
+    { pattern: /\b(?:steel|iron|metal)\b/i, hatchName: 'ANSI32', layer: 'V-STRC-PATT', scale: 1 },
+  ];
+
+  for (const rule of SEMANTIC_MAP) {
+    if (rule.pattern.test(raw)) {
+      const found = getHatchByName(rule.hatchName, custom) ?? STANDARD_HATCHES[1];
+      return {
+        hatch: found,
+        recommendedLayer: rule.layer,
+        recommendedScale: rule.scale ?? found.defaultScale ?? 1,
+        recommendedAngle: 0,
+        source: 'semantic-keyword',
+        confidence: 0.86,
+      };
+    }
+  }
+
+  // 5. Default fallback -> ANSI31
+  const fallback = getHatchByName('ANSI31', custom) ?? STANDARD_HATCHES[0];
+  return {
+    hatch: fallback,
+    recommendedLayer: 'V-ANNO-PATT',
+    recommendedScale: fallback.defaultScale ?? 1,
+    recommendedAngle: 0,
+    source: 'default',
+    confidence: 0.5,
+  };
+}
+
+// ─── Cached Canvas Tile Renderer for 2D Drawing Canvas ──────────────────────
+
+const tileCache = new Map<string, HTMLCanvasElement>();
+
+/**
+ * A hatch tile always represents this many drawing units at scale 1. The
+ * canvas renderer maps the bitmap to that footprint, so the pattern spacing is
+ * fixed in world coordinates and cannot breathe while zooming.
+ */
+export const CANVAS_HATCH_WORLD_TILE_UNITS = 64;
+
+export interface CanvasHatchPatternMetrics {
+  userScale: number;
+  zoomBucket: number;
+  pixelSize: number;
+  worldTileSize: number;
+  /** World units represented by one PAT pattern unit. */
+  patternUnitWorld: number;
+  /** Pattern-bitmap pixels → world units. */
+  scaleToWorld: number;
+  /** Source line weight that keeps hatch strokes legible on screen. */
+  lineWidthPx: number;
+}
+
+/**
+ * Resolution/metrics for a world-locked hatch pattern. Only the bitmap
+ * resolution follows zoom; the tile's world footprint and pattern spacing do
+ * not. This is the distinction that prevents hatches from scaling as the user
+ * zooms.
+ */
+export function getCanvasHatchPatternMetrics(
+  options: { scale?: number; zoomScale?: number } = {},
+): CanvasHatchPatternMetrics {
+  const userScale = Math.max(0.05, options.scale ?? 1);
+  const zoom = Math.max(0.02, options.zoomScale ?? 1);
+  const zoomBucket = Math.max(0.25, Math.min(8, Math.round(zoom * 4) / 4));
+  const pixelSize = Math.max(
+    64,
+    Math.min(512, Math.round(CANVAS_HATCH_WORLD_TILE_UNITS * zoomBucket)),
+  );
+  const worldTileSize = CANVAS_HATCH_WORLD_TILE_UNITS * userScale;
+  const lineWidthPx = Math.max(
+    0.85,
+    Math.min(4, (1.15 * pixelSize) / (CANVAS_HATCH_WORLD_TILE_UNITS * zoom)),
+  );
+
+  return {
+    userScale,
+    zoomBucket,
+    pixelSize,
+    worldTileSize,
+    patternUnitWorld: (CANVAS_HATCH_WORLD_TILE_UNITS / 4) * userScale,
+    scaleToWorld: worldTileSize / pixelSize,
+    lineWidthPx,
+  };
+}
+
+/**
+ * Creates or retrieves a cached repeating offscreen tile canvas for rendering
+ * a `CanvasHatch` on `DrawingCanvas` at 60fps.
+ */
+export function createCanvasHatchTile(
+  hatch: HatchDefinition,
+  options: {
+    scale?: number;
+    angleDeg?: number;
+    color?: string;
+    backgroundColor?: string;
+    opacity?: number;
+    zoomScale?: number;
+    /** Explicit bitmap resolution. Used by the world-locked canvas pattern. */
+    pixelSize?: number;
+    /** Explicit source line weight for the requested zoom bucket. */
+    lineWidthPx?: number;
+  } = {}
+): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+
+  const userScale = Math.max(0.05, options.scale ?? hatch.defaultScale ?? 1);
+  const extraAngle = options.angleDeg ?? 0;
+  const color = options.color || hatch.previewColor || '#22d3ee';
+  const bgColor = options.backgroundColor || '';
+  const opacity = Math.max(0.02, Math.min(1, options.opacity ?? 0.45));
+  // Quantize zoomScale bucket slightly so smooth wheel zoom doesn't thrash cache
+  const zoomBucket = Math.max(0.25, Math.min(8, Math.round((options.zoomScale ?? 1) * 4) / 4));
+
+  const cacheKey = [
+    hatch.name,
+    hatch.lines.length,
+    userScale.toFixed(2),
+    extraAngle.toFixed(1),
+    color,
+    bgColor,
+    opacity.toFixed(2),
+    zoomBucket.toFixed(2),
+    options.pixelSize ?? 'auto',
+    (options.lineWidthPx ?? 1.15).toFixed(2),
+  ].join('|');
+
+  const cached = tileCache.get(cacheKey);
+  if (cached) return cached;
+
+  // Legacy preview path: tile pixels double as pattern units. Canvas hatches
+  // use pixelSize + createCanvasHatchPattern so their world footprint stays
+  // fixed while only the bitmap resolution changes with zoom.
+  const rawTilePx = Math.round(64 * userScale * zoomBucket);
+  const tileSize = options.pixelSize
+    ? Math.max(16, Math.min(1024, Math.round(options.pixelSize)))
+    : Math.max(24, Math.min(512, rawTilePx));
+
+  const tile = document.createElement('canvas');
+  tile.width = tileSize;
+  tile.height = tileSize;
+  const tctx = tile.getContext('2d');
+  if (!tctx) return null;
+
+  tctx.clearRect(0, 0, tileSize, tileSize);
+
+  if (bgColor) {
+    tctx.save();
+    tctx.globalAlpha = opacity * 0.5;
+    tctx.fillStyle = bgColor;
+    tctx.fillRect(0, 0, tileSize, tileSize);
+    tctx.restore();
+  }
+
+  if (hatch.name.toUpperCase() === 'SOLID') {
+    tctx.save();
+    tctx.globalAlpha = opacity;
+    tctx.fillStyle = color;
+    tctx.fillRect(0, 0, tileSize, tileSize);
+    tctx.restore();
+  } else if (hatch.lines.length > 0) {
+    tctx.save();
+    tctx.globalAlpha = opacity;
+    tctx.strokeStyle = color;
+    tctx.fillStyle = color;
+    tctx.lineWidth = options.lineWidthPx ?? 1.15;
+
+    // Render pattern lines rotated by extraAngle
+    const patUnitPx = tileSize / 4;
+    const diag = Math.hypot(tileSize, tileSize) * 1.5;
+
+    for (const l of hatch.lines) {
+      const totalAngleRad = ((l.angle + extraAngle) * Math.PI) / 180;
+      const cos = Math.cos(totalAngleRad);
+      const sin = Math.sin(totalAngleRad);
+
+      const rawDelta = l.deltaY !== 0 ? Math.abs(l.deltaY) : l.deltaX !== 0 ? Math.abs(l.deltaX) : 0.125;
+      const spacingPx = Math.max(4, rawDelta * patUnitPx);
+      const lineCount = Math.ceil(diag / spacingPx) + 2;
+
+      if (l.dashes && l.dashes.length > 0) {
+        const dashArr: number[] = [];
+        for (const d of l.dashes) {
+          if (d === 0) {
+            dashArr.push(1.5, Math.max(3, Math.abs(l.dashes[1] ?? 0.125) * patUnitPx));
+            break;
+          }
+          dashArr.push(Math.max(1.5, Math.abs(d) * patUnitPx));
+        }
+        tctx.setLineDash(dashArr);
+      } else {
+        tctx.setLineDash([]);
+      }
+
+      for (let i = -lineCount; i <= lineCount; i++) {
+        const perpX = -sin * i * spacingPx + l.originX * patUnitPx;
+        const perpY = cos * i * spacingPx + l.originY * patUnitPx;
+        const cx = tileSize / 2 + perpX;
+        const cy = tileSize / 2 - perpY;
+
+        tctx.beginPath();
+        tctx.moveTo(cx - cos * diag, cy - sin * diag);
+        tctx.lineTo(cx + cos * diag, cy + sin * diag);
+        tctx.stroke();
+      }
+    }
+
+    tctx.setLineDash([]);
+    tctx.restore();
+  }
+
+  if (tileCache.size > 150) {
+    const firstKey = tileCache.keys().next().value;
+    if (firstKey) tileCache.delete(firstKey);
+  }
+  tileCache.set(cacheKey, tile);
+  return tile;
+}
+
+/**
+ * Builds a canvas pattern whose repeat is locked to drawing units. The tile is
+ * rendered at a zoom-appropriate resolution, then transformed to its fixed
+ * world footprint before the canvas applies the viewport zoom.
+ */
+export function createCanvasHatchPattern(
+  ctx: CanvasRenderingContext2D,
+  hatch: HatchDefinition,
+  options: {
+    scale?: number;
+    angleDeg?: number;
+    color?: string;
+    backgroundColor?: string;
+    opacity?: number;
+    zoomScale?: number;
+  } = {},
+): CanvasPattern | null {
+  const metrics = getCanvasHatchPatternMetrics({
+    scale: options.scale ?? hatch.defaultScale,
+    zoomScale: options.zoomScale,
+  });
+  const tile = createCanvasHatchTile(hatch, {
+    scale: 1,
+    angleDeg: options.angleDeg,
+    color: options.color,
+    backgroundColor: options.backgroundColor,
+    opacity: options.opacity,
+    pixelSize: metrics.pixelSize,
+    lineWidthPx: metrics.lineWidthPx,
+  });
+  if (!tile) return null;
+
+  const pattern = ctx.createPattern(tile, 'repeat');
+  if (!pattern) return null;
+
+  if (typeof DOMMatrix !== 'undefined') {
+    pattern.setTransform(new DOMMatrix([
+      metrics.scaleToWorld,
+      0,
+      0,
+      metrics.scaleToWorld,
+      0,
+      0,
+    ]));
+  }
+
+  return pattern;
+}
+

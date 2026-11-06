@@ -20,6 +20,7 @@ import {
   ZoningIcon,
   TitleSearchIcon,
   CadManagerIcon,
+  RoadIcon,
 } from '../icons';
 
 export const AgentsPageContent: React.FC = () => {
@@ -188,6 +189,15 @@ export const AgentsPageContent: React.FC = () => {
       color: 'indigo',
       description: 'Description-key and drafting-standard management.',
       details: 'Build, standardize, and manage CAD layers, field codes, linetypes, symbols, and annotation rules.',
+    },
+    {
+      type: AgentType.ROADING_AGENT,
+      host: 'roading',
+      name: 'Roading Agent',
+      icon: RoadIcon,
+      color: 'amber',
+      description: 'Existing road synthesis and proposed roadway corridor design.',
+      details: 'Synthesize existing roads from survey points, background imagery, and OpenStreetMap ways, or design proposed road corridors, typical sections, profiles, and cross sections with Stationing & CL and Profile integration.',
     },
   ];
   const agents = agentCatalog.filter((agent) => !retiredAgents.includes(agent.type));

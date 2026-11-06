@@ -8,6 +8,9 @@ import { sanitizeZoningAnswer } from '../utils/zoningRender';
 import { formatChatHtml } from '../utils/chatHtml';
 import SuggestedQuestions from './SuggestedQuestions';
 import { A2UISurface } from './A2UISurface';
+import { A2UIQuickThoughtSurface } from './A2UIQuickThoughtSurface';
+import { decomposeMessageForQuickThought } from '../services/a2uiQuickThought';
+import { rememberCanvasPointer } from '../services/canvasFlashes';
 import { a2uiSurfaceBus } from '../services/a2uiSurfaces';
 import { ChatToolDialogs } from './ChatToolDialogs';
 import type { DockableToolItem } from './AgentToolDock';
@@ -239,6 +242,12 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const socketAnchorRef = useRef<HTMLDivElement | null>(null);
   // SVG paint servers reject React's raw useId colons, so strip them.
   const [agentDockPos, setAgentDockPos] = useState<{ left: number; top: number } | null>(null);
+  // A phone's software keyboard changes the visual viewport without resizing
+  // the bar, so the bar can move (e.g. back down when the keyboard closes)
+  // while no ResizeObserver fires. Coalesce viewport churn into a frame-aligned
+  // re-measure plus one pass after the keyboard's resize animation settles.
+  const dockMeasureFrameRef = useRef(0);
+  const dockMeasureSettleRef = useRef(0);
   const agentDragStateRef = useRef<{ pointerId: number; startX: number; startY: number; detached: boolean; offsetX: number; offsetY: number } | null>(null);
   const agentDragCleanupRef = useRef<(() => void) | null>(null);
   const floatDragRef = useRef<{ offsetX: number; offsetY: number } | null>(null);
@@ -492,55 +501,17 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       lastMessage.a2ui.status !== 'completed' &&
       lastMessage.a2ui.status !== 'dismissed'
   );
-  // The Boundary Agent's intake prompt carries its own Upload / Author / GIS
-  // route choices. Surface those directly instead of the generic review link,
-  // which only opened the chat and made the user hunt for the same controls.
-  const boundaryIntakeActions = (() => {
-    if (
-      effectiveAgent !== AgentType.DEED_READER ||
-      !hasActiveA2UI ||
-      lastMessage?.a2ui?.widgetType !== 'deed-upload' ||
-      !boundaryQuickActions
-    ) {
-      return null;
-    }
-    return [
-      {
-        label: 'Upload',
-        onClick: () => {
-          openAgentConversation(true);
-          boundaryQuickActions.onUpload();
-        },
-      },
-      { label: 'Author', onClick: boundaryQuickActions.onAuthor },
-      { label: 'GIS', onClick: boundaryQuickActions.onGis },
-    ];
-  })();
-  // Not every agent emits structured `questionOptions`; LSAI sometimes answers
-  // with a numbered choice list in prose. Treat that as a pending question too,
-  // otherwise the agent silently starts a Q&A in the open feed with no
-  // notification at the socket. A CACP action that needs one missing value sets
-  // `needsInput` directly, even when there are no option pills to render.
-  const inlinePromptText = lastMessage?.result || lastMessage?.text || '';
-  const hasInlineQuestionPrompt = Boolean(
-    lastMessage?.role === MessageRole.MODEL &&
-    !hasPendingQuestionOptions &&
-    !hasActiveA2UI &&
-    (
-      lastMessage.needsInput ||
-      (
-        /\b(?:let me know|which|choose|select|specify|tell me)\b/i.test(inlinePromptText) &&
-        /\b1\.\s[\s\S]*\b2\.\s/.test(inlinePromptText)
-      )
-    )
-  );
-  // Questions (option pills), numbered prose choices, and active A2UI prompts
-  // all need a deliberate response, so each raises a thought bubble above the
-  // agent socket.
-  const hasPendingPrompt = hasPendingQuestionOptions || hasActiveA2UI || hasInlineQuestionPrompt;
-  const pendingOptions = lastMessage?.questionOptions ?? [];
+  const quickThoughtBreakdown = decomposeMessageForQuickThought(lastMessage, effectiveAgent);
+  // Questions (option pills), numbered prose choices, inline checkboxes/forms,
+  // and active A2UI prompts all need a deliberate response, so each raises a
+  // thought bubble above the agent socket.
+  const hasPendingPrompt =
+    hasPendingQuestionOptions ||
+    hasActiveA2UI ||
+    quickThoughtBreakdown.hasActionablePrompt;
+  const pendingOptions = lastMessage?.questionOptions ?? quickThoughtBreakdown.options ?? [];
   const thoughtKey = lastMessage
-    ? `${effectiveAgent}:${messages.length}:${lastMessage.role}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}`
+    ? `${effectiveAgent}:${messages.length}:${lastMessage.role}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}:${quickThoughtBreakdown.kind ?? ''}`
     : null;
   const isThoughtDismissed = thoughtKey !== null && dismissedThoughtKey === thoughtKey;
 
@@ -1125,19 +1096,47 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     ));
   }, []);
 
+  const scheduleAgentDockPositionUpdate = useCallback(() => {
+    if (dockMeasureFrameRef.current) cancelAnimationFrame(dockMeasureFrameRef.current);
+    // Two frames: the first lets --app-height land, the second measures the
+    // reflowed bar. The delayed pass covers the keyboard's slide animation.
+    dockMeasureFrameRef.current = requestAnimationFrame(() => {
+      dockMeasureFrameRef.current = requestAnimationFrame(() => {
+        dockMeasureFrameRef.current = 0;
+        updateAgentDockPosition();
+      });
+    });
+    if (dockMeasureSettleRef.current) window.clearTimeout(dockMeasureSettleRef.current);
+    dockMeasureSettleRef.current = window.setTimeout(() => {
+      dockMeasureSettleRef.current = 0;
+      updateAgentDockPosition();
+    }, 320);
+  }, [updateAgentDockPosition]);
+
   useLayoutEffect(() => {
     updateAgentDockPosition();
-    window.addEventListener('resize', updateAgentDockPosition);
+    const viewport = window.visualViewport;
+    window.addEventListener('resize', scheduleAgentDockPositionUpdate);
+    window.addEventListener('orientationchange', scheduleAgentDockPositionUpdate);
+    // iOS and Android change visualViewport.height as the software keyboard
+    // opens and closes without firing a window resize on the layout viewport.
+    viewport?.addEventListener('resize', scheduleAgentDockPositionUpdate);
+    viewport?.addEventListener('scroll', scheduleAgentDockPositionUpdate);
     const root = terminalRootRef.current;
     const observer = typeof ResizeObserver !== 'undefined' && root
       ? new ResizeObserver(updateAgentDockPosition)
       : null;
     if (root && observer) observer.observe(root);
     return () => {
-      window.removeEventListener('resize', updateAgentDockPosition);
+      if (dockMeasureFrameRef.current) cancelAnimationFrame(dockMeasureFrameRef.current);
+      if (dockMeasureSettleRef.current) window.clearTimeout(dockMeasureSettleRef.current);
+      window.removeEventListener('resize', scheduleAgentDockPositionUpdate);
+      window.removeEventListener('orientationchange', scheduleAgentDockPositionUpdate);
+      viewport?.removeEventListener('resize', scheduleAgentDockPositionUpdate);
+      viewport?.removeEventListener('scroll', scheduleAgentDockPositionUpdate);
       observer?.disconnect();
     };
-  }, [updateAgentDockPosition]);
+  }, [scheduleAgentDockPositionUpdate, updateAgentDockPosition]);
 
   // Report the bar's height (including an expanded feed) so the agent tool
   // drawer can sit with its bottom edge exactly on the top of the command bar.
@@ -2181,6 +2180,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
               data-testid="agent-thought-bubble"
               role="dialog"
               aria-label="Quick thought"
+              onPointerDownCapture={e => rememberCanvasPointer(e.clientX, e.clientY)}
               className="absolute bottom-full left-0 z-[10030] mb-6 w-[min(336px,calc(100vw-24px))] animate-fade-in-up overflow-hidden rounded-xl border border-white/20 bg-[#0a1018]/[0.985] font-sans text-white shadow-[0_18px_44px_-12px_rgba(0,0,0,0.85)] backdrop-blur-xl"
             >
               <span
@@ -2225,67 +2225,33 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   {thoughtText || (hasPendingQuestionOptions ? 'I have a suggestion for the next step.' : 'I have a quick panel ready for you.')}
                 </p>
 
-              {hasPendingQuestionOptions ? (
-                <div className="mt-2.5 flex flex-col gap-1">
-                  {pendingOptions.map((opt, optIdx) => (
-                    <button
-                      key={optIdx}
-                      type="button"
-                      data-no-drag
-                      disabled={isLoading}
-                      onClick={() => onSendMessage?.(opt)}
-                      className="group flex w-full items-center gap-2 rounded-md border border-white/15 bg-white/[0.035] px-2 py-1.5 text-left text-[11px] font-medium leading-snug text-white/85 transition-colors hover:border-white/30 hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <span
-                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] border font-mono text-[8px] font-bold"
-                        style={{ borderColor: 'rgba(255,255,255,0.24)', backgroundColor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.85)' }}
-                      >
-                        {String.fromCharCode(65 + optIdx)}
-                      </span>
-                      <span className="line-clamp-2 min-w-0 flex-1">{opt}</span>
-                      <span aria-hidden="true" className="shrink-0 text-white/35 transition-colors group-hover:text-white">›</span>
-                    </button>
-                  ))}
-                </div>
-              ) : boundaryIntakeActions ? (
-                <div data-testid="boundary-intake-actions" className="mt-2.5 grid grid-cols-3 gap-1">
-                  {boundaryIntakeActions.map(action => (
-                    <button
-                      key={action.label}
-                      type="button"
-                      data-no-drag
-                      onClick={action.onClick}
-                      className="flex h-7 items-center justify-center rounded-md border border-white/15 bg-white/[0.03] px-1.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-white/75 transition-colors hover:border-white/30 hover:bg-white/[0.06] hover:text-white"
-                    >
-                      {action.label}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  data-no-drag
-                  onClick={() => openAgentConversation(true)}
-                  className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-md border border-white/15 bg-white/[0.03] px-2.5 py-1.5 text-[10px] font-semibold text-white/85 transition-colors hover:border-white/30 hover:bg-white/[0.06] hover:text-white"
-                >
-                  {lastMessage?.needsInput ? 'Answer in chat' : 'Review the panel'}
-                  <span aria-hidden="true" className="text-white/70">→</span>
-                </button>
-              )}
-
-              {hasPendingQuestionOptions && (
-                <div className="mt-2 flex items-center justify-end border-t border-white/[0.06] pt-1.5">
-                  <button
-                    type="button"
-                    data-no-drag
-                    onClick={() => openAgentConversation(true)}
-                    className="group inline-flex shrink-0 items-center gap-1 text-[9px] font-medium text-white/45 transition-colors hover:text-white"
-                  >
-                    Open conversation
-                    <span aria-hidden="true" className="text-white/60 transition-transform group-hover:translate-x-0.5">→</span>
-                  </button>
-                </div>
-              )}
+                {lastMessage && (
+                  <A2UIQuickThoughtSurface
+                    breakdown={quickThoughtBreakdown}
+                    message={lastMessage}
+                    isLoading={isLoading}
+                    onSendMessage={onSendMessage}
+                    onOpenConversation={() => openAgentConversation(true)}
+                    onDock={
+                      onToggleA2UIDock && lastMessage.a2ui
+                        ? () => {
+                            onToggleA2UIDock(lastMessage);
+                            setIsExpanded(false);
+                            setIsCollapsePulsing(false);
+                          }
+                        : undefined
+                    }
+                    onPopOut={
+                      onToggleA2UIFloat && lastMessage.a2ui
+                        ? () => {
+                            onToggleA2UIFloat(lastMessage);
+                            setIsCollapsePulsing(false);
+                          }
+                        : undefined
+                    }
+                    boundaryQuickActions={boundaryQuickActions}
+                  />
+                )}
               </div>
 
             </div>

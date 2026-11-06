@@ -388,6 +388,7 @@ export async function extractAuthoritativeRoads(
 
   const halfWidth = defaultRoadWidthFt / 2;
 
+  let corridorIdx = 0;
   for (let rIdx = 0; rIdx < ways.length; rIdx++) {
     const way = ways[rIdx];
     if (!way.nodes || way.nodes.length < 2) continue;
@@ -413,9 +414,13 @@ export async function extractAuthoritativeRoads(
     const smoothCl = smoothSplinePoints(validNodes, 6, false);
     roadCenterlines.push(smoothCl);
 
-    const clPolyId = `road-cl-${rIdx + 1}`;
-    const leftPolyId = `road-edge-left-${rIdx + 1}`;
-    const rightPolyId = `road-edge-right-${rIdx + 1}`;
+    // Use a sequential valid-corridor index (not the raw OSM way index): ways
+    // with too few clipped nodes are skipped, and callers match this index back
+    // to `roadCenterlines`.
+    const clPolyId = `road-cl-${corridorIdx + 1}`;
+    const leftPolyId = `road-edge-left-${corridorIdx + 1}`;
+    const rightPolyId = `road-edge-right-${corridorIdx + 1}`;
+    corridorIdx += 1;
 
     const clPts: SurveyPoint[] = [];
     const leftPts: SurveyPoint[] = [];

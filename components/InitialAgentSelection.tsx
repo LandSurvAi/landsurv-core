@@ -19,6 +19,7 @@ import { ARAgentContent } from './landing/ARAgentContent.tsx';
 import { CadManagerContent } from './landing/CadManagerContent.tsx';
 import { CivilDrafterContent } from './landing/CivilDrafterContent.tsx';
 import { StandardsComplianceContent } from './landing/StandardsComplianceContent.tsx';
+import { RoadingAgentContent } from './landing/RoadingAgentContent.tsx';
 import { BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, DocumentDuplicateIcon, DxfAnalyzerIcon, LsvzIcon, CurrencyDollarIcon, CrosshairsIcon, CogoIcon, FolderIcon, DocumentTextIcon, ArrowUpTrayIcon, DownloadIcon, ScaleIcon, MapPinIcon, CameraIcon, DroneIcon, ClipboardDocumentListIcon, LogClockIcon, BugAntIcon, CpuChipIcon, GisAgentIcon, ContourIcon, ProfileIcon, SatelliteIcon, ARIcon, ZoningIcon, TitleSearchIcon, PlugIcon, LayersIcon, CadManagerIcon, CivilDrafterIcon, KeyIcon, CogIcon, FloodIcon, HomeIcon, StructuresIcon, SoilsIcon, SlopeIcon, StandardsComplianceIcon, EnvelopeIcon, InfoIcon, LegalScaleIcon, ProjectionGlobeIcon } from './icons.tsx';
 import { getRetiredAgents, type HomepageAgentType } from '../utils/retiredAgents.ts';
 import { getGlobalSettings, subscribeGlobalSettings } from '../utils/globalSettings.ts';
@@ -190,6 +191,7 @@ const agentSeoUrls: Partial<Record<AgentType, string>> = {
   [AgentType.AR_AGENT]: 'https://ar.landsurv.ai',
   [AgentType.CAD_MANAGER]: 'https://cadmanager.landsurv.ai',
   [AgentType.CIVIL_DRAFTER]: 'https://civildrafter.landsurv.ai',
+  [AgentType.ROADING_AGENT]: 'https://roading.landsurv.ai',
 };
 
 /** SPA info modal: maps each agent to its in-app info content. */
@@ -211,6 +213,7 @@ const agentInfoMap: Partial<Record<AgentType, { title: string; content: React.FC
   [AgentType.CAD_MANAGER]:           { title: 'CAD Manager',                     content: CadManagerContent },
   [AgentType.CIVIL_DRAFTER]:         { title: 'Civil Drafter Agent',             content: CivilDrafterContent },
   [AgentType.STANDARDS_COMPLIANCE]:  { title: 'Standards Compliance Agent',      content: StandardsComplianceContent },
+  [AgentType.ROADING_AGENT]:         { title: 'Roading Agent',                   content: RoadingAgentContent },
   // RAW_CRAWLER intentionally omitted — agent is being phased out
 };
 
@@ -343,6 +346,16 @@ export const homepageAgentCards = [
         description: 'An advanced AI-powered drafting assistant specializing in intelligent linework recognition, automated plat generation, and seamless CAD workflow integration.',
         icon: CivilDrafterIcon,
         color: 'fuchsia',
+        actionType: 'agent' as const,
+        c3dEnabled: true,
+        releaseStage: 'alpha' as ReleaseStage
+    },
+    { 
+        type: AgentType.ROADING_AGENT, 
+        title: 'Roading Agent', 
+        description: 'Synthesize existing roads from survey points, background imagery, and OSM ways, or design proposed road corridors, typical sections, profiles, and cross sections.',
+        icon: RoadIcon,
+        color: 'amber',
         actionType: 'agent' as const,
         c3dEnabled: true,
         releaseStage: 'alpha' as ReleaseStage
@@ -838,6 +851,29 @@ const Card: React.FC<{ card: Card, onClick: () => void, onToolOptionClick?: () =
                     <CivilDrafterIcon className="w-3 h-3" />
                     AI Draw
                 </button>
+            )}
+            {/* Roading Agent — Synthesize & Design Road quick chips. */}
+            {card.actionType === 'agent' && card.type === AgentType.ROADING_AGENT && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                    <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); (onToolOptionClick ?? onClick)(); }}
+                        title="Synthesize existing roads from survey points, background imagery, and OpenStreetMap"
+                        className={QUICK_CHIP_CLASS}
+                    >
+                        <RoadIcon className="w-3 h-3" />
+                        Synthesize
+                    </button>
+                    <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); (onToolOptionClick ?? onClick)(); }}
+                        title="Design a proposed road corridor, typical section, and elevation profile"
+                        className={QUICK_CHIP_CLASS}
+                    >
+                        <ScaleIcon className="w-3 h-3" />
+                        Design Road
+                    </button>
+                </div>
             )}
             {/* Profile Agent New Profile CTA — opens Profile tool dock. */}
             {card.actionType === 'agent' && card.type === AgentType.PROFILE_AGENT && (

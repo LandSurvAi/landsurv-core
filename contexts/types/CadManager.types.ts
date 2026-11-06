@@ -39,6 +39,14 @@ export interface CodeDefinition {
   lineLayer?: string;     // CAD layer for F2F linework (optional, null = no linework)
   lineType?: string;      // CAD linetype for F2F linework (e.g., "CONTINUOUS", "DASHED", "FENCELINE")
   symbol?: string | SymbolDefinition;  // Block name (string) or full symbol definition
+  /** Optional default CAD hatch pattern name (e.g., "ANSI31", "AR-CONC", "SOLID") for closed areas of this code. */
+  hatchPattern?: string;
+  /** Optional default hatch scale multiplier for this code. */
+  hatchScale?: number;
+  /** Optional default hatch rotation angle in degrees for this code. */
+  hatchAngle?: number;
+  /** Optional CAD layer specifically for hatch fills generated from this code. */
+  hatchLayer?: string;
   category?: string;      // Optional category (e.g., "Infrastructure", "Boundary")
   aliases?: string[];     // Optional existing aliases (legacy)
   // Per-surveyor field-code overrides. Each surveyor may map one or more
@@ -69,6 +77,8 @@ export interface LayerDefinition {
   lineType?: string;      // Line type name (e.g., "CONTINUOUS", "DASHED")
   lineWeight?: number;    // Line weight in mm
   description?: string;   // Human-readable purpose
+  /** Optional default hatch pattern associated with this layer. */
+  hatchPattern?: string;
   isPointLayer?: boolean; // True if used for points
   isLineLayer?: boolean;  // True if used for linework
 }
@@ -127,6 +137,21 @@ export interface TextStyleDefinition {
 }
 
 /**
+ * First-class text primitive inside a CAD block / point symbol.
+ * Coordinates are in the symbol's SVG viewBox space (default 0..24, center 12,12).
+ */
+export interface SymbolTextElement {
+  text: string;            // Literal text string (e.g., "CO", "WV", "MH", "E")
+  x: number;               // X position in viewBox coordinates (typically 12 for center)
+  y: number;               // Y position in viewBox coordinates (typically 12 for center)
+  fontSize: number;        // Font height in viewBox units (e.g., 7.5 to 9)
+  fontWeight?: 'normal' | 'bold';
+  fontFamily?: string;
+  anchor?: 'start' | 'middle' | 'end';
+  rotation?: number;       // Optional rotation in degrees
+}
+
+/**
  * Symbol definition for CAD blocks/point symbols
  * Used in CodeDefinition to store AI-generated or uploaded symbols
  */
@@ -134,6 +159,7 @@ export interface SymbolDefinition {
   name: string;            // Symbol/block name (e.g., "LP", "TREE")
   svgPath: string;         // Main SVG path for outline (stroke, no fill)
   fillPath?: string;       // Optional SVG path for filled areas (fill, no stroke)
+  texts?: SymbolTextElement[]; // Optional true text primitives (rendered as <text> / Canvas fillText / DXF TEXT)
   viewBox: string;         // SVG viewBox (typically "0 0 24 24")
   source: 'ai' | 'upload' | 'library';  // How the symbol was created
   dxfContent?: string;     // Raw DXF entities for the symbol (if uploaded)

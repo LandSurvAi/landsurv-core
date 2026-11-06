@@ -22,9 +22,13 @@ import { CodeDefinition, StandardDefinition, FieldToFinishSettings as F2FSetting
 import { checkAliasConflict, type AliasConflict } from '../../utils/codeDomainClassifier';
 import { FieldToFinishSettings } from './FieldToFinishSettings';
 import { SymbolCell, SymbolPreviewModal } from './SymbolCell';
+import { HatchCell } from './HatchCell';
+import { HatchManagerPanel } from './HatchManagerPanel';
+import type { HatchDefinition } from '../../services/hatchLibrary';
 import { SurveyorCodeMatcher, createEmptySurveyorSession } from './SurveyorCodeMatcher';
 import { useSettings } from '../../types';
 import { findMatchingSymbol, libraryToSymbolDefinition, SURVEY_SYMBOL_LIBRARY } from '../../data/surveySymbolLibrary';
+import { SymbolSvg } from '../common/SymbolSvg';
 import { useErrorReporter } from '../../contexts/AppStateContext';
 
 interface StandardsEditorProps {
@@ -32,7 +36,7 @@ interface StandardsEditorProps {
   onSave: (standard: StandardDefinition) => void;
   onClose: () => void;
   /** Optional sub-modal to open immediately when the editor mounts. */
-  initialModal?: 'f2f' | 'team-codes' | 'auto-assign' | null;
+  initialModal?: 'f2f' | 'team-codes' | 'auto-assign' | 'hatches' | null;
 }
 
 interface EditingCell {
@@ -50,6 +54,7 @@ const COLUMNS: { key: keyof CodeDefinition; label: string; width: string }[] = [
   { key: 'lineLayer', label: 'Line Layer', width: 'w-36' },
   { key: 'lineType', label: 'Linetype', width: 'w-32' },
   { key: 'symbol', label: 'Symbol', width: 'w-44' },  // Wider for preview + actions
+  { key: 'hatchPattern', label: 'Hatch', width: 'w-36' },
   { key: 'category', label: 'Category', width: 'w-28' },
 ];
 
@@ -76,6 +81,8 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
   const [hasChanges, setHasChanges] = useState(false);
   const [copiedRows, setCopiedRows] = useState<CodeDefinition[]>([]);
   const [showF2FSettings, setShowF2FSettings] = useState(initialModal === 'f2f');
+  const [showHatchManager, setShowHatchManager] = useState(initialModal === 'hatches');
+  const [customHatches, setCustomHatches] = useState<HatchDefinition[]>(() => [...(standard.hatches ?? [])]);
   const [f2fSettings, setF2FSettings] = useState<F2FSettings>(() => standard.f2fSettings ?? DEFAULT_F2F_SETTINGS);
   const [textStyles, setTextStyles] = useState<CadTextStyleDefinition[]>(() =>
     (standard.textStyles ?? []).map(style => ({ ...style }))
@@ -315,6 +322,23 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
       };
     }
     
+    newCodes[actualIndex] = updatedCode;
+    setCodes(newCodes);
+  }, [codes, filteredCodes, saveToUndo]);
+
+  const handleHatchChange = useCallback((rowIndex: number, patternName: string | undefined) => {
+    const actualIndex = codes.findIndex(c => c === filteredCodes[rowIndex]);
+    if (actualIndex === -1) return;
+    saveToUndo();
+    const newCodes = [...codes];
+    const updatedCode = { ...newCodes[actualIndex], hatchPattern: patternName };
+    updatedCode.userEdits = {
+      ...(updatedCode.userEdits || {}),
+      hatchPattern: {
+        editedAt: new Date().toISOString(),
+        originalValue: String(newCodes[actualIndex].hatchPattern || '-'),
+      },
+    };
     newCodes[actualIndex] = updatedCode;
     setCodes(newCodes);
   }, [codes, filteredCodes, saveToUndo]);
@@ -579,6 +603,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
     const updatedStandard: StandardDefinition = {
       ...standard,
       codes: codes,
+      hatches: customHatches,
       textStyles: textStyles,
       surveyorCodeSession: surveyorSession.surveyors.length > 0 ? surveyorSession : undefined,
       f2fSettings: f2fSettings,
@@ -941,6 +966,18 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
               title="Field-to-Finish Settings"
             >
               ⚙️ F2F Settings
+            </button>
+            <button
+              onClick={() => setShowHatchManager(true)}
+              className="px-3 py-2 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 rounded-lg text-sm transition-colors flex items-center gap-1"
+              title="Manage CAD Hatch Patterns (.PAT)"
+            >
+              ▤ Hatches
+              {customHatches.length > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 bg-cyan-500/30 rounded text-xs">
+                  {customHatches.length}
+                </span>
+              )}
             </button>
             <div className="w-px h-6 bg-white/[0.09] mx-2" />
             <button
@@ -1380,6 +1417,26 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                         </td>
                       );
                     }
+
+                    // Special rendering for Hatch column
+                    if (col.key === 'hatchPattern') {
+                      return (
+                        <td
+                          key={col.key}
+                          onClick={(e) => e.stopPropagation()}
+                          className={`${col.width} px-2 py-1 text-sm relative`}
+                        >
+                          <HatchCell
+                            hatchPattern={code.hatchPattern}
+                            codeName={code.code}
+                            codeDescription={code.description}
+                            customHatches={customHatches}
+                            onHatchChange={(patternName) => handleHatchChange(displayIndex, patternName)}
+                            isLocked={isLocked}
+                          />
+                        </td>
+                      );
+                    }
                     
                     return (
                       <td
@@ -1550,6 +1607,46 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
         />
       )}
 
+      {/* Hatch Manager Modal */}
+      {showHatchManager && (
+        <div
+          className="fixed inset-0 z-[10000] bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setShowHatchManager(false)}
+        >
+          <div
+            className="bg-[#070d16] border border-white/[0.1] rounded-xl shadow-2xl max-w-4xl w-full h-[80vh] flex flex-col overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.08] bg-[#0b1420]">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  ▤ CAD Standard Hatch Patterns (.PAT)
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Manage standard, FEMA, and custom hatch patterns saved with this CAD standard.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowHatchManager(false)}
+                className="px-2.5 py-1 rounded hover:bg-white/[0.08] text-slate-400 hover:text-white text-sm"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 min-h-0">
+              <HatchManagerPanel
+                customHatches={customHatches}
+                onCustomHatchesChange={(nextHatches) => {
+                  setCustomHatches(nextHatches);
+                  setHasChanges(true);
+                }}
+                availableLayers={availableLayers}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Symbol Preview Modal */}
       {previewSymbol && (
         <SymbolPreviewModal
@@ -1670,15 +1767,14 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
                       {/* Matched Symbol */}
                       {result.matchedSymbol && (
                         <div className="flex items-center gap-2 flex-shrink-0">
-                          <svg
+                          <SymbolSvg
                             className="w-6 h-6 text-cyan-300"
+                            svgPath={result.matchedSymbol.svgPath}
+                            fillPath={result.matchedSymbol.fillPath}
+                            texts={result.matchedSymbol.texts}
                             viewBox={result.matchedSymbol.viewBox || '0 0 24 24'}
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                          >
-                            <path d={result.matchedSymbol.svgPath} strokeLinecap="round" strokeLinejoin="round" />
-                          </svg>
+                            strokeWidth={1.5}
+                          />
                           <span className="text-sm text-slate-300">{result.matchedSymbol.name}</span>
                           <span className="text-xs px-1.5 py-0.5 rounded bg-cyan-400/10 text-cyan-300">
                             {result.matchedSymbol.category}

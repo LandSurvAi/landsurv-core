@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { XMarkIcon, AdjustmentsHorizontalIcon, CogIcon } from './icons.tsx';
 import { AgentType, type Settings, type NtripSettings, type JobInfo, type PointLabelingSettings } from '../types.ts';
+import { agentConfig } from '../constants/agents.ts';
 import { projectionStates, projectionZones } from '../utils/projections.ts';
 import { LINEAR_UNIT_OPTIONS, getLinearUnitAbbreviation, type LinearUnit } from '../utils/linearUnits.ts';
 import { setHolidayThemeOverride } from './InitialAgentSelection.tsx';
@@ -8,6 +9,33 @@ import { useErrorReporter } from '../contexts/AppStateContext';
 import { PROVIDER_KEY_URLS, type ByokProvider } from '../services/providerKeys.ts';
 import { WebGpuBasemap, isWebGpuEnabled, getGpuPowerPreference, WEBGPU_ENABLED_KEY, WEBGPU_POWER_KEY, WEBGPU_PREF_EVENT, type GpuPowerPreference } from '../utils/webgpuBasemap.ts';
 import GlobalCrsPicker from './GlobalCrsPicker.tsx';
+
+const FORCE_AGENT_OPTIONS: AgentType[] = [
+    AgentType.CIVIL_DRAFTER,
+    AgentType.ROADING_AGENT,
+    AgentType.POINT_EDITOR,
+    AgentType.DEED_READER,
+    AgentType.CENTERLINE_STATIONING,
+    AgentType.CONTOURING_AGENT,
+    AgentType.STEEP_SLOPE_AGENT,
+    AgentType.PROFILE_AGENT,
+    AgentType.COGO_AGENT,
+    AgentType.RAW_CRAWLER,
+    AgentType.CIVIL_PLAN_EXPERT,
+    AgentType.DXF_ANALYZER,
+    AgentType.IMAGE_ANALYZER,
+    AgentType.GIS_AGENT,
+    AgentType.GPS_STAKEOUT,
+    AgentType.GNSS_AGENT,
+    AgentType.DRONE_AGENT,
+    AgentType.ZONING_AGENT,
+    AgentType.TITLE_SEARCH,
+    AgentType.CAD_MANAGER,
+    AgentType.STANDARDS_COMPLIANCE,
+    AgentType.STRUCTURES_AGENT,
+    AgentType.SOILS_AGENT,
+    AgentType.LSVZ_AGENT,
+].sort((a, b) => (agentConfig[a]?.label ?? a).localeCompare(agentConfig[b]?.label ?? b));
 
 const AUTO_SELECTOR_OPTION = 'auto';
 const getSelectorModelValue = (modelName: string): string => modelName;
@@ -395,6 +423,22 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             <span className="text-sm font-medium text-gray-300 light-theme:text-gray-700">Enable Experimental Geospatial AI / Aerial Drafting in Civil Drafter</span>
                         </label>
                         <p className="text-xs text-gray-500 mt-1 ml-7">Developer / Experimental setting. When disabled (default), Civil Drafter drafts directly from field survey points as usual without asking about background aerial imagery. When enabled, Civil Drafter offers multi-source methodology choices (points, aerial imagery, or synthesis) and can vectorize corridors from aerial imagery.</p>
+                    </div>
+
+                    <div>
+                        <label htmlFor="forceAgent" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">🔒 Force Agent (testing)</label>
+                        <select
+                            id="forceAgent"
+                            value={settings.forceAgent ?? ''}
+                            onChange={e => handleSettingChange('forceAgent', (e.target.value || undefined) as AgentType | undefined)}
+                            className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
+                        >
+                            <option value="">Off — normal CACP routing</option>
+                            {FORCE_AGENT_OPTIONS.map(agent => (
+                                <option key={agent} value={agent}>{agentConfig[agent]?.label ?? agent}</option>
+                            ))}
+                        </select>
+                        <p className="text-xs text-gray-500 mt-1">Pins interactive chat requests to this agent, bypasses the CACP intent handoff, and disables peer delegation for the turn. Use Civil Drafter to test road or drafting prompts without the Roading Agent taking over. Explicit CACP/internal targets are unaffected. A “forced” badge appears in the chat header while active.</p>
                     </div>
 
                     <div>

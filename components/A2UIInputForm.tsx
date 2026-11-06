@@ -1,6 +1,11 @@
 import React, { useEffect, useId, useMemo, useState } from 'react';
 import { ArrowRight, CheckCircle2, ListChecks } from 'lucide-react';
 import type { A2UIInputFormSpec } from '../types.ts';
+import {
+  buildA2UIInputInitialValues,
+  buildA2UIInputSubmission,
+  validateA2UIInputValues,
+} from '../utils/a2uiInputForm.ts';
 
 interface A2UIInputFormProps {
   form: A2UIInputFormSpec;
@@ -13,13 +18,7 @@ const inputClass =
 
 export const A2UIInputForm: React.FC<A2UIInputFormProps> = ({ form, onSubmit }) => {
   const formId = useId();
-  const initialValues = useMemo(() => {
-    const next: Record<string, string> = {};
-    for (const field of form.fields) {
-      next[field.id] = field.type === 'select' ? (field.options?.[0] ?? '') : '';
-    }
-    return next;
-  }, [form]);
+  const initialValues = useMemo(() => buildA2UIInputInitialValues(form), [form]);
 
   const [values, setValues] = useState<Record<string, string>>(initialValues);
   const [error, setError] = useState<string | null>(null);
@@ -37,56 +36,18 @@ export const A2UIInputForm: React.FC<A2UIInputFormProps> = ({ form, onSubmit }) 
     setSubmitted(false);
   };
 
-  const validate = (): string | null => {
-    for (const field of form.fields) {
-      const value = (values[field.id] ?? '').trim();
-      if (field.required && !value) {
-        return `${field.label} is required.`;
-      }
-      if (value && field.type === 'number' && !Number.isFinite(Number(value))) {
-        return `${field.label} must be a number.`;
-      }
-    }
-
-    if (form.requireOneOf && form.requireOneOf.length > 0) {
-      const satisfied = form.requireOneOf.some(group =>
-        group.every(id => (values[id] ?? '').trim().length > 0),
-      );
-      if (!satisfied) {
-        const choices = form.requireOneOf.map(group =>
-          group
-            .map(id => form.fields.find(field => field.id === id)?.label ?? id)
-            .join(' + '),
-        );
-        return `Provide ${choices.join(' or ')}.`;
-      }
-    }
-
-    return null;
-  };
-
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!onSubmit) return;
 
-    const validationError = validate();
+    const validationError = validateA2UIInputValues(form, values);
     if (validationError) {
       setError(validationError);
       setSubmitted(false);
       return;
     }
 
-    const lines = form.fields.flatMap(field => {
-      const raw = (values[field.id] ?? '').trim();
-      if (!raw) return [];
-      const value =
-        field.type === 'number' && Number.isFinite(Number(raw))
-          ? String(Number(raw))
-          : raw;
-      return [`${field.label}: ${value}${field.unit ? ` ${field.unit}` : ''}`];
-    });
-
-    onSubmit(`Here are the requested values:\n${lines.join('\n')}`);
+    onSubmit(buildA2UIInputSubmission(form, values));
     setError(null);
     setSubmitted(true);
   };
@@ -131,65 +92,84 @@ export const A2UIInputForm: React.FC<A2UIInputFormProps> = ({ form, onSubmit }) 
                 )}
 
                 <div className={field.span === 2 ? 'sm:col-span-2' : undefined}>
-                  <label
-                    htmlFor={inputId}
-                    className="mb-1 flex items-center gap-1 text-[9.5px] font-semibold uppercase tracking-[0.08em] text-slate-400"
-                  >
-                    {field.label}
-                    {field.required && (
-                      <span aria-hidden="true" className="text-cyan-300">
-                        *
-                      </span>
-                    )}
-                  </label>
-
-                  {field.type === 'textarea' ? (
-                    <textarea
-                      id={inputId}
-                      value={fieldValue}
-                      onChange={event => updateValue(field.id, event.target.value)}
-                      placeholder={field.placeholder}
-                      aria-describedby={hintId}
-                      rows={2}
-                      spellCheck={false}
-                      className={`${inputClass} resize-y`}
-                    />
-                  ) : field.type === 'select' ? (
-                    <select
-                      id={inputId}
-                      value={fieldValue}
-                      onChange={event => updateValue(field.id, event.target.value)}
-                      aria-describedby={hintId}
-                      className={`${inputClass} appearance-none`}
+                  {field.type === 'checkbox' ? (
+                    <label
+                      htmlFor={inputId}
+                      className="flex cursor-pointer select-none items-center gap-2 rounded-md border border-white/[0.1] bg-[#060d17] px-2.5 py-1.5 text-[11.5px] text-slate-100 transition-colors hover:border-cyan-400/40"
                     >
-                      {(field.options ?? []).map(option => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <div className="relative">
                       <input
                         id={inputId}
-                        type={field.type === 'number' ? 'number' : 'text'}
-                        inputMode={field.type === 'number' ? 'decimal' : undefined}
-                        step={field.type === 'number' ? 'any' : undefined}
-                        value={fieldValue}
-                        onChange={event => updateValue(field.id, event.target.value)}
-                        placeholder={field.placeholder}
+                        type="checkbox"
+                        checked={fieldValue === 'true'}
+                        onChange={event => updateValue(field.id, event.target.checked ? 'true' : 'false')}
                         aria-describedby={hintId}
-                        aria-required={field.required || undefined}
-                        autoComplete="off"
-                        spellCheck={false}
-                        className={`${inputClass} ${field.unit ? 'pr-10' : ''}`}
+                        className="h-3.5 w-3.5 rounded border-white/20 accent-cyan-400"
                       />
-                      {field.unit && (
-                        <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[9px] font-semibold uppercase tracking-wide text-slate-500">
-                          {field.unit}
-                        </span>
+                      <span className="font-medium">{field.label}</span>
+                    </label>
+                  ) : (
+                    <>
+                      <label
+                        htmlFor={inputId}
+                        className="mb-1 flex items-center gap-1 text-[9.5px] font-semibold uppercase tracking-[0.08em] text-slate-400"
+                      >
+                        {field.label}
+                        {field.required && (
+                          <span aria-hidden="true" className="text-cyan-300">
+                            *
+                          </span>
+                        )}
+                      </label>
+
+                      {field.type === 'textarea' ? (
+                        <textarea
+                          id={inputId}
+                          value={fieldValue}
+                          onChange={event => updateValue(field.id, event.target.value)}
+                          placeholder={field.placeholder}
+                          aria-describedby={hintId}
+                          rows={2}
+                          spellCheck={false}
+                          className={`${inputClass} resize-y`}
+                        />
+                      ) : field.type === 'select' ? (
+                        <select
+                          id={inputId}
+                          value={fieldValue}
+                          onChange={event => updateValue(field.id, event.target.value)}
+                          aria-describedby={hintId}
+                          className={`${inputClass} appearance-none`}
+                        >
+                          {(field.options ?? []).map(option => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="relative">
+                          <input
+                            id={inputId}
+                            type={field.type === 'number' ? 'number' : 'text'}
+                            inputMode={field.type === 'number' ? 'decimal' : undefined}
+                            step={field.type === 'number' ? 'any' : undefined}
+                            value={fieldValue}
+                            onChange={event => updateValue(field.id, event.target.value)}
+                            placeholder={field.placeholder}
+                            aria-describedby={hintId}
+                            aria-required={field.required || undefined}
+                            autoComplete="off"
+                            spellCheck={false}
+                            className={`${inputClass} ${field.unit ? 'pr-10' : ''}`}
+                          />
+                          {field.unit && (
+                            <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[9px] font-semibold uppercase tracking-wide text-slate-500">
+                              {field.unit}
+                            </span>
+                          )}
+                        </div>
                       )}
-                    </div>
+                    </>
                   )}
 
                   {field.hint && (

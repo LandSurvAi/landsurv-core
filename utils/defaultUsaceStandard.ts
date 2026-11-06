@@ -55,15 +55,15 @@ export const USACE_AEC_STANDARD: StandardDefinition = {
     { code: 'EP',    description: 'Edge of Pavement',           pointLayer: 'V-NODE',      lineLayer: 'V-ROAD-EDGE',  lineType: 'CONTINUOUS',  category: 'Roads' },
     { code: 'CURB',  description: 'Curb',                       pointLayer: 'V-NODE',      lineLayer: 'V-ROAD-CURB',  lineType: 'CONTINUOUS',  category: 'Roads' },
     { code: 'GUT',   description: 'Gutter',                     pointLayer: 'V-NODE',      lineLayer: 'V-ROAD-CURB',  lineType: 'CONTINUOUS',  category: 'Roads' },
-    { code: 'SW',    description: 'Sidewalk',                   pointLayer: 'V-NODE',      lineLayer: 'V-SITE-WALK',  lineType: 'CONTINUOUS',  category: 'Roads' },
-    { code: 'DW',    description: 'Driveway',                   pointLayer: 'V-NODE',      lineLayer: 'V-SITE-DRIV',  lineType: 'CONTINUOUS',  category: 'Roads' },
-    { code: 'AC',    description: 'Asphalt',                    pointLayer: '-',           lineLayer: 'V-SITE-PAVE',  lineType: 'CONTINUOUS',  category: 'Roads' },
-    { code: 'CONC',  description: 'Concrete',                   pointLayer: '-',           lineLayer: 'V-SITE-PAVE',  lineType: 'CONTINUOUS',  category: 'Roads' },
+    { code: 'SW',    description: 'Sidewalk',                   pointLayer: 'V-NODE',      lineLayer: 'V-SITE-WALK',  lineType: 'CONTINUOUS',  hatchPattern: 'AR-CONC',  category: 'Roads' },
+    { code: 'DW',    description: 'Driveway',                   pointLayer: 'V-NODE',      lineLayer: 'V-SITE-DRIV',  lineType: 'CONTINUOUS',  hatchPattern: 'GRAVEL',   category: 'Roads' },
+    { code: 'AC',    description: 'Asphalt',                    pointLayer: '-',           lineLayer: 'V-SITE-PAVE',  lineType: 'CONTINUOUS',  hatchPattern: 'ASPHALT',  category: 'Roads' },
+    { code: 'CONC',  description: 'Concrete',                   pointLayer: '-',           lineLayer: 'V-SITE-PAVE',  lineType: 'CONTINUOUS',  hatchPattern: 'AR-CONC',  category: 'Roads' },
 
     // ── Buildings / Structures ──────────────────────────────────────────────
-    { code: 'BLDG',  description: 'Building Outline',           pointLayer: 'V-NODE',      lineLayer: 'V-BLDG',       lineType: 'CONTINUOUS',  category: 'Structures' },
-    { code: 'WALL',  description: 'Wall',                       pointLayer: 'V-NODE',      lineLayer: 'V-SITE-WALL',  lineType: 'CONTINUOUS',  category: 'Structures' },
-    { code: 'STR',   description: 'Structure (generic)',        pointLayer: 'V-NODE',      lineLayer: 'V-SITE-STRC',  lineType: 'CONTINUOUS',  category: 'Structures' },
+    { code: 'BLDG',  description: 'Building Outline',           pointLayer: 'V-NODE',      lineLayer: 'V-BLDG',       lineType: 'CONTINUOUS',  hatchPattern: 'ANSI31',   category: 'Structures' },
+    { code: 'WALL',  description: 'Wall',                       pointLayer: 'V-NODE',      lineLayer: 'V-SITE-WALL',  lineType: 'CONTINUOUS',  hatchPattern: 'AR-BRIK',  category: 'Structures' },
+    { code: 'STR',   description: 'Structure (generic)',        pointLayer: 'V-NODE',      lineLayer: 'V-SITE-STRC',  lineType: 'CONTINUOUS',  hatchPattern: 'ANSI31',   category: 'Structures' },
 
     // ── Sanitary Sewer ──────────────────────────────────────────────────────
     { code: 'SMH',   description: 'Sanitary Manhole',           pointLayer: 'V-SSWR-STRC', lineLayer: '-',            lineType: '-',           category: 'Sanitary Sewer' },
@@ -109,9 +109,9 @@ export const USACE_AEC_STANDARD: StandardDefinition = {
     { code: 'TL',    description: 'Tree Line',                  pointLayer: '-',           lineLayer: 'V-VEGE-LINE',  lineType: 'TREELINE',    category: 'Vegetation' },
 
     // ── Environmental ───────────────────────────────────────────────────────
-    { code: 'WET',   description: 'Wetland Boundary',           pointLayer: 'V-NODE',      lineLayer: 'V-WETL',       lineType: 'WETLAND',     category: 'Environmental' },
-    { code: 'RW',    description: 'Regulated Waters',           pointLayer: 'V-NODE',      lineLayer: 'V-WETL-RGWT',  lineType: 'REGULATED_WATERS', category: 'Environmental' },
-    { code: 'EC',    description: 'Edge of Water',              pointLayer: 'V-NODE',      lineLayer: 'V-HYDR-EDGE',  lineType: 'CONTINUOUS',  category: 'Environmental' },
+    { code: 'WET',   description: 'Wetland Boundary',           pointLayer: 'V-NODE',      lineLayer: 'V-WETL',       lineType: 'WETLAND',     hatchPattern: 'SWAMP',    category: 'Environmental' },
+    { code: 'RW',    description: 'Regulated Waters',           pointLayer: 'V-NODE',      lineLayer: 'V-WETL-RGWT',  lineType: 'REGULATED_WATERS', hatchPattern: 'WATER', category: 'Environmental' },
+    { code: 'EC',    description: 'Edge of Water',              pointLayer: 'V-NODE',      lineLayer: 'V-HYDR-EDGE',  lineType: 'CONTINUOUS',  hatchPattern: 'WATER',    category: 'Environmental' },
     { code: 'STRM',  description: 'Stream Centerline',          pointLayer: 'V-NODE',      lineLayer: 'V-HYDR-CNTR',  lineType: 'STREAM',      category: 'Environmental' },
   ],
 

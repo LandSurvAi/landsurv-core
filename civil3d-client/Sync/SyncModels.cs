@@ -56,10 +56,23 @@ namespace LandsurvConnector.Sync
         [JsonProperty("height")] public double? Height { get; set; }
     }
 
+    public class SyncSymbolText
+    {
+        [JsonProperty("text")] public string Text { get; set; } = "";
+        [JsonProperty("x")] public double X { get; set; } = 12;
+        [JsonProperty("y")] public double Y { get; set; } = 12;
+        [JsonProperty("fontSize")] public double FontSize { get; set; } = 7;
+        [JsonProperty("fontWeight")] public string FontWeight { get; set; }
+        [JsonProperty("anchor")] public string Anchor { get; set; }
+        [JsonProperty("rotation")] public double? Rotation { get; set; }
+    }
+
     public class SyncBlockRecord
     {
         [JsonProperty("name")] public string Name { get; set; } = "";
         [JsonProperty("svgPath")] public string SvgPath { get; set; }      // LSAI side
+        [JsonProperty("fillPath")] public string FillPath { get; set; }    // LSAI side
+        [JsonProperty("texts")] public List<SyncSymbolText> Texts { get; set; } // LSAI side
         [JsonProperty("viewBox")] public string ViewBox { get; set; }
         [JsonProperty("scale")] public double? Scale { get; set; }
         [JsonProperty("referenceCount")] public int? ReferenceCount { get; set; } // CAD side

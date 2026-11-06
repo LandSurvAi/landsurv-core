@@ -399,6 +399,124 @@ export function repairBankCorridorChains(
   return repaired;
 }
 
+const ROAD_EDGE_DESC_RE = /\b(EP|EOP|ER|EDGE|ES|EG|EC|ET|CURB|TBC|TC|BC|GUTTER|PAV|PVMT|SHLD|SH|ROW)\b/i;
+const ROAD_EDGE_LAYER_RE = /(?:ROAD|EP|PAV|CURB|SHLD|SHOULDER|ROW)/i;
+const ROAD_CL_DESC_RE = /\b(CL|CTR|CENTER|CENTERLINE)\b/i;
+
+/**
+ * Repairs a road-edge or curb chain when the model accidentally grouped both
+ * opposing sides of a road corridor into a single sawtooth chain.
+ *
+ * Genuine single-edge chains (including curved edges and T-intersection branches)
+ * have small step-to-step transverse jumps along their principal axis and pass
+ * through untouched. Only chains that repeatedly jump across a cartway width
+ * (>= 8 ft) between two distinct parallel offset clusters are split into left
+ * and right edge chains.
+ */
+export function repairRoadCorridorChains(
+  chains: DrafterChain[],
+  lookup: (pointNumber: string) => ChainPointMetadata | undefined,
+): DrafterChain[] {
+  const out: DrafterChain[] = [];
+
+  for (const chain of chains) {
+    if (!chain || chain.isClosed || !Array.isArray(chain.pointNumbers) || chain.pointNumbers.length < 4) {
+      out.push(chain);
+      continue;
+    }
+
+    const resolved: Array<OrderablePoint & { description?: string }> = [];
+    for (const rawPn of chain.pointNumbers) {
+      const pn = String(rawPn);
+      const meta = lookup(pn);
+      if (meta && Number.isFinite(meta.easting) && Number.isFinite(meta.northing)) {
+        resolved.push({
+          pointNumber: pn,
+          easting: meta.easting,
+          northing: meta.northing,
+          description: meta.description,
+        });
+      }
+    }
+
+    if (resolved.length < 4) {
+      out.push(chain);
+      continue;
+    }
+
+    const roadEdgeMatches = resolved.filter(
+      p => ROAD_EDGE_DESC_RE.test(p.description ?? '') && !ROAD_CL_DESC_RE.test(p.description ?? ''),
+    ).length;
+    const isRoadEdgeChain =
+      roadEdgeMatches >= Math.ceil(resolved.length * 0.5) ||
+      (ROAD_EDGE_LAYER_RE.test(chain.layer ?? '') && !/CNTR|CENTER|CL/i.test(chain.layer ?? ''));
+
+    if (!isRoadEdgeChain) {
+      out.push(chain);
+      continue;
+    }
+
+    const axis = principalAxis(resolved);
+    const c = centroid(resolved);
+    const projected = resolved
+      .map(point => ({
+        point,
+        s: (point.easting - c.e) * axis.ux + (point.northing - c.n) * axis.uy,
+        offset: -(point.easting - c.e) * axis.uy + (point.northing - c.n) * axis.ux,
+      }))
+      .sort((a, b) => a.s - b.s);
+
+    const strands = clusterByCrossCorridorOffset(resolved, 2);
+    if (strands.length !== 2 || strands[0].length < 2 || strands[1].length < 2) {
+      out.push(chain);
+      continue;
+    }
+
+    const meanOffset = (pts: OrderablePoint[]) =>
+      pts.reduce((sum, p) => sum + (-(p.easting - c.e) * axis.uy + (p.northing - c.n) * axis.ux), 0) / pts.length;
+    const mean0 = meanOffset(strands[0]);
+    const mean1 = meanOffset(strands[1]);
+    const separation = Math.abs(mean1 - mean0);
+    if (separation < 8 || separation > 100) {
+      out.push(chain);
+      continue;
+    }
+
+    const strandZeroSet = new Set(strands[0].map(p => p.pointNumber));
+    let crossJumps = 0;
+    for (let i = 1; i < projected.length; i++) {
+      const prevSide = strandZeroSet.has(projected[i - 1].point.pointNumber) ? 0 : 1;
+      const currSide = strandZeroSet.has(projected[i].point.pointNumber) ? 0 : 1;
+      const deltaOffset = Math.abs(projected[i].offset - projected[i - 1].offset);
+      if (prevSide !== currSide && deltaOffset >= separation * 0.55) {
+        crossJumps++;
+      }
+    }
+
+    // Require at least 2 cross-corridor jumps (sawtooth behavior) before splitting.
+    if (crossJumps < 2) {
+      out.push(chain);
+      continue;
+    }
+
+    const baseId = chain.polylineId || 'road-edge';
+    out.push(
+      {
+        ...chain,
+        polylineId: `${baseId}-left`,
+        pointNumbers: strands[0].map(p => p.pointNumber),
+      },
+      {
+        ...chain,
+        polylineId: `${baseId}-right`,
+        pointNumbers: strands[1].map(p => p.pointNumber),
+      },
+    );
+  }
+
+  return out;
+}
+
 export interface ExpandedChainLine {
   from: string;
   to: string;

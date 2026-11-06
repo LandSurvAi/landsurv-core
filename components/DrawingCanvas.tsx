@@ -198,6 +198,7 @@ import {
     type PlanarTransform,
 } from '../utils/cadTransforms.ts';
 import { orderConnectedChain, offsetOrderedChain, offsetCircleRadius, resolveArcGeometry, type ChainSegment, type OffsetEntitySegment } from '../utils/offsetGeometry';
+import { createLayerValueLookup, resolveCadEntityColor, resolveCadEntityLinetype } from '../utils/cadEntityStyle.ts';
 
 interface DrawingCanvasProps {
     /** Initial 2D canvas transform (scale/zoom & pan offsets) restored from saved session state. */
@@ -417,6 +418,8 @@ interface DrawingCanvasProps {
      *  Used as a fallback when a SurveyLine has a layer but no explicit lineType — common
      *  for lines created before the linetype system existed or imported from DXF. */
     layerLinetypeMap?: Record<string, string>;
+    /** Map of CAD layer name → RGB color. Used when an entity has no explicit color (BYLAYER). */
+    layerColors?: Record<string, string>;
     /** Key info passed from App.tsx for display in the interactive command terminal. */
     keyInfo?: {
         label: string;
@@ -857,6 +860,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         linetypes: standardLinetypes,
         globalLinetypeScale = 1,
         layerLinetypeMap,
+        layerColors = {},
         orientationTuple = {
             angle: 0,
             originX: 0,
@@ -3317,7 +3321,35 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
         const codeDef = cadStandard.codes.find(c => c.code.toUpperCase() === res.master.toUpperCase());
         const sym = codeDef?.symbol;
-        if (!sym || typeof sym !== 'object' || !sym.svgPath) {
+        if (!sym) {
+            cadSymbolCache.current.set(description, null);
+            return undefined;
+        }
+        if (typeof sym === 'string') {
+            if (sym.trim() === '-' || !sym.trim()) {
+                cadSymbolCache.current.set(description, null);
+                return undefined;
+            }
+            const libMatch = findMatchingSymbol(sym, codeDef?.description);
+            if (!libMatch) {
+                cadSymbolCache.current.set(description, null);
+                return undefined;
+            }
+            const syntheticFromLib: CustomSymbol = {
+                id: `cad-${res.master}`,
+                name: sym || res.master,
+                description: libMatch.description || codeDef?.description || '',
+                associatedTerms: [],
+                svgPath: libMatch.svgPath,
+                fillPath: libMatch.fillPath,
+                texts: libMatch.texts,
+                viewBox: libMatch.viewBox || '0 0 24 24',
+                scale: 1,
+            };
+            cadSymbolCache.current.set(description, syntheticFromLib);
+            return syntheticFromLib;
+        }
+        if (!sym.svgPath && !sym.fillPath && (!sym.texts || sym.texts.length === 0)) {
             cadSymbolCache.current.set(description, null);
             return undefined;
         }
@@ -3328,6 +3360,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             associatedTerms: [],
             svgPath: sym.svgPath,
             fillPath: sym.fillPath,
+            texts: sym.texts,
             viewBox: sym.viewBox || '0 0 24 24',
             scale: 1,
         };
@@ -3368,6 +3401,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 associatedTerms: [],
                 svgPath: def.svgPath!,
                 fillPath: def.fillPath,
+                texts: def.texts,
                 viewBox: def.viewBox || '0 0 24 24',
                 scale: 1,
             };
@@ -6295,6 +6329,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         // Keys are upper-cased AND stripped of non-alphanumerics so "FENCE_LINE",
         // "FENCELINE", "FENCE-LINE", etc. all hash to the same entry.
         const normalizeLtName = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const layerColorLookup = createLayerValueLookup(layerColors);
+        const layerLinetypeLookup = createLayerValueLookup(layerLinetypeMap);
         const linetypeLookup = new Map<string, LinetypeDefinition>();
         if (standardLinetypes && standardLinetypes.length > 0) {
             for (const lt of standardLinetypes) {
@@ -6373,14 +6409,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         //   1) explicit line.lineType
         //   2) lookup by line.layer in the standard's codes (layerLinetypeMap)
         //   3) undefined → caller falls back to CONTINUOUS
-        const resolveLineTypeName = (l: { lineType?: string; layer?: string }): string | undefined => {
-            if (l.lineType && l.lineType.length > 0) return l.lineType;
-            if (l.layer && layerLinetypeMap) {
-                const hit = layerLinetypeMap[l.layer];
-                if (hit) return hit;
-            }
-            return undefined;
-        };
+        const resolveLineTypeName = (l: { lineType?: string; layer?: string }): string | undefined =>
+            resolveCadEntityLinetype(l, layerLinetypeLookup);
 
         // World-units → screen-pixel multiplier used when rendering a standard's
         // raw .lin pattern (which is expressed in drawing units). Tuned so a
@@ -6878,7 +6908,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             if (p1Coords && p2Coords) {
                 if (dashBatch && dashBatch.pid !== line.polylineId) flushDashBatch();
                 // Determine line styling
-                let strokeStyle = line.color || (isLightTheme ? '#111827' : '#FFFFFF');
+                let strokeStyle = resolveCadEntityColor(line, layerColorLookup)
+                    || (isLightTheme ? '#111827' : '#FFFFFF');
                 let lineWidth = scaledLineWidth;
                 let isDashed = false;
 
@@ -7124,7 +7155,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const center = line.circleCenter || (line.fromPt ? { x: line.fromPt.x, y: line.fromPt.y } : p1Coords);
                 if (!center) return;
 
-                let strokeStyle = isLightTheme ? '#111827' : '#FFFFFF';
+                let strokeStyle = resolveCadEntityColor(line, layerColorLookup)
+                    || (isLightTheme ? '#111827' : '#FFFFFF');
                 let lineWidth = scaledLineWidth;
                 let isDashed = false;
 
@@ -7202,7 +7234,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
 
             // Determine line styling
-            let strokeStyle = isLightTheme ? '#111827' : '#FFFFFF';
+            let strokeStyle = resolveCadEntityColor(line, layerColorLookup)
+                || (isLightTheme ? '#111827' : '#FFFFFF');
             let lineWidth = scaledLineWidth; // Already has minimum applied
             let isDashed = false;
 
@@ -9437,7 +9470,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             ctx.lineWidth = 0.5;
 
             const symbol = getSymbolForPoint(p);
-            if (symbol && symbol.svgPath) {
+            if (symbol && (symbol.svgPath || symbol.fillPath || (symbol.texts && symbol.texts.length > 0))) {
                 const viewBoxParts = symbol.viewBox.split(' ').map(Number);
                 const [vx, vy, vw, vh] = viewBoxParts.length === 4 ? viewBoxParts : [0, 0, 24, 24];
                 // Symbols are world geometry (like CAD blocks): they must grow
@@ -9450,28 +9483,52 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const viewExtent = Math.max(vw, vh) || 24;
                 const targetWorldExtent = 9.6 * (symbol.scale || 1) * (symbolScale || 1);
                 const symbolScreenScale = (targetWorldExtent / viewExtent) * transform.scale;
-                const strokePath = new Path2D(symbol.svgPath);
+                const strokePath = symbol.svgPath ? new Path2D(symbol.svgPath) : null;
                 const fillPath = symbol.fillPath ? new Path2D(symbol.fillPath) : null;
 
                 ctx.save();
                 ctx.translate(screenX, screenY);
-                ctx.scale(symbolScreenScale, -symbolScreenScale);
+                // Both SVG viewBox coordinates and HTML5 Canvas screen space are Y-down
+                // (DXF imports already flip Y in dxfParser.ts), so scale Y positively
+                // so symbols and block text render upright matching their preview.
+                ctx.scale(symbolScreenScale, symbolScreenScale);
                 ctx.translate(-(vx + vw / 2), -(vy + vh / 2));
 
                 const symbolColor = isLightTheme ? '#111827' : '#FFD700';
 
                 if (fillPath) {
                     ctx.fillStyle = symbolColor;
-                    ctx.fill(fillPath);
+                    ctx.fill(fillPath, 'evenodd');
                 }
 
-                ctx.strokeStyle = symbolColor;
-                // Keep the outline a roughly constant on-screen weight (~1.5px)
-                // even as the glyph scales with zoom — the CAD "lineweight is
-                // screen-constant, geometry scales" convention. Guard against a
-                // zero scale (fully zoomed out) to avoid a non-finite width.
-                ctx.lineWidth = symbolScreenScale > 0 ? 1.5 / symbolScreenScale : 1.5;
-                ctx.stroke(strokePath);
+                if (strokePath) {
+                    ctx.strokeStyle = symbolColor;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    // Keep the outline a roughly constant on-screen weight (~1.5px)
+                    // even as the glyph scales with zoom — the CAD "lineweight is
+                    // screen-constant, geometry scales" convention. Guard against a
+                    // zero scale (fully zoomed out) to avoid a non-finite width.
+                    ctx.lineWidth = symbolScreenScale > 0 ? 1.5 / symbolScreenScale : 1.5;
+                    ctx.stroke(strokePath);
+                }
+
+                if (symbol.texts && symbol.texts.length > 0) {
+                    ctx.fillStyle = symbolColor;
+                    for (const t of symbol.texts) {
+                        if (!t.text) continue;
+                        ctx.save();
+                        ctx.translate(t.x, t.y);
+                        if (t.rotation) {
+                            ctx.rotate((t.rotation * Math.PI) / 180);
+                        }
+                        ctx.font = `${t.fontWeight || 'bold'} ${t.fontSize}px ${t.fontFamily || 'Arial, sans-serif'}`;
+                        ctx.textAlign = t.anchor === 'start' ? 'left' : t.anchor === 'end' ? 'right' : 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(t.text, 0, 0);
+                        ctx.restore();
+                    }
+                }
 
                 ctx.restore();
             } else {
@@ -9862,7 +9919,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         ctx.restore(); // --- End screen-space pass ---
-    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, props.streetLabels, parcelLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter]);
+    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, props.streetLabels, parcelLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap]);
 
     // Throttled draw using requestAnimationFrame to prevent flickering during rapid updates
     const scheduleDraw = useCallback(() => {
@@ -11036,7 +11093,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 return;
             }
         }
-        // L / I / C / S / B / R — start drawing & selection commands (AutoCAD-like command shortcuts).
+        // L / I / C / S / B / R / F / D / X — start drawing, selection, dimension, fillet and delete shortcuts.
         if (!isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
             if (e.key === 'r' || e.key === 'R') {
                 e.preventDefault();
@@ -11108,6 +11165,41 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     setIsSelectionMode(false);
                     setSelectedLineIds(new Set());
                 }
+                return;
+            }
+            if (e.key === 'f' || e.key === 'F') {
+                e.preventDefault();
+                if (selectedLineIds.size !== 2) {
+                    beginSelectionForCommand('f', 'FILLET');
+                    return;
+                }
+                commandPromptOpenedRef.current = false;
+                const result = executeCanvasCommand(parseCanvasCommand('f'), {
+                    hasSelection: true,
+                    selectionCount: 2,
+                    onFilletSelection: filletSelectionCommand,
+                    onPrompt: openCommandPrompt,
+                    linearUnitLabel: getLinearUnitAbbreviation(settings.linearUnits),
+                });
+                setTerminalIncoming({
+                    text: result.message,
+                    tone: result.status === 'error' ? 'error' : result.status === 'ok' ? 'ok' : 'info',
+                });
+                if (!commandPromptOpenedRef.current) setCommandFocusRequest(n => n + 1);
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+            if (e.key === 'd' || e.key === 'D') {
+                e.preventDefault();
+                const wasAligned = drawingMode === 'aligned-dim';
+                startDimensionMode('aligned-dim');
+                setTerminalIncoming({
+                    text: wasAligned
+                        ? 'DIM ALIGNED: Cancelled'
+                        : 'DIM ALIGNED: Pick first point, second point, then the offset line [Esc to cancel]',
+                    tone: wasAligned ? 'info' : 'ok',
+                });
+                requestAnimationFrame(() => drawRef.current?.());
                 return;
             }
             if (e.key === 'c' || e.key === 'C') {
@@ -11212,7 +11304,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 return;
             }
         }
-        if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'd' || e.key === 'D') && selectedDimensionId) {
+        if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'x' || e.key === 'X') && selectedDimensionId) {
             if (isTextInput) return;
             e.preventDefault();
             onDeleteDimension?.(selectedDimensionId);
@@ -11220,7 +11312,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTerminalIncoming({ text: 'Deleted dimension', tone: 'info' });
             return;
         }
-        if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'd' || e.key === 'D')
+        if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'x' || e.key === 'X')
             && (selectedLineIds.size > 0 || selectedPointNumbers.size > 0 || selectedCenterlineIds.size > 0)) {
             if (isTextInput) return;
             e.preventDefault();
@@ -11348,7 +11440,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTtrEntity2(null);
             setTtrHoverEntity(null);
         }
-    }, [selectedLineIds, selectedPointNumbers, selectedCenterlineIds, isPickingMirrorLine, onDeletePoints, onDeleteCenterline, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isAddPointFlyoutOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
+    }, [selectedLineIds, selectedPointNumbers, selectedCenterlineIds, isPickingMirrorLine, onDeletePoints, onDeleteCenterline, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, filletSelectionCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isAddPointFlyoutOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
 
     const handleKeyUp = useCallback((e: KeyboardEvent) => {
         if (e.key === 'Control' || e.key === 'Meta') {
@@ -15464,7 +15556,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 </>
                             ) : (
                                 <>
-                                    <span className="text-gray-300 font-semibold">[B]</span> Box · <span className="text-gray-300 font-semibold">[Dbl-Click]</span> Chain · <span className="text-gray-300 font-semibold">[D/Del]</span> Delete · <span className="text-gray-300 font-semibold">[S/Esc]</span> Exit
+                                    <span className="text-gray-300 font-semibold">[B]</span> Box · <span className="text-gray-300 font-semibold">[Dbl-Click]</span> Chain · <span className="text-gray-300 font-semibold">[X/Del]</span> Delete · <span className="text-gray-300 font-semibold">[S/Esc]</span> Exit
                                 </>
                             )}
                         </div>
@@ -15986,6 +16078,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 selectedIds={Array.from(selectedLineIds)}
                 lines={lines}
                 availableLayers={props.availableLayers}
+                availableLinetypes={standardLinetypes?.map(linetype => linetype.name) ?? []}
+                layerColors={layerColors}
+                layerLinetypes={layerLinetypeMap}
                 onUpdateLines={handleUpdateSelectedLines}
                 onDeleteLines={(ids) => {
                     ids.forEach(id => onDeleteLine(id));
@@ -16057,7 +16152,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 <span className="font-mono text-cyan-200">{currentLayer}</span>
                             )}
                         </div>
-                        <p className="text-[10px] text-gray-500">Del/Backspace/D to delete · Esc to deselect · Alt+click label to flip · Shift+click label to swap bearing</p>
+                        <p className="text-[10px] text-gray-500">Del/Backspace/X to delete · Esc to deselect · Alt+click label to flip · Shift+click label to swap bearing</p>
                         {onConvertSelectionToBoundary && (
                             <button
                                 onClick={() => {
@@ -16165,7 +16260,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         </div>
                         <div className="flex items-center justify-between text-xs font-mono text-gray-300">
                             <span className="font-semibold text-white">{valueSummary}</span>
-                            <span className="text-[10px] text-gray-500 font-sans">Del / D to delete</span>
+                            <span className="text-[10px] text-gray-500 font-sans">Del / X to delete</span>
                         </div>
                         <div className="flex items-center gap-2 pt-1">
                             <button
@@ -17505,7 +17600,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                         });
                                     }}
                                     className={`p-2.5 rounded-lg transition-colors ${isSelectionMode ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
-                                    title="Selection Mode (S) — click lines, press D to delete, then Convert to Boundary"
+                                    title="Selection Mode (S) — click lines, press X to delete, then Convert to Boundary"
                                 >
                                     <ToolbarSelectIcon className="w-5 h-5"/>
                                 </button>
@@ -17811,7 +17906,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         : isDeletingLines
                         ? 'DELETE: Click line to remove [Esc to exit]'
                         : isSelectionMode
-                        ? `SELECTION: ${selectedLineIds.size} lines, ${selectedDimensionId ? '1 dim' : '0 dims'} selected [S to exit, B for box select, D to delete]`
+                        ? `SELECTION: ${selectedLineIds.size} lines, ${selectedDimensionId ? '1 dim' : '0 dims'} selected [S to exit, B for box select, X to delete]`
                         : drawingMode === 'boundary-align'
                         ? 'ALIGN: Click matching lines between deeds to align'
                         : undefined
@@ -17852,6 +17947,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         setSelectedLineIds(new Set());
                         setPolylinePoints([]);
                     },
+                    onStartAlignedDimension: () => startDimensionMode('aligned-dim'),
                     onStartInclusion: () => {
                         setDrawingMode('inclusion');
                         setIsTrimmingLines(false);

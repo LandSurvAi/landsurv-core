@@ -49,6 +49,13 @@ const respond = (msg: AgentMessage, success: boolean, data?: Record<string, unkn
   timestamp: Date.now(),
 });
 
+function askForCogoInput(
+  question: string,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { needsInput: { question, ...extra } };
+}
+
 /** Resolve azimuth from a string (DMS / quadrant / decimal) — radians from north. */
 function az(input: unknown): number | null {
   if (typeof input === 'number') return input;
@@ -472,10 +479,46 @@ export function useCogoExtendedSkills(opts: UseCogoExtendedSkillsOpts): void {
         const sp = findPoint(pointListsRef.current, d.fromPointNumber);
         if (sp) from = { northing: sp.northing, easting: sp.easting, elevation: sp.elevation };
       }
-      if (!from) return respond(m, false, undefined, 'fromPointNumber or fromCoordinates required.');
+      if (!from) {
+        return respond(
+          m,
+          false,
+          askForCogoInput('Where should the COGO direct calculation start?', {
+            title: 'COGO Direct Start',
+            fields: [
+              { id: 'fromPointNumber', label: 'Point number', type: 'text', placeholder: 'e.g. 101' },
+              { id: 'northing', label: 'Northing', type: 'number', placeholder: '5000.00' },
+              { id: 'easting', label: 'Easting', type: 'number', placeholder: '5000.00' },
+            ],
+            requireOneOf: [['fromPointNumber'], ['northing', 'easting']],
+          }),
+          'fromPointNumber or fromCoordinates required.',
+        );
+      }
       const a = az(d.azimuth);
-      if (a === null) return respond(m, false, undefined, 'azimuth could not be parsed.');
-      if (typeof d.distance !== 'number') return respond(m, false, undefined, 'distance is required.');
+      if (a === null) {
+        return respond(
+          m,
+          false,
+          askForCogoInput('What bearing or azimuth should I use?', {
+            title: 'COGO Direction',
+            field: 'azimuth',
+            hint: 'e.g. N 45°00\'00" E or 45.0',
+          }),
+          'azimuth could not be parsed.',
+        );
+      }
+      if (typeof d.distance !== 'number') {
+        return respond(
+          m,
+          false,
+          askForCogoInput('What horizontal distance should I use?', {
+            title: 'COGO Distance',
+            fields: [{ id: 'distance', label: 'Distance', type: 'number', unit: 'ft', required: true }],
+          }),
+          'distance is required.',
+        );
+      }
       const out = direct(from, a, d.distance);
       return respond(m, true, { coordinates: out, pointNumber: d.newPointNumber });
     }));
@@ -538,19 +581,63 @@ export function useCogoExtendedSkills(opts: UseCogoExtendedSkillsOpts): void {
       try {
         const out = solveCurve(d);
         return respond(m, true, { ...out });
-      } catch (e) { return respond(m, false, undefined, (e as Error).message); }
+      } catch (e) {
+        return respond(
+          m,
+          false,
+          askForCogoInput('Provide any two independent curve elements (e.g. Radius and Delta angle):', {
+            title: 'Horizontal Curve Parameters',
+            fields: [
+              { id: 'radius', label: 'Radius (R)', type: 'number', unit: 'ft' },
+              { id: 'delta', label: 'Delta angle (Δ)', type: 'number', unit: 'deg' },
+              { id: 'arcLength', label: 'Arc length (L)', type: 'number', unit: 'ft' },
+              { id: 'chord', label: 'Chord length (C)', type: 'number', unit: 'ft' },
+            ],
+          }),
+          (e as Error).message,
+        );
+      }
     }));
 
     unsubs.push(interAgentComm.onCommand('cogo_curve_stations', async (m) => {
       const d = (m.data ?? {}) as { piStation?: number; tangent?: number; arcLength?: number };
-      if (typeof d.piStation !== 'number' || typeof d.tangent !== 'number' || typeof d.arcLength !== 'number') return respond(m, false, undefined, 'piStation, tangent, arcLength required.');
+      if (typeof d.piStation !== 'number' || typeof d.tangent !== 'number' || typeof d.arcLength !== 'number') {
+        return respond(
+          m,
+          false,
+          askForCogoInput('What PI station, tangent (T), and arc length (L) should I use?', {
+            title: 'Curve Station Parameters',
+            fields: [
+              { id: 'piStation', label: 'PI station', type: 'number', unit: 'ft', required: true },
+              { id: 'tangent', label: 'Tangent (T)', type: 'number', unit: 'ft', required: true },
+              { id: 'arcLength', label: 'Arc length (L)', type: 'number', unit: 'ft', required: true },
+            ],
+          }),
+          'piStation, tangent, arcLength required.',
+        );
+      }
       const out = curveStations(d.piStation, { tangent: d.tangent, arcLength: d.arcLength });
       return respond(m, true, out as unknown as Record<string, unknown>);
     }));
 
     unsubs.push(interAgentComm.onCommand('cogo_spiral_xy', async (m) => {
       const d = (m.data ?? {}) as { length?: number; endRadius?: number; totalLength?: number };
-      if (typeof d.length !== 'number' || typeof d.endRadius !== 'number' || typeof d.totalLength !== 'number') return respond(m, false, undefined, 'length, endRadius, totalLength required.');
+      if (typeof d.length !== 'number' || typeof d.endRadius !== 'number' || typeof d.totalLength !== 'number') {
+        return respond(
+          m,
+          false,
+          askForCogoInput('What spiral parameters should I use?', {
+            title: 'Spiral Parameters',
+            submitLabel: 'Compute spiral',
+            fields: [
+              { id: 'totalLength', label: 'Total spiral length (Ls)', type: 'number', unit: 'ft', required: true },
+              { id: 'endRadius', label: 'End radius (R)', type: 'number', unit: 'ft', required: true },
+              { id: 'length', label: 'Distance along spiral (l)', type: 'number', unit: 'ft', required: true },
+            ],
+          }),
+          'length, endRadius, totalLength required.',
+        );
+      }
       const r = spiralXY(d.length, d.endRadius, d.totalLength);
       return respond(m, true, r as unknown as Record<string, unknown>);
     }));

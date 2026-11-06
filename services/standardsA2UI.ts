@@ -14,6 +14,7 @@
 
 import type { StandardDefinition } from '../contexts/types/CadManager.types.ts';
 import type { A2UIStandardsFacet, A2UIStandardsFilter } from '../types.ts';
+import { ALL_BUILT_IN_HATCHES } from './hatchLibrary.ts';
 
 export interface StandardsA2UIResolution {
   filter: A2UIStandardsFilter;
@@ -27,7 +28,7 @@ interface StandardsSearchConcept {
 }
 
 const FACET_WORD_RE =
-  /\b(layers?|linetypes?|line\s*types?|description\s*keys?|codes?|symbols?|standards?|spreadsheet|sheet)\b/i;
+  /\b(layers?|linetypes?|line\s*types?|hatches?|hatch\s*patterns?|description\s*keys?|codes?|symbols?|standards?|spreadsheet|sheet)\b/i;
 
 const INTENT_RE =
   /\b(show|list|display|view|open|what|which|where|find|lookup|look up|explain|tell\s+me|search|filter|sheet|spreadsheet)\b|\?/i;
@@ -46,7 +47,7 @@ const SEARCH_STOP_WORDS = new Set([
   'standard', 'standards', 'spreadsheet', 'sheet', 'all', 'any', 'do', 'we',
   'have', 'has', 'available', 'exist', 'exists', 'defined', 'entries', 'rows',
   'layer', 'layers', 'linetype', 'linetypes', 'line', 'types', 'type', 'code',
-  'codes', 'symbol', 'symbols', 'description', 'key', 'keys',
+  'codes', 'symbol', 'symbols', 'hatch', 'hatches', 'pattern', 'patterns', 'description', 'key', 'keys',
 ]);
 
 /**
@@ -347,7 +348,7 @@ function extractFocus(
 
   const cleaned = query
     .replace(/[?!.,;:]+/g, ' ')
-    .replace(/\b(?:layer|layers|linetype|linetypes|line\s*type|codes?|symbols?|description\s*keys?)\b/gi, ' ')
+    .replace(/\b(?:layer|layers|linetype|linetypes|line\s*type|hatches?|hatch\s*patterns?|patterns?|codes?|symbols?|description\s*keys?)\b/gi, ' ')
     .replace(STOP_WORDS, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -371,15 +372,17 @@ export function resolveStandardsA2UIQuery(
   }
 
   const lower = trimmed.toLowerCase();
-  const facet: A2UIStandardsFacet = /\blayers?\b/.test(lower)
-    ? 'layers'
-    : /\b(linetypes?|line\s*types?)\b/.test(lower)
-      ? 'linetypes'
-      : /\bsymbols?\b/.test(lower)
-        ? 'symbols'
-        : /\b(codes?|description\s*keys?)\b/.test(lower)
-          ? 'codes'
-          : 'all';
+  const facet: A2UIStandardsFacet = /\b(hatches?|hatch\s*patterns?)\b/.test(lower)
+    ? 'hatches'
+    : /\blayers?\b/.test(lower)
+      ? 'layers'
+      : /\b(linetypes?|line\s*types?)\b/.test(lower)
+        ? 'linetypes'
+        : /\bsymbols?\b/.test(lower)
+          ? 'symbols'
+          : /\b(codes?|description\s*keys?)\b/.test(lower)
+            ? 'codes'
+            : 'all';
 
   const focus = extractFocus(trimmed, standard, facet);
   const filter: A2UIStandardsFilter = {
@@ -391,11 +394,15 @@ export function resolveStandardsA2UIQuery(
   const layers = collectLayerNames(standard);
   const linetypes = standard.linetypes ?? [];
   const symbolCodes = codes.filter(code => symbolName(code.symbol));
+  const hatches = [...ALL_BUILT_IN_HATCHES, ...(standard.hatches ?? [])];
 
   let matched = 0;
   let literalMatched = 0;
 
-  if (facet === 'layers') {
+  if (facet === 'hatches') {
+    matched = hatches.filter(h => scoreStandardsMatch([h.name, h.description, h.category, h.femaZone, h.usage], focus) > 0).length;
+    literalMatched = hatches.filter(h => includesQuery([h.name, h.description, h.category, h.femaZone, h.usage], focus)).length;
+  } else if (facet === 'layers') {
     matched = layers.filter(name => scoreStandardsMatch(layerValues(name, standard), focus) > 0).length;
     literalMatched = layers.filter(name => includesQuery(layerValues(name, standard), focus)).length;
   } else if (facet === 'linetypes') {
@@ -403,28 +410,32 @@ export function resolveStandardsA2UIQuery(
     literalMatched = linetypes.filter(lt => includesQuery([lt.name, lt.description], focus)).length;
   } else if (facet === 'symbols') {
     matched = symbolCodes.filter(code => scoreStandardsMatch(codeValues(code), focus) > 0).length;
-    literalMatched = symbolCodes.filter(code => includesQuery(codeValues(code), focus)).length;
+    literalMatched = symbolCodes.filter(lt => includesQuery(codeValues(lt), focus)).length;
   } else if (facet === 'codes' || facet === 'all') {
     matched = codes.filter(code => scoreStandardsMatch(codeValues(code), focus) > 0).length;
     literalMatched = codes.filter(code => includesQuery(codeValues(code), focus)).length;
   }
 
   const noun =
-    facet === 'layers'
-      ? 'layer'
-      : facet === 'linetypes'
-        ? 'linetype'
-        : facet === 'symbols'
-          ? 'symbol-mapped code'
-          : 'description key';
+    facet === 'hatches'
+      ? 'hatch pattern'
+      : facet === 'layers'
+        ? 'layer'
+        : facet === 'linetypes'
+          ? 'linetype'
+          : facet === 'symbols'
+            ? 'symbol-mapped code'
+            : 'description key';
   const total =
-    facet === 'layers'
-      ? layers.length
-      : facet === 'linetypes'
-        ? linetypes.length
-        : facet === 'symbols'
-          ? symbolCodes.length
-          : codes.length;
+    facet === 'hatches'
+      ? hatches.length
+      : facet === 'layers'
+        ? layers.length
+        : facet === 'linetypes'
+          ? linetypes.length
+          : facet === 'symbols'
+            ? symbolCodes.length
+            : codes.length;
   const focusLabel = focus ? ` matching “${focus}”` : '';
   const concepts = matchedConcepts(significantSearchTokens(focus));
   const relatedSummary = [...new Set(concepts.map(concept => concept.summary))].slice(0, 2).join(' and ');

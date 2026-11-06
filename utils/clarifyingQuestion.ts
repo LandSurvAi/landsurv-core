@@ -6,9 +6,13 @@
 // validates it, and returns the question, option labels, and the text with the
 // JSON removed so the caller can render clickable reply pills instead.
 
+import type { A2UIInputFormSpec } from '../types.ts';
+import { buildA2UIInputFormFromNeedsInput } from '../services/a2uiInput.ts';
+
 export interface ExtractedClarifyingQuestion {
   question: string;
   options: string[];
+  inputForm?: A2UIInputFormSpec;
   /** Source text with the question JSON (and any empty ```json fence) removed. */
   text: string;
 }
@@ -76,6 +80,20 @@ export function extractClarifyingQuestion(raw: string | null | undefined): Extra
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
 
     const record = parsed as Record<string, unknown>;
+    // Ignore geometry / tool-call payloads that are not clarifying prompts
+    if (
+      record.points ||
+      record.lines ||
+      record.askPeer ||
+      record.recallFact ||
+      record.newFile ||
+      record.modifiedContent ||
+      record.stationingParameters ||
+      record.closureParameters
+    ) {
+      continue;
+    }
+
     const question = typeof record.question === 'string' ? record.question.trim() : '';
     const options: string[] = [];
     for (const key of OPTION_KEYS) {
@@ -87,9 +105,15 @@ export function extractClarifyingQuestion(raw: string | null | undefined): Extra
       if (options.length > 0) break;
     }
 
-    if (!question && options.length === 0) continue;
+    const hasFields = Array.isArray(record.fields) && record.fields.length > 0;
+    const inputForm =
+      hasFields && question
+        ? buildA2UIInputFormFromNeedsInput(record) ?? undefined
+        : undefined;
 
-    return { question, options, text: stripQuestionBlock(raw, candidate) };
+    if (!question && options.length === 0 && !inputForm) continue;
+
+    return { question, options, inputForm, text: stripQuestionBlock(raw, candidate) };
   }
 
   return null;

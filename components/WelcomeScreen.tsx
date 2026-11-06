@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { 
   XMarkIcon, 
   YouTubeIcon, 
-  FacebookIcon
+  FacebookIcon,
+  LinkedInIcon
 } from './icons';
 import '@fontsource-variable/inter';
 import { getHolidayTheme } from './InitialAgentSelection';
@@ -126,6 +127,9 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
               <span className="hidden sm:inline-block text-xs font-semibold uppercase tracking-[0.14em] text-slate-400 light-theme:text-gray-500 truncate">
                 AI Surveying &amp; Civil Agentic CAD Suite
               </span>
+              <span className="font-mono text-[10px] sm:text-xs font-medium tracking-wide text-slate-500 light-theme:text-gray-500 whitespace-nowrap">
+                v{version}
+              </span>
             </div>
           </div>
 
@@ -163,7 +167,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                         Primary Workspace
                       </span>
                     </div>
-                    <p className="text-sm text-slate-300 light-theme:text-gray-600 leading-relaxed max-w-lg">
+                    <p className="hidden sm:block text-sm text-slate-300 light-theme:text-gray-600 leading-relaxed max-w-lg">
                       Open the full CAD environment with the LSAI Agent in command: AI-assisted and manual drafting, COGO solvers, layer management, and Civil 3D sync, all connected to the active project.
                     </p>
                   </div>
@@ -208,7 +212,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                     <h4 className="text-base font-bold text-white light-theme:text-gray-900 group-hover:text-red-300 light-theme:group-hover:text-red-700 transition-colors">
                       Home
                     </h4>
-                    <p className="text-sm text-slate-400 light-theme:text-gray-600 leading-relaxed">
+                    <p className="hidden sm:block text-sm text-slate-400 light-theme:text-gray-600 leading-relaxed">
                       Browse the full suite of 24 specialized survey, GIS, GNSS, and civil drafting agents.
                     </p>
                   </div>
@@ -240,7 +244,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                         </span>
                       )}
                     </div>
-                    <p className="text-sm text-slate-400 light-theme:text-gray-600 leading-relaxed">
+                    <p className="hidden sm:block text-sm text-slate-400 light-theme:text-gray-600 leading-relaxed">
                       Upload a deed PDF or paste a legal description and have the Boundary Agent draft the parcel.
                     </p>
                     {!freeDeedsUnlimited && (
@@ -295,7 +299,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                         Apache-2.0
                       </span>
                     </div>
-                    <p className="text-sm text-slate-400 light-theme:text-gray-600 leading-relaxed">
+                    <p className="hidden sm:block text-sm text-slate-400 light-theme:text-gray-600 leading-relaxed">
                       Open-source software you can use, study, and build on, plus ways to support the project.
                     </p>
                   </div>
@@ -303,30 +307,6 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                     View Open Source &amp; Support &rarr;
                   </p>
                 </div>
-              </div>
-
-              {/* COMMUNITY LINKS */}
-              <div className="flex items-center justify-center gap-6 pt-5 border-t border-gray-800 light-theme:border-gray-200">
-                <a
-                  href="https://www.youtube.com/@LandSurvAI"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-red-500 hover:text-red-400 hover:scale-110 transition-all"
-                  title="Watch tutorials on YouTube"
-                  aria-label="LandSurv.ai on YouTube"
-                >
-                  <YouTubeIcon className="w-7 h-7" />
-                </a>
-                <a
-                  href="https://www.facebook.com/profile.php?id=61583326114422"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[#1877F2] hover:text-[#4a9bff] hover:scale-110 transition-all"
-                  title="Join our Facebook community"
-                  aria-label="LandSurv.ai on Facebook"
-                >
-                  <FacebookIcon className="w-7 h-7" />
-                </a>
               </div>
             </div>
           )}
@@ -478,38 +458,93 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         </main>
 
         {/* Footer Bar */}
-        <footer className="px-4 py-3 sm:px-6 bg-gray-950/40 flex items-center justify-between gap-2.5 border-t border-gray-800 shrink-0 light-theme:bg-gray-50 light-theme:border-gray-200">
+        <footer className="px-4 py-3 sm:px-6 bg-gray-950/40 border-t border-gray-800 shrink-0 light-theme:bg-gray-50 light-theme:border-gray-200">
           {mode === 'main' ? (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500 light-theme:text-gray-600">
-              <span>v{version}</span>
-              {[
-                { label: 'TOS', href: 'https://tos.landsurv.ai' },
-                { label: 'Legal', href: 'https://legal.landsurv.ai' },
-                { label: 'Privacy', href: 'https://privacy.landsurv.ai' },
-                { label: 'Standards', href: 'https://standards.landsurv.ai' },
-                { label: 'DPA', href: 'https://dpa.landsurv.ai' },
-                { label: 'Subprocessors', href: 'https://subprocessors.landsurv.ai' },
-                { label: 'Compliance', href: 'https://compliance.landsurv.ai' },
-              ].map(link => (
+            <div className="flex flex-col items-center gap-2.5 md:grid md:grid-cols-[1fr_auto_1fr] md:items-center md:gap-10">
+              {/* Community links — centered in the fixed bar */}
+              <div className="flex items-center justify-center gap-5 md:col-start-2 md:row-start-1">
                 <a
-                  key={link.label}
-                  href={link.href}
+                  href="https://www.youtube.com/@LandSurvAI"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-gray-400 hover:text-white underline-offset-2 hover:underline transition-colors"
+                  className="text-red-500 hover:text-red-400 hover:scale-110 transition-all"
+                  title="Watch tutorials on YouTube"
+                  aria-label="LandSurv.ai on YouTube"
                 >
-                  {link.label}
+                  <YouTubeIcon className="w-5 h-5" />
                 </a>
-              ))}
+                <a
+                  href="https://www.facebook.com/profile.php?id=61583326114422"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#1877F2] hover:text-[#4a9bff] hover:scale-110 transition-all"
+                  title="Join our Facebook community"
+                  aria-label="LandSurv.ai on Facebook"
+                >
+                  <FacebookIcon className="w-5 h-5" />
+                </a>
+                <a
+                  href="https://www.linkedin.com/in/michael-sersen-b710a2320/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#0A66C2] hover:text-[#3b8fd6] hover:scale-110 transition-all"
+                  title="Connect with Michael Sersen on LinkedIn"
+                  aria-label="Michael Sersen on LinkedIn"
+                >
+                  <LinkedInIcon className="w-5 h-5" />
+                </a>
+              </div>
+
+              {/* Left legal group — 2×2 beside the socials */}
+              <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-xs text-gray-500 light-theme:text-gray-600 md:col-start-1 md:row-start-1 md:grid md:grid-cols-2 md:justify-self-end md:justify-items-start">
+                {[
+                  { label: 'Sitemap', href: 'https://sitemap.landsurv.ai' },
+                  { label: 'TOS', href: 'https://tos.landsurv.ai' },
+                  { label: 'Legal', href: 'https://legal.landsurv.ai' },
+                  { label: 'Privacy', href: 'https://privacy.landsurv.ai' },
+                ].map(link => (
+                  <a
+                    key={link.label}
+                    href={link.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-gray-400 hover:text-white underline-offset-2 hover:underline transition-colors"
+                  >
+                    {link.label}
+                  </a>
+                ))}
+              </div>
+
+              {/* Right legal group — 2×2 beside the socials */}
+              <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-xs text-gray-500 light-theme:text-gray-600 md:col-start-3 md:row-start-1 md:grid md:grid-cols-2 md:justify-self-start md:justify-items-start">
+                {[
+                  { label: 'Standards', href: 'https://standards.landsurv.ai' },
+                  { label: 'DPA', href: 'https://dpa.landsurv.ai' },
+                  { label: 'Subprocessors', href: 'https://subprocessors.landsurv.ai' },
+                  { label: 'Compliance', href: 'https://compliance.landsurv.ai' },
+                ].map(link => (
+                  <a
+                    key={link.label}
+                    href={link.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-gray-400 hover:text-white underline-offset-2 hover:underline transition-colors"
+                  >
+                    {link.label}
+                  </a>
+                ))}
+              </div>
             </div>
           ) : (
-            <button
-              type="button"
-              onClick={() => setMode('main')}
-              className="px-4 py-2 font-semibold text-xs sm:text-sm text-gray-300 hover:text-white bg-gray-700/60 hover:bg-gray-700 rounded-lg transition light-theme:bg-gray-200 light-theme:text-gray-800 light-theme:hover:bg-gray-300"
-            >
-              Back to Welcome
-            </button>
+            <div className="flex items-center justify-between gap-2.5">
+              <button
+                type="button"
+                onClick={() => setMode('main')}
+                className="px-4 py-2 font-semibold text-xs sm:text-sm text-gray-300 hover:text-white bg-gray-700/60 hover:bg-gray-700 rounded-lg transition light-theme:bg-gray-200 light-theme:text-gray-800 light-theme:hover:bg-gray-300"
+              >
+                Back to Welcome
+              </button>
+            </div>
           )}
         </footer>
       </div>

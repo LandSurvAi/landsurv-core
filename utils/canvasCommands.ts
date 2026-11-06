@@ -15,6 +15,8 @@ export interface CommandContext {
   onAddPoint?: () => void;
   onStartLine?: () => void;
   onStartCircle?: () => void;
+  /** Start the interactive aligned-dimension tool (D / DIMALIGNED). */
+  onStartAlignedDimension?: () => void;
   onStartInclusion?: () => void;
   onToggleOrtho?: () => void;
   /** Open the selection Properties dialog. */
@@ -80,6 +82,13 @@ export interface CommandContext {
   ) => number;
   /** Start the interactive polygon tool: snapped center, live radius, adjustable sides. */
   onStartPolygon?: (sides?: number, center?: { easting: number; northing: number }) => void;
+  /** Start interactive Hatch tool (H / HATCH / BHATCH) in pick-area or select-object mode. */
+  onStartHatch?: (options?: {
+    mode?: 'pick-area' | 'select-object';
+    patternName?: string;
+    scale?: number;
+    angleDeg?: number;
+  }) => void;
   /** Open the floating, operation-anchored prompt for a multi-input command. */
   onPrompt?: (prompt: CommandPromptSpec) => void;
   /** Linear unit abbreviation shown by prompt fields, e.g. "ft". */
@@ -175,6 +184,10 @@ const COMMAND_ALIASES: Record<string, string> = {
   c: 'circle',
   circle: 'circle',
   cir: 'circle',
+  h: 'hatch',
+  hatch: 'hatch',
+  bh: 'hatch',
+  bhatch: 'hatch',
   s: 'select',
   sel: 'select',
   select: 'select',
@@ -184,6 +197,9 @@ const COMMAND_ALIASES: Record<string, string> = {
   t: 'trim',
   tr: 'trim',
   trim: 'trim',
+  d: 'aligned_dimension',
+  dim: 'aligned_dimension',
+  dimaligned: 'aligned_dimension',
   f: 'fillet',
   fillet: 'fillet',
   cp: 'copy',
@@ -240,7 +256,7 @@ const COMMAND_ALIASES: Record<string, string> = {
   mirror: 'mirror',
   j: 'join',
   join: 'join',
-  x: 'explode',
+  x: 'erase',
   explode: 'explode',
   e: 'erase',
   er: 'erase',
@@ -263,6 +279,7 @@ const COMMAND_ALIASES: Record<string, string> = {
 export const COMMAND_DESCRIPTIONS: Record<string, string> = {
   line: 'Draw chained line/arc segments',
   circle: 'Draw a circle by center and radius',
+  hatch: 'Hatch a closed area (click inside) or selected object',
   rectangle: 'Rectangle from two corners',
   polygon: 'Regular polygon from a snapped center and drag radius',
   array: 'Rectangular array',
@@ -272,7 +289,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
   scale: 'Scale the selection',
   mirror: 'Mirror the selection',
   join: 'Join segments into one polyline',
-  explode: 'Explode polylines into segments',
+  explode: 'Explode polylines and hatches into linework',
   erase: 'Delete selected entities',
   copy: 'Copy the selection',
   offset: 'Offset a line, polyline, arc or circle',
@@ -284,6 +301,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
   select_all: 'Select every visible entity',
   deselect: 'Clear the selection',
   distance: 'Measure between two points',
+  aligned_dimension: 'Place an aligned dimension between two points',
   ortho: 'Toggle orthogonal drawing',
   inclusion: 'Draw an inclusion boundary',
   undo: 'Undo the last change',
@@ -311,6 +329,8 @@ export const HELP_GROUPS: HelpGroup[] = [
     entries: [
       { command: 'L / PLINE', description: 'Chained line and tangent-arc segments', note: 'A arc · L line' },
       { command: 'C / CIRCLE', description: 'Center + radius, or two tangents (TTR)', note: 'T toggles TTR' },
+      { command: 'H / HATCH', description: 'Hatch by clicking inside an enclosed area or selecting a closed object', note: 'S object · A area' },
+      { command: 'D / DIMALIGNED', description: 'Aligned dimension — pick two points, then the offset line', note: 'annotation' },
       { command: 'REC / RECTANGLE', description: 'Rectangle from two opposite corners', note: 'arrow pad' },
       { command: 'POL / POLYGON', description: 'Regular polygon from a snapped center and drag radius', note: 'scroll / [ ] sides' },
       { command: 'P', description: 'Place a survey point' },
@@ -333,8 +353,8 @@ export const HELP_GROUPS: HelpGroup[] = [
       { command: 'SC / SCALE', description: 'Scale with snaps and a live ghost preview', note: 'click or type factor' },
       { command: 'MI / MIRROR', description: 'Mirror across two snapped points' },
       { command: 'J / JOIN', description: 'Join segments into one polyline' },
-      { command: 'X / EXPLODE', description: 'Explode polylines into segments' },
-      { command: 'E / ERASE', description: 'Delete the selection' },
+      { command: 'EXPLODE', description: 'Explode polylines and hatches into linework' },
+      { command: 'X / E / DEL', description: 'Delete the selection' },
     ],
   },
   {
@@ -381,6 +401,7 @@ export const HELP_GROUPS: HelpGroup[] = [
 ];
 
 export const HELP_NOTES: string[] = [
+  'Bare-key shortcuts: F starts FILLET, D starts an aligned dimension, and X deletes the selection. Delete or Backspace also delete; EXPLODE is the full command for exploding polylines and hatches.',
   'Coordinates are E,N in feet. Typed distances, radii and spacings use the current linear unit.',
   'Angles are degrees, counter-clockwise positive. Hold Shift to snap to 15° increments.',
   'Use the buttons after a result to open it in the Text Editor, open Properties, or copy it.',
@@ -622,9 +643,41 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
       ctx.onStartCircle?.();
       return { status: 'ok', message: 'CIRCLE: Specify center point or [T] for TTR [Esc to cancel]' };
 
+    case 'hatch': {
+      let mode: 'pick-area' | 'select-object' | undefined;
+      let patternName: string | undefined;
+      let scale: number | undefined;
+      let angleDeg: number | undefined;
+
+      for (const token of args) {
+        const upper = token.toUpperCase();
+        if (upper === 'SELECT' || upper === 'OBJECT' || upper === 'OBJ' || upper === 'S') {
+          mode = 'select-object';
+        } else if (upper === 'AREA' || upper === 'PICK' || upper === 'POINT' || upper === 'A' || upper === 'P') {
+          mode = 'pick-area';
+        } else if (/^[+-]?\d+(?:\.\d+)?$/.test(token)) {
+          const val = parseFloat(token);
+          if (scale === undefined && val > 0) scale = val;
+          else if (angleDeg === undefined) angleDeg = val;
+        } else if (/^[A-Za-z0-9_-]+$/.test(token)) {
+          patternName = upper;
+        }
+      }
+
+      ctx.onStartHatch?.({ mode, patternName, scale, angleDeg });
+      const modeDesc = mode === 'select-object'
+        ? 'Select a closed polyline, circle, or boundary object'
+        : 'Click inside an enclosed area or press [S] to select an object';
+      const patDesc = patternName ? ` (${patternName}${scale ? ` ×${scale}` : ''}${angleDeg !== undefined ? ` @${angleDeg}°` : ''})` : '';
+      return {
+        status: 'ok',
+        message: `HATCH${patDesc}: ${modeDesc} [A area · S select object · Esc to exit]`,
+      };
+    }
+
     case 'select':
       ctx.onToggleSelection?.();
-      return { status: 'ok', message: 'SELECT: Click lines to select/deselect [B for Box, D/Del to remove]' };
+      return { status: 'ok', message: 'SELECT: Click lines to select/deselect [B for Box, X/Del to remove]' };
 
     case 'box':
       ctx.onToggleBoxSelect?.();
@@ -980,7 +1033,7 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
       const blocked = selectionRequired(cmd, ctx, 'EXPLODE');
       if (blocked) return blocked;
       const exploded = ctx.onExplodeSelection?.() ?? 0;
-      return { status: 'ok', message: `EXPLODE: Released ${exploded} entities from their polylines.` };
+      return { status: 'ok', message: `EXPLODE: Released ${exploded} entities into linework.` };
     }
 
     case 'erase': {
@@ -1002,6 +1055,13 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
     case 'deselect':
       ctx.onDeselectAll?.();
       return { status: 'ok', message: 'DESELECT: Selection cleared.' };
+
+    case 'aligned_dimension':
+      if (!ctx.onStartAlignedDimension) {
+        return { status: 'error', message: 'DIMALIGNED: The aligned-dimension tool is not available in this view.' };
+      }
+      ctx.onStartAlignedDimension();
+      return { status: 'ok', message: 'DIMALIGNED: Pick first point, second point, then the offset line [Esc to cancel]' };
 
     case 'distance': {
       if (args.length > 2) {
@@ -1100,8 +1160,8 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
         status: 'info',
         message: [
           'Commands:',
-          'DRAW — L/PLINE (line), C (circle), REC (rectangle), POL (polygon: click center, drag/type radius, scroll or [ ] sides), P (point), I (inclusion).',
-          'MODIFY — S (select), B (box), T (trim), F (fillet — select exactly two straight lines, then type the radius; bare F opens the radius pad), EX (extend), CP (copy), OS (offset [distance]), M (move — bare M picks a snapped base point and destination with a live ghost preview, M dx,dy moves immediately), RO / R (rotate — bare RO or the R key picks a base point with snaps and a live ghost preview, then takes a clicked point or typed angle (Shift snaps to 15°); RO angle [pivot] rotates immediately), SC (scale — bare SC picks a snapped reference point with a live ghost preview, then takes a clicked point or typed factor; SC factor [pivot] scales immediately), MI (mirror — bare MI picks two snapped axis points with a live ghost preview, MI x1,y1 x2,y2 mirrors immediately), J (join), X (explode), E (erase).',
+          'DRAW — L/PLINE (line), C (circle), D (aligned dimension — pick two points, then the offset line), REC (rectangle), POL (polygon: click center, drag/type radius, scroll or [ ] sides), P (point), I (inclusion).',
+          'MODIFY — S (select), B (box), T (trim), F (fillet — select exactly two straight lines, then type the radius; bare F opens the radius pad), EX (extend), CP (copy), OS (offset [distance]), M (move — bare M picks a snapped base point and destination with a live ghost preview, M dx,dy moves immediately), RO / R (rotate — bare RO or the R key picks a base point with snaps and a live ghost preview, then takes a clicked point or typed angle (Shift snaps to 15°); RO angle [pivot] rotates immediately), SC (scale — bare SC picks a snapped reference point with a live ghost preview, then takes a clicked point or typed factor; SC factor [pivot] scales immediately), MI (mirror — bare MI picks two snapped axis points with a live ghost preview, MI x1,y1 x2,y2 mirrors immediately), J (join), EXPLODE (explode), X / E / DEL (delete).',
           'ARRAYS — AR rows cols rowSpacing colSpacing (rectangular), PA count fillAngle [center] (polar; default selection center). Typing bare AR opens a UCS-style X/Y manipulator: drag a handle for spacing, Shift-drag for quantity, Alt-drag for span, or type any value. The direction ring sets the array angle. The unused axis keeps its preloaded 1 quantity / 0 spacing, so you only enter the axis you need. Typing bare PA opens the compact ring manipulator.',
           'SELECTION — run a modify/array command with nothing selected and it waits for picks: left-click entities, drag a window to box select, MMB pans, Enter applies, Esc cancels.',
           'UTILITY — ZE (zoom extents), U (undo), REDO, ALL (select all), DS (deselect), DI x1,y1 x2,y2 (distance), KEY, CLEAR, PROP / PROPERTIES (selection properties panel).',

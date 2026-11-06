@@ -56,6 +56,7 @@ import { StandardsBuilder, ChatMessage } from './StandardsBuilder';
 import { SurveyUpload } from './SurveyUpload';
 import { LinetypeUpload } from './LinetypeUpload';
 import { SymbolLibraryPanel } from './SymbolLibraryPanel';
+import { findMatchingSymbol } from '../../data/surveySymbolLibrary';
 import { ReviewModal } from './ReviewModal';
 import { generateLinetypesFromCodes } from '../../utils/markdownTableParser';
 import { StandardsEditor } from './StandardsEditor';
@@ -694,79 +695,38 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
         }
       }
       
-      // Common survey symbol SVG paths - used when symbol is just a name string
-      const commonSymbolPaths: Record<string, { svgPath: string; viewBox: string }> = {
-        // Control & Monuments
-        'BACKSIGHT_TARGET': { svgPath: 'M 12 2 L 12 22 M 2 12 L 22 12 M 12 8 A 4 4 0 1 0 12 16 A 4 4 0 1 0 12 8 Z', viewBox: '0 0 24 24' },
-        'BENCHMARK': { svgPath: 'M 12 4 L 20 20 L 4 20 Z M 12 10 L 12 16', viewBox: '0 0 24 24' },
-        'CONTROL_POINT': { svgPath: 'M 12 2 L 12 22 M 2 12 L 22 12 M 12 6 A 6 6 0 1 0 12 18 A 6 6 0 1 0 12 6 Z', viewBox: '0 0 24 24' },
-        'GPS_BASE_STATION': { svgPath: 'M 12 2 L 12 22 M 2 12 L 22 12 M 8 8 L 16 16 M 16 8 L 8 16', viewBox: '0 0 24 24' },
-        // Set monuments
-        'IRON_PIPE_SET': { svgPath: 'M 12 4 A 8 8 0 1 0 12 20 A 8 8 0 1 0 12 4 Z M 12 8 A 4 4 0 1 0 12 16 A 4 4 0 1 0 12 8 Z', viewBox: '0 0 24 24' },
-        'IRON_ROD_SET': { svgPath: 'M 12 4 A 8 8 0 1 0 12 20 A 8 8 0 1 0 12 4 Z', viewBox: '0 0 24 24' },
-        'MAG_NAIL_SET': { svgPath: 'M 4 4 L 20 4 L 20 20 L 4 20 Z M 4 4 L 20 20 M 20 4 L 4 20', viewBox: '0 0 24 24' },
-        'PK_NAIL_SET': { svgPath: 'M 4 4 L 20 4 L 20 20 L 4 20 Z', viewBox: '0 0 24 24' },
-        'REBAR_SET': { svgPath: 'M 12 4 L 20 12 L 12 20 L 4 12 Z', viewBox: '0 0 24 24' },
-        'REBAR_CAP_SET': { svgPath: 'M 12 4 L 20 12 L 12 20 L 4 12 Z M 12 8 L 16 12 L 12 16 L 8 12 Z', viewBox: '0 0 24 24' },
-        // Found monuments
-        'CL_MON_FOUND': { svgPath: 'M 12 4 L 20 20 L 4 20 Z', viewBox: '0 0 24 24' },
-        'CONCRETE_MONUMENT_FOUND': { svgPath: 'M 4 4 L 20 4 L 20 20 L 4 20 Z', viewBox: '0 0 24 24' },
-        'IRON_PIPE_FOUND': { svgPath: 'M 12 4 A 8 8 0 1 0 12 20 A 8 8 0 1 0 12 4 Z', viewBox: '0 0 24 24' },
-        'IRON_ROD_FOUND': { svgPath: 'M 12 4 A 8 8 0 1 0 12 20 A 8 8 0 1 0 12 4 Z M 8 8 L 16 16 M 16 8 L 8 16', viewBox: '0 0 24 24' },
-        'MAG_NAIL_FOUND': { svgPath: 'M 4 4 L 20 4 L 20 20 L 4 20 Z M 4 4 L 20 20 M 20 4 L 4 20', viewBox: '0 0 24 24' },
-        'PK_NAIL_FOUND': { svgPath: 'M 4 4 L 20 4 L 20 20 L 4 20 Z M 8 8 L 16 16 M 16 8 L 8 16', viewBox: '0 0 24 24' },
-        'PROPERTY_CORNER_FOUND': { svgPath: 'M 12 4 L 20 12 L 12 20 L 4 12 Z M 12 8 A 4 4 0 1 0 12 16', viewBox: '0 0 24 24' },
-        'QUARTER_CORNER_FOUND': { svgPath: 'M 12 2 L 12 22 M 2 12 L 22 12 M 12 4 L 20 12 L 12 20 L 4 12 Z', viewBox: '0 0 24 24' },
-        'REBAR_FOUND': { svgPath: 'M 12 4 L 20 12 L 12 20 L 4 12 Z', viewBox: '0 0 24 24' },
-        'REBAR_CAP_FOUND': { svgPath: 'M 12 4 L 20 12 L 12 20 L 4 12 Z M 12 8 L 16 12 L 12 16 L 8 12 Z', viewBox: '0 0 24 24' },
-        'SECTION_CORNER_FOUND': { svgPath: 'M 12 2 L 12 22 M 2 12 L 22 12 M 6 6 L 18 18 M 18 6 L 6 18', viewBox: '0 0 24 24' },
-        'LOT_CORNER_FOUND': { svgPath: 'M 12 4 A 8 8 0 1 0 12 20 A 8 8 0 1 0 12 4 Z M 12 2 L 12 22', viewBox: '0 0 24 24' },
-        // Staking
-        'LATH': { svgPath: 'M 10 2 L 14 2 L 14 22 L 10 22 Z', viewBox: '0 0 24 24' },
-        'LATH_FLAGGED': { svgPath: 'M 10 2 L 14 2 L 14 22 L 10 22 Z M 14 2 L 22 6 L 14 10', viewBox: '0 0 24 24' },
-        'WOOD_STAKE': { svgPath: 'M 8 2 L 16 2 L 14 22 L 10 22 Z', viewBox: '0 0 24 24' },
-        'WOOD_HUB': { svgPath: 'M 4 8 L 20 8 L 20 16 L 4 16 Z M 12 8 L 12 2 M 12 16 L 12 22', viewBox: '0 0 24 24' },
-        // Utilities
-        'LIGHT_POLE': { svgPath: 'M 12 2 L 12 22 M 6 4 L 18 4 L 12 10 Z', viewBox: '0 0 24 24' },
-        'POWER_POLE': { svgPath: 'M 12 2 L 12 22 M 4 6 L 20 6', viewBox: '0 0 24 24' },
-        'GAS_METER': { svgPath: 'M 4 8 L 20 8 L 20 16 L 4 16 Z M 8 8 L 8 16 M 16 8 L 16 16', viewBox: '0 0 24 24' },
-        'GAS_VALVE': { svgPath: 'M 12 4 L 20 12 L 12 20 L 4 12 Z M 8 12 L 16 12', viewBox: '0 0 24 24' },
-        // Generic
-        'X': { svgPath: 'M 4 4 L 20 20 M 20 4 L 4 20', viewBox: '0 0 24 24' },
-        'POINT': { svgPath: 'M 12 8 A 4 4 0 1 0 12 16 A 4 4 0 1 0 12 8 Z', viewBox: '0 0 24 24' },
-        'CROSS': { svgPath: 'M 12 2 L 12 22 M 2 12 L 22 12', viewBox: '0 0 24 24' },
-        'SQUARE': { svgPath: 'M 4 4 L 20 4 L 20 20 L 4 20 Z', viewBox: '0 0 24 24' },
-        'TRIANGLE': { svgPath: 'M 12 4 L 20 20 L 4 20 Z', viewBox: '0 0 24 24' },
-        'DIAMOND': { svgPath: 'M 12 4 L 20 12 L 12 20 L 4 12 Z', viewBox: '0 0 24 24' },
-        'CIRCLE': { svgPath: 'M 12 4 A 8 8 0 1 0 12 20 A 8 8 0 1 0 12 4 Z', viewBox: '0 0 24 24' },
-      };
-
       // Send all code data for comprehensive legend
-      // Include full symbol data (SVG paths) for rendering in C3D
+      // Include full symbol data (SVG paths, fills, and texts) for rendering in C3D,
+      // resolving string block names against the single-source SURVEY_SYMBOL_LIBRARY.
       const legendCodes = currentStandard.codes.map(code => {
-        // Extract symbol data if it's a full SymbolDefinition object
-        let symbolData = undefined;
+        let symbolData: {
+          svgPath: string;
+          fillPath?: string;
+          texts?: import('../../contexts/types/CadManager.types').SymbolTextElement[];
+          viewBox: string;
+          name: string;
+        } | undefined = undefined;
         let symbolName = '-';
         
         if (code.symbol) {
           if (typeof code.symbol === 'object') {
-            // Full SymbolDefinition with SVG paths
             symbolData = {
               svgPath: code.symbol.svgPath,
               fillPath: code.symbol.fillPath,
+              texts: code.symbol.texts,
               viewBox: code.symbol.viewBox || '0 0 24 24',
               name: code.symbol.name,
             };
             symbolName = code.symbol.name;
-          } else if (typeof code.symbol === 'string') {
+          } else if (typeof code.symbol === 'string' && code.symbol.trim() !== '-') {
             symbolName = code.symbol;
-            // Look up in common symbols library
-            const upperName = code.symbol.toUpperCase().replace(/[- ]/g, '_');
-            const commonSym = commonSymbolPaths[upperName] || commonSymbolPaths[code.symbol];
-            if (commonSym) {
+            const matchedLib = findMatchingSymbol(code.symbol, code.description);
+            if (matchedLib) {
               symbolData = {
-                svgPath: commonSym.svgPath,
-                viewBox: commonSym.viewBox,
+                svgPath: matchedLib.svgPath,
+                fillPath: matchedLib.fillPath,
+                texts: matchedLib.texts,
+                viewBox: matchedLib.viewBox || '0 0 24 24',
                 name: code.symbol,
               };
             }

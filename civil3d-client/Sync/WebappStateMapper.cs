@@ -428,10 +428,29 @@ namespace LandsurvConnector.Sync
                 if (s["hidden"]?.ToObject<bool>() ?? false) continue;
                 string name = s["name"]?.ToString();
                 if (string.IsNullOrWhiteSpace(name)) continue;
+                List<SyncSymbolText> texts = null;
+                if (s["texts"] is JArray textsArr && textsArr.Count > 0)
+                {
+                    texts = textsArr.OfType<JObject>()
+                        .Select(t => new SyncSymbolText
+                        {
+                            Text = t["text"]?.ToString() ?? "",
+                            X = t["x"]?.ToObject<double?>() ?? 12.0,
+                            Y = t["y"]?.ToObject<double?>() ?? 12.0,
+                            FontSize = t["fontSize"]?.ToObject<double?>() ?? 7.0,
+                            FontWeight = t["fontWeight"]?.ToString(),
+                            Anchor = t["anchor"]?.ToString(),
+                            Rotation = t["rotation"]?.ToObject<double?>(),
+                        })
+                        .Where(t => !string.IsNullOrWhiteSpace(t.Text))
+                        .ToList();
+                }
                 snapshot.Symbols.Add(new SyncBlockRecord
                 {
                     Name = name,
                     SvgPath = s["svgPath"]?.ToString(),
+                    FillPath = s["fillPath"]?.ToString(),
+                    Texts = texts,
                     ViewBox = s["viewBox"]?.ToString(),
                     Scale = s["scale"]?.ToObject<double?>(),
                 });

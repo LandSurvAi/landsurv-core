@@ -45,6 +45,9 @@ export type A2UICustomActionId =
   | 'open-zoning-intake'
   | 'open-title-search-panel'
   | 'open-compliance-panel'
+  | 'roading-synthesize-existing'
+  | 'roading-design-corridor'
+  | 'open-roading-studio'
   | 'decline-upload';
 
 export type A2UIReplyResolution =
@@ -79,6 +82,7 @@ export const A2UI_INTAKE_AGENTS: readonly AgentType[] = [
   AgentType.TITLE_SEARCH,
   AgentType.STANDARDS_COMPLIANCE,
   AgentType.CAD_MANAGER,
+  AgentType.ROADING_AGENT,
 ] as const;
 
 export function getAgentA2UIWidgetType(agent: AgentType): A2UIWidgetType | null {
@@ -109,6 +113,8 @@ export function getAgentA2UIWidgetType(agent: AgentType): A2UIWidgetType | null 
       return 'standards-compliance-intake';
     case AgentType.CAD_MANAGER:
       return 'cad-manager-intake';
+    case AgentType.ROADING_AGENT:
+      return 'roading-intake';
     case AgentType.CONTOURING_AGENT:
     case AgentType.STEEP_SLOPE_AGENT:
     case AgentType.PROFILE_AGENT:
@@ -147,6 +153,8 @@ export function getUploadPromptCopy(agent: AgentType, widgetType: A2UIWidgetType
       return 'Configure your compliance audit below — select a subject PDF, optional reference PDFs, source mode, and checks to run:';
     case 'cad-manager-intake':
       return 'Drop your CAD standards file (<strong>.lay</strong>, <strong>.dsc</strong>, <strong>.lin</strong>, <strong>.json</strong>, <strong>.md</strong>, <strong>.csv</strong>, <strong>.fxl</strong>, <strong>.fcl</strong>) below, or start a new standards session:';
+    case 'roading-intake':
+      return 'All fields are optional. Press <strong>Synthesize Existing Road</strong> to draw from the loaded survey points with the defaults shown, or <strong>Generate Road Corridor</strong> for a proposed design — refine lanes, curb, sidewalk, ROW, and Stationing/Profile coupling whenever you like:';
     default:
       return buildAgentWelcome(agent, 'Use the interactive options below to load your project data:');
   }
@@ -341,6 +349,18 @@ export function buildA2UIIntakeGreeting(
       ];
       break;
 
+    case AgentType.ROADING_AGENT:
+      detail =
+        ptCount > 0
+          ? `Welcome to the drawing canvas! I see <strong>${ptCount.toLocaleString()} point${ptCount === 1 ? '' : 's'}</strong>${ctx.hasCenterlines ? ' and active centerline alignments' : ''} ready. Would you like to synthesize existing roads from your points and background imagery, design a proposed road corridor with Stationing &amp; CL and Profile integration, or open the Roading Studio?`
+          : 'Welcome to the drawing canvas! Would you like to synthesize existing roads from points, background imagery, and OpenStreetMap, or design a proposed road corridor (lanes, curb &amp; gutter, sidewalks, ROW, and profiles)?';
+      questionOptions = [
+        'Synthesize existing road from points & imagery',
+        'Design new road corridor',
+        'Open Roading Studio',
+      ];
+      break;
+
     default:
       return null;
   }
@@ -441,6 +461,13 @@ export function getDefaultSuggestedQuestions(agent: AgentType): string[] {
         'Run compliance now.',
         'Run compliance using CAD Manager mode.',
         'Show likely layer and linetype mismatches.',
+      ];
+    case AgentType.ROADING_AGENT:
+      return [
+        'Synthesize the existing road from my survey points and background imagery',
+        'Design a 24ft wide road corridor with curb, 5ft sidewalks, and 50ft ROW',
+        'Generate a road centerline profile and cross sections every 25 feet',
+        'Add a 45ft radius cul-de-sac at the end of the road',
       ];
     default:
       return [];
@@ -624,6 +651,35 @@ export function classifyA2UIIntakeReply(
     };
   }
 
+  if (/^synthesize\s+existing\s+road(?:\s+from\s+points\s*&\s*imagery)?$/i.test(trimmed)) {
+    return {
+      action: 'custom-action',
+      customActionId: 'roading-synthesize-existing',
+      replyText:
+        'Synthesizing the existing road from your points and imagery now. Inputs are optional — if you know the deeded <strong>right-of-way (ROW) width</strong>, give it to me afterwards and I will add the ROW lines without redrawing.',
+      suggestedQuestions: getDefaultSuggestedQuestions(AgentType.ROADING_AGENT),
+    };
+  }
+
+  if (/^design\s+new\s+road\s+corridor$/i.test(trimmed)) {
+    return {
+      action: 'show-upload-widget',
+      widgetType: 'roading-intake',
+      agent: AgentType.ROADING_AGENT,
+      replyText: getUploadPromptCopy(AgentType.ROADING_AGENT, 'roading-intake'),
+    };
+  }
+
+  if (/^open\s+roading\s+studio$/i.test(trimmed)) {
+    return {
+      action: 'custom-action',
+      customActionId: 'open-roading-studio',
+      replyText:
+        'I have opened the <strong>Roading Studio</strong> so you can configure existing road synthesis, typical sections, cul-de-sacs, and centerline profiles.',
+      suggestedQuestions: getDefaultSuggestedQuestions(AgentType.ROADING_AGENT),
+    };
+  }
+
   // 2. Check affirmative / upload chips when an intake prompt is active
   if (
     isPrompting &&
@@ -715,8 +771,21 @@ export function markPendingA2UICompleted(
   summary?: string
 ): ChatMessage[] {
   return history.map((msg) => {
-    if (!msg.a2ui) return msg;
-    if (msg.a2ui.kind !== 'intake-prompt' && msg.a2ui.kind !== 'upload-widget') {
+    if (!msg.a2ui) {
+      if (msg.questionOptions || msg.needsInput) {
+        return {
+          ...msg,
+          questionOptions: undefined,
+          needsInput: undefined,
+        };
+      }
+      return msg;
+    }
+    if (
+      msg.a2ui.kind !== 'intake-prompt' &&
+      msg.a2ui.kind !== 'upload-widget' &&
+      msg.a2ui.kind !== 'input-form'
+    ) {
       return msg;
     }
     if (msg.a2ui.status === 'completed' || msg.a2ui.status === 'dismissed') {
@@ -730,6 +799,7 @@ export function markPendingA2UICompleted(
     return {
       ...msg,
       questionOptions: undefined,
+      needsInput: undefined,
       a2ui: nextA2ui,
     };
   });

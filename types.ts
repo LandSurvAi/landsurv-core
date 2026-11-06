@@ -55,6 +55,7 @@ export enum AgentType {
   FLOOD_AGENT = 'FLOOD_AGENT',
   STRUCTURES_AGENT = 'STRUCTURES_AGENT',
   SOILS_AGENT = 'SOILS_AGENT',
+  ROADING_AGENT = 'ROADING_AGENT',
 }
 
 // FUTURE GEMINI: This type defines the available panels in the main view area.
@@ -63,7 +64,7 @@ export enum AgentType {
 // 'cadstandards' — both render the same CadManagerPage component, which is now
 // framed as the CAD Standards view of the CAD Manager agent.
 // 'styleguide' — Drafting Style Library: CAD Manager sub-tool for training the Civil Drafter.
-export type VisualPanel = 'canvas' | 'cutsheet' | 'fieldbook' | 'pdfviewer' | 'texteditor' | 'gpsstakeout' | 'filemanager' | 'imageanalyzer' | 'wms' | 'symbolmanager' | 'annotatemanager' | 'profile' | 'closurereport' | 'steepslopereport' | 'layermanager' | 'gnssprocessor' | 'ar' | 'zoning' | 'titlesearch' | 'cadmanager' | 'cadstandards' | 'linetypemanager' | 'legalwriter' | 'sheetview' | 'styleguide' | 'compliance';
+export type VisualPanel = 'canvas' | 'cutsheet' | 'fieldbook' | 'pdfviewer' | 'texteditor' | 'gpsstakeout' | 'filemanager' | 'imageanalyzer' | 'wms' | 'symbolmanager' | 'annotatemanager' | 'profile' | 'closurereport' | 'steepslopereport' | 'layermanager' | 'gnssprocessor' | 'ar' | 'zoning' | 'titlesearch' | 'cadmanager' | 'cadstandards' | 'linetypemanager' | 'hatchmanager' | 'legalwriter' | 'sheetview' | 'styleguide' | 'draftstylelib' | 'compliance';
 
 // =============================================================================
 // Generic Ambiguity / Uncertainty model — usable across PDF parsing, deed
@@ -182,7 +183,7 @@ export interface ChatMessageAction {
   };
 }
 
-export type A2UIStandardsFacet = 'all' | 'layers' | 'codes' | 'linetypes' | 'symbols';
+export type A2UIStandardsFacet = 'all' | 'layers' | 'codes' | 'linetypes' | 'symbols' | 'hatches';
 
 /** Pre-applied filter for the compact A2UI CAD-standards sheet. */
 export interface A2UIStandardsFilter {
@@ -192,7 +193,7 @@ export interface A2UIStandardsFilter {
   facet?: A2UIStandardsFacet;
 }
 
-export type A2UIInputFieldType = 'text' | 'number' | 'textarea' | 'select';
+export type A2UIInputFieldType = 'text' | 'number' | 'textarea' | 'select' | 'checkbox';
 
 /** Presentation size for a globally-hosted A2UI surface window. */
 export type A2UISurfaceSize = 'compact' | 'standard' | 'wide' | 'fullscreen';
@@ -235,7 +236,8 @@ export type A2UIWorkspaceToolId =
   | 'closure-report'
   | 'steep-slope-report'
   | 'legal-writer'
-  | 'sheet-view';
+  | 'sheet-view'
+  | 'roading-panel';
 
 export interface A2UIInputField {
   id: string;
@@ -245,6 +247,8 @@ export interface A2UIInputField {
   hint?: string;
   required?: boolean;
   options?: string[];
+  /** Default checked state when `type === 'checkbox'`. */
+  defaultChecked?: boolean;
   /** Optional visual grouping heading inside the form. */
   group?: string;
   /** Unit suffix shown inside the input. */
@@ -277,9 +281,12 @@ export type A2UIWidgetType =
   | 'standards-compliance-intake'
   | 'image-upload'
   | 'centerline-upload'
+  | 'roading-intake'
+  | 'roading-designer'
   | 'cad-manager-intake'
   | 'cad-manager-workspace'
   | 'cad-standards-table'
+  | 'hatch-studio'
   | 'zoning-research'
   | 'zoning-sources'
   | 'surface-console'
@@ -357,6 +364,23 @@ export interface A2UISelectionPromptSpec {
   pointCount?: number;
 }
 
+export interface A2UIHatchStudioSpec {
+  title?: string;
+  description?: string;
+  patternName?: string;
+  scale?: number;
+  angleDeg?: number;
+  opacity?: number;
+  color?: string;
+  backgroundColor?: string;
+  layer?: string;
+  mode?: 'pick-area' | 'select-object';
+  /** What the request named, when the surface came from conversational intent. */
+  target?: 'area' | 'objects' | 'circles';
+  targetFeature?: string;
+  code?: string;
+}
+
 export interface A2UIPayload {
   /** Surface kind: inquisitive prompt, upload/intake widget, data explorer, or bridge surface. */
   kind:
@@ -364,6 +388,7 @@ export interface A2UIPayload {
     | 'upload-widget'
     | 'selection-prompt'
     | 'standards-explorer'
+    | 'hatch-studio'
     | 'zoning-research'
     | 'zoning-sources'
     | 'cad-manager'
@@ -386,6 +411,8 @@ export interface A2UIPayload {
   completedSummary?: string;
   /** Pre-set query/facet for the compact CAD-standards explorer. */
   standardsFilter?: A2UIStandardsFilter;
+  /** Interactive A2UI Hatch Studio parameters for fluid conversational hatching. */
+  hatchStudio?: A2UIHatchStudioSpec;
   /** Jurisdiction bound to a chat-hosted zoning research surface. */
   zoningContext?: A2UIZoningContext;
   /** Citation-to-source ledger for a specific zoning answer. */
@@ -406,6 +433,8 @@ export interface A2UIPayload {
   workspaceTool?: A2UIWorkspaceToolId;
   /** Initial manifest selection for an in-chat CACP explorer. */
   cacpManifests?: { initialAgent?: AgentType };
+  /** Roading Agent intake/design parameters bound to the A2UI surface. */
+  roadingDesign?: Partial<RoadTypicalSection & { mode?: 'existing-synthesis' | 'corridor-design'; centerlineId?: string }>;
 }
 
 export interface ChatMessage {
@@ -1092,6 +1121,18 @@ export interface Settings {
     /** When true, include internal CACP handler dispatch phases in activity notifications. */
     showCacpHandlerNotifications?: boolean;
     notion?: NotionIntegration;
+    /** Background map imagery overlay (NAIP + Google Static Maps). */
+    googleMaps?: {
+        enabled?: boolean;
+        apiKey?: string;
+        mapType?: 'roadmap' | 'satellite' | 'hybrid' | 'terrain' | 'naip';
+        opacity?: number;
+        scale?: 1 | 2;
+        showLabels?: boolean;
+        language?: string;
+        region?: string;
+        styleJson?: string;
+    };
     floodHatch?: {
         /** Hatch pattern drawn inside FEMA flood-zone polygons. */
         style: 'lines' | 'cross' | 'dots' | 'chevron' | 'none';
@@ -1117,6 +1158,13 @@ export interface Settings {
        * Default: false (Civil Drafter drafts directly from survey points as usual).
        */
       enableGeoAiDrafting?: boolean;
+      /**
+       * Developer / Testing: pin interactive chat requests to this agent.
+       * While set, the CACP intent handoff and this agent's peer-delegation
+       * catalog are disabled so the selected agent handles the request itself.
+       * Explicit CACP/internal agent targets are unaffected.
+       */
+      forceAgent?: AgentType;
       /**
        * Geospatial AI execution mode for SamGeo & SAM-Road:
        * 'local' (desktop daemon on localhost, $0 cloud cost) or
@@ -1270,6 +1318,17 @@ export interface DxfExportOptions {
   steepSlopeFillStyle?: 'solid' | 'hatch' | 'native-hatch';
 }
 
+export interface SymbolTextElement {
+    text: string;
+    x: number;
+    y: number;
+    fontSize: number;
+    fontWeight?: 'normal' | 'bold';
+    fontFamily?: string;
+    anchor?: 'start' | 'middle' | 'end';
+    rotation?: number;
+}
+
 export interface CustomSymbol {
     id: string;
     name: string;
@@ -1277,6 +1336,7 @@ export interface CustomSymbol {
     associatedTerms: string[];
     svgPath: string;
     fillPath?: string;
+    texts?: SymbolTextElement[];
     viewBox: string;
     scale: number;
     isDefault?: boolean;
@@ -1635,6 +1695,55 @@ export type AnnotationDimension =
     | AngularAnnotationDimension
     | OrdinateAnnotationDimension;
 
+/**
+ * A single closed boundary loop for a `CanvasHatch` entity.
+ * Vertices are ordered in world coordinates (easting = x, northing = y).
+ */
+export interface HatchBoundaryLoop {
+    vertices: Array<{ x: number; y: number }>;
+    /** True when this loop is an interior island hole subtracted from the outer loop. */
+    isHole?: boolean;
+    /** Optional source entity IDs that formed this loop. */
+    sourceLineIds?: string[];
+}
+
+/**
+ * First-class CAD Hatch entity placed on the 2D drawing canvas.
+ * Persisted in `.lsvz` (`SessionState.hatches`), controllable via CACP skills,
+ * and exported as a native `AcDbHatch` entity in DXF exports.
+ */
+export interface CanvasHatch {
+    id: string;
+    name?: string;
+    /** Pattern identifier matching a built-in or custom `HatchDefinition.name` (e.g., 'ANSI31', 'AR-CONC', 'SOLID'). */
+    patternName: string;
+    /** Boundary loops: first non-hole loop is outer boundary; loops with `isHole: true` are subtracted islands. */
+    loops: HatchBoundaryLoop[];
+    /** Pattern scale multiplier (default 1). */
+    scale: number;
+    /** Pattern rotation in degrees (counter-clockwise, default 0). */
+    angleDeg: number;
+    /** Optional foreground stroke/fill color override (CSS hex or rgb). */
+    color?: string;
+    /** Optional background fill color behind pattern lines. */
+    backgroundColor?: string;
+    /** Opacity 0..1 (default 0.45). */
+    opacity: number;
+    /** CAD layer name for visibility toggling and DXF export. */
+    layer: string;
+    /** Optional associative SurveyLine IDs used to derive the boundary. */
+    associativeLineIds?: string[];
+    /** Optional BoundaryFile ID when hatched from a deed parcel. */
+    boundaryFileId?: string;
+    /** How this hatch was created. */
+    sourceMode?: 'select-object' | 'pick-area' | 'cacp' | 'agent';
+    /** Computed area in square feet (outer area minus island holes). */
+    areaSqFt?: number;
+    /** When true, suppressed on canvas and DXF export. */
+    hidden?: boolean;
+    createdAt: string;
+}
+
 export interface ClosureReport {
   id: string;
   name: string;
@@ -1674,6 +1783,36 @@ export interface GisFeature {
     displayLineIds?: string[]; // IDs of generated survey lines
 }
 
+export interface RoadTypicalSection {
+    laneCount: number;
+    laneWidthFt: number;
+    crownSlopePct: number;
+    includeCurbAndGutter: boolean;
+    curbWidthFt: number;
+    gutterWidthFt: number;
+    includeSidewalk: boolean;
+    sidewalkWidthFt: number;
+    sidewalkOffsetFt: number;
+    rowWidthFt: number;
+    stationIntervalFt: number;
+    designGradePct?: number;
+}
+
+export interface RoadCorridorRun {
+    id: string;
+    name: string;
+    mode: 'existing-synthesis' | 'corridor-design';
+    centerlineId?: string;
+    typicalSection: RoadTypicalSection;
+    culDeSacRadiusFt?: number;
+    filletRadiusFt?: number;
+    drawnPointIds: string[];
+    drawnLineIds: string[];
+    roadNames?: string[];
+    profileGenerated?: boolean;
+    createdAt: string;
+}
+
 export interface SessionState {
     version: string;
     savedAt: string;
@@ -1696,6 +1835,8 @@ export interface SessionState {
     boundaryFiles?: BoundaryFile[];
     deedBatchJob?: DeedBatchJob | null;
     dimensions?: AnnotationDimension[];
+    /** First-class CAD hatch entities placed on the drawing canvas. */
+    hatches?: CanvasHatch[];
     tinSurfaces?: TinSurface[];
     /** Saved contour generation objects (v26.05.19.3). Each ContourGeneration
      *  stores its own IsoPaths (mathematical representation), display settings,
@@ -1703,6 +1844,8 @@ export interface SessionState {
     contourGenerations?: ContourGeneration[];
     /** Saved steep-slope analysis runs keyed to TIN surfaces. */
     steepSlopeRuns?: SteepSlopeRunResult[];
+    /** Saved Roading Agent synthesis & corridor design runs. */
+    roadCorridors?: RoadCorridorRun[];
     /** Street-name labels placed on the plan (v26.05.19.4). Each label is a
      *  rotated text annotation aligned to the nearest road bearing, derived
      *  from OpenStreetMap road geometry within the inclusion boundary. */
@@ -1755,6 +1898,7 @@ export interface SessionState {
     zoningChatHistory: ChatMessage[];
     soilsChatHistory?: ChatMessage[];
     structuresChatHistory?: ChatMessage[];
+    roadingChatHistory?: ChatMessage[];
     standardsComplianceChatHistory?: ChatMessage[];
     /** @deprecated use standardsComplianceControlFiles — kept for loading older saved sessions. */
     standardsComplianceControlFile?: SessionFile | null;

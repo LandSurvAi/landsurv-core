@@ -62,6 +62,7 @@ export function parseMarkdownTable(markdown: string): CodeDefinition[] {
           else if (header.includes('line') && header.includes('layer')) columnIndexMap['lineLayer'] = index;
           else if (header.includes('linetype') || header.includes('line type')) columnIndexMap['lineType'] = index;
           else if (header.includes('symbol')) columnIndexMap['symbol'] = index;
+          else if (header.includes('hatch') || header.includes('pattern')) columnIndexMap['hatchPattern'] = index;
           else if (header.includes('category') || header.includes('cat')) columnIndexMap['category'] = index;
         });
         
@@ -84,6 +85,7 @@ export function parseMarkdownTable(markdown: string): CodeDefinition[] {
       const lineLayer = cells[columnIndexMap['lineLayer']] || '';
       const lineType = cells[columnIndexMap['lineType']] || '';
       const symbol = cells[columnIndexMap['symbol']] || '';
+      const hatchPattern = columnIndexMap['hatchPattern'] !== undefined ? (cells[columnIndexMap['hatchPattern']] || '') : '';
       const category = cells[columnIndexMap['category']] || '';
       
       // Debug log first few rows
@@ -101,6 +103,7 @@ export function parseMarkdownTable(markdown: string): CodeDefinition[] {
         lineLayer: lineLayer !== '-' && lineLayer !== '' ? lineLayer : undefined,
         lineType: lineType !== '-' && lineType !== '' ? lineType : undefined,
         symbol: symbol !== '-' && symbol !== '' ? symbol : undefined,
+        hatchPattern: hatchPattern !== '-' && hatchPattern !== '' ? hatchPattern.toUpperCase() : undefined,
         category: category !== '-' ? category : 'Misc',
       });
     } else {

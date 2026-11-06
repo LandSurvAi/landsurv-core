@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { parseDxfForSymbol } from '../utils/dxfParser.ts';
-import { getSymbolCategories, type LibrarySymbol } from '../data/surveySymbolLibrary.ts';
+import { getSymbolCategories, type LibrarySymbol, type SymbolTextElement } from '../data/surveySymbolLibrary.ts';
+import { SymbolSvg } from './common/SymbolSvg.tsx';
 
 /*
  * Starter Symbol Library Builder (DevOps)
@@ -44,6 +45,7 @@ const loadDrafts = (): DraftSymbol[] => {
         category: s.category || 'Uncategorized',
         svgPath: s.svgPath,
         fillPath: s.fillPath,
+        texts: Array.isArray(s.texts) ? s.texts : undefined,
         viewBox: s.viewBox || '0 0 24 24',
         tags: Array.isArray(s.tags) ? s.tags : [],
         _key: `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}`,
@@ -60,6 +62,7 @@ const toLibrarySymbol = (d: DraftSymbol): LibrarySymbol => ({
   category: d.category,
   svgPath: d.svgPath,
   ...(d.fillPath ? { fillPath: d.fillPath } : {}),
+  ...(d.texts && d.texts.length > 0 ? { texts: d.texts } : {}),
   viewBox: d.viewBox,
   tags: d.tags,
 });
@@ -74,11 +77,8 @@ const download = (filename: string, content: string, mime: string) => {
   URL.revokeObjectURL(url);
 };
 
-const SymbolPreview: React.FC<{ svgPath: string; fillPath?: string; viewBox: string; size?: number }> = ({ svgPath, fillPath, viewBox, size = 56 }) => (
-  <svg width={size} height={size} viewBox={viewBox} className="text-cyan-300">
-    <path d={svgPath} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    {fillPath && <path d={fillPath} fill="currentColor" stroke="none" />}
-  </svg>
+const SymbolPreview: React.FC<{ svgPath: string; fillPath?: string; texts?: SymbolTextElement[]; viewBox: string; size?: number }> = ({ svgPath, fillPath, texts, viewBox, size = 56 }) => (
+  <SymbolSvg size={size} svgPath={svgPath} fillPath={fillPath} texts={texts} viewBox={viewBox} className="text-cyan-300" strokeWidth={1.5} />
 );
 
 export const StarterSymbolLibraryTab: React.FC = () => {
@@ -133,9 +133,9 @@ export const StarterSymbolLibraryTab: React.FC = () => {
       }
       try {
         const content = await file.text();
-        const { svgPath, viewBox } = parseDxfForSymbol(content);
-        if (!svgPath) {
-          failures.push(`${file.name} (no LINE/LWPOLYLINE geometry found)`);
+        const { svgPath, fillPath, texts, viewBox } = parseDxfForSymbol(content);
+        if (!svgPath && !fillPath && (!texts || texts.length === 0)) {
+          failures.push(`${file.name} (no supported geometry found)`);
           continue;
         }
         const baseName = file.name.replace(/\.[^/.]+$/, '');
@@ -148,6 +148,8 @@ export const StarterSymbolLibraryTab: React.FC = () => {
           description: '',
           category: 'Uncategorized',
           svgPath,
+          fillPath,
+          texts,
           viewBox,
           tags: [],
         });
@@ -198,6 +200,7 @@ export const StarterSymbolLibraryTab: React.FC = () => {
             category: s.category || 'Uncategorized',
             svgPath: s.svgPath,
             fillPath: s.fillPath,
+            texts: Array.isArray(s.texts) ? s.texts : undefined,
             viewBox: s.viewBox || '0 0 24 24',
             tags: Array.isArray(s.tags) ? s.tags : [],
           };
@@ -223,6 +226,7 @@ export const StarterSymbolLibraryTab: React.FC = () => {
         `    category: ${JSON.stringify(s.category)},`,
         `    svgPath: ${JSON.stringify(s.svgPath)},`,
         ...(s.fillPath ? [`    fillPath: ${JSON.stringify(s.fillPath)},`] : []),
+        ...(s.texts && s.texts.length > 0 ? [`    texts: ${JSON.stringify(s.texts)},`] : []),
         `    viewBox: ${JSON.stringify(s.viewBox)},`,
         `    tags: ${JSON.stringify(s.tags)},`,
         `  },`,
@@ -331,7 +335,7 @@ export const StarterSymbolLibraryTab: React.FC = () => {
                 <div key={d._key} className="bg-slate-800 rounded-lg border border-slate-700 p-4 flex gap-4">
                   <div className="flex-shrink-0 flex flex-col items-center gap-2">
                     <div className="w-20 h-20 bg-slate-900 rounded-md flex items-center justify-center">
-                      <SymbolPreview svgPath={d.svgPath} fillPath={d.fillPath} viewBox={d.viewBox} />
+                      <SymbolPreview svgPath={d.svgPath} fillPath={d.fillPath} texts={d.texts} viewBox={d.viewBox} />
                     </div>
                     <div className="flex gap-1">
                       <button onClick={() => moveDraft(d._key, -1)} disabled={i === 0 && filterCategory === 'all' && !search} title="Move up" className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 rounded disabled:opacity-30">↑</button>

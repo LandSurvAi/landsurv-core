@@ -40,8 +40,11 @@ import {
   type SurveyPoint,
   type TinSurface,
   type ActiveWmsLayer,
+  type RoadCorridorRun,
+  type StreetLabel,
 } from '../types';
 import { rectifyBuildings, type RectifyStats } from './buildingRectifier';
+import { registerRoadingSkillHandlers } from './roadingSkillHandlers';
 import { runSteepSlopeAnalysis, steepSlopeRunToSurveyLines } from './SteepSlopeService';
 import {
   generateContoursAsIsoPaths,
@@ -72,6 +75,12 @@ export interface DomainSkillHandlersOpts {
   lines: SurveyLine[];
   setLines: React.Dispatch<React.SetStateAction<SurveyLine[]>>;
   centerlines: Centerline[];
+  setCenterlines?: React.Dispatch<React.SetStateAction<Centerline[]>>;
+  roadCorridors?: RoadCorridorRun[];
+  setRoadCorridors?: React.Dispatch<React.SetStateAction<RoadCorridorRun[]>>;
+  streetLabels?: StreetLabel[];
+  setStreetLabels?: React.Dispatch<React.SetStateAction<StreetLabel[]>>;
+  canvas2dRef?: React.RefObject<any>;
   settings: Settings;
   activeModel: string;
   activeDrawingLayer: string;
@@ -1211,6 +1220,31 @@ export function registerDomainSkillHandlers(
         deedName: opts.deedFile?.name ?? undefined,
         facts,
       });
+    }),
+  );
+
+  // ── 11. Roading Agent skills ─────────────────────────────────────────────
+  unsubs.push(
+    registerRoadingSkillHandlers(() => {
+      const opts = getOpts();
+      return {
+        points: opts.points,
+        pointLists: opts.pointLists,
+        setPointLists: opts.setPointLists,
+        lines: opts.lines,
+        setLines: opts.setLines,
+        centerlines: opts.centerlines,
+        setCenterlines: opts.setCenterlines,
+        roadCorridors: opts.roadCorridors,
+        setRoadCorridors: opts.setRoadCorridors,
+        streetLabels: opts.streetLabels,
+        setStreetLabels: opts.setStreetLabels,
+        setProfileData: opts.setProfileData,
+        setProfileInfo: opts.setProfileInfo,
+        settings: opts.settings,
+        canvas2dRef: opts.canvas2dRef,
+        logActionToFieldbook: opts.logActionToFieldbook,
+      };
     }),
   );
 

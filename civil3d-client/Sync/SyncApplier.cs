@@ -659,8 +659,8 @@ namespace LandsurvConnector.Sync
                     ObjectId layerZeroId = lt.Has("0") ? lt["0"] : ObjectId.Null;
                     double size = Math.Max(1.0, spec.Scale ?? 1.0);
                     CivilAgent.DrawSvgSymbol(
-                        btr, tr, spec.SvgPath, null, spec.ViewBox ?? "0 0 24 24",
-                        0, 0, size, layerZeroId, log);
+                        btr, tr, spec.SvgPath, spec.FillPath, spec.ViewBox ?? "0 0 24 24",
+                        0, 0, size, layerZeroId, log, spec.Texts);
                     return null;
                 }
 

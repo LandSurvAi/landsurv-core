@@ -52,16 +52,25 @@ export const ToolbarAnnotationScaleIcon: React.FC<IconProps> = (props) => (
   </Base>
 );
 
-/** Isometric layer stack with live-node markers — data visibility. */
+/**
+ * Open eye over stacked layer plates — data visibility.
+ * The eye is the hero so the glyph reads as a visibility control first and a
+ * layer stack second; the plates below are kept as two light chevrons so the
+ * shape stays quiet at 18px next to the sidebar labels.
+ */
 export const ToolbarLayersIcon: React.FC<IconProps> = (props) => (
   <Base {...props}>
-    <polygon points="12,2.4 21.6,7.2 12,12 2.4,7.2" strokeWidth="1.4" strokeLinejoin="round" fill="currentColor" fillOpacity="0.15" />
-    <path d="M2.4 11.8 12 16.6 21.6 11.8" strokeWidth="1.4" strokeLinejoin="round" />
-    <path d="M2.4 16.2 12 21 21.6 16.2" strokeWidth="1.4" strokeLinejoin="round" opacity="0.85" />
-    <path d="M12 12v4.6M12 16.6V21" strokeWidth="1" opacity="0.5" strokeDasharray="1.4 1.4" />
-    <circle cx="12" cy="7.2" r="1.1" fill="currentColor" stroke="none" />
-    <circle cx="6.4" cy="9.8" r="0.8" fill="currentColor" stroke="none" opacity="0.7" />
-    <circle cx="17.6" cy="9.8" r="0.8" fill="currentColor" stroke="none" opacity="0.7" />
+    <path
+      d="M4.9 7.3C7 4.3 9.3 3.1 12 3.1s5 1.2 7.1 4.2c-2.1 3-4.4 4.2-7.1 4.2s-5-1.2-7.1-4.2Z"
+      strokeWidth="1.45"
+      strokeLinejoin="round"
+      fill="currentColor"
+      fillOpacity="0.08"
+    />
+    <circle cx="12" cy="7.3" r="2.4" strokeWidth="1.1" fill="currentColor" fillOpacity="0.16" />
+    <circle cx="12" cy="7.3" r="1.05" fill="currentColor" stroke="none" />
+    <path d="M3.1 13.5 12 17.9 20.9 13.5" strokeWidth="1.35" strokeLinejoin="round" />
+    <path d="M3.1 17 12 21.4 20.9 17" strokeWidth="1.35" strokeLinejoin="round" opacity="0.6" />
   </Base>
 );
 
@@ -132,15 +141,19 @@ export const ToolbarDrawToolsIcon: React.FC<IconProps> = (props) => (
   </Base>
 );
 
-/** Aligned dimension with witness lines and arrowheads — dimension tools. */
+/**
+ * Horizontal aligned dimension — witness lines, a fully arrowed dimension
+ * line, and the value block sitting above it. Square-on rather than slanted so
+ * it stays readable in the 20px canvas toolbar.
+ */
 export const ToolbarDimensionIcon: React.FC<IconProps> = (props) => (
   <Base {...props}>
-    <path d="M3.4 19.6h17.2" strokeWidth="1.2" strokeLinecap="round" />
-    <path d="M5 16.2 19 8.2" strokeWidth="1.25" strokeLinecap="round" />
-    <path d="M5 16.2 7.2 15.6 6.1 14.2Z" fill="currentColor" stroke="none" />
-    <path d="M19 8.2 16.8 8.8 17.9 10.2Z" fill="currentColor" stroke="none" />
-    <path d="M5.6 19.6v-3.7M18.4 19.6V8.6" strokeWidth="1" opacity="0.55" />
-    <path d="M9.8 17.9 11 17.3M13.4 16 14.6 15.4" strokeWidth="0.9" opacity="0.6" />
+    <path d="M4.6 6.2v11.8M19.4 6.2v11.8" strokeWidth="1.1" opacity="0.6" />
+    <path d="M4.6 15.3h14.8" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M4.6 15.3 8 14.15v2.3Z" fill="currentColor" stroke="none" />
+    <path d="M19.4 15.3 16 14.15v2.3Z" fill="currentColor" stroke="none" />
+    <rect x="7.6" y="7.1" width="8.8" height="4.6" rx="1.3" strokeWidth="1.15" fill="currentColor" fillOpacity="0.12" />
+    <path d="M9.5 9.4h5" strokeWidth="1.5" strokeLinecap="round" />
   </Base>
 );
 
@@ -202,36 +215,44 @@ export const ToolbarShrinkwrapIcon: React.FC<IconProps> = (props) => (
 );
 
 /**
- * Civil 3D link: an isometric corridor solid coupled to a chain link.
- * Used for the sidebar's Connect C3D control.
+ * Civil 3D link: an isometric solid (the model) joined by a chain link.
+ * The two interlocking arcs replace the old pair of overlapping capsules,
+ * which turned to mush below 20px. Used by the sidebar's Connect C3D control.
  */
 export const C3DLinkIcon: React.FC<IconProps> = (props) => (
   <Base {...props}>
-    <polygon points="2.2,8.1 7.4,5.1 12.6,8.1 7.4,11.1" strokeWidth="1.3" strokeLinejoin="round" fill="currentColor" fillOpacity="0.14" />
-    <path d="M2.2 8.1v4.4l5.2 3 5.2-3V8.1" strokeWidth="1.3" strokeLinejoin="round" />
-    <path d="M7.4 11.1v4.4" strokeWidth="1" opacity="0.7" />
-    <path d="M2.6 9.6 5.1 10.9 7.4 9.5 9.7 10.9 12.2 9.6" strokeWidth="0.9" strokeDasharray="1.4 1.2" opacity="0.8" />
-    <path d="M13 10.6c1.7 0 1.9 1.8 3.4 1.8" strokeWidth="1.15" strokeDasharray="1.6 1.3" opacity="0.7" />
-    <rect x="16.1" y="9.1" width="5.6" height="5.6" rx="2.8" transform="rotate(-32 18.9 11.9)" strokeWidth="1.5" />
-    <rect x="14.4" y="6.2" width="5.6" height="5.6" rx="2.8" transform="rotate(-32 17.2 9)" strokeWidth="1.5" />
+    <polygon points="1.6,8.2 6,5.6 10.4,8.2 6,10.8" strokeWidth="1.4" strokeLinejoin="round" fill="currentColor" fillOpacity="0.16" />
+    <path d="M1.6 8.2v5L6 15.8" strokeWidth="1.4" strokeLinejoin="round" />
+    <path d="M10.4 8.2v5L6 15.8" strokeWidth="1.4" strokeLinejoin="round" />
+    <path d="M6 10.8v5" strokeWidth="0.95" opacity="0.55" />
+    <g transform="translate(9.72 8.42) scale(0.54)" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 17H7A5 5 0 0 1 7 7h2" />
+      <path d="M15 7h2a5 5 0 1 1 0 10h-2" />
+      <path d="M8 12h8" />
+    </g>
   </Base>
 );
 
 /**
- * Smart auto-routing: a central router fanning work to graded model nodes.
- * Used for the sidebar's Auto (Smart) control.
+ * AI model: a hexagon core holding a routing spark, with a caret underneath
+ * signalling the model picker. Used for the sidebar's model selector.
  */
-export const AutoRouteIcon: React.FC<IconProps> = (props) => (
+export const ModelSelectIcon: React.FC<IconProps> = (props) => (
   <Base {...props}>
-    <circle cx="12" cy="12" r="8.8" strokeWidth="1.1" strokeDasharray="2 2" opacity="0.45" />
-    <circle cx="12" cy="12" r="3" strokeWidth="1.5" fill="currentColor" fillOpacity="0.15" />
-    <circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
-    <path d="M9.4 10.2 4.9 6.6M14.6 10.2 19.1 6.6M9.4 13.8 4.9 17.4M14.6 13.8 19.1 17.4" strokeWidth="1.15" />
-    <circle cx="4.9" cy="6.6" r="1.35" fill="currentColor" stroke="none" />
-    <circle cx="19.1" cy="6.6" r="1" fill="currentColor" stroke="none" opacity="0.7" />
-    <circle cx="4.9" cy="17.4" r="1" fill="currentColor" stroke="none" opacity="0.55" />
-    <circle cx="19.1" cy="17.4" r="1.35" fill="currentColor" stroke="none" />
-    <path d="M18.1 1.6 18.8 3.3 20.5 4 18.8 4.7 18.1 6.4 17.4 4.7 15.7 4 17.4 3.3Z" fill="currentColor" stroke="none" opacity="0.9" />
+    <path
+      d="M10.4 3 16.7 6.7v7.4L10.4 17.8 4.1 14.1V6.7Z"
+      strokeWidth="1.45"
+      strokeLinejoin="round"
+      fill="currentColor"
+      fillOpacity="0.07"
+    />
+    <path
+      d="M10.4 6 11.9 8.9 14.8 10.4 11.9 11.9 10.4 14.8 8.9 11.9 6 10.4 8.9 8.9Z"
+      fill="currentColor"
+      fillOpacity="0.9"
+      stroke="none"
+    />
+    <path d="M15.3 17.5 17.7 19.9 20.1 17.5" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
   </Base>
 );
 
@@ -268,6 +289,15 @@ export const LinetypeManagerIcon: React.FC<IconProps> = (props) => (
     <path d="M2.6 12h18.8" strokeWidth="1.3" strokeDasharray="3 2" />
     <path d="M2.6 16.8h18.8" strokeWidth="2.2" strokeDasharray=".8 2.4" strokeLinecap="round" />
     <path d="M3.2 4.6v4.2M20.8 4.6v4.2M3.2 9.9v4.2M20.8 9.9v4.2M3.2 14.7v4.2M20.8 14.7v4.2" strokeWidth="0.9" opacity="0.45" />
+  </Base>
+);
+
+/** Diagonal cross-hatch inside a framed region — Hatch Manager. */
+export const HatchManagerIcon: React.FC<IconProps> = (props) => (
+  <Base {...props}>
+    <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth="1.5" fill="currentColor" fillOpacity="0.06" />
+    <path d="M3 9 9 3M3 15 15 3M3 21 21 3M9 21 21 9M15 21 21 15" strokeWidth="1.2" opacity="0.85" />
+    <path d="M9 3 21 15M3 9 15 21" strokeWidth="0.9" opacity="0.4" strokeDasharray="2 2" />
   </Base>
 );
 

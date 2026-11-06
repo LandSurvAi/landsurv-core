@@ -456,6 +456,24 @@ namespace LandsurvConnector
                                         string symbolViewBox = symbolData?["viewBox"]?.ToString() 
                                             ?? codeDef["viewBox"]?.ToString()
                                             ?? "0 0 24 24";
+                                        List<Sync.SyncSymbolText> symbolTexts = null;
+                                        var rawTexts = (symbolData?["texts"] ?? codeDef["texts"]) as JArray;
+                                        if (rawTexts != null && rawTexts.Count > 0)
+                                        {
+                                            symbolTexts = rawTexts.OfType<JObject>()
+                                                .Select(t => new Sync.SyncSymbolText
+                                                {
+                                                    Text = t["text"]?.ToString() ?? "",
+                                                    X = t["x"]?.ToObject<double?>() ?? 12.0,
+                                                    Y = t["y"]?.ToObject<double?>() ?? 12.0,
+                                                    FontSize = t["fontSize"]?.ToObject<double?>() ?? 7.0,
+                                                    FontWeight = t["fontWeight"]?.ToString(),
+                                                    Anchor = t["anchor"]?.ToString(),
+                                                    Rotation = t["rotation"]?.ToObject<double?>(),
+                                                })
+                                                .Where(t => !string.IsNullOrWhiteSpace(t.Text))
+                                                .ToList();
+                                        }
 
                                         // Add category separator if category changed
                                         if (category != lastCategory && category != "-" && !string.IsNullOrEmpty(category))
@@ -550,7 +568,8 @@ namespace LandsurvConnector
                                                     int entitiesDrawn = DrawSvgSymbol(
                                                         ms, tr, symbolSvgPath, symbolFillPath, symbolViewBox,
                                                         symbolCenterX, symbolCenterY, symbolSize, symbolLayerId,
-                                                        msg => this.PrintMessage(msg)
+                                                        msg => this.PrintMessage(msg),
+                                                        symbolTexts
                                                     );
                                                     linesCreated += entitiesDrawn;
                                                 }
@@ -815,21 +834,27 @@ namespace LandsurvConnector
             double centerY,
             double size,
             ObjectId layerId,
-            Action<string> log)
+            Action<string> log,
+            IEnumerable<Sync.SyncSymbolText> texts = null)
         {
             int entitiesCreated = 0;
             
             try
             {
                 // Parse viewBox to get scale factor
-                double[] vb = viewBox.Split(' ').Select(s => double.Parse(s)).ToArray();
+                double[] vb = (viewBox ?? "0 0 24 24")
+                    .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => double.Parse(s, System.Globalization.CultureInfo.InvariantCulture))
+                    .ToArray();
+                double vbX = vb.Length >= 1 ? vb[0] : 0;
+                double vbY = vb.Length >= 2 ? vb[1] : 0;
                 double vbWidth = vb.Length >= 3 ? vb[2] : 24;
                 double vbHeight = vb.Length >= 4 ? vb[3] : 24;
                 double scale = size / Math.Max(vbWidth, vbHeight);
 
                 // Offset to center the symbol
-                double offsetX = centerX - (vbWidth / 2.0) * scale;
-                double offsetY = centerY + (vbHeight / 2.0) * scale;
+                double offsetX = centerX - (vbX + vbWidth / 2.0) * scale;
+                double offsetY = centerY + (vbY + vbHeight / 2.0) * scale;
 
                 // Helper to transform SVG coords to drawing coords
                 Func<double, double, Autodesk.AutoCAD.Geometry.Point3d> toDrawing = (sx, sy) =>
@@ -839,13 +864,40 @@ namespace LandsurvConnector
                     return new Autodesk.AutoCAD.Geometry.Point3d(dx, dy, 0);
                 };
 
-                // Parse and draw the path
-                entitiesCreated += ParseAndDrawSvgPath(ms, tr, svgPath, toDrawing, layerId, false, log);
+                // Parse and draw the outline path
+                if (!string.IsNullOrWhiteSpace(svgPath))
+                {
+                    entitiesCreated += ParseAndDrawSvgPath(ms, tr, svgPath, toDrawing, layerId, false, log);
+                }
                 
-                // Draw fill path if provided (as hatched region - simplified to polyline for now)
-                if (!string.IsNullOrEmpty(fillPath))
+                // Draw fill path if provided (creates closed entities + SOLID hatch)
+                if (!string.IsNullOrWhiteSpace(fillPath))
                 {
                     entitiesCreated += ParseAndDrawSvgPath(ms, tr, fillPath, toDrawing, layerId, true, log);
+                }
+
+                // Draw first-class text primitives as middle-centered AutoCAD DBText
+                if (texts != null)
+                {
+                    foreach (var t in texts)
+                    {
+                        if (t == null || string.IsNullOrWhiteSpace(t.Text)) continue;
+                        var pt = toDrawing(t.X, t.Y);
+                        double capHeight = Math.Max(0.01, (t.FontSize > 0 ? t.FontSize : 7.0) * scale * 0.72);
+                        var dbText = new DBText
+                        {
+                            TextString = t.Text.Trim(),
+                            Height = capHeight,
+                            Position = pt,
+                            Justify = AttachmentPoint.MiddleCenter,
+                            AlignmentPoint = pt,
+                            Rotation = -((t.Rotation ?? 0.0) * Math.PI / 180.0),
+                        };
+                        if (layerId != ObjectId.Null) dbText.LayerId = layerId;
+                        ms.AppendEntity(dbText);
+                        tr.AddNewlyCreatedDBObject(dbText, true);
+                        entitiesCreated++;
+                    }
                 }
             }
             catch (System.Exception ex)
@@ -854,6 +906,26 @@ namespace LandsurvConnector
             }
 
             return entitiesCreated;
+        }
+
+        private static void TryAddSolidHatch(BlockTableRecord ms, Transaction tr, ObjectId loopEntId, ObjectId layerId)
+        {
+            try
+            {
+                var hatch = new Hatch();
+                if (layerId != ObjectId.Null) hatch.LayerId = layerId;
+                ms.AppendEntity(hatch);
+                tr.AddNewlyCreatedDBObject(hatch, true);
+                hatch.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+                hatch.Associative = false;
+                var ids = new ObjectIdCollection { loopEntId };
+                hatch.AppendLoop(HatchLoopTypes.Default, ids);
+                hatch.EvaluateHatch(true);
+            }
+            catch
+            {
+                // Best-effort solid fill; boundary entity remains visible if hatch evaluation fails
+            }
         }
 
         /// <summary>
@@ -881,16 +953,49 @@ namespace LandsurvConnector
 
                 double currentX = 0, currentY = 0;
                 double startX = 0, startY = 0;
-                bool pathStarted = false;
+                int subpathCmdCount = 0;
+                bool completedFullCircle = false;
+                double? pendingCircleStartX = null, pendingCircleStartY = null, pendingCircleMidX = null, pendingCircleMidY = null, pendingCircleR = null;
                 var polyPoints = new List<Autodesk.AutoCAD.Geometry.Point2d>();
+
+                Action<bool> flushPoly = (closed) =>
+                {
+                    if (polyPoints.Count > 1)
+                    {
+                        var pline = new Autodesk.AutoCAD.DatabaseServices.Polyline();
+                        int vIdx = 0;
+                        for (int j = 0; j < polyPoints.Count; j++)
+                        {
+                            if (j > 0 && polyPoints[j].GetDistanceTo(polyPoints[j - 1]) < 1e-6) continue;
+                            pline.AddVertexAt(vIdx++, polyPoints[j], 0, 0, 0);
+                        }
+                        if (vIdx > 1)
+                        {
+                            if (layerId != ObjectId.Null) pline.LayerId = layerId;
+                            if (closed || isFill) pline.Closed = true;
+                            ObjectId plineId = ms.AppendEntity(pline);
+                            tr.AddNewlyCreatedDBObject(pline, true);
+                            entitiesCreated++;
+                            if (isFill && pline.Closed && vIdx >= 3)
+                            {
+                                TryAddSolidHatch(ms, tr, plineId, layerId);
+                            }
+                        }
+                        else
+                        {
+                            pline.Dispose();
+                        }
+                    }
+                    polyPoints.Clear();
+                };
 
                 foreach (System.Text.RegularExpressions.Match cmd in commands)
                 {
                     char command = cmd.Groups[1].Value[0];
                     string args = cmd.Groups[2].Value.Trim();
                     double[] nums = string.IsNullOrEmpty(args) ? new double[0] :
-                        args.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                            .Select(s => double.Parse(s))
+                        args.Split(new[] { ',', ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                            .Select(s => double.Parse(s, System.Globalization.CultureInfo.InvariantCulture))
                             .ToArray();
 
                     bool isRelative = char.IsLower(command);
@@ -899,127 +1004,152 @@ namespace LandsurvConnector
                     switch (command)
                     {
                         case 'M': // MoveTo
-                            // Flush previous polyline if exists
-                            if (polyPoints.Count > 1)
-                            {
-                                var pline = new Autodesk.AutoCAD.DatabaseServices.Polyline();
-                                for (int j = 0; j < polyPoints.Count; j++)
-                                {
-                                    pline.AddVertexAt(j, polyPoints[j], 0, 0, 0);
-                                }
-                                pline.LayerId = layerId;
-                                if (isFill) pline.Closed = true;
-                                ms.AppendEntity(pline);
-                                tr.AddNewlyCreatedDBObject(pline, true);
-                                entitiesCreated++;
-                            }
-                            polyPoints.Clear();
+                            flushPoly(false);
+                            pendingCircleStartX = null;
+                            completedFullCircle = false;
+                            subpathCmdCount = 0;
 
-                            if (nums.Length >= 2)
+                            for (int j = 0; j + 1 < nums.Length; j += 2)
                             {
-                                currentX = isRelative ? currentX + nums[0] : nums[0];
-                                currentY = isRelative ? currentY + nums[1] : nums[1];
-                                startX = currentX;
-                                startY = currentY;
+                                currentX = isRelative ? currentX + nums[j] : nums[j];
+                                currentY = isRelative ? currentY + nums[j + 1] : nums[j + 1];
+                                if (j == 0)
+                                {
+                                    startX = currentX;
+                                    startY = currentY;
+                                }
                                 var pt = toDrawing(currentX, currentY);
                                 polyPoints.Add(new Autodesk.AutoCAD.Geometry.Point2d(pt.X, pt.Y));
-                                pathStarted = true;
+                                subpathCmdCount++;
                             }
                             break;
 
                         case 'L': // LineTo
+                            pendingCircleStartX = null;
+                            completedFullCircle = false;
                             for (int j = 0; j + 1 < nums.Length; j += 2)
                             {
                                 currentX = isRelative ? currentX + nums[j] : nums[j];
                                 currentY = isRelative ? currentY + nums[j + 1] : nums[j + 1];
                                 var pt = toDrawing(currentX, currentY);
                                 polyPoints.Add(new Autodesk.AutoCAD.Geometry.Point2d(pt.X, pt.Y));
+                                subpathCmdCount++;
                             }
                             break;
 
                         case 'H': // Horizontal LineTo
+                            pendingCircleStartX = null;
+                            completedFullCircle = false;
                             foreach (double x in nums)
                             {
                                 currentX = isRelative ? currentX + x : x;
                                 var pt = toDrawing(currentX, currentY);
                                 polyPoints.Add(new Autodesk.AutoCAD.Geometry.Point2d(pt.X, pt.Y));
+                                subpathCmdCount++;
                             }
                             break;
 
                         case 'V': // Vertical LineTo
+                            pendingCircleStartX = null;
+                            completedFullCircle = false;
                             foreach (double y in nums)
                             {
                                 currentY = isRelative ? currentY + y : y;
                                 var pt = toDrawing(currentX, currentY);
                                 polyPoints.Add(new Autodesk.AutoCAD.Geometry.Point2d(pt.X, pt.Y));
+                                subpathCmdCount++;
                             }
                             break;
 
                         case 'A': // Arc (rx ry x-rotation large-arc-flag sweep-flag x y)
-                            // Simplified: draw as circle if rx == ry, else approximate with line
                             for (int j = 0; j + 6 < nums.Length; j += 7)
                             {
-                                double rx = nums[j];
-                                double ry = nums[j + 1];
+                                double rx = Math.Abs(nums[j]);
+                                double ry = Math.Abs(nums[j + 1]);
                                 double endX = isRelative ? currentX + nums[j + 5] : nums[j + 5];
                                 double endY = isRelative ? currentY + nums[j + 6] : nums[j + 6];
+                                double chord = Math.Sqrt((endX - currentX) * (endX - currentX) + (endY - currentY) * (endY - currentY));
 
-                                // If it's a full circle (start == end after transform), draw circle
-                                if (Math.Abs(rx - ry) < 0.01 && j == 0 && nums.Length == 7)
+                                // Detect first half of a 2-arc full circle: M x0 y0 A r r 0 1 0 x1 y1
+                                if (Math.Abs(rx - ry) < 0.01 && subpathCmdCount == 1 && polyPoints.Count == 1 && Math.Abs(chord - 2.0 * rx) < 0.05)
                                 {
-                                    // Likely a circle - calculate center
-                                    double circleX = (currentX + endX) / 2;
-                                    double circleY = currentY; // Center Y is at start Y for horizontal arc
+                                    pendingCircleStartX = currentX;
+                                    pendingCircleStartY = currentY;
+                                    pendingCircleMidX = endX;
+                                    pendingCircleMidY = endY;
+                                    pendingCircleR = rx;
+                                    currentX = endX;
+                                    currentY = endY;
+                                    subpathCmdCount++;
+                                    continue;
+                                }
+
+                                // Detect second half of a 2-arc full circle returning to start
+                                if (pendingCircleStartX.HasValue && Math.Abs(rx - ry) < 0.01
+                                    && Math.Abs(rx - pendingCircleR.Value) < 0.05
+                                    && Math.Abs(endX - pendingCircleStartX.Value) < 0.05
+                                    && Math.Abs(endY - pendingCircleStartY.Value) < 0.05)
+                                {
+                                    double circleX = (pendingCircleStartX.Value + pendingCircleMidX.Value) / 2.0;
+                                    double circleY = (pendingCircleStartY.Value + pendingCircleMidY.Value) / 2.0;
                                     var centerPt = toDrawing(circleX, circleY);
-                                    var radiusPt = toDrawing(currentX, currentY);
-                                    double radius = Math.Abs(centerPt.X - radiusPt.X);
-                                    
+                                    var rimPt = toDrawing(pendingCircleStartX.Value, pendingCircleStartY.Value);
+                                    double radius = centerPt.DistanceTo(rimPt);
+
                                     if (radius > 0.001)
                                     {
                                         var circle = new Circle(centerPt, Autodesk.AutoCAD.Geometry.Vector3d.ZAxis, radius);
-                                        circle.LayerId = layerId;
-                                        ms.AppendEntity(circle);
+                                        if (layerId != ObjectId.Null) circle.LayerId = layerId;
+                                        ObjectId circleId = ms.AppendEntity(circle);
                                         tr.AddNewlyCreatedDBObject(circle, true);
                                         entitiesCreated++;
+                                        if (isFill)
+                                        {
+                                            TryAddSolidHatch(ms, tr, circleId, layerId);
+                                        }
                                     }
-                                }
-                                else
-                                {
-                                    // Approximate arc with line for now
-                                    var pt = toDrawing(endX, endY);
-                                    polyPoints.Add(new Autodesk.AutoCAD.Geometry.Point2d(pt.X, pt.Y));
+
+                                    pendingCircleStartX = null;
+                                    completedFullCircle = true;
+                                    polyPoints.Clear(); // Clear initial M point so Z doesn't draw a stray line
+                                    currentX = endX;
+                                    currentY = endY;
+                                    subpathCmdCount++;
+                                    continue;
                                 }
 
+                                if (pendingCircleStartX.HasValue)
+                                {
+                                    var midPt = toDrawing(pendingCircleMidX.Value, pendingCircleMidY.Value);
+                                    polyPoints.Add(new Autodesk.AutoCAD.Geometry.Point2d(midPt.X, midPt.Y));
+                                    pendingCircleStartX = null;
+                                }
+
+                                var pt = toDrawing(endX, endY);
+                                polyPoints.Add(new Autodesk.AutoCAD.Geometry.Point2d(pt.X, pt.Y));
                                 currentX = endX;
                                 currentY = endY;
+                                subpathCmdCount++;
                             }
                             break;
 
                         case 'Z': // ClosePath
-                            if (polyPoints.Count > 1)
+                            if (completedFullCircle)
                             {
-                                // Close by returning to start
-                                var startPt = toDrawing(startX, startY);
-                                polyPoints.Add(new Autodesk.AutoCAD.Geometry.Point2d(startPt.X, startPt.Y));
+                                completedFullCircle = false;
+                                polyPoints.Clear();
                             }
+                            else
+                            {
+                                flushPoly(true);
+                            }
+                            currentX = startX;
+                            currentY = startY;
                             break;
                     }
                 }
 
-                // Flush any remaining polyline
-                if (polyPoints.Count > 1)
-                {
-                    var pline = new Autodesk.AutoCAD.DatabaseServices.Polyline();
-                    for (int j = 0; j < polyPoints.Count; j++)
-                    {
-                        pline.AddVertexAt(j, polyPoints[j], 0, 0, 0);
-                    }
-                    pline.LayerId = layerId;
-                    if (isFill) pline.Closed = true;
-                    ms.AppendEntity(pline);
-                    tr.AddNewlyCreatedDBObject(pline, true);
-                    entitiesCreated++;
-                }
+                flushPoly(false);
             }
             catch (System.Exception ex)
             {

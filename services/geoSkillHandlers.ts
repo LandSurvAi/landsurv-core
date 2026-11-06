@@ -168,7 +168,6 @@ export function useGeoSkills({
       const currentSettings = settingsRef.current;
       const mode = currentSettings.geoAiMode ?? 'local';
       const localEndpoint = currentSettings.localGeoAiEndpoint || 'http://127.0.0.1:8765';
-      const includeRoad = data.includeRoad === true;
 
       // Composite visible map overlay tiles for computer vision and optical self-checking (1280x1280 resolution)
       const tiles = canvas2dRef?.current?.getMapOverlayTiles?.() ?? [];
@@ -186,12 +185,6 @@ export function useGeoSkills({
             existingPoints: allPts,
             canvas: offscreenCanvas,
           });
-
-          // If includeRoad requested, place road lines on canvas
-          if (includeRoad && roadRes.lines.length > 0) {
-            setLines(prev => [...prev, ...roadRes.lines]);
-            logActionToFieldbook(`Civil Drafter: Extracted authoritative road corridor onto layer "C-ROAD-CNTR".`);
-          }
 
           // Locate house building footprint via OSM if WGS84 bbox is valid
           let buildingCentroid: { x: number; y: number } | undefined;

@@ -85,6 +85,17 @@ export interface C3DBlockRecord {
   name: string;
   /** LSAI side: SVG path used to (re)create the block definition. */
   svgPath?: string;
+  fillPath?: string | null;
+  texts?: Array<{
+    text: string;
+    x: number;
+    y: number;
+    fontSize: number;
+    fontWeight?: 'normal' | 'bold';
+    fontFamily?: string;
+    anchor?: 'start' | 'middle' | 'end';
+    rotation?: number;
+  }>;
   viewBox?: string;
   scale?: number;
   /** CAD side: how many inserts reference this block. */

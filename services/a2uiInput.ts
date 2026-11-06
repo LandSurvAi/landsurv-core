@@ -191,9 +191,16 @@ function readOptions(value: unknown): string[] {
 
 function coerceFieldType(value: unknown, options: string[], label: string): A2UIInputFieldType {
   if (options.length > 0) return 'select';
-  if (value === 'text' || value === 'number' || value === 'textarea' || value === 'select') {
+  if (
+    value === 'text' ||
+    value === 'number' ||
+    value === 'textarea' ||
+    value === 'select' ||
+    value === 'checkbox'
+  ) {
     return value;
   }
+  if (value === 'boolean') return 'checkbox';
   return inferFieldType(label);
 }
 
@@ -218,6 +225,10 @@ function readInputFields(value: unknown, used: Set<string>): A2UIInputField[] {
       hint: typeof record.hint === 'string' ? clean(record.hint) : undefined,
       required: record.required === true,
       options: options.length > 0 ? options : undefined,
+      defaultChecked:
+        type === 'checkbox'
+          ? record.defaultChecked === true || record.checked === true
+          : undefined,
       group:
         typeof record.group === 'string' && record.group.trim()
           ? clean(record.group)
@@ -514,11 +525,20 @@ export function buildA2UIInputFormFromNeedsInput(
         .filter(group => group.length > 0)
     : [];
 
+  const recordTitle =
+    typeof record.title === 'string' && record.title.trim()
+      ? clean(record.title)
+      : undefined;
+  const recordSubmitLabel =
+    typeof record.submitLabel === 'string' && record.submitLabel.trim()
+      ? clean(record.submitLabel)
+      : undefined;
+
   return {
-    title: options.title ?? 'Input needed',
+    title: options.title ?? recordTitle ?? 'Input needed',
     description: question,
     fields,
-    submitLabel: 'Send to agent',
+    submitLabel: recordSubmitLabel ?? 'Send to agent',
     requireOneOf: requireOneOf.length > 0 ? requireOneOf : undefined,
   };
 }

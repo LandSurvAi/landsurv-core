@@ -151,6 +151,11 @@ export const AGENT_WELCOME_PROFILES: Partial<Record<AgentType, AgentWelcomeProfi
     summary:
       'I retrieve USDA NRCS SSURGO soil map units and attribute reports, including hydrologic group, drainage class, and farmland classification.',
   },
+  [AgentType.ROADING_AGENT]: {
+    name: 'Roading',
+    summary:
+      'I synthesize existing roads from survey points, background imagery, and OpenStreetMap ways, and design proposed road corridors, typical sections, profiles, and cross sections in coordination with the Stationing & CL and Profile agents.',
+  },
 };
 
 /**

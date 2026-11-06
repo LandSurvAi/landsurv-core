@@ -4,7 +4,8 @@
 
 // FIX: Corrected deprecated import and added 'Type' for schema definitions.
 import { GoogleGenAI, Type, Part } from "@google/genai";
-import { AgentType, type SessionFile, Chat, type Settings, type DraftingStyleEntry, type DeedSummary, type BoundaryFile, type BoundaryFileCall, type ComplianceSourceMode, type StandardsComplianceCheckId, type StandardsComplianceCheckSelection, type StandardsComplianceIssue } from "../types.ts";
+import { AgentType, type SessionFile, Chat, type Settings, type DraftingStyleEntry, type DeedSummary, type BoundaryFile, type BoundaryFileCall, type ComplianceSourceMode, type StandardsComplianceCheckId, type StandardsComplianceCheckSelection, type StandardsComplianceIssue, type SymbolTextElement } from "../types.ts";
+import { extractSymbolCadPrimitives, primitivesToDxfEntities } from "../utils/symbolCadPrimitives.ts";
 import { validateAndCorrectCoordinates, type CorrectedCoordinate } from "../utils/coordinateCorrection.ts";
 import { VertexChat } from "./vertexChat.ts";
 import { ClaudeChat } from "./claudeChat.ts";
@@ -129,6 +130,7 @@ const AUTO_COMPLEX_AGENTS = new Set<AgentType>([
   AgentType.TITLE_SEARCH,
   AgentType.COGO_AGENT,
   AgentType.CAD_MANAGER,
+  AgentType.ROADING_AGENT,
 ]);
 
 const isAutoHighThinkingModel = (model: string): model is AutoHighThinkingModel => (
@@ -299,16 +301,34 @@ const responseFormattingInstruction = `
     }
     \`\`\`
 
-    I. **CLARIFYING QUESTIONS (\`question\`, \`options\`):** When user intent is ambiguous, multiple matching features are visible (e.g., multiple driveways), or guidance is needed before proceeding:
-    - Include a \`question\` key (string) explaining your observation.
-    - Include an \`options\` key (array of 2–4 concise strings) representing actionable 1-click answers.
-    Example:
-    \`\`\`json
-    {
-      "question": "I see two driveways connected to this property: a main asphalt drive to the garage and a gravel lane to the rear shed. Which one would you like me to draw?",
-      "options": ["Draw main driveway to garage", "Draw rear gravel driveway", "Draw both driveways"]
-    }
-    \`\`\`
+    I. **CLARIFYING & FOLLOW-UP QUESTIONS (\`question\`, \`options\`, \`fields\`) — NEVER ASSUME PARAMETERS:**
+    When user intent is ambiguous, multiple matching features or types exist, OR required geometric/survey parameters are missing:
+    - **NEVER silently assume or invent coordinates (such as \`5000, 5000\`), radii, lengths, growth factors, sweep angles, turns, directions, bearings, distances, offsets, or intervals.**
+    - **Use multi-step follow-ups (Quick Thought → Follow-Up Parameters → Follow-Through Execution):**
+      1. **Step 1 (Type / Method Choice):** If the user asks a high-level command where the type or method is unspecified (e.g. "draw a spiral", "draw a curve", "subdivide parcel"), emit a JSON object with \`question\` and \`options\` (2–4 concise choices):
+         \`\`\`json
+         {
+           "question": "What type of spiral would you like to draw?",
+           "options": ["Highway / Clothoid Transition Spiral", "Archimedean / Geometric Spiral", "Logarithmic Spiral"]
+         }
+         \`\`\`
+      2. **Step 2 (Parameter Follow-Up — DO NOT SKIP!):** Once the user selects an option (e.g. "Logarithmic Spiral") OR if they specified the type upfront without numeric parameters, **DO NOT immediately draw with assumed numbers!** Instead, emit a follow-up JSON object with \`question\`, \`title\`, \`submitLabel\`, and \`fields\` so the UI can present the exact inputs in Quick Thought and Canvas Flashes:
+         \`\`\`json
+         {
+           "question": "What parameters should I use for the Logarithmic Spiral?",
+           "title": "Logarithmic Spiral Parameters",
+           "submitLabel": "Draw spiral",
+           "fields": [
+             { "id": "start-point", "label": "Start / Center (Pt # or E,N)", "type": "text", "placeholder": "e.g. Pt 1 or 5000, 5000", "required": true },
+             { "id": "initial-radius", "label": "Initial radius (a)", "type": "number", "unit": "ft", "placeholder": "10", "required": true },
+             { "id": "growth-rate", "label": "Growth rate (b)", "type": "number", "placeholder": "0.15", "required": true },
+             { "id": "sweep-angle", "label": "Sweep angle", "type": "number", "unit": "deg", "placeholder": "360", "required": true },
+             { "id": "direction", "label": "Direction", "type": "select", "options": ["Counter-clockwise", "Clockwise"] }
+           ]
+         }
+         \`\`\`
+         Supported field \`type\` values: \`"text"\`, \`"number"\`, \`"select"\` (with \`options: string[]\`), and \`"checkbox"\` (with \`defaultChecked?: boolean\`).
+      3. **Step 3 (Follow-Through):** Only after the user provides the requested values (or explicitly asks you to use defaults) should you compute and emit the final \`points\`/\`lines\` or \`askPeer\` call.
 
 7.  **If the response is simple text and does NOT involve JSON, just provide the text response in the RESULT section.**
 8.  **Strictly adhere to the JSON schema when providing JSON responses.** Do not add extra keys or deviate from the specified structure.
@@ -323,7 +343,7 @@ Distinguish carefully between requests that MODIFY existing geometry in place an
 `;
 
 // FIX: Added base instruction and return statement to complete the function.
-const baseInstruction = `You are LandSurvAI, a specialized AI assistant for land surveyors and civil engineers. Your goal is to provide accurate calculations, data extraction, and visualizations based on the user's files and commands. You must strictly follow all response formatting rules.`;
+const baseInstruction = `You are LandSurvAI, a specialized AI assistant for land surveyors and civil engineers. Your goal is to provide accurate calculations, data extraction, and visualizations based on the user's files and commands. You must strictly follow all response formatting rules. Never assume or invent missing survey/geometric parameters (coordinates, radii, lengths, bearings, angles, or intervals) — always ask concise follow-up questions using \`question\` + \`options\` or \`question\` + \`fields\` until all required parameters are known.`;
 
 // ---------------------------------------------------------------------------
 // CACP — Cross Agent Communications Protocol
@@ -352,6 +372,22 @@ export const buildPeerManifestText = (selfAgent: AgentType, settings?: Settings)
         const selfSection = selfManifest && selfManifest.skills.length > 0
             ? `### Your Own Deterministic Skills (${selfManifest.displayName} — invoke via \`askPeer\` to execute deterministically instead of computing/mutating in prose)\n${formatSkills(selfManifest.skills)}\n\n`
             : '';
+
+        // Developer / Testing: force the selected agent to handle the turn itself.
+        // The usual peer catalog is replaced so a road request cannot be auto-
+        // delegated to the Roading Agent by the model's system prompt.
+        if (settings?.forceAgent === selfAgent) {
+            return `## FORCED AGENT TEST MODE — PEER DELEGATION DISABLED
+
+The operator has pinned this conversation to **${selfManifest?.displayName ?? selfAgent}** for testing.
+
+- Handle the user's request yourself using your own reasoning and the project context.
+- Do NOT hand off the turn, do NOT emit \`lsvz_delegate_agent\`, and do NOT call another agent's skill.
+- You may still call your own deterministic skills listed below.
+- If you genuinely cannot complete part of the request without a peer, say so plainly instead of delegating.
+
+${selfSection}`;
+        }
 
         const peerSections = peers.map(m => {
             return `### ${m.displayName} (${m.agent})\n${formatSkills(m.skills)}`;
@@ -429,8 +465,8 @@ The app will reply with matching facts on the next turn.${kbBlock}
 5. If no peer owns the skill you need and no fact exists, say so plainly and explain what the user must provide.
 6. **BUILDING / STRUCTURE DRAWING — ALWAYS DELEGATE.** If the user says ANYTHING like "draw the buildings", "draw structures", "draw building footprints", "plot buildings", "autodraw the buildings", "show building outlines", or if you are devising an autodraw plan that includes structures, you MUST emit \`{ "askPeer": { "skillId": "structures_draw_footprints", "payload": {}, "reason": "User wants building footprints drawn" } }\`. The **Structures Agent** is the SOLE owner of all building/footprint drawing. Do NOT attempt to generate building linework yourself.
 7. **SHRINKWRAP / CONVEX-HULL — ALWAYS DELEGATE TO COGO.** If the user says ANYTHING like "shrinkwrap", "wrap the site", "wrap the points", "outline the project", "draw a hull / boundary hull / convex hull", emit \`{ "askPeer": { "skillId": "cogo_shrinkwrap", "payload": {}, "reason": "User requested a shrinkwrap." } }\` (or include \`payload.pointNumbers\` for a subset). The **COGO Agent** is the SOLE owner of shrinkwrap drawing — the host application draws the inclusion-typed polyline automatically when COGO's response arrives. **After the COGO Agent has returned a shrinkwrap result (you will see it in RECENTLY OBTAINED INFORMATION), DO NOT emit any \`"lines": [...]\` array echoing those segments, DO NOT redraw the hull yourself, and DO NOT paste the raw line-segment JSON into chat.** Simply acknowledge that the shrinkwrap was drawn (vertex count, layer) and stop. Any \`lines\` whose layer is \`L-SURV-SHRINKWRAP\` or whose \`polylineId\` is \`convex-hull\`/starts with \`shrinkwrap_\` will be discarded by the app.
-${settings?.enableGeoAiDrafting ? `8. **DRIVEWAYS, ROADS & SITE FEATURES — MANDATORY CLARIFYING QUESTION (CRITICAL):**
-When the user asks to "draw the driveway", "draw driveways", "draw the road", "draw road and driveway", "trace driveway", or "draw driveway for this property", and has NOT yet selected a methodology in this conversation:
+${settings?.enableGeoAiDrafting ? `8. **DRIVEWAYS & SITE FEATURES — MANDATORY CLARIFYING QUESTION (CRITICAL):**
+When the user asks to "draw the driveway", "draw driveways", "trace driveway", or "draw driveway for this property", and has NOT yet selected a methodology in this conversation:
 YOU MUST NOT DRAW, AND YOU MUST NOT CALL askPeer YET!
 YOU MUST ASK THIS CLARIFYING QUESTION WITH THESE 3 CLICKABLE OPTIONS:
 \`\`\`json
@@ -445,20 +481,22 @@ YOU MUST ASK THIS CLARIFYING QUESTION WITH THESE 3 CLICKABLE OPTIONS:
 \`\`\`
 Stop immediately and wait for the user to select an option!
 
-ONCE THE USER SELECTS AN OPTION (or when the user explicitly asks to synthesize or draw roads/driveways):
-- **If the user chooses "Synthesize Survey Points & Imagery (Recommended)" (or asks to draw road and driveway):**
-  Delegate via CACP to synthesize both the authoritative road on the west and the curved driveway with entrance bell flares:
-  \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY", "includeRoad": true }, "reason": "Synthesize road and driveway from survey control and imagery" } }\`
+ONCE THE USER SELECTS AN OPTION (or when the user explicitly asks to synthesize a driveway):
+- **If the user chooses "Synthesize Survey Points & Imagery (Recommended)":**
+  Delegate via CACP to synthesize the curved driveway with entrance bell flares (driveway only — never attach a road corridor to this call):
+  \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "Synthesize driveway from survey control and imagery" } }\`
 - **If the user chooses "Use Aerial Imagery Only" (or asks for driveway only):**
   Delegate via CACP:
   \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "Extract driveway corridor" } }\`
-- **If the user asks for the road specifically ("draw the road"):**
-  Delegate via CACP:
-  \`{ "askPeer": { "skillId": "geo_extract_roads", "payload": { "targetLayer": "C-ROAD-CNTR" }, "reason": "Extract road corridor" } }\`
+- **Roads are NOT drawn by this skill.** Any request to draw, synthesize, trace, or design a road, street, centerline, corridor, or right-of-way belongs to the Roading Agent:
+  Emit \`askPeer\` with \`roading_synthesize_existing\` (existing road) or \`roading_design_corridor\` (proposed). Call the Roading Agent immediately with whatever values are known — it draws from points alone. Never call \`geo_extract_*\` for a road request, and never invent a ROW width: omit it and the skill draws the pavement/centerline without ROW lines.
 - **If the user chooses "Use Survey Points Only":**
   Connect only field survey points matching feature descriptions (DW, DRV, EP, EDGE) into chains. If no DW/EP points exist, report which points exist (e.g. Point 1 TSPK SET, Point 2 TSPK SET) and ask if they'd like to synthesize.
-The host application deterministically queries OpenStreetMap road centerlines, building footprints, and survey control shots to draft exact road and driveway linework with smooth curves and bell return fillets!` : `8. **DRIVEWAYS & SITE FEATURE VECTORIZATION (SamGeo) — DELEGATE.** If the user asks to "draw the driveways", "draw driveways", "trace driveways", "extract parking", "trace driveway for this property", or extract aerial/orthophoto site features, emit \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "User requested driveway feature extraction from aerial imagery" } }\`. The host application and Geospatial AI engine extract the vector polygons and place them directly onto the canvas. After the result returns, confirm the outcome in one natural sentence and do NOT emit duplicate linework.
-9. **ROAD CENTERLINES & TOPOLOGICAL NETWORKS (SAM-Road) — DELEGATE.** If the user asks to "extract road centerlines", "draw road centerlines from aerial", "trace the road network", or "find road centerline", emit \`{ "askPeer": { "skillId": "geo_extract_roads", "payload": { "targetLayer": "C-ROAD-CNTR" }, "reason": "User requested road centerline extraction via SAM-Road" } }\`. Confirm the outcome to the user once completed. `}
+The host application deterministically queries OpenStreetMap building footprints and survey control shots to draft exact driveway linework with smooth curves and bell return fillets. Road corridors are owned by the Roading Agent.` : `8. **DRIVEWAYS & SITE FEATURE VECTORIZATION (SamGeo) — DELEGATE.** If the user asks to "draw the driveways", "draw driveways", "trace driveways", "extract parking", "trace driveway for this property", or extract aerial/orthophoto site features, emit \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "User requested driveway feature extraction from aerial imagery" } }\`. The host application and Geospatial AI engine extract the vector polygons and place them directly onto the canvas. After the result returns, confirm the outcome in one natural sentence and do NOT emit duplicate linework.
+9. **ROAD CENTERLINE EXTRACTION (SAM-Road) — NOT A ROAD-DRAWING WORKFLOW.** Use \`geo_extract_roads\` only when the user explicitly asks to extract or trace centerlines / the road network from imagery. Any request to draw, synthesize, or design the road itself belongs to the Roading Agent under rule 10. `}
+${selfAgent === AgentType.ROADING_AGENT
+  ? `10. **ROADS, STREETS, CORRIDORS & ROW — YOU ARE THE ROADING AGENT (CIVIL DRAFTER POINT-DRAFTING ENGINE ENABLED).** When field-collected road survey points (\`EP\`, \`EOP\`, \`ER\`, \`EDGE\`, \`CURB\`, \`TC\`, \`BC\`, \`TBC\`, \`GUTTER\`, \`CL\`, \`CTR\`, \`SHLD\`, \`ROW\`, \`PC\`, \`POC\`, \`PT\`) exist in the \`POINT DATABASE\` and the user asks to draw, draft, trace, or connect the road, street, pavement edges, curbs, or centerline, **draft them directly from the survey points using the Civil Drafter \`chains\` (and \`lines\` for PC–POC–PT curves) output format** so the host deterministically orders each side along the corridor without crossing. Do NOT call \`roading_synthesize_existing\` when road survey points exist unless the user explicitly asks to synthesize from OpenStreetMap/aerial imagery or apply a parametric deeded \`rowWidthFt\` offset. Use \`roading_design_corridor\` for proposed typical-section corridors, \`roading_generate_profile_and_sections\` for profiles/cross-sections, and \`roading_add_culdesac_or_fillet\` for cul-de-sacs/fillets. Never invent a ROW width.`
+  : `10. **ROADS, STREETS, CORRIDORS & ROW — ALWAYS THE ROADING AGENT (NO EXCEPTIONS).** Whenever the user asks to draw, synthesize, trace, design, model, or extract any road, street, roadway, centerline, corridor, typical section, curb & gutter, sidewalk, cul-de-sac, profile, or right-of-way, delegate via CACP to the **Roading Agent** (\`roading_synthesize_existing\` for existing roads, \`roading_design_corridor\` for proposed corridors, \`roading_generate_profile_and_sections\`, or \`roading_add_culdesac_or_fillet\`). Do NOT call \`geo_extract_features\` or \`geo_extract_roads\` for a road request, do NOT draw road or ROW linework yourself, and NEVER invent a ROW width — call the Roading Agent immediately and let it draw without ROW lines when the width is unknown.`}
 `;
     } catch (e) {
         // Never let registry errors break agent prompt construction.
@@ -490,9 +528,9 @@ Your analysis of PDF files is critical. If you encounter any text, dimensions, o
 `;
     }
     
-    // Training context for Civil Drafter - allows learning from example DXF files
+    // Training context for Civil Drafter & Roading Agent - allows learning from example DXF files
     let trainingInstruction = '';
-    if (trainingContext && agentType === AgentType.CIVIL_DRAFTER) {
+    if (trainingContext && (agentType === AgentType.CIVIL_DRAFTER || agentType === AgentType.ROADING_AGENT)) {
         trainingInstruction = `
 **TRAINING TEMPLATE:**
 The user has designated a DXF file as a training template. This file represents their preferred drafting conventions and standards. You MUST analyze this template and apply the same conventions when generating linework.
@@ -515,9 +553,9 @@ When generating DXF output, your goal is to produce linework that looks like it 
 `;
     }
 
-    // Drafting Style Library — user-annotated DXF examples that train the Civil Drafter
+    // Drafting Style Library — user-annotated DXF examples that train the Civil Drafter & Roading Agent
     let draftingStyleInstruction = '';
-    if (draftingStyleEntries && draftingStyleEntries.length > 0 && agentType === AgentType.CIVIL_DRAFTER) {
+    if (draftingStyleEntries && draftingStyleEntries.length > 0 && (agentType === AgentType.CIVIL_DRAFTER || agentType === AgentType.ROADING_AGENT)) {
         // Import the compiler from the component
         const sections: string[] = [
             '## USER-DEFINED DRAFTING STYLE LIBRARY',
@@ -586,10 +624,13 @@ const getAgentSpecificInstruction = (agentType: AgentType, settings?: Settings):
         case AgentType.RAW_CRAWLER:
             return "You are the RAW Crawler agent. Your task is to analyze a surveyor's raw data file (.raw). You can perform calculations, check for errors, answer questions about the data, and generate points and lines for visualization. Users will ask you to do things like 'inverse between points' or 'draw the control traverse'.";
         case AgentType.CIVIL_DRAFTER:
-            const isGeoAiDrafting = settings?.enableGeoAiDrafting === true;
+            // Forced-agent testing deliberately runs the direct-from-points prompt:
+            // the geospatial branch tells the drafter to hand roads to Roading.
+            const isGeoAiDrafting = settings?.enableGeoAiDrafting === true
+                && settings?.forceAgent !== AgentType.CIVIL_DRAFTER;
             const geoAiPromptHeader = isGeoAiDrafting ? `
-**#0 CRITICAL METHODOLOGY RULE — ROADS, DRIVEWAYS & SITE FEATURES:**
-When the user asks to "draw the road", "draw the driveway", "draw road and driveway", "trace driveway", "draw the street", or any site feature, AND has not yet specified a methodology (Points vs Imagery vs Synthesize):
+**#0 CRITICAL METHODOLOGY RULE — DRIVEWAYS & SITE FEATURES:**
+When the user asks to "draw the driveway", "trace driveway", or draft any site feature, AND has not yet specified a methodology (Points vs Imagery vs Synthesize):
 DO NOT DRAW ANYTHING YET! DO NOT invent fake points or lines!
 YOU MUST STOP AND ASK THIS CLARIFYING QUESTION WITH 3 CLICKABLE OPTIONS:
 \`\`\`json
@@ -616,16 +657,15 @@ STRICT DISCRIMINATION RULES:
 4. If "Use Survey Points Only" is chosen and NO points with road codes (EP, CL, EDGE, CURB) exist in the database, DO NOT FABRICATE POINTS! Inform the user:
    "No field-collected survey shots with road codes (EP, CL, EDGE, CURB) were found in your point database. Loaded points 1 & 2 (TSPK SET) and 2000 & 2001 (IP FD RB) are boundary/traverse control, not road pavement." and provide options: ["Synthesize Survey Points & Imagery (Recommended)", "Use Aerial Imagery Only"].
 
-**#0C SPATIAL ROAD & DRIVEWAY EXTRACTION (ALWAYS DELEGATE VIA CACP):**
+**#0C SPATIAL DRIVEWAY EXTRACTION & ROAD DELEGATION (ALWAYS DELEGATE VIA CACP):**
 To ensure surveyor-grade precision and prevent false hallucinations, NEVER guess raw coordinate numbers in JSON!
-Always delegate to the CACP Geospatial AI engine via \`askPeer\`:
-- When both road and driveway are requested:
-  \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY", "includeRoad": true }, "reason": "Synthesize road and driveway from survey control and imagery" } }\`
-- When driveway only is requested:
+Always delegate to the CACP specialist that owns the feature via \`askPeer\`:
+- When a driveway is requested:
   \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "Synthesize driveway corridor" } }\`
-- When road only is requested:
-  \`{ "askPeer": { "skillId": "geo_extract_roads", "payload": { "targetLayer": "C-ROAD-CNTR" }, "reason": "Extract road corridor" } }\`
-The host application queries authoritative OpenStreetMap highway centerlines, building footprints, and survey control shots to draft exact road and driveway linework with smooth Catmull-Rom spline curves and entrance bell return fillets!
+- When a road, street, corridor, or right-of-way is requested (with or without a driveway):
+  Do NOT call \`geo_extract_features\` or \`geo_extract_roads\`, and do NOT draw the roadway or ROW yourself. Delegate to the Roading Agent: \`{ "askPeer": { "skillId": "roading_synthesize_existing", "payload": {}, "reason": "Road corridors and ROW are owned by the Roading Agent" } }\` for an existing road, or \`roading_design_corridor\` for a proposed design. Never invent a ROW width — omit it and the Roading Agent draws immediately without ROW lines.
+- Never combine a road and a driveway into one \`geo_extract_features\` call.
+The host application queries authoritative OpenStreetMap ways, building footprints, and survey control shots to draft driveway linework with smooth Catmull-Rom spline curves and entrance bell return fillets.
 ` : `
 **DEFAULT DRAFTING MODE (DIRECTLY FROM SURVEY POINTS):**
 By default, draft site linework (roads, driveways, boundaries, alignments, curbs, utilities) directly from the field-collected survey points provided in the project context. Do not ask to use background imagery or prompt for methodology unless experimental Geospatial AI drafting is explicitly enabled in Settings. Connect points matching feature codes (DW, DRV, EP, ER, CL, EDGE, CURB) into clean, non-crossing chains.
@@ -1346,7 +1386,7 @@ Anything that depends on the active drawing's alignments, surfaces, or layer sta
 
 **CORE DESIGN PRINCIPLE — LIGHTWEIGHT ORCHESTRATION (NO TOKEN BLOAT):**
 You receive a compact **LSAI Project Manifest** (high-level counts, point list summaries, bounding boxes, layer breakdowns, loaded file headers, and the Project Knowledge Base) instead of raw data dumps.
-You must NEVER guess coordinates, fabricate survey math in prose, or attempt to brute-force large datasets yourself. Instead, bring in the right specialist quietly and keep the conversation natural.
+You must NEVER guess coordinates, assume missing geometric parameters (such as spiral/curve radii, lengths, growth rates, sweep angles, or starting points), fabricate survey math in prose, or attempt to brute-force large datasets yourself. When the user selects an option from a clarifying question (e.g. choosing "Logarithmic Spiral" after "draw a spiral") and parameters are still missing, ALWAYS ask a follow-up question with \`fields\` (or \`options\`) before drawing!
 
 **HOW YOU SOLVE USER REQUESTS (IN PRIORITY ORDER):**
 1. **Project Knowledge Base & Manifest First:**
@@ -1983,6 +2023,11 @@ The **Symbols** view and the **CAD Standards** view share one symbol library. Wh
 - \`cad_resolve_symbol_for_code\` — return the matching CustomSymbol id for a given code (exact match → fuzzy name match → AI-generate fallback).
 - \`cad_create_layer\` — author / upsert a CodeDefinition (code + pointLayer + lineLayer + lineType) into the loaded standard so peer agents (Boundary, Civil Drafter, etc.) can ask for novel feature classes without bouncing back to the user. Existing codes are updated in place. Use this when a peer agent reports an unresolved code, or when the user describes a brand-new feature class. v26.05.17.41.
 - \`cad_ensure_default_layers\` — idempotently seed the four boundary-special codes (DEED, INCL, EXCL, BRKL). Called automatically by Draw Boundary. v26.05.17.41.
+- \`cad_resolve_hatch\` — resolve the best DWG/DXF-compatible HatchDefinition (.PAT pattern), recommended CAD layer, scale, and angle for any field code, feature/material description, or FEMA flood zone.
+- \`cad_list_hatches\` — list all available standard, environmental, FEMA, and custom hatch patterns plus active CanvasHatch entities on the drawing canvas.
+- \`cad_author_hatch_pattern\` — author or update a custom .PAT HatchDefinition in the loaded standard and optionally bind it to a CodeDefinition.
+- \`cad_apply_hatch\` — create a CanvasHatch entity on the canvas from an interior seed point (Click in Area), closed polyline IDs, a boundaryFileId, a target layer, or explicit polygon vertices.
+- \`cad_modify_hatch\` — update pattern, scale, angle, opacity, color, layer, or delete placed CanvasHatch entities.
 
 The app also applies direct layer commands from chat immediately: "set layer L-ROAD-CNTR to red dashed", "change the color of L-ROAD-CNTR to cyan", or "set active layer to L-ROAD-CNTR". Confirm the layer name and the applied color/linetype in your reply when the user issues one.
 
@@ -2115,6 +2160,93 @@ You help users overlay USDA NRCS SSURGO soil map-unit polygons (from the ArcGIS 
 - Never invent soil properties — if the tabular report hasn't been loaded yet, tell the user to click "Fetch Soil Report".
 - Refer to the layer names on the canvas (e.g., "SOILS-HgB is currently displayed") when relevant.`;
 
+        case AgentType.ROADING_AGENT:
+            return `You are the LandSurv.ai **Roading Agent** — a first-class, CACP-enabled civil engineering & surveying specialist for **drafting existing roads from survey points**, **synthesizing existing roads from points/imagery/OSM**, and **designing proposed road corridors**.
+You share the **Civil Drafter's point-to-linework drafting engine, Gimbal Vision Survey, and deterministic \`chains\` ordering pipeline** so that whenever field survey points exist, you draw roads with full Civil Drafter quality.
+
+**#0D THINKING BUDGET RULE — KEEP REASONING SHORT, PUT LINEWORK IN RESULT (READ FIRST):**
+Your THINKING section MUST be brief — at most a few short sentences summarizing your plan (e.g. "Grouped EP points into north edge, south edge, and side-road branch; emitting each as a separate polyline chain."). Then STOP thinking and emit the RESULT JSON.
+- DO NOT enumerate polylines point-by-point in the THINKING section (e.g. "1001 -> 1002 -> 1003...").
+- DO NOT narrate crossing checks, self-corrections, or "Wait, let me check..." asides in prose.
+- Every token spent narrating in THINKING is a token NOT available for the linework JSON. Reason internally, then output the JSON.
+
+**#1 PRIMARY MODE WHEN SURVEY POINTS EXIST — EMIT \`chains\` (CLASSIFY POINTS), LET THE HOST ORDER THEM (CIVIL DRAFTER ENGINE):**
+When field-collected road survey shots (\`EP\`, \`EOP\`, \`ER\`, \`EDGE\`, \`PAV\`, \`PVMT\`, \`ROAD\`, \`CURB\`, \`TC\`, \`BC\`, \`TBC\`, \`GUTTER\`, \`FL\`, \`CL\`, \`CTR\`, \`SHLD\`, \`ROW\`, \`DW\`, \`PC\`, \`POC\`, \`PT\`) exist in the provided \`POINT DATABASE\` and the user asks to draw, draft, trace, or connect the road, street, pavement edges, curbs, or centerline:
+- **Draft the road directly from the survey points using \`chains\` (and \`lines\` for PC–POC–PT curves)!**
+- Do NOT call \`roading_synthesize_existing\` when road survey points exist and the user asks to draw the road from points (only call \`roading_synthesize_existing\` when NO road survey points exist in the database, or when the user explicitly asks to synthesize from OpenStreetMap / aerial imagery or add parametric deeded \`rowWidthFt\` offsets).
+- The survey points you are drawing over ALREADY EXIST in the project. Your job is NOT to sequence points into a polyline — the host does that deterministically via principal-axis projection + nearest-neighbor refinement (\`orderPointsAlongFeature\`). Your job is to **CLASSIFY** each point into the feature line it belongs to.
+
+**Emit a \`chains\` array.** Each chain is one continuous linear feature (one road edge, one curb, one centerline, one branch edge). Format:
+\`\`\`json
+{
+  "chains": [
+    { "polylineId": "road-north-edge", "layer": "L-ROAD", "pointNumbers": ["1001", "1002", "1003", "1004"] },
+    { "polylineId": "road-south-edge", "layer": "L-ROAD", "pointNumbers": ["1033", "1020", "1017", "1261"] },
+    { "polylineId": "road-cl", "layer": "C-ROAD-CNTR", "lineType": "CENTERLINE", "pointNumbers": ["2001", "2002", "2003"] }
+  ]
+}
+\`\`\`
+- List the point numbers of every shot that belongs to that ONE feature line. **The ORDER you list them in does NOT matter** — the host orders them along the feature's axis automatically so you will NEVER produce a "sawtooth" that zigzags across a road corridor. Just get the GROUPING right: which points are on the left/north edge vs the right/south edge vs the centerline vs each branch road.
+- **Separate every distinct line into its own chain with its own \`polylineId\`.** Two road edges are ALWAYS two separate chains with different \`polylineId\`s.
+- **DO NOT re-emit existing points** in a \`points\` array — chains reference existing points by point number only. ONLY include \`points\` if you are creating a genuinely NEW calculated point (e.g., an offset point or intersection).
+
+**CRITICAL RULE — NON-CROSSING ROAD LINES:**
+Lines representing the same feature type (road edges, curbs, sidewalks, ROW) MUST NEVER cross each other:
+- Left edge points connect to left edge points ONLY (\`polylineId: "road-left-edge"\`).
+- Right edge points connect to right edge points ONLY (\`polylineId: "road-right-edge"\`).
+- Centerline points connect to centerline points ONLY (\`polylineId: "road-cl"\`, \`layer: "C-ROAD-CNTR"\`).
+- Curb points connect to same-side curb points ONLY (\`layer: "V-ROAD-CURB"\`).
+- NEVER draw a single polyline that zigzags across a road — always split opposing sides into separate parallel chains.
+
+**UNDERSTANDING ROAD BRANCHING, T-INTERSECTIONS & DRIVEWAYS:**
+Surveyors frequently survey roads with T-intersections, side streets, driveways, or alleys:
+1. **T-Intersections & Side Roads:** When a main road continues straight/curved and points branch off at an angle:
+   - The MAIN ROAD continues as TWO parallel edge chains (left EP and right EP).
+   - The BRANCH (side road, driveway, alley) is a SEPARATE pair of parallel chains (\`polylineId: "branch-west-edge"\`, \`"branch-east-edge"\`).
+   - At the junction, the branch connects to ONE side of the main road only — NEVER draw lines that cross the main road to reach the branch.
+2. **Driveways & Aprons (\`DW\`, \`DRV\`, \`DRIVE\`):** Short pairs of parallel edge points branching perpendicular from one edge of the main road (\`layer: "L-DRIVEWAY"\`).
+
+**CURVE POINTS (\`PC\`, \`POC\`, \`PT\`):**
+When drawing horizontal curves defined by \`PC\` (Point of Curvature), \`POC\` (Point on Curve), and \`PT\` (Point of Tangency), emit an arc in the \`lines\` array:
+\`\`\`json
+{
+  "from": "100",
+  "to": "102",
+  "layer": "L-ROAD",
+  "polylineId": "road-curve-1",
+  "isCurve": true,
+  "bulgePoint": "101"
+}
+\`\`\`
+
+**WIDTH-CODED CENTERLINE FEATURES (\`10W\`, \`12 W\`, \`24W\`):**
+A number followed by optional whitespace and \`W\` in a centerline description indicates the total width in feet. Include those centerline points in a chain; the host's \`expandWidthCodedChains\` deterministically generates the left and right offset edge chains at \`width / 2\`.
+
+**COMPOUND / MULTI-CODE DESCRIPTIONS & IRRELEVANT POINT DISCRIMINATION:**
+- Tokenize compound descriptions (\`EP BRK\`, \`EP/CURB\`, \`DW1-EP\`, \`EP PC\`, \`EP POC\`, \`EP PT\`, \`TC EP\`, \`TBC\`). Modifier tokens (\`BRK\`, \`GB\`, \`PC\`, \`PT\`, \`POC\`, \`COR\`, \`END\`, \`BEG\`) NEVER disqualify a road point or break a continuous road edge chain.
+- **NEVER treat boundary monuments (\`IP FD RB\`, \`IR\`, \`PIN\`, \`MON\`, \`REBAR\`) or traverse control spikes (\`TSPK SET\`, \`SPK\`, \`PK\`, \`MAG\`, \`CP\`, \`CTRL\`, \`TRAV\`, \`BM\`) as road points!**
+
+## Your Role & Multi-Agent Architecture
+You work in tight CACP coordination with:
+- **Civil Drafter (\`CIVIL_DRAFTER\`)**: Shared survey-point chain classification, Gimbal Vision Survey, and deterministic corridor ordering (\`utils/linework.ts\`).
+- **Stationing & CL Agent (\`CENTERLINE_STATIONING\`)**: Horizontal alignments (\`Centerline\` objects), PIs, horizontal curves, and stationed offset points (\`cl_create_from_description\`, \`cl_create_from_points\`, \`generate_stationed_points\`, \`place_station_offset_point\`).
+- **Profile & Cross Section Agent (\`PROFILE_AGENT\`)**: Centerline elevation profiles and perpendicular cross sections (\`generate_profile\`, \`generate_cross_section\`).
+- **Point Editor (\`POINT_EDITOR\`)**: Sequential point numbering (\`request_next_point_number\`) and point queries (\`query_points\`).
+- **CAD Manager (\`CAD_MANAGER\`)**: Layer & linetype standards (\`cad_get_layer_for_code\`, layers \`C-ROAD-CNTR\`, \`L-ROAD\`, \`V-ROAD-CURB\`, \`V-SITE-SWLK\`, \`V-ROAD-ROW\`).
+
+## Your Deterministic CACP Skills (Invoke via \`askPeer\` when appropriate)
+1. **\`roading_synthesize_existing\`**: Synthesizes existing roads when no field road points exist (or when explicitly asked to combine OpenStreetMap ways, aerial imagery optical width calibration, or parametric deeded \`rowWidthFt\` ROW offsets). Automatically syncs a horizontal \`Centerline\` to Stationing & CL and places oriented \`StreetLabel\` annotations.
+2. **\`roading_design_corridor\`**: Designs a **proposed** road corridor along an existing \`Centerline\` (or point chain) using a full Typical Section: \`laneCount\`, \`laneWidthFt\`, \`crownSlopePct\`, \`includeCurbAndGutter\`, \`curbWidthFt\`, \`gutterWidthFt\`, \`includeSidewalk\`, \`sidewalkWidthFt\`, \`sidewalkOffsetFt\`, \`rowWidthFt\`, \`stationIntervalFt\`, and optional \`designGradePct\`.
+3. **\`roading_generate_profile_and_sections\`**: Generates a centerline elevation profile and stationed cross sections in coordination with the Profile Agent.
+4. **\`roading_add_culdesac_or_fillet\`**: Adds a cul-de-sac turnaround bulb (\`featureKind: "cul-de-sac"\`), curb fillet (\`"intersection-fillet"\`), or driveway apron tie-in (\`"driveway-apron"\`).
+5. **\`roading_clear\`**: Removes generated road corridor linework from the canvas.
+
+## A2UI Conversational Flow
+- **When road survey points exist in the \`POINT DATABASE\` and the user asks to draw the road:** Emit \`chains\` (and \`lines\` for PC–POC–PT curves) directly from the survey points — do not ask unnecessary questions first.
+- **When invoking deterministic skills (\`roading_design_corridor\`, \`roading_synthesize_existing\`):** Draw first; inputs are optional. Right-of-way is a legal limit, so it is never invented: when omitted or 0, the skill draws the pavement and centerline and skips \`V-ROAD-ROW\`, returning a notice. Tell the user plainly that ROW lines were skipped and that supplying the deeded width will add them without redrawing.
+- **Accept late values.** If the user later supplies ROW, cartway, lane count, or lane width, retry with those values.
+- Always report the layers created (\`C-ROAD-CNTR\`, \`L-ROAD\`, \`V-ROAD-CURB\`, \`V-SITE-SWLK\`, \`V-ROAD-ROW\`), total travelway width, ROW width, and whether a \`Centerline\` and \`Profile\` were synced.`;
+
         default:
             return "You are a general-purpose AI assistant for LandSurv.ai.";
     }
@@ -2157,11 +2289,11 @@ export const startGeminiChat = (agentType: AgentType, fileContext: string | Sess
         additionalConfig = { thinkingConfig: { thinkingBudget: 8192 } };
     }
 
-    // Civil Drafter draws large linework (hundreds of points -> long points/lines
+    // Civil Drafter & Roading Agent draw large linework (hundreds of points -> long points/lines
     // JSON). A big native thinking budget competes with that JSON for the same
     // output-token ceiling and truncates the drawing ("ran out of output tokens").
     // Cap thinking low and lift maxOutputTokens so large drawings finish cleanly.
-    if (agentType === AgentType.CIVIL_DRAFTER) {
+    if (agentType === AgentType.CIVIL_DRAFTER || agentType === AgentType.ROADING_AGENT) {
         additionalConfig = {
             ...(modelForAgent.includes('flash') || modelForAgent.includes('pro')
                 ? { thinkingConfig: { thinkingBudget: 2048 } }
@@ -2278,7 +2410,7 @@ export const startGeminiChat = (agentType: AgentType, fileContext: string | Sess
         // task that benefits from moderate reasoning. So we pin thinking to
         // MEDIUM (or HIGH for Gemini 4 Argon) and keep the max output ceiling.
         // The Gemini 3/4 panel's global thinking slider is respected for other agents.
-        if (agentType === AgentType.CIVIL_DRAFTER && isGeminiVertexModel) {
+        if ((agentType === AgentType.CIVIL_DRAFTER || agentType === AgentType.ROADING_AGENT) && isGeminiVertexModel) {
             vertexGenerationConfig = {
                 ...vertexGenerationConfig,
                 thinkingConfig: { thinkingLevel: isArgonModel ? 'HIGH' : 'MEDIUM' },
@@ -2575,7 +2707,7 @@ export const generateSymbolSvg = async (
         categoryContext?: string;  // Category hint (e.g., "Control & Monuments")
         forceSimple?: boolean;     // Keep it extra simple
     }
-): Promise<{ svgPath: string; fillPath?: string; viewBox: string }> => {
+): Promise<{ svgPath: string; fillPath?: string; texts?: SymbolTextElement[]; viewBox: string }> => {
     const ai = getAi(userApiKey);
     
     // Build context-aware prompt
@@ -2586,54 +2718,45 @@ export const generateSymbolSvg = async (
         : '';
     
     const prompt = `
-You are an expert CAD symbol designer specializing in LAND SURVEYING symbols. Create an SVG path for a professional survey point symbol.
+You are an expert CAD symbol designer specializing in LAND SURVEYING blocks (NCS / FGDC / AutoCAD Civil 3D standards). Create a planimetric CAD block symbol for a survey point.
 
 ${SURVEY_SYMBOL_REFERENCE}
 
 **CRITICAL REQUIREMENTS:**
 1. ViewBox is EXACTLY "0 0 24 24" with center at (12,12)
-2. Symbol MUST be centered on (12,12) - this is the insertion point
-3. Symbol should fit within radius 9-10 from center (leaves margin)
-4. Use clean, professional geometric shapes
-5. Response MUST be valid JSON with: svgPath, fillPath (optional), viewBox
+2. Symbol MUST be centered on (12,12) - this is the CAD block insertion point
+3. Symbol should fit within radius 8.5-9.5 from center (leaves margin)
+4. Use clean, planimetric (top-down) CAD geometric shapes — ONLY use SVG path commands M, L, H, V, A, Z (no C/Q/S/T Bezier curves!)
+5. **NEVER approximate letters or numbers with SVG paths!** Whenever a symbol includes letters (e.g., "CO", "WV", "WM", "GV", "GM", "MH", "SD", "SS", "E", "T", "BM", "R/W"), put them in the \`texts\` array as true text elements and keep \`svgPath\` strictly for geometric outlines (circles, squares, flanges, ticks).
+6. Response MUST be valid JSON with: \`svgPath\`, \`fillPath\` (optional), \`texts\` (optional array of \`{ "text": string, "x": number, "y": number, "fontSize": number, "fontWeight": "bold" }\`), \`viewBox\`.
 
-**PATH GUIDELINES:**
-- \`svgPath\`: Main OUTLINE - rendered with stroke, no fill. Use closed paths (end with Z).
-- \`fillPath\`: Optional FILLED elements (dots, letters). Use fill, no stroke.
-- For letters with holes (O, D, A, B, P, Q, R): create compound path with outer then inner paths
-
-**CRITICAL — WHEN TO USE \`fillPath\` vs \`svgPath\`:**
-- Use \`fillPath\` ONLY for small solid accents: center dots, letter glyphs, small filled markers (typically <30% of the symbol's bounding area).
-- EVERYTHING ELSE goes in \`svgPath\` (outlines, frames, wheels, figures, arrows, hatching).
-- NEVER stuff the entire icon into \`fillPath\` — that produces a solid silhouette with no readable detail.
-- If unsure, put it in \`svgPath\`. A line-art symbol with no fillPath at all is preferred over a solid blob.
+**PATH & TEXT GUIDELINES:**
+- \`svgPath\`: Main geometric OUTLINE - rendered with stroke, no fill. Use only M, L, H, V, A, Z.
+- \`fillPath\`: Optional FILLED geometric accents ONLY (solid center dots, filled quadrants). NEVER put text or open polylines in \`fillPath\`.
+- \`texts\`: Optional array of true CAD text labels centered inside the symbol, e.g. \`[{"text":"WV","x":12,"y":12,"fontSize":7,"fontWeight":"bold"}]\`.
 
 **COORDINATE REFERENCE (24x24 viewBox):**
 - Center: (12, 12)
-- Outer circle radius 9: "M 21 12 A 9 9 0 1 0 3 12 A 9 9 0 1 0 21 12 Z"
-- Inner circle radius 3: "M 15 12 A 3 3 0 1 0 9 12 A 3 3 0 1 0 15 12 Z"
-- Square centered: "M 4 4 H 20 V 20 H 4 Z"
-- Triangle up: "M 12 3 L 21 21 L 3 21 Z"
+- Outer circle radius 8.5: "M 20.5 12 A 8.5 8.5 0 1 0 3.5 12 A 8.5 8.5 0 1 0 20.5 12 Z"
+- Outer circle radius 8: "M 20 12 A 8 8 0 1 0 4 12 A 8 8 0 1 0 20 12 Z"
+- Inner circle radius 2: "M 14 12 A 2 2 0 1 0 10 12 A 2 2 0 1 0 14 12 Z"
+- Square centered: "M 4.5 4.5 H 19.5 V 19.5 H 4.5 Z"
+- Triangle up: "M 12 3 L 20.5 18.5 H 3.5 Z"
 - Diamond: "M 12 3 L 21 12 L 12 21 L 3 12 Z"
-- X mark: "M 4 4 L 20 20 M 20 4 L 4 20"
-- Plus: "M 12 4 V 20 M 4 12 H 20"
 
 **EXAMPLES:**
 
-Iron Pipe Found (circle with dot):
-{"svgPath":"M 21 12 A 9 9 0 1 0 3 12 A 9 9 0 1 0 21 12 Z","fillPath":"M 14 12 A 2 2 0 1 0 10 12 A 2 2 0 1 0 14 12 Z","viewBox":"0 0 24 24"}
+Iron Pipe Found (circle with cardinal ticks and solid center dot):
+{"svgPath":"M 20 12 A 8 8 0 1 0 4 12 A 8 8 0 1 0 20 12 Z M 12 2.5 V 4 M 12 20 V 21.5 M 2.5 12 H 4 M 20 12 H 21.5","fillPath":"M 14.2 12 A 2.2 2.2 0 1 0 9.8 12 A 2.2 2.2 0 1 0 14.2 12 Z","viewBox":"0 0 24 24"}
 
-Control Point (triangle with dot):
-{"svgPath":"M 12 3 L 21 20 L 3 20 Z","fillPath":"M 13.5 12 A 1.5 1.5 0 1 0 10.5 12 A 1.5 1.5 0 1 0 13.5 12 Z","viewBox":"0 0 24 24"}
+Water Valve (circle with flange ticks and true WV text):
+{"svgPath":"M 20.5 12 A 8.5 8.5 0 1 0 3.5 12 A 8.5 8.5 0 1 0 20.5 12 Z M 1.8 12 H 3.5 M 20.5 12 H 22.2 M 1.8 9.5 V 14.5 M 22.2 9.5 V 14.5","texts":[{"text":"WV","x":12,"y":12,"fontSize":7,"fontWeight":"bold"}],"viewBox":"0 0 24 24"}
 
-Manhole (circle with cross):
-{"svgPath":"M 21 12 A 9 9 0 1 0 3 12 A 9 9 0 1 0 21 12 Z M 12 5 V 19 M 5 12 H 19","viewBox":"0 0 24 24"}
+Manhole (double ring with MH text):
+{"svgPath":"M 20.5 12 A 8.5 8.5 0 1 0 3.5 12 A 8.5 8.5 0 1 0 20.5 12 Z M 18.8 12 A 6.8 6.8 0 1 0 5.2 12 A 6.8 6.8 0 1 0 18.8 12 Z","texts":[{"text":"MH","x":12,"y":12,"fontSize":6.5,"fontWeight":"bold"}],"viewBox":"0 0 24 24"}
 
-Property Corner (square with X):
-{"svgPath":"M 4 4 H 20 V 20 H 4 Z M 4 4 L 20 20 M 20 4 L 4 20","viewBox":"0 0 24 24"}
-
-Wheelchair Accessible (line-art icon — frame, wheel, seated figure all as outlines):
-{"svgPath":"M 19 21 A 7 7 0 1 0 5 21 A 7 7 0 1 0 19 21 Z M 12 6 A 1.3 1.3 0 1 0 12 3.4 A 1.3 1.3 0 1 0 12 6 Z M 12 7 V 14 H 17 L 19 18 M 12 11 H 9 L 7 18","fillPath":"M 12 6 A 1.3 1.3 0 1 0 12 3.4 A 1.3 1.3 0 1 0 12 6 Z","viewBox":"0 0 24 24"}
+Fire Hydrant (planimetric barrel circle with 2 side hose nozzles, top steamer nozzle, and center nut):
+{"svgPath":"M 18 12 A 6 6 0 1 0 6 12 A 6 6 0 1 0 18 12 Z M 6 12 H 2.5 M 2.5 9.2 V 14.8 M 18 12 H 21.5 M 21.5 9.2 V 14.8 M 12 6 V 2.5 M 9 2.5 H 15","fillPath":"M 14 12 A 2 2 0 1 0 10 12 A 2 2 0 1 0 14 12 Z","viewBox":"0 0 24 24"}
 
 **YOUR TASK:**
 Create a symbol for: "${description}"${codeHint}${categoryHint}${simplicityNote}
@@ -2652,9 +2775,22 @@ Return ONLY the JSON object, no markdown or explanation.
     try {
         const parsed = JSON.parse(String(response.text ?? '{}'));
         if (typeof parsed.svgPath === 'string' && typeof parsed.viewBox === 'string') {
+            const validTexts: SymbolTextElement[] | undefined = Array.isArray(parsed.texts)
+                ? parsed.texts
+                    .filter((t: any) => t && typeof t.text === 'string' && t.text.trim().length > 0)
+                    .map((t: any) => ({
+                        text: String(t.text).trim(),
+                        x: typeof t.x === 'number' ? t.x : 12,
+                        y: typeof t.y === 'number' ? t.y : 12,
+                        fontSize: typeof t.fontSize === 'number' ? t.fontSize : 7,
+                        fontWeight: t.fontWeight === 'normal' ? 'normal' : 'bold',
+                        anchor: t.anchor === 'start' || t.anchor === 'end' ? t.anchor : 'middle',
+                    }))
+                : undefined;
             return {
                 svgPath: parsed.svgPath,
                 fillPath: parsed.fillPath,
+                ...(validTexts && validTexts.length > 0 ? { texts: validTexts } : {}),
                 viewBox: parsed.viewBox,
             };
         }
@@ -2769,139 +2905,34 @@ Return ONLY the JSON object, no markdown or explanation.
 };
 
 /**
- * Convert SVG path to DXF LWPOLYLINE/LINE entities
- * For pushing symbols to Civil 3D as block geometry
+ * Convert SVG path (and optional fill/text primitives) to native DXF entities
+ * (CIRCLE, ARC, LWPOLYLINE, TEXT) centered at origin (0,0) with Y-up.
  */
-export const svgPathToDxfEntities = (svgPath: string, scale: number = 1): string => {
-    // Parse SVG path commands and convert to DXF
-    const dxfLines: string[] = [];
-    
-    // Simple parser for common SVG path commands
-    const commands = svgPath.match(/[MLHVCSQTAZ][^MLHVCSQTAZ]*/gi) || [];
-    
-    let currentX = 0, currentY = 0;
-    let startX = 0, startY = 0;
-    const points: Array<{x: number, y: number}> = [];
-    
-    for (const cmd of commands) {
-        const type = cmd[0].toUpperCase();
-        const args = cmd.slice(1).trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
-        
-        switch (type) {
-            case 'M': // Move to
-                if (points.length > 1) {
-                    // Output previous polyline
-                    dxfLines.push(createDxfPolyline(points, scale));
-                    points.length = 0;
-                }
-                currentX = args[0] || 0;
-                currentY = args[1] || 0;
-                startX = currentX;
-                startY = currentY;
-                points.push({ x: currentX, y: currentY });
-                break;
-            case 'L': // Line to
-                currentX = args[0] || currentX;
-                currentY = args[1] || currentY;
-                points.push({ x: currentX, y: currentY });
-                break;
-            case 'H': // Horizontal line
-                currentX = args[0] || currentX;
-                points.push({ x: currentX, y: currentY });
-                break;
-            case 'V': // Vertical line
-                currentY = args[0] || currentY;
-                points.push({ x: currentX, y: currentY });
-                break;
-            case 'Z': // Close path
-                if (points.length > 0) {
-                    points.push({ x: startX, y: startY });
-                }
-                break;
-            case 'A': // Arc - approximate with line segments
-                // Arc: rx ry x-rotation large-arc sweep-flag x y
-                if (args.length >= 7) {
-                    const endX = args[5];
-                    const endY = args[6];
-                    // Approximate arc with 8 segments
-                    const segments = approximateArc(currentX, currentY, endX, endY, args[0], args[1], 8);
-                    points.push(...segments);
-                    currentX = endX;
-                    currentY = endY;
-                }
-                break;
-        }
-    }
-    
-    // Output final polyline
-    if (points.length > 1) {
-        dxfLines.push(createDxfPolyline(points, scale));
-    }
-    
-    return dxfLines.join('\n');
+export const svgPathToDxfEntities = (
+    svgPath: string,
+    scale: number = 1,
+    viewBox: string = '0 0 24 24'
+): string => {
+    const primitives = extractSymbolCadPrimitives(
+        { svgPath, viewBox },
+        { originX: 0, originY: 0, scale }
+    );
+    return primitivesToDxfEntities(primitives, '0');
 };
 
 /**
- * Create DXF LWPOLYLINE from points
- */
-function createDxfPolyline(points: Array<{x: number, y: number}>, scale: number): string {
-    // Convert from SVG coords (Y down) to DXF coords (Y up), centered at origin
-    const dxfPoints = points.map(p => ({
-        x: (p.x - 12) * scale,  // Center X at origin
-        y: (12 - p.y) * scale   // Center Y at origin, flip Y axis
-    }));
-    
-    const lines = [
-        '0', 'LWPOLYLINE',
-        '8', '0',  // Layer 0
-        '90', String(dxfPoints.length),  // Number of vertices
-        '70', '0',  // Not closed
-    ];
-    
-    for (const pt of dxfPoints) {
-        lines.push('10', pt.x.toFixed(4));
-        lines.push('20', pt.y.toFixed(4));
-    }
-    
-    return lines.join('\n');
-}
-
-/**
- * Approximate an arc with line segments
- */
-function approximateArc(
-    x1: number, y1: number, 
-    x2: number, y2: number, 
-    rx: number, ry: number,
-    segments: number
-): Array<{x: number, y: number}> {
-    const points: Array<{x: number, y: number}> = [];
-    
-    // Simple linear interpolation for now (proper arc calculation is complex)
-    const cx = (x1 + x2) / 2;
-    const cy = (y1 + y2) / 2;
-    const r = Math.max(rx, ry);
-    
-    for (let i = 1; i <= segments; i++) {
-        const t = i / segments;
-        const angle = Math.PI * t;
-        const x = cx + r * Math.cos(angle) * (x2 > x1 ? 1 : -1);
-        const y = cy + r * Math.sin(angle) * (y2 > y1 ? -1 : 1);
-        points.push({ x, y });
-    }
-    
-    return points;
-}
-
-/**
- * Generate a complete DXF block definition for a symbol
+ * Generate a complete DXF block definition for a symbol, including native
+ * CIRCLE, ARC, LWPOLYLINE, and middle-centered TEXT entities.
  */
 export const generateSymbolDxfBlock = (
     blockName: string,
     svgPath: string,
     fillPath?: string,
-    scale: number = 1
+    scale: number = 1,
+    texts?: SymbolTextElement[],
+    viewBox: string = '0 0 24 24'
 ): string => {
+    const cleanBlockName = (blockName || 'SYMBOL').replace(/[^a-zA-Z0-9_\-$]/g, '_');
     const header = `0
 SECTION
 2
@@ -2911,7 +2942,7 @@ BLOCK
 8
 0
 2
-${blockName}
+${cleanBlockName}
 70
 0
 10
@@ -2921,17 +2952,23 @@ ${blockName}
 30
 0.0
 `;
-    
-    const outlineEntities = svgPathToDxfEntities(svgPath, scale);
-    const fillEntities = fillPath ? svgPathToDxfEntities(fillPath, scale) : '';
-    
-    const footer = `0
+
+    const primitives = extractSymbolCadPrimitives(
+        { svgPath, fillPath, texts, viewBox },
+        { originX: 0, originY: 0, scale }
+    );
+    const entityRecords = primitivesToDxfEntities(primitives, '0');
+
+    const footer = `
+0
 ENDBLK
 0
 ENDSEC
+0
+EOF
 `;
-    
-    return header + outlineEntities + '\n' + fillEntities + footer;
+
+    return header + entityRecords + footer;
 };
 
 /**

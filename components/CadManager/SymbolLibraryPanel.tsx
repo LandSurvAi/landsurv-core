@@ -17,6 +17,7 @@ import {
   libraryToSymbolDefinition,
 } from '../../data/surveySymbolLibrary';
 import { SymbolDefinition } from '../../contexts/types/CadManager.types';
+import { SymbolSvg } from '../common/SymbolSvg';
 
 interface SymbolLibraryPanelProps {
   /** Callback when a symbol is selected */
@@ -48,28 +49,15 @@ const SymbolThumbnail: React.FC<{
       }
     `}
   >
-    <svg
-      width={size}
-      height={size}
+    <SymbolSvg
+      size={size}
+      svgPath={symbol.svgPath}
+      fillPath={symbol.fillPath}
+      texts={symbol.texts}
       viewBox={symbol.viewBox}
       className={selected ? 'text-cyan-400' : 'text-gray-300'}
-    >
-      <path
-        d={symbol.svgPath}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {symbol.fillPath && (
-        <path
-          d={symbol.fillPath}
-          fill="currentColor"
-          stroke="none"
-        />
-      )}
-    </svg>
+      strokeWidth={1.5}
+    />
     <span className={`text-xs mt-1 truncate w-full text-center ${selected ? 'text-cyan-300' : 'text-gray-400'}`}>
       {symbol.name}
     </span>
@@ -195,28 +183,15 @@ export const SymbolLibraryPanel: React.FC<SymbolLibraryPanelProps> = ({
         <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
           <div className="flex gap-4">
             <div className="bg-gray-900 rounded-lg p-4 flex items-center justify-center">
-              <svg
-                width={64}
-                height={64}
+              <SymbolSvg
+                size={64}
+                svgPath={previewSymbol.svgPath}
+                fillPath={previewSymbol.fillPath}
+                texts={previewSymbol.texts}
                 viewBox={previewSymbol.viewBox}
                 className="text-cyan-400"
-              >
-                <path
-                  d={previewSymbol.svgPath}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                {previewSymbol.fillPath && (
-                  <path
-                    d={previewSymbol.fillPath}
-                    fill="currentColor"
-                    stroke="none"
-                  />
-                )}
-              </svg>
+                strokeWidth={1.5}
+              />
             </div>
             <div className="flex-1 min-w-0">
               <h4 className="font-semibold text-white">{previewSymbol.name}</h4>

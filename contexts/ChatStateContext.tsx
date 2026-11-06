@@ -44,6 +44,7 @@ interface ChatState {
   standardsComplianceChat: Chat | null;
   structuresChat: Chat | null;
   soilsChat: Chat | null;
+  roadingChat: Chat | null;
   
   // Chat histories (message arrays)
   rawChatHistory: ChatMessage[];
@@ -71,6 +72,7 @@ interface ChatState {
   standardsComplianceChatHistory: ChatMessage[];
   structuresChatHistory: ChatMessage[];
   soilsChatHistory: ChatMessage[];
+  roadingChatHistory: ChatMessage[];
   
   // Fieldbook notes
   fieldbookNotes: string;
@@ -102,6 +104,7 @@ interface ChatActions {
   setStandardsComplianceChat: (chat: Chat | null) => void;
   setStructuresChat: (chat: Chat | null) => void;
   setSoilsChat: (chat: Chat | null) => void;
+  setRoadingChat: (chat: Chat | null) => void;
   
   // Chat history setters
   setRawChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
@@ -129,6 +132,7 @@ interface ChatActions {
   setStandardsComplianceChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   setStructuresChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   setSoilsChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
+  setRoadingChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   
   // Fieldbook notes
   setFieldbookNotes: (notes: string) => void;
@@ -181,6 +185,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
   const [standardsComplianceChat, setStandardsComplianceChat] = useState<Chat | null>(null);
   const [structuresChat, setStructuresChat] = useState<Chat | null>(null);
   const [soilsChat, setSoilsChat] = useState<Chat | null>(null);
+  const [roadingChat, setRoadingChat] = useState<Chat | null>(null);
   
   // Chat histories
   const [rawChatHistory, setRawChatHistory] = useState<ChatMessage[]>([]);
@@ -208,6 +213,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
   const [standardsComplianceChatHistory, setStandardsComplianceChatHistory] = useState<ChatMessage[]>([]);
   const [structuresChatHistory, setStructuresChatHistory] = useState<ChatMessage[]>([]);
   const [soilsChatHistory, setSoilsChatHistory] = useState<ChatMessage[]>([]);
+  const [roadingChatHistory, setRoadingChatHistory] = useState<ChatMessage[]>([]);
   
   // Fieldbook notes
   const [fieldbookNotes, setFieldbookNotes] = useState<string>('');
@@ -234,6 +240,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
       'ar': setArChatHistory,
       'civilDrafter': setCivilDrafterChatHistory,
       'standardsCompliance': setStandardsComplianceChatHistory,
+      'roading': setRoadingChatHistory,
     };
     
     const setter = setterMap[agentType];
@@ -263,6 +270,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
       'ar': setArChatHistory,
       'civilDrafter': setCivilDrafterChatHistory,
       'standardsCompliance': setStandardsComplianceChatHistory,
+      'roading': setRoadingChatHistory,
     };
     
     const setter = setterMap[agentType];
@@ -290,6 +298,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setArChat(null);
     setCivilDrafterChat(null);
     setStandardsComplianceChat(null);
+    setRoadingChat(null);
     
     // Reset chat histories
     setRawChatHistory([]);
@@ -310,6 +319,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setArChatHistory([]);
     setCivilDrafterChatHistory([]);
     setStandardsComplianceChatHistory([]);
+    setRoadingChatHistory([]);
     
     // Reset fieldbook notes
     setFieldbookNotes('');
@@ -341,6 +351,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     standardsComplianceChat,
     structuresChat,
     soilsChat,
+    roadingChat,
     rawChatHistory,
     deedChatHistory,
     dxfChatHistory,
@@ -366,6 +377,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     standardsComplianceChatHistory,
     structuresChatHistory,
     soilsChatHistory,
+    roadingChatHistory,
     fieldbookNotes,
     
     // Setters
@@ -393,6 +405,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setStandardsComplianceChat,
     setStructuresChat,
     setSoilsChat,
+    setRoadingChat,
     setRawChatHistory,
     setDeedChatHistory,
     setDxfChatHistory,
@@ -418,6 +431,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setStandardsComplianceChatHistory,
     setStructuresChatHistory,
     setSoilsChatHistory,
+    setRoadingChatHistory,
     setFieldbookNotes,
     
     // Helpers

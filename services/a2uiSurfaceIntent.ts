@@ -11,10 +11,12 @@
 
 import {
   AgentType,
+  type A2UIHatchStudioSpec,
   type A2UISettingsSection,
   type A2UIWorkspaceToolId,
 } from '../types.ts';
 import { agentRegistry } from './AgentRegistry.ts';
+import { resolveHatchForFeatureOrCode } from './hatchLibrary.ts';
 
 export type A2UISurfaceIntent =
   | {
@@ -45,13 +47,19 @@ export type A2UISurfaceIntent =
       surface: 'cad-standards-editor';
       replyText: string;
       suggestedQuestions: string[];
+    }
+  | {
+      surface: 'hatch-studio';
+      hatchStudio: A2UIHatchStudioSpec;
+      replyText: string;
+      suggestedQuestions: string[];
     };
 
 const REQUEST_VERB_RE =
   /\b(?:show|open|inspect|browse|list|view|display|review|pull\s+up|what(?:'s| is)|which|any)\b/i;
 
 const ACTION_OR_HOWTO_VERB_RE =
-  /\b(?:show|open|inspect|browse|list|view|display|review|pull\s+up|bring\s+up|launch|edit|adjust|change|configure|set(?:\s+up)?|turn\s+(?:on|off)|enable|disable|toggle|switch|update|manage|how\s+(?:do\s+i|to|can\s+i)|where\s+(?:do\s+i|can\s+i|is|are))\b/i;
+  /\b(?:show|open|inspect|browse|list|view|display|review|pull\s+up|bring\s+up|launch|edit|adjust|change|configure|set(?:\s+up)?|turn\s+(?:on|off)|enable|disable|toggle|switch|update|manage|hatch|bhatch|fill|shade|cross[- ]?hatch|how\s+(?:do\s+i|to|can\s+i)|where\s+(?:do\s+i|can\s+i|is|are))\b/i;
 
 const MANIFEST_RE = /\b(?:manifests?|skills?|schemas?|capabilit(?:y|ies))\b/i;
 const CACCP_RE = /\bcacp\b/i;
@@ -341,6 +349,18 @@ const WORKSPACE_TOOL_RULES: readonly WorkspaceToolRule[] = [
     ],
   },
   {
+    tool: 'roading-panel',
+    agent: AgentType.ROADING_AGENT,
+    pattern: /\b(?:roading\s+(?:studio|panel|workspace|designer)|road\s+(?:typical\s+section|corridor)\s+(?:panel|designer|tool))\b/i,
+    replyText:
+      'Here is the live <strong>Roading Studio</strong> in chat. Synthesize existing roads from points &amp; imagery, design proposed corridors and typical sections, or generate road profiles.',
+    suggestedQuestions: [
+      'Synthesize existing road from points & imagery',
+      'Design a 24ft road corridor with curb and sidewalk',
+      'Generate road profile and cross sections',
+    ],
+  },
+  {
     tool: 'fieldbook-panel',
     agent: AgentType.FIELD_BOOK,
     pattern: /\b(?:field\s*book(?:\s+panel|\s+notes|\s+log)?|open\s+field\s*book)\b/i,
@@ -505,6 +525,51 @@ export function resolveA2UISurfaceIntent(query: string): A2UISurfaceIntent | nul
         suggestedQuestions: rule.suggestedQuestions,
       };
     }
+  }
+
+  // 6. Fluid Conversational Hatch Requests -> A2UI Hatch Studio
+  const isHatchActionRequest =
+    /\b(?:hatch|bhatch|cross[- ]?hatch)\b/i.test(trimmed) ||
+    /\b(?:fill|shade)\b.*\b(?:with\s+hatch|pattern|polygon|area|building|concrete|asphalt|gravel|wetland|pond|parcel|lot|driveway|sidewalk)\b/i.test(trimmed);
+
+  if (isHatchActionRequest && !/\b(?:standard|spreadsheet|sheet|table)\b/i.test(trimmed)) {
+    const rec = resolveHatchForFeatureOrCode(trimmed);
+    const scaleMatch = trimmed.match(/\bscale\s*(?:of\s*|to\s*|=\s*)?(\d+(?:\.\d+)?)/i);
+    const angleMatch = trimmed.match(/\b(?:angle|rotate|rotated)\s*(?:of\s*|to\s*|=\s*)?(-?\d+(?:\.\d+)?)/i);
+    const scale = scaleMatch ? Math.max(0.05, parseFloat(scaleMatch[1])) : rec.recommendedScale;
+    const angleDeg = angleMatch ? parseFloat(angleMatch[1]) : rec.recommendedAngle;
+    const target: 'area' | 'objects' | 'circles' = /\bcircles?\b/i.test(trimmed)
+      ? 'circles'
+      : /\b(?:select|objects?|polyline)\b/i.test(trimmed)
+        ? 'objects'
+        : 'area';
+    const mode: 'pick-area' | 'select-object' =
+      target === 'area' ? 'pick-area' : 'select-object';
+
+    return {
+      surface: 'hatch-studio',
+      hatchStudio: {
+        title: `Hatch Studio — ${rec.hatch.name}`,
+        description: `${rec.hatch.description} (Layer: ${rec.recommendedLayer})`,
+        patternName: rec.hatch.name,
+        scale,
+        angleDeg,
+        opacity: 0.45,
+        color: rec.hatch.previewColor || '#22d3ee',
+        layer: rec.recommendedLayer,
+        mode,
+        target,
+        targetFeature: trimmed,
+      },
+      replyText:
+        `I matched your request to the <strong>${rec.hatch.name}</strong> pattern (${rec.hatch.description}) on layer <code>${rec.recommendedLayer}</code>. ` +
+        `Adjust scale, angle, or pattern below, then click <strong>Click in Area on Canvas (H)</strong> or <strong>Select Closed Object</strong> to place it.`,
+      suggestedQuestions: [
+        'Open Hatch Manager',
+        'Show all hatch patterns in the standard',
+        'Open CAD Standards spreadsheet editor',
+      ],
+    };
   }
 
   return null;

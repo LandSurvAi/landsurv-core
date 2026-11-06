@@ -199,9 +199,20 @@ export const CourthouseIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) =
   </svg>
 );
 
+// Roading Agent Glyph — plan-view roadway with ROW limits, edge-of-pavement,
+// dashed centerline and right-of-way offset ticks.
 export const RoadIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6 6.878V6a2.25 2.25 0 012.25-2.25h7.5A2.25 2.25 0 0118 6v.878m-12 0c.235-.083.487-.128.75-.128h10.5c.263 0 .515.045.75.128m-12 0A2.25 2.25 0 004.5 9v.878m13.5-3A2.25 2.25 0 0119.5 9v.878m0 0a2.246 2.246 0 00-.75-.128H5.25c-.263 0-.515.045-.75.128m15 0A2.25 2.25 0 0121 12v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6c0-.98.626-1.813 1.5-2.122" />
+        {/* Right-of-way limits */}
+        <path strokeLinecap="round" strokeWidth={1} opacity={0.42} d="M4.2 22C4.2 18.2 0.7 17 0.7 12.5S4.2 6 4.2 2" />
+        <path strokeLinecap="round" strokeWidth={1} opacity={0.42} d="M19.8 22C19.8 18.2 16.3 17 16.3 12.5S19.8 6 19.8 2" />
+        {/* Edge of pavement */}
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8 22C8 18.2 4.5 17 4.5 12.5S8 6 8 2" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M16 22C16 18.2 12.5 17 12.5 12.5S16 6 16 2" />
+        {/* Dashed centerline / median */}
+        <path strokeLinecap="round" strokeDasharray="2.2 1.8" strokeWidth={1.2} d="M12 22C12 18.2 8.5 17 8.5 12.5S12 6 12 2" />
+        {/* ROW offset ticks at both ends */}
+        <path strokeLinecap="round" strokeWidth={1.1} opacity={0.75} d="M4.2 2.2H7.3M16.7 2.2H19.8M4.2 21.8H7.3M16.7 21.8H19.8" />
     </svg>
 );
 
@@ -1280,6 +1291,12 @@ export const YouTubeIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
 export const FacebookIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
         <path d="M13.5 21v-8h2.75l.41-3.12H13.5V7.89c0-.9.25-1.51 1.55-1.51h1.66V3.59A22.23 22.23 0 0 0 14.29 3C11.9 3 10.26 4.46 10.26 7.14v2.74H7.5V13h2.76v8h3.24Z" />
+    </svg>
+);
+
+export const LinkedInIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z" />
     </svg>
 );
 

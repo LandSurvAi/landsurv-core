@@ -2,7 +2,7 @@
 // canvas slices. Intentionally free of any model/LLM call: labels are computed
 // synchronously so the toolbar tooltip and history panel are always instant.
 
-import type { PointList, SurveyLine, ContourLabel, Centerline } from '../types.ts';
+import type { PointList, SurveyLine, ContourLabel, Centerline, CanvasHatch } from '../types.ts';
 
 export interface TrackedCanvasState {
   pointLists: PointList[];
@@ -10,6 +10,7 @@ export interface TrackedCanvasState {
   centerlines: Centerline[];
   contourLabels: ContourLabel[];
   boundaryFiles?: unknown[];
+  hatches?: CanvasHatch[];
 }
 
 const plural = (n: number, one: string, many = `${one}s`) =>
@@ -108,6 +109,27 @@ function describeBoundary(prev: unknown[], next: unknown[]): string | null {
   return 'Edited boundary';
 }
 
+function describeHatches(prev: CanvasHatch[], next: CanvasHatch[]): string | null {
+  if (next.length > prev.length) {
+    const added = next.length - prev.length;
+    if (added === 1) {
+      const prevIds = new Set(prev.map(h => h.id));
+      const hatch = next.find(h => !prevIds.has(h.id));
+      return hatch?.patternName ? `Placed ${hatch.patternName} hatch` : 'Placed hatch';
+    }
+    return `Placed ${plural(added, 'hatch', 'hatches')}`;
+  }
+  if (next.length < prev.length) {
+    const removed = prev.length - next.length;
+    return `Deleted ${plural(removed, 'hatch', 'hatches')}`;
+  }
+  const prevById = new Map(prev.map(h => [h.id, h]));
+  const changed = next.filter(h => prevById.get(h.id) !== h);
+  if (changed.length === 1) return 'Edited hatch';
+  if (changed.length > 1) return `Edited ${plural(changed.length, 'hatch', 'hatches')}`;
+  return null;
+}
+
 /**
  * Produces a label for a transition. `changedKeys` comes from the engine's
  * reference-equality diff, so only slices that actually moved are inspected.
@@ -137,6 +159,9 @@ export function describeCanvasChange(
       case 'boundaryFiles':
         part = describeBoundary(prev.boundaryFiles ?? [], next.boundaryFiles ?? []);
         break;
+      case 'hatches':
+        part = describeHatches(prev.hatches ?? [], next.hatches ?? []);
+        break;
       default:
         part = null;
     }
@@ -164,6 +189,7 @@ export function categorizeCanvasChange(
       case 'centerlines': tags.add('centerlines'); break;
       case 'contourLabels': tags.add('contours'); break;
       case 'boundaryFiles': tags.add('boundary'); break;
+      case 'hatches': tags.add('hatches'); break;
       default: break;
     }
   }

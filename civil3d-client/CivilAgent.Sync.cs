@@ -440,7 +440,7 @@ namespace LandsurvConnector
                         break;
                     case "symbols":
                         MergeBaseline(postCad.Symbols, lsai.Symbols, lsaiWonKeys,
-                            s => s.Name, (a, b) => { a.SvgPath = b.SvgPath; a.Scale = b.Scale; });
+                            s => s.Name, (a, b) => { a.SvgPath = b.SvgPath; a.FillPath = b.FillPath; a.Texts = b.Texts; a.Scale = b.Scale; });
                         break;
                 }
             }

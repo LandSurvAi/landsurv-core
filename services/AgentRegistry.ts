@@ -14,6 +14,7 @@ import { HISTORY_SKILLS } from './historySkillSchemas';
 import { COGO_EXTENDED_SKILLS } from './cogoSkillSchemas';
 import { GEO_AI_SKILLS } from './geoSkillSchemas';
 import { CL_SKILLS } from './clSkillSchemas';
+import { ROADING_SKILLS } from './roadingSkillSchemas';
 
 /** A loose JSON-Schema-ish descriptor. Kept narrow on purpose. */
 export interface SkillFieldSchema {
@@ -927,6 +928,127 @@ agentRegistry.register({
       examples: [
         'Boundary Agent press "Draw Boundary" → cad_ensure_default_layers() → DEED + INCL + EXCL + BRKL inserted on first run.',
       ],
+    },
+    {
+      id: 'cad_resolve_hatch',
+      name: 'Resolve Hatch Pattern for Code, Feature, or Flood Zone',
+      description:
+        'Resolves the best DWG/DXF-compatible HatchDefinition (.PAT pattern), recommended CAD layer, ' +
+        'scale, and angle for any field code, material/feature description (e.g., "BLDG", "concrete", ' +
+        '"asphalt", "wetland", "riprap"), or FEMA flood zone ("AE", "V", "FLOODWAY").',
+      inputs: {
+        query: {
+          type: 'string',
+          required: true,
+          description: 'Code, feature type, material keyword, pattern name, or FEMA flood zone.',
+        },
+      },
+      outputs: {
+        patternName:      { type: 'string', required: true, description: 'Resolved .PAT identifier (e.g. "ANSI31", "AR-CONC", "FEMA-AE").' },
+        description:      { type: 'string', required: true },
+        category:         { type: 'string', required: true },
+        recommendedLayer: { type: 'string', required: true },
+        recommendedScale: { type: 'number', required: true },
+        recommendedAngle: { type: 'number', required: true },
+        source:           { type: 'string', required: true },
+        confidence:       { type: 'number', required: true },
+      },
+      examples: [
+        'Civil Drafter resolves hatch for "CONC" → patternName="AR-CONC", recommendedLayer="V-SITE-PAVE".',
+        'Flood Agent resolves hatch for "Zone AE" → patternName="FEMA-AE", recommendedLayer="V-FEMA-HTCH".',
+      ],
+    },
+    {
+      id: 'cad_list_hatches',
+      name: 'List Available Hatch Patterns & Active Canvas Hatches',
+      description:
+        'Returns all available built-in (ACAD/ISO, survey, environmental, FEMA) and custom (.PAT) hatch ' +
+        'patterns in the loaded standard, along with all active CanvasHatch regions placed on the drawing canvas.',
+      inputs: {
+        category: {
+          type: 'string',
+          enum: ['all', 'standard', 'environmental', 'fema', 'custom'],
+          default: 'all',
+          description: 'Optional category filter.',
+        },
+      },
+      outputs: {
+        patterns:      { type: 'array', items: { type: 'object' }, required: true },
+        canvasHatches: { type: 'array', items: { type: 'object' }, required: true },
+        contextTable:  { type: 'string', required: true },
+      },
+    },
+    {
+      id: 'cad_author_hatch_pattern',
+      name: 'Author or Update Custom Hatch Pattern (.PAT)',
+      type: 'action' as const,
+      description:
+        'Creates or updates a custom DXF/AutoCAD .PAT HatchDefinition in the loaded CAD standard (persisted in .lsvz), ' +
+        'and optionally binds it as the default hatchPattern on a master CodeDefinition.',
+      inputs: {
+        name:        { type: 'string', required: true, description: 'Unique ASCII pattern identifier (e.g. "CUST_PAVER").' },
+        description: { type: 'string', description: 'Human-readable description.' },
+        lines:       { type: 'array', items: { type: 'object' }, description: 'Array of { angle, originX, originY, deltaX, deltaY, dashes? } PAT line families.' },
+        assignToCode:{ type: 'string', description: 'Optional master code (e.g. "BLDG", "CONC") to assign this hatch pattern to.' },
+      },
+      outputs: {
+        patternName: { type: 'string', required: true },
+        assignedCode:{ type: 'string' },
+        totalCustom: { type: 'integer', required: true },
+      },
+    },
+    {
+      id: 'cad_apply_hatch',
+      name: 'Apply Hatch Fill to Canvas Region or Entities',
+      type: 'action' as const,
+      description:
+        'Creates a first-class CanvasHatch entity on the 2D drawing canvas. Can target: ' +
+        '(1) an interior point { easting, northing } via the planar loop + island tracer, ' +
+        '(2) specific closed line/polyline IDs (`lineIds`), ' +
+        '(3) a `boundaryFileId` parcel, ' +
+        '(4) all closed loops on a given CAD `targetLayer`, or ' +
+        '(5) explicit polygon `vertices`.',
+      inputs: {
+        patternName:    { type: 'string', description: 'Hatch pattern name (e.g. "ANSI31", "AR-CONC", "SOLID") or feature keyword to auto-resolve.' },
+        seedPoint:      { type: 'object', description: 'Interior world point { easting, northing } for Click-in-Area planar boundary + island tracing.' },
+        lineIds:        { type: 'array', items: { type: 'string' }, description: 'IDs of closed polylines, circles, or chained SurveyLines to hatch.' },
+        boundaryFileId: { type: 'string', description: 'ID of a BoundaryFile parcel to hatch.' },
+        targetLayer:    { type: 'string', description: 'Hatch all closed loops found on this CAD layer.' },
+        vertices:       { type: 'array', items: { type: 'object' }, description: 'Explicit closed polygon vertices [{ x, y } or { easting, northing }].' },
+        scale:          { type: 'number', default: 1, description: 'Pattern scale multiplier.' },
+        angleDeg:       { type: 'number', default: 0, description: 'Pattern rotation angle in degrees.' },
+        opacity:        { type: 'number', default: 0.45, description: 'Fill opacity (0.05–1.0).' },
+        color:          { type: 'string', description: 'Optional CSS hex color override.' },
+        layer:          { type: 'string', description: 'Destination CAD layer for the hatch entity.' },
+      },
+      outputs: {
+        hatchId:     { type: 'string', required: true },
+        patternName: { type: 'string', required: true },
+        layer:       { type: 'string', required: true },
+        areaSqFt:    { type: 'number', required: true },
+        holeCount:   { type: 'integer', required: true },
+      },
+    },
+    {
+      id: 'cad_modify_hatch',
+      name: 'Modify or Delete Canvas Hatch Entity',
+      type: 'action' as const,
+      description:
+        'Updates patternName, scale, angleDeg, color, opacity, layer, visibility, or deletes one or all CanvasHatch entities.',
+      inputs: {
+        hatchId:     { type: 'string', description: 'Target CanvasHatch id (or "all" / "last").' },
+        action:      { type: 'string', enum: ['update', 'delete', 'clear-all'], default: 'update' },
+        patternName: { type: 'string' },
+        scale:       { type: 'number' },
+        angleDeg:    { type: 'number' },
+        opacity:     { type: 'number' },
+        color:       { type: 'string' },
+        layer:       { type: 'string' },
+        hidden:      { type: 'boolean' },
+      },
+      outputs: {
+        modifiedCount: { type: 'integer', required: true },
+      },
     },
   ],
 });
@@ -1928,4 +2050,19 @@ agentRegistry.register({
     },
   ],
 });
+
+// ---------------------------------------------------------------------------
+// Roading Agent — Road synthesis (Points + Imagery + OSM) & Corridor Design
+// Coordinates with CENTERLINE_STATIONING, PROFILE_AGENT, POINT_EDITOR, CAD_MANAGER
+// ---------------------------------------------------------------------------
+agentRegistry.register({
+  agent: AgentType.ROADING_AGENT,
+  displayName: 'Roading Agent',
+  cacpEnabled: true,
+  version: '1.0.0',
+  skills: [
+    ...ROADING_SKILLS,
+  ],
+});
+
 

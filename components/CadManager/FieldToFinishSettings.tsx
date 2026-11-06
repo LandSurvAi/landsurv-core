@@ -24,6 +24,7 @@ import {
   SymbolLayerSettings,
 } from '../../contexts/types/CadManager.types';
 import { SymbolLibraryPanel } from './SymbolLibraryPanel';
+import { SymbolSvg } from '../common/SymbolSvg';
 import { useErrorReporter } from '../../contexts/AppStateContext';
 
 // Debug logging helper - outputs to console in format easy to copy for AutoCAD
@@ -1637,27 +1638,18 @@ const SymbolLayersPanel: React.FC<{
             .filter(c => c.symbol && typeof c.symbol === 'object' && c.symbol.svgPath)
             .slice(0, 8)
             .map((code, i) => {
-              const sym = code.symbol as { svgPath: string; fillPath?: string; viewBox: string; name: string };
+              const sym = code.symbol as { svgPath: string; fillPath?: string; texts?: import('../../contexts/types/CadManager.types').SymbolTextElement[]; viewBox: string; name: string };
               return (
                 <div key={i} className="bg-gray-900/50 rounded-lg p-3 text-center border border-gray-700">
-                  <svg
-                    width={40}
-                    height={40}
+                  <SymbolSvg
+                    size={40}
+                    svgPath={sym.svgPath}
+                    fillPath={sym.fillPath}
+                    texts={sym.texts}
                     viewBox={sym.viewBox || '0 0 24 24'}
                     className="mx-auto text-cyan-400"
-                  >
-                    <path
-                      d={sym.svgPath}
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                    {sym.fillPath && (
-                      <path d={sym.fillPath} fill="currentColor" stroke="none" />
-                    )}
-                  </svg>
+                    strokeWidth={1.5}
+                  />
                   <p className="text-xs text-gray-400 mt-2 truncate">{code.code}</p>
                   <p className="text-xs text-gray-500 truncate">{sym.name}</p>
                 </div>

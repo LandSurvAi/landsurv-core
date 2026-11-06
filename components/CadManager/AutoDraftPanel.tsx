@@ -297,6 +297,7 @@ export default function AutoDraftPanel({
             associatedTerms: codes,
             svgPath: lib.svgPath,
             fillPath: lib.fillPath,
+            ...(lib.texts && lib.texts.length > 0 ? { texts: lib.texts } : {}),
             viewBox: lib.viewBox,
             scale: 1,
           });

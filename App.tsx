@@ -45,6 +45,8 @@ import { CadManagerPage } from './components/CadManager/CadManagerPage.tsx';
 import { StandardsEditor } from './components/CadManager/StandardsEditor.tsx';
 import { HatchManagerPanel } from './components/CadManager/HatchManagerPanel.tsx';
 import LinetypeManagerPanel from './components/CadManager/LinetypeManagerPanel.tsx';
+import { ALL_BUILT_IN_HATCHES, resolveHatchForFeatureOrCode, type HatchDefinition, type HatchPatternLine } from './services/hatchLibrary.ts';
+import { traceEnclosingLoopAtPoint, resolveHatchFromSelectedEntities, computePolygonAreaAbs, type TracedHatchRegion } from './utils/hatchBoundaryTracer.ts';
 import SheetView from './components/SheetView.tsx';
 import { DraftingStyleLibrary } from './components/CadManager/DraftingStyleLibrary.tsx';
 import CivilDrafterVisionHUD from './components/CadManager/CivilDrafterVisionHUD.tsx';
@@ -125,6 +127,7 @@ import { AgentsPageContent } from './components/landing/AgentsPageContent.tsx';
 import { ARAgentContent } from './components/landing/ARAgentContent.tsx';
 import { CadManagerContent } from './components/landing/CadManagerContent.tsx';
 import { CivilDrafterContent } from './components/landing/CivilDrafterContent.tsx';
+import { RoadingAgentContent } from './components/landing/RoadingAgentContent.tsx';
 import { Civil3DLandingPage } from './components/Civil3DLandingPage.tsx';
 
 // Import all modal and panel components
@@ -173,6 +176,7 @@ import FloatingPanel from './components/FloatingPanel.tsx';
 import FloodPanel from './components/FloodPanel.tsx';
 import StructuresPanel from './components/StructuresPanel.tsx';
 import SoilsPanel from './components/SoilsPanel.tsx';
+import RoadingPanel from './components/RoadingPanel.tsx';
 import ShrinkwrapPanel from './components/ShrinkwrapPanel.tsx';
 import InclusionBoundariesPanel from './components/InclusionBoundariesPanel.tsx';
 import { ContourGenerationPanel } from './components/ContourGenerationPanel.tsx';
@@ -221,7 +225,8 @@ import {
 import { loadClaudeConfig, setClaudeConfig, type ClaudeModel } from './services/claudeConfig.ts';
 import { generateDxf } from './utils/dxf.ts';
 import { parseDxfGeometry } from './utils/dxfGeometryParser.ts';
-import { expandChainsToLines, expandWidthCodedChains, repairBankCorridorChains, type DrafterChain } from './utils/linework.ts';
+import { expandChainsToLines, expandWidthCodedChains, repairBankCorridorChains, repairRoadCorridorChains, type DrafterChain } from './utils/linework.ts';
+import { buildCenterlineFromVertices } from './services/roadingSkillHandlers.ts';
 import { buildCivilDrafterLineworkContext } from './utils/civilDrafterLinework.ts';
 import {
   addLineToList,
@@ -240,7 +245,7 @@ import { parseBearingToRadians, parseDistance, inverse, direct, directCurve, cal
 // FIX: Import the new `generateProfile` function to enable client-side profile calculations.
 import { generateContours, generateProfile, generateContoursAsIsoPaths, isoPathsToSurveyLines, suppressEsriContoursInsidePolygon, buildPolygonFromSegments, pointInPolygon, getSegPairs, clipSegmentToPolygon } from './utils/contouring.ts';
 // FIX: Import `CustomSymbol`, `ContourSettings` and `ContourLabel` to be used with new features.
-import { type ChatMessage, MessageRole, type SurveyPoint, type SurveyLine, type CutSheetRow, type CutSheetInfo, AgentType, type SessionFile, type SessionState, type Centerline, JobInfo, Settings, PdfHighlight, type PointList, WmsService, ActiveWmsLayer, DxfExportOptions, VisualPanel, type OfflineMapArea, type ChatMessageAction, SettingsContext, AgentContext, UIContext, HighlightContext, Chat, Modality, Part, ProjectionSetting, type CustomSymbol, type AnnotationRule, type ContourSettings, type ContourLabel, type StreetLabel, type ProfilePoint, type ProfileInfo, type ClosureReport, type GisFeature, type DeedMetadata, type TitleSearchData, type BoundaryFile, type BoundaryFileCall, type AnnotationDimension, type EsriServiceInfo, type InclusionBoundary, type DraftingStyleEntry, type ContourGeneration, type IsoPath, type ParcelLabel, type AnnotationCategoryStyle, type DeedSummary, type AppNotification, type TinSurface, type SteepSlopeBand, type SteepSlopeRunResult, DEFAULT_ANNOTATION_CATEGORIES, type ParcelLabelFormatter, type ParcelCadTextStyle, DEFAULT_PARCEL_LABEL_FORMATTER, type StandardsComplianceCheckSelection, type StandardsComplianceReport, type ComplianceSourceMode, type SessionSaveOptions } from './types.ts';
+import { type ChatMessage, MessageRole, type SurveyPoint, type SurveyLine, type CutSheetRow, type CutSheetInfo, AgentType, type SessionFile, type SessionState, type Centerline, JobInfo, Settings, PdfHighlight, type PointList, WmsService, ActiveWmsLayer, DxfExportOptions, VisualPanel, type OfflineMapArea, type ChatMessageAction, SettingsContext, AgentContext, UIContext, HighlightContext, Chat, Modality, Part, ProjectionSetting, type CustomSymbol, type AnnotationRule, type ContourSettings, type ContourLabel, type StreetLabel, type ProfilePoint, type ProfileInfo, type ClosureReport, type GisFeature, type DeedMetadata, type TitleSearchData, type BoundaryFile, type BoundaryFileCall, type AnnotationDimension, type CanvasHatch, type EsriServiceInfo, type InclusionBoundary, type DraftingStyleEntry, type ContourGeneration, type IsoPath, type ParcelLabel, type AnnotationCategoryStyle, type DeedSummary, type AppNotification, type TinSurface, type SteepSlopeBand, type SteepSlopeRunResult, DEFAULT_ANNOTATION_CATEGORIES, type ParcelLabelFormatter, type ParcelCadTextStyle, DEFAULT_PARCEL_LABEL_FORMATTER, type StandardsComplianceCheckSelection, type StandardsComplianceReport, type ComplianceSourceMode, type SessionSaveOptions } from './types.ts';
 import { DEFAULT_PARCEL_CAD_TEXT_STYLES } from './utils/parcelLabelFormatter.ts';
 // FIX: Corrected import of startGeminiChat. Renamed import 'startChat' to 'startGeminiChat' to match export.
 import { startGeminiChat, selectContextSources, getModelForAgent, getAutoModelForAgent, summarizeDeed, investigateDeedClosure, isClaudeModel, isOpenAIModel, isGrokModel, extractZoningDistrictsFromMap, runVisualStandardsComplianceAudit, processAndCorrectCoordinates, AUTO_FAST_MODEL, type DeedClosureReview, type DeedClosureHypothesis } from './services/geminiService.ts';
@@ -268,6 +273,16 @@ import {
   markPendingA2UICompleted,
 } from './services/a2uiIntake.ts';
 import { buildA2UIInputFormFromNeedsInput, deriveA2UIInputForm } from './services/a2uiInput.ts';
+import {
+  closeCanvasFlashInput,
+  flashCanvasMessage,
+  openCanvasFlashForInputForm,
+} from './services/canvasFlashes.ts';
+import {
+  extractInlineCheckboxes,
+  extractInlineQuestionOptions,
+  resolveA2UIFollowUpPrompt,
+} from './services/a2uiQuickThought.ts';
 import { A2UISurface, A2UIHostContext, WORKSPACE_TOOL_LABELS, type A2UIHostContextValue } from './components/A2UISurface.tsx';
 import { A2UISurfaceHost } from './components/A2UISurfaceHost.tsx';
 import { A2UIPublicSurfaceLayer } from './components/A2UIPublicSurfaceLayer.tsx';
@@ -297,6 +312,7 @@ import { useUndoShortcuts } from './hooks/useUndoShortcuts.ts';
 import HistoryPanel from './components/HistoryPanel.tsx';
 import { UndoHistoryQuickPicker } from './components/UndoHistoryQuickPicker.tsx';
 import { useHistorySkills } from './services/historySkillHandlers.ts';
+import { resolveIntentHandoff } from './services/cacpIntentRouter.ts';
 import { AppStateProvider, useAppState } from './contexts/AppStateContext.tsx';
 import { CadManagerProvider, useCadManager } from './contexts/CadManagerContext.tsx';
 import {
@@ -444,7 +460,9 @@ const getLightweightLsvzManifest = (sessionState: Partial<Omit<SessionState, 've
             perimeter: cr.perimeter,
         })),
         inclusionBoundariesCount: (sessionState.inclusionBoundaries || []).length,
+        hatchesCount: (sessionState.hatches || []).length,
         steepSlopeRunsCount: (sessionState.steepSlopeRuns || []).length,
+        roadCorridorsCount: (sessionState.roadCorridors || []).length,
         soilMapUnitsCount: (sessionState.soilMapUnits || []).length,
         cadStandardName: sessionState.cadManagerState?.standard?.name ?? null,
         filesLoaded: {
@@ -508,6 +526,9 @@ const A2UI_DOCK_TITLES: Record<string, string> = {
     'steep-slope-report': 'Steep Slope Report',
     'legal-writer': 'Legal Description Writer',
     'sheet-view': 'Sheet View (24×36 Plot Layout)',
+    'roading-intake': 'Roading Intake',
+    'roading-designer': 'Roading Designer',
+    'roading-panel': 'Roading Studio',
 };
 
 
@@ -618,6 +639,15 @@ interface DrawingCanvasHandles {
   beginSelectionMode?: () => void;
   beginOtOriginPick?: () => void;
   beginOtLineAlign?: () => void;
+  startHatchMode?: (options?: {
+    mode?: 'pick-area' | 'select-object';
+    patternName?: string;
+    scale?: number;
+    angleDeg?: number;
+    opacity?: number;
+    color?: string;
+    layer?: string;
+  }) => void;
 }
 interface CutSheetPanelHandles {
   downloadDocx: () => void;
@@ -686,6 +716,7 @@ const generateSitemapXml = (): string => {
         { url: 'https://gpx.landsurv.ai', title: 'GPX Data Tools' },
         { url: 'https://rinex.landsurv.ai', title: 'RINEX Agent' },
         { url: 'https://civildrafter.landsurv.ai', title: 'Civil Drafter Agent' },
+        { url: 'https://roading.landsurv.ai', title: 'Roading Agent' },
     ];
 
     const allLinks = [...mainLinks, ...agentLinks];
@@ -746,6 +777,7 @@ const landingPageConfig = {
     ...(isOssBuild() ? {} : { 'devops': { title: "DevOps Console", component: DevOpsConsolePage, isFullPage: true } }),
     // CAD Manager subdomain
     'cadmanager': { title: "CAD Manager - Description Key Builder", content: CadManagerContent },
+    'roading': { title: "Roading Agent", content: RoadingAgentContent },
     // Civil Drafter subdomain
     'civildrafter': { title: "Civil Drafter Agent", content: CivilDrafterContent },
     // 2026 Roadmap subdomain
@@ -996,6 +1028,21 @@ function computeConcaveHullPoints<T extends { easting: number; northing: number 
 
 // FIX: Changed to a named export to resolve the module resolution error in index.tsx.
 // REFACTORING: Split into AppContent (uses context) and App (provides context)
+function collectVisibleCircleEntities(lines: SurveyLine[], points: SurveyPoint[]): SurveyLine[] {
+  const pointMap = new Map<string, SurveyPoint>();
+  for (const point of points) pointMap.set(point.pointNumber, point);
+
+  return lines.filter(line => {
+    if (line.hidden) return false;
+    if (line.isCircle) return true;
+    if (!line.isCurve || !line.curveRadius || line.tangentBearing || line.chordBearing) return false;
+    const start = pointMap.get(line.from);
+    const end = pointMap.get(line.to);
+    if (!start || !end) return false;
+    return Math.abs(start.easting - end.easting) < 1e-6 && Math.abs(start.northing - end.northing) < 1e-6;
+  });
+}
+
 const AppContent = () => {
   const APP_VERSION = APP_VERSION_CONST;
   
@@ -1073,6 +1120,8 @@ const AppContent = () => {
     structuresChatHistory, setStructuresChatHistory,
     soilsChat, setSoilsChat,
     soilsChatHistory, setSoilsChatHistory,
+    roadingChat, setRoadingChat,
+    roadingChatHistory, setRoadingChatHistory,
     fieldbookNotes, setFieldbookNotes,
   } = useChatState();
   
@@ -1330,6 +1379,11 @@ const AppContent = () => {
   const [standardsComplianceLastReport, setStandardsComplianceLastReport] = useState<StandardsComplianceReport | null>(null);
   const [isStandardsComplianceRunning, setIsStandardsComplianceRunning] = useState(false);
 
+  // ROADING_AGENT — Road synthesis & corridor design studio.
+  const [isRoadingPanelVisible, setIsRoadingPanelVisible] = useState(false);
+  const [isRoadingWorking, setIsRoadingWorking] = useState(false);
+  const [roadCorridors, setRoadCorridors] = useState<import('./types.ts').RoadCorridorRun[]>([]);
+
   // PROFILE_AGENT � direct UI panel (no AI round-trip; client-side generateProfile).
   const [isProfileGenPanelVisible, setIsProfileGenPanelVisible] = useState(false);
 
@@ -1491,6 +1545,7 @@ const AppContent = () => {
     flood: true,
     structures: true,
     soils: true,
+    roading: true,
     gpsStakeout: true,
     gpsCollect: true,
     gnss: true,
@@ -1614,6 +1669,12 @@ const AppContent = () => {
 
   // Annotation dimensions � aligned dimension annotations drawn on the canvas
   const [dimensions, setDimensions] = useState<AnnotationDimension[]>([]);
+
+  // First-class CAD Hatch entities placed on the drawing canvas
+  const [hatches, setHatches] = useState<CanvasHatch[]>([]);
+  // Hatches live in App state rather than CanvasStateContext; register them so
+  // add/edit/delete participate in the same automatic undo/redo stack.
+  useHistorySlice('hatches', hatches, setHatches);
 
   // --- UI STATE: Layout and Resizing ---
   // REFACTORING NOTE: Layout and resizing state moved to UIStateContext (see top of component)
@@ -1746,6 +1807,66 @@ const AppContent = () => {
   useEffect(() => {
     centerlinesRef.current = centerlines;
   }, [centerlines]);
+
+  // Live-draw follow: while the agent streams points/lines onto the canvas, keep
+  // the viewport framed on the geometry that has landed so far. Without this,
+  // live drawing can happen entirely off-screen. The camera only moves during
+  // the preview; a settled drawing never yanks the user's view.
+  const livePreviewFitRef = useRef('');
+  useEffect(() => {
+    if (streamPreviewPoints.length === 0 && streamPreviewLines.length === 0) {
+      livePreviewFitRef.current = '';
+      return;
+    }
+    const canvas = canvas2dRef.current;
+    if (!canvas) return;
+
+    let minE = Infinity;
+    let maxE = -Infinity;
+    let minN = Infinity;
+    let maxN = -Infinity;
+    const include = (easting: number, northing: number) => {
+      if (!Number.isFinite(easting) || !Number.isFinite(northing)) return;
+      minE = Math.min(minE, easting);
+      maxE = Math.max(maxE, easting);
+      minN = Math.min(minN, northing);
+      maxN = Math.max(maxN, northing);
+    };
+
+    const previewIndex = new Map<string, SurveyPoint>();
+    for (const point of streamPreviewPoints) {
+      previewIndex.set(point.pointNumber, point);
+      include(point.easting, point.northing);
+    }
+    const lookup = (pointNumber: string) =>
+      previewIndex.get(pointNumber) ?? pointMap.get(pointNumber);
+
+    for (const line of streamPreviewLines) {
+      const from = lookup(line.from)
+        ?? (line.fromPt ? { easting: line.fromPt.x, northing: line.fromPt.y } : null);
+      const to = lookup(line.to)
+        ?? (line.toPt ? { easting: line.toPt.x, northing: line.toPt.y } : null);
+      if (from) include(from.easting, from.northing);
+      if (to) include(to.easting, to.northing);
+
+      // A full circle's diameter extends past its center point.
+      if (line.isCircle && line.curveRadius && line.curveRadius > 0) {
+        if (line.circleCenter) {
+          include(line.circleCenter.x - line.curveRadius, line.circleCenter.y - line.curveRadius);
+          include(line.circleCenter.x + line.curveRadius, line.circleCenter.y + line.curveRadius);
+        } else if (from) {
+          include(from.easting - line.curveRadius, from.northing - line.curveRadius);
+          include(from.easting + line.curveRadius, from.northing + line.curveRadius);
+        }
+      }
+    }
+
+    if (!Number.isFinite(minE) || !Number.isFinite(minN)) return;
+    const signature = `${minE.toFixed(4)}|${maxE.toFixed(4)}|${minN.toFixed(4)}|${maxN.toFixed(4)}`;
+    if (signature === livePreviewFitRef.current) return;
+    livePreviewFitRef.current = signature;
+    canvas.zoomToBbox(minE, maxE, minN, maxN, 0.3);
+  }, [streamPreviewPoints, streamPreviewLines, pointMap, activeVisualPanel]);
 
   // Faint futuristic background grid on the drawing canvas � purely cosmetic,
   // toggled from the header next to the notification bell.
@@ -2417,12 +2538,60 @@ const AppContent = () => {
     const cadLayerContext = cadManagerContext.state.standard
       ? cadManagerContext.getLayersContextString('condensed')
       : undefined;
-    // Pass Drafting Style Library to the Civil Drafter so it receives training context.
-    const styleEntries = agentType === AgentType.CIVIL_DRAFTER && draftingStyleLibrary.length > 0
+    // Pass Drafting Style Library to the Civil Drafter and Roading Agent so they receive training context.
+    const styleEntries = (agentType === AgentType.CIVIL_DRAFTER || agentType === AgentType.ROADING_AGENT) && draftingStyleLibrary.length > 0
       ? draftingStyleLibrary
       : undefined;
     return startGeminiChat(agentType, fileContext, activeModel, settings, trainingContext, override, cadLayerContext, styleEntries, autoHighThinkingModel);
   }, [activeModel, settings, agentModelOverrides, cadManagerContext, draftingStyleLibrary, autoHighThinkingModel]);
+
+  // Force Agent is a test switch: when it changes, drop the in-memory chat
+  // session for the affected agent(s) so the next turn rebuilds with the
+  // forced-agent system prompt (visible history is preserved).
+  const previousForcedAgentRef = useRef<AgentType | null>(null);
+  useEffect(() => {
+    const previous = previousForcedAgentRef.current;
+    const next = settings.forceAgent ?? null;
+    if (previous === next) return;
+    previousForcedAgentRef.current = next;
+
+    const resetChatSession = (agent: AgentType | null) => {
+      switch (agent) {
+        case AgentType.RAW_CRAWLER: setRawChat(null); break;
+        case AgentType.CIVIL_DRAFTER: setCivilDrafterChat(null); break;
+        case AgentType.DEED_READER: setDeedChat(null); break;
+        case AgentType.CIVIL_PLAN_EXPERT: setPlanExpertChat(null); break;
+        case AgentType.DXF_ANALYZER: setDxfChat(null); break;
+        case AgentType.IMAGE_ANALYZER: setImageAnalyzerChat(null); break;
+        case AgentType.GIS_AGENT: setGisChat(null); break;
+        case AgentType.GPS_STAKEOUT: setGpsStakeoutChat(null); break;
+        case AgentType.LSVZ_AGENT: setLsvzChat(null); break;
+        case AgentType.CENTERLINE_STATIONING: setStationingChat(null); break;
+        case AgentType.POINT_EDITOR: setPointEditorChat(null); break;
+        case AgentType.CONTOURING_AGENT: setContouringChat(null); break;
+        case AgentType.STEEP_SLOPE_AGENT: setSteepSlopeChat(null); break;
+        case AgentType.PROFILE_AGENT: setProfileChat(null); break;
+        case AgentType.COGO_AGENT: setCogoChat(null); break;
+        case AgentType.GNSS_AGENT: setRinexChat(null); break;
+        case AgentType.DRONE_AGENT: setDroneChat(null); break;
+        case AgentType.ZONING_AGENT: setZoningChat(null); break;
+        case AgentType.TITLE_SEARCH: setTitleSearchChat(null); break;
+        case AgentType.CAD_MANAGER: setCadManagerChat(null); break;
+        case AgentType.STANDARDS_COMPLIANCE: setStandardsComplianceChat(null); break;
+        case AgentType.STRUCTURES_AGENT: setStructuresChat(null); break;
+        case AgentType.SOILS_AGENT: setSoilsChat(null); break;
+        case AgentType.ROADING_AGENT: setRoadingChat(null); break;
+      }
+    };
+
+    resetChatSession(previous);
+    resetChatSession(next);
+
+    if (next) {
+      setInitializedAgents(prev => new Set(prev).add(next));
+      setActiveAgent(next);
+    }
+  }, [settings.forceAgent, setActiveAgent, setInitializedAgents]);
 
   // Load C3D session token from localStorage on app startup
   useEffect(() => {
@@ -3220,6 +3389,7 @@ const AppContent = () => {
         associatedTerms: Array.from(terms),
         svgPath: sym.svgPath,
         fillPath: sym.fillPath,
+        ...(sym.texts && sym.texts.length > 0 ? { texts: sym.texts } : {}),
         viewBox: sym.viewBox || '0 0 24 24',
         scale: 1,
       });
@@ -3248,7 +3418,7 @@ const AppContent = () => {
         prevMirrored.length === mirroredWithScale.length &&
         prevMirrored.every((p, i) => {
           const m = mirroredWithScale[i];
-          return p.id === m.id && p.name === m.name && p.svgPath === m.svgPath && p.fillPath === m.fillPath && p.viewBox === m.viewBox && p.scale === m.scale && p.associatedTerms.join('|') === m.associatedTerms.join('|');
+          return p.id === m.id && p.name === m.name && p.svgPath === m.svgPath && p.fillPath === m.fillPath && JSON.stringify(p.texts) === JSON.stringify(m.texts) && p.viewBox === m.viewBox && p.scale === m.scale && p.associatedTerms.join('|') === m.associatedTerms.join('|');
         });
       if (same) return prev;
       return [...userEntries, ...mirroredWithScale];
@@ -3296,6 +3466,7 @@ const AppContent = () => {
     const panelToA2UITool: Partial<Record<VisualPanel, { tool: A2UIWorkspaceToolId; agent: AgentType }>> = {
       symbolmanager: { tool: 'symbol-manager', agent: AgentType.CAD_MANAGER },
       linetypemanager: { tool: 'linetype-manager', agent: AgentType.CAD_MANAGER },
+      hatchmanager: { tool: 'hatch-manager', agent: AgentType.CAD_MANAGER },
       draftstylelib: { tool: 'drafting-style-library', agent: AgentType.CAD_MANAGER },
       annotatemanager: { tool: 'annotate-manager', agent: AgentType.CIVIL_DRAFTER },
       layermanager: { tool: 'layer-manager', agent: AgentType.CAD_MANAGER },
@@ -3407,8 +3578,8 @@ const AppContent = () => {
         if (cadStandardsLoaded) {
           setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
         }
-      } else if (viewToShow === 'draftstylelib') {
-        // Drafting Style Library is a CAD Manager sub-tool.
+      } else if (viewToShow === 'draftstylelib' || viewToShow === 'hatchmanager' || viewToShow === 'linetypemanager') {
+        // Drafting Style Library, Hatch Manager, and Linetype Manager are CAD Manager sub-tools.
         setActiveAgent(AgentType.CAD_MANAGER);
         if (cadStandardsLoaded) {
           setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
@@ -3528,6 +3699,7 @@ const AppContent = () => {
     setIsBoundaryEditorVisible(false);
     setIsBoundaryEditorButtonPulsing(false);
     setDimensions([]);
+    setHatches([]);
     setTinSurfaces([]);
     setDraftingStyleLibrary([]);
     setCanvasTransform(null);
@@ -3614,16 +3786,9 @@ const AppContent = () => {
     if (!updated) return null;
 
     const layerKey = updated.name;
-    if (color || lineType) {
-      setLines(prev => prev.map(line => {
-        if ((line.layer ?? '').trim().toUpperCase() !== layerKey.toUpperCase()) return line;
-        return {
-          ...line,
-          ...(color ? { color } : {}),
-          ...(lineType ? { lineType } : {}),
-        };
-      }));
-    }
+    // Layer defaults are resolved at render time. Do not stamp them onto
+    // entities here: object-level color/linetype overrides must survive a
+    // later layer edit, and ByLayer entities must follow the new default.
     if (color) {
       setCadLayerColors(prev => ({ ...prev, [layerKey]: color }));
     }
@@ -3633,7 +3798,7 @@ const AppContent = () => {
     ].filter(Boolean).join(', ');
     logActionToFieldbook(`CAD Manager: layer "${layerKey}" updated${changes ? ` (${changes})` : ''}.`);
     return updated;
-  }, [cadManagerContext, logActionToFieldbook, setCadLayerColors, setLines]);
+  }, [cadManagerContext, logActionToFieldbook, setCadLayerColors]);
 
   const handleCadLayerColorChange = useCallback((layerName: string, color: string) => {
     handleCadLayerPropertyChange(layerName, { color });
@@ -6374,6 +6539,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       case AgentType.STANDARDS_COMPLIANCE: return setStandardsComplianceChatHistory;
       case AgentType.STRUCTURES_AGENT: return setStructuresChatHistory;
       case AgentType.SOILS_AGENT: return setSoilsChatHistory;
+      case AgentType.ROADING_AGENT: return setRoadingChatHistory;
       default: return null;
     }
   }, [
@@ -6382,7 +6548,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setLsvzChatHistory, setStationingChatHistory, setPointEditorChatHistory, setContouringChatHistory,
     setSteepSlopeChatHistory, setProfileChatHistory, setCogoChatHistory, setRinexChatHistory,
     setDroneChatHistory, setZoningChatHistory, setTitleSearchChatHistory, setCadManagerChatHistory,
-    setStandardsComplianceChatHistory, setStructuresChatHistory, setSoilsChatHistory,
+    setStandardsComplianceChatHistory, setStructuresChatHistory, setSoilsChatHistory, setRoadingChatHistory,
   ]);
 
   // FIX: Add initialization for the new Contouring Agent.
@@ -6745,7 +6911,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }]);
     }
 
-    if (activeAgent === AgentType.CIVIL_DRAFTER && existingPtsCount > 0 && !rawFile) {
+    if ((activeAgent === AgentType.CIVIL_DRAFTER || activeAgent === AgentType.ROADING_AGENT) && existingPtsCount > 0 && !rawFile) {
       const visibleListWithPoints =
         pointLists.find(l => l.isVisible && l.points.length > 0) ??
         pointLists.find(l => l.points.length > 0);
@@ -6755,8 +6921,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setRawFile({ name: syntheticName, content: syntheticContent });
         try {
           const trainingDxf = dxfFile?.forTraining ? dxfFile : undefined;
-          const newChat = startChatWithOverride(AgentType.CIVIL_DRAFTER, syntheticContent, trainingDxf);
-          setCivilDrafterChat(newChat);
+          const newChat = startChatWithOverride(activeAgent, syntheticContent, trainingDxf);
+          if (activeAgent === AgentType.CIVIL_DRAFTER) setCivilDrafterChat(newChat);
+          else setRoadingChat(newChat);
         } catch {
           /* AI chat deferred until needed */
         }
@@ -6858,6 +7025,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setIsProfileGenPanelVisible(false);
     }
   }, [activeAgent, isInitialScreen, initializeProfileAgent]);
+
+  // Roading Agent: auto-show Roading Studio panel when agent is activated.
+  useEffect(() => {
+    if (activeAgent === AgentType.ROADING_AGENT && !isInitialScreen) {
+      setIsRoadingPanelVisible(true);
+    } else {
+      setIsRoadingPanelVisible(false);
+    }
+  }, [activeAgent, isInitialScreen]);
 
   // Flood Agent (v26.05.17.16): auto-show floating panel when agent activated;
   // auto-hide when switching away so the floating dialog doesn't linger.
@@ -7144,6 +7320,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           associatedTerms: [code.toLowerCase()],
           svgPath: def.svgPath!,
           fillPath: def.fillPath,
+          ...(def.texts && def.texts.length > 0 ? { texts: def.texts } : {}),
           viewBox: def.viewBox || '0 0 24 24',
           scale: 1,
         };
@@ -7391,8 +7568,284 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       };
     });
 
-    return () => { unsubLayer(); unsubBatch(); unsubCtx(); unsubList(); unsubCreate(); unsubSetProps(); unsubEnsure(); };
-  }, [cadManagerContext, handleCadLayerPropertyChange, logActionToFieldbook, setActiveDrawingLayer]);
+    const unsubResolveHatch = interAgentComm.onCommand('cad_resolve_hatch', async (message) => {
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const query = String(d.query ?? d.code ?? d.feature ?? '').trim();
+      if (!query) {
+        return { requestId: message.id, from: AgentType.CAD_MANAGER, success: false, error: 'Missing query', timestamp: Date.now() };
+      }
+      const rec = resolveHatchForFeatureOrCode(query, {
+        customHatches: cadManagerContext.state.standard?.hatches ?? [],
+        codes: cadManagerContext.state.standard?.codes ?? [],
+      });
+      return {
+        requestId: message.id,
+        from: AgentType.CAD_MANAGER,
+        success: true,
+        data: {
+          patternName: rec.hatch.name,
+          description: rec.hatch.description,
+          category: rec.hatch.category,
+          recommendedLayer: rec.recommendedLayer,
+          recommendedScale: rec.recommendedScale,
+          recommendedAngle: rec.recommendedAngle,
+          source: rec.source,
+          confidence: rec.confidence,
+        },
+        timestamp: Date.now(),
+      };
+    });
+
+    const unsubListHatches = interAgentComm.onCommand('cad_list_hatches', async (message) => {
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const category = typeof d.category === 'string' ? d.category : 'all';
+      const custom = cadManagerContext.state.standard?.hatches ?? [];
+      const allPatterns = [...ALL_BUILT_IN_HATCHES, ...custom].filter(
+        p => category === 'all' || p.category === category,
+      );
+      return {
+        requestId: message.id,
+        from: AgentType.CAD_MANAGER,
+        success: true,
+        data: {
+          patterns: allPatterns.map(p => ({
+            name: p.name,
+            description: p.description,
+            category: p.category,
+            femaZone: p.femaZone ?? null,
+            defaultScale: p.defaultScale ?? 1,
+          })),
+          canvasHatches: hatches.map(ch => ({
+            id: ch.id,
+            patternName: ch.patternName,
+            layer: ch.layer,
+            scale: ch.scale,
+            angleDeg: ch.angleDeg,
+            areaSqFt: ch.areaSqFt ?? 0,
+            hidden: Boolean(ch.hidden),
+          })),
+          contextTable: cadManagerContext.getHatchContextString(),
+        },
+        timestamp: Date.now(),
+      };
+    });
+
+    const unsubAuthorHatch = interAgentComm.onCommand('cad_author_hatch_pattern', async (message) => {
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const rawName = String(d.name ?? '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '_');
+      if (!rawName) {
+        return { requestId: message.id, from: AgentType.CAD_MANAGER, success: false, error: 'Missing pattern name', timestamp: Date.now() };
+      }
+      const rawLines = Array.isArray(d.lines) ? (d.lines as Array<Record<string, unknown>>) : [];
+      const patLines: HatchPatternLine[] = rawLines.length > 0
+        ? rawLines.map(l => ({
+            angle: Number(l.angle) || 0,
+            originX: Number(l.originX) || 0,
+            originY: Number(l.originY) || 0,
+            deltaX: Number(l.deltaX) || 0,
+            deltaY: Number(l.deltaY) || 0.125,
+            dashes: Array.isArray(l.dashes) ? l.dashes.map(Number).filter(n => Number.isFinite(n)) : undefined,
+          }))
+        : [{ angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 0.125 }];
+
+      const authored: HatchDefinition = {
+        name: rawName,
+        description: typeof d.description === 'string' && d.description.trim() ? d.description.trim() : `Custom hatch ${rawName}`,
+        category: 'custom',
+        isAcadStandard: false,
+        lines: patLines,
+      };
+
+      const std = cadManagerContext.state.standard;
+      const existingCustom = [...(std?.hatches ?? [])];
+      const idx = existingCustom.findIndex(h => h.name.toUpperCase() === rawName);
+      if (idx >= 0) existingCustom[idx] = authored;
+      else existingCustom.push(authored);
+
+      const assignToCode = typeof d.assignToCode === 'string' ? d.assignToCode.trim().toUpperCase() : '';
+      let nextCodes = std?.codes ?? [];
+      if (assignToCode && nextCodes.length > 0) {
+        nextCodes = nextCodes.map(c =>
+          c.code.toUpperCase() === assignToCode ? { ...c, hatchPattern: rawName } : c,
+        );
+      }
+
+      if (std) {
+        cadManagerContext.dispatch({
+          type: 'SET_STANDARD',
+          payload: {
+            ...std,
+            hatches: existingCustom,
+            codes: nextCodes,
+            lastUpdated: new Date().toISOString(),
+          },
+        });
+      }
+      logActionToFieldbook(`CAD Manager: authored custom hatch pattern "${rawName}"${assignToCode ? ` and assigned to code "${assignToCode}"` : ''}.`);
+      return {
+        requestId: message.id,
+        from: AgentType.CAD_MANAGER,
+        success: true,
+        data: {
+          patternName: rawName,
+          assignedCode: assignToCode || undefined,
+          totalCustom: existingCustom.length,
+        },
+        timestamp: Date.now(),
+      };
+    });
+
+    const unsubApplyHatch = interAgentComm.onCommand('cad_apply_hatch', async (message) => {
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const queryPat = String(d.patternName ?? 'ANSI31').trim();
+      const rec = resolveHatchForFeatureOrCode(queryPat, {
+        customHatches: cadManagerContext.state.standard?.hatches ?? [],
+        codes: cadManagerContext.state.standard?.codes ?? [],
+      });
+      const ptMap = new Map<string, SurveyPoint>();
+      for (const p of points) ptMap.set(p.pointNumber, p);
+
+      let region: TracedHatchRegion | null = null;
+      if (Array.isArray(d.vertices) && d.vertices.length >= 3) {
+        const verts = (d.vertices as Array<Record<string, unknown>>)
+          .map(v => ({
+            x: Number(v.x ?? v.easting ?? 0),
+            y: Number(v.y ?? v.northing ?? 0),
+          }))
+          .filter(v => Number.isFinite(v.x) && Number.isFinite(v.y));
+        if (verts.length >= 3) {
+          const area = computePolygonAreaAbs(verts);
+          const outerLoop = { vertices: verts, isHole: false };
+          region = { outerLoop, holes: [], loops: [outerLoop], boundingLineIds: [], areaSqFt: area };
+        }
+      } else if (d.seedPoint && typeof d.seedPoint === 'object') {
+        const sp = d.seedPoint as Record<string, unknown>;
+        const x = Number(sp.easting ?? sp.x);
+        const y = Number(sp.northing ?? sp.y);
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          region = traceEnclosingLoopAtPoint({ x, y }, lines, ptMap, boundaryFiles);
+        }
+      } else if (Array.isArray(d.lineIds) && d.lineIds.length > 0) {
+        region = resolveHatchFromSelectedEntities(d.lineIds.map(String), lines, ptMap, boundaryFiles);
+      } else if (typeof d.boundaryFileId === 'string' && d.boundaryFileId.trim()) {
+        const bf = boundaryFiles.find(b => b.id === d.boundaryFileId);
+        if (bf) {
+          region = resolveHatchFromSelectedEntities(bf.drawnLineIds ?? [`bf:${bf.id}`], lines, ptMap, [bf]);
+        }
+      } else if (typeof d.targetLayer === 'string' && d.targetLayer.trim()) {
+        const targetLayerUpper = d.targetLayer.trim().toUpperCase();
+        const layerLineIds = lines
+          .filter(l => !l.hidden && (l.layer || '').toUpperCase() === targetLayerUpper)
+          .map(l => l.id || `${l.from}-${l.to}`);
+        if (layerLineIds.length > 0) {
+          region = resolveHatchFromSelectedEntities(layerLineIds, lines, ptMap, boundaryFiles);
+        }
+      }
+
+      if (!region) {
+        return {
+          requestId: message.id,
+          from: AgentType.CAD_MANAGER,
+          success: false,
+          error: 'Could not trace a closed boundary from the provided target.',
+          timestamp: Date.now(),
+        };
+      }
+
+      const newHatch: CanvasHatch = {
+        id: `hatch_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        patternName: rec.hatch.name,
+        loops: region.loops,
+        scale: Number(d.scale) > 0 ? Number(d.scale) : rec.recommendedScale,
+        angleDeg: Number.isFinite(Number(d.angleDeg)) ? Number(d.angleDeg) : rec.recommendedAngle,
+        opacity: Number(d.opacity) > 0 ? Math.min(1, Number(d.opacity)) : 0.45,
+        color: typeof d.color === 'string' ? d.color : rec.hatch.previewColor,
+        layer: typeof d.layer === 'string' && d.layer.trim() ? d.layer.trim() : rec.recommendedLayer,
+        associativeLineIds: region.boundingLineIds,
+        sourceMode: 'cacp',
+        areaSqFt: region.areaSqFt,
+        createdAt: new Date().toISOString(),
+      };
+      setHatches(prev => [...prev, newHatch]);
+      logActionToFieldbook(`CAD Manager: placed ${newHatch.patternName} hatch on ${newHatch.layer} (${region.areaSqFt.toFixed(1)} sq ft).`);
+      return {
+        requestId: message.id,
+        from: AgentType.CAD_MANAGER,
+        success: true,
+        data: {
+          hatchId: newHatch.id,
+          patternName: newHatch.patternName,
+          layer: newHatch.layer,
+          areaSqFt: region.areaSqFt,
+          holeCount: region.holes.length,
+        },
+        timestamp: Date.now(),
+      };
+    });
+
+    const unsubModifyHatch = interAgentComm.onCommand('cad_modify_hatch', async (message) => {
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const action = typeof d.action === 'string' ? d.action : 'update';
+      const hatchId = typeof d.hatchId === 'string' ? d.hatchId : 'last';
+
+      if (action === 'clear-all') {
+        const count = hatches.length;
+        setHatches([]);
+        return { requestId: message.id, from: AgentType.CAD_MANAGER, success: true, data: { modifiedCount: count }, timestamp: Date.now() };
+      }
+
+      let modifiedCount = 0;
+      setHatches(prev => {
+        if (prev.length === 0) return prev;
+        const targetId = hatchId === 'last' ? prev[prev.length - 1].id : hatchId;
+        if (action === 'delete') {
+          const next = prev.filter(h => {
+            const match = hatchId === 'all' || h.id === targetId;
+            if (match) modifiedCount++;
+            return !match;
+          });
+          return next;
+        }
+        return prev.map(h => {
+          if (hatchId !== 'all' && h.id !== targetId) return h;
+          modifiedCount++;
+          return {
+            ...h,
+            ...(typeof d.patternName === 'string' ? { patternName: d.patternName.toUpperCase() } : {}),
+            ...(Number(d.scale) > 0 ? { scale: Number(d.scale) } : {}),
+            ...(Number.isFinite(Number(d.angleDeg)) ? { angleDeg: Number(d.angleDeg) } : {}),
+            ...(Number(d.opacity) > 0 ? { opacity: Math.min(1, Number(d.opacity)) } : {}),
+            ...(typeof d.color === 'string' ? { color: d.color } : {}),
+            ...(typeof d.layer === 'string' ? { layer: d.layer } : {}),
+            ...(typeof d.hidden === 'boolean' ? { hidden: d.hidden } : {}),
+          };
+        });
+      });
+
+      return {
+        requestId: message.id,
+        from: AgentType.CAD_MANAGER,
+        success: true,
+        data: { modifiedCount },
+        timestamp: Date.now(),
+      };
+    });
+
+    return () => {
+      unsubLayer();
+      unsubBatch();
+      unsubCtx();
+      unsubList();
+      unsubCreate();
+      unsubSetProps();
+      unsubEnsure();
+      unsubResolveHatch();
+      unsubListHatches();
+      unsubAuthorHatch();
+      unsubApplyHatch();
+      unsubModifyHatch();
+    };
+  }, [cadManagerContext, handleCadLayerPropertyChange, logActionToFieldbook, setActiveDrawingLayer, hatches, points, lines, boundaryFiles]);
 
   useEffect(() => {
     const unsubRun = interAgentComm.onCommand('standards_run_compliance_audit', async (message) => {
@@ -9234,6 +9687,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     lines,
     setLines,
     centerlines,
+    setCenterlines,
+    roadCorridors,
+    setRoadCorridors,
+    streetLabels,
+    setStreetLabels,
+    canvas2dRef,
     settings,
     activeModel,
     activeDrawingLayer,
@@ -9769,10 +10228,21 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const handleSendMessage = useCallback(async (query: string, agentOverride?: AgentType, askPeerDepth = 0, zoningDistrictOverride?: string) => {
     console.log('[handleSendMessage] Called with query:', query, 'activeAgent:', activeAgent, 'override:', agentOverride, 'askPeerDepth:', askPeerDepth);
 
+    const isInternalFollowUp =
+      askPeerDepth > 0 ||
+      query.startsWith('[CACP ') ||
+      query.startsWith('[KB RECALL');
+    // Developer / Testing: a forced agent pins interactive requests to one
+    // specialist. Explicit agent overrides (CACP peer calls, C3D hand-offs,
+    // delegated follow-ups) keep their original target.
+    const forcedAgent = !agentOverride && !isInternalFollowUp
+      ? (settings.forceAgent ?? null)
+      : null;
+
     // COGO owns dividing lines/arcs. Start with a selection prompt instead of
     // letting the model guess which entities the user meant.
     const divideIntent = parseDivideSelectionIntent(query);
-    if (divideIntent && !agentOverride && askPeerDepth === 0) {
+    if (divideIntent && !agentOverride && !forcedAgent && askPeerDepth === 0) {
       const count = divideIntent.pointCount;
       setActiveAgent(AgentType.COGO_AGENT);
       setCogoChatHistory(prev => [
@@ -9841,6 +10311,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         effectiveIntakeAgent === AgentType.TITLE_SEARCH ? titleSearchChatHistory :
         effectiveIntakeAgent === AgentType.CAD_MANAGER ? cadManagerChatHistory :
         effectiveIntakeAgent === AgentType.STANDARDS_COMPLIANCE ? standardsComplianceChatHistory :
+        effectiveIntakeAgent === AgentType.ROADING_AGENT ? roadingChatHistory :
         lsvzChatHistory;
       const lastIntakeMsg = currentHistoryForIntake.length > 0
         ? currentHistoryForIntake[currentHistoryForIntake.length - 1]
@@ -9940,11 +10411,66 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             case 'open-compliance-panel':
               showView('compliance');
               break;
+            case 'roading-synthesize-existing': {
+              // Inputs are optional: synthesize immediately from the loaded
+              // points/imagery. ROW lines are skipped when no width was given.
+              setIsRoadingPanelVisible(true);
+              setIsToolShelfVisible(true);
+              toggleToolDock('roading', true);
+              void interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_synthesize_existing', {
+                useSurveyPoints: true,
+                useBackgroundImagery: true,
+                useOsmWays: true,
+                syncCenterline: true,
+              });
+              break;
+            }
+            case 'open-roading-studio':
+              setIsRoadingPanelVisible(true);
+              setIsToolShelfVisible(true);
+              toggleToolDock('roading', true);
+              break;
             default:
               break;
           }
           return;
         }
+      }
+    }
+
+    // Multi-step follow-up guardrails: when the user asks to draw a spiral (or
+    // clicks a spiral type option in Quick Thought / Flash without parameters),
+    // prompt for the exact parameters via Quick Thought and Canvas Flashes
+    // instead of letting the model assume coordinates or dimensions.
+    if (!agentOverride && askPeerDepth === 0) {
+      const followUpAgent = activeAgent || AgentType.LSVZ_AGENT;
+      const followUpPrompt = resolveA2UIFollowUpPrompt(query, followUpAgent);
+      const followUpSetHistory = getSetHistoryForAgent(followUpAgent);
+      if (followUpPrompt && followUpSetHistory) {
+        followUpSetHistory(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          {
+            role: MessageRole.MODEL,
+            text: followUpPrompt.replyText,
+            result: followUpPrompt.replyText,
+            questionOptions: followUpPrompt.questionOptions,
+            needsInput: followUpPrompt.needsInput,
+            a2ui: followUpPrompt.inputForm
+              ? {
+                  kind: 'input-form',
+                  agent: followUpAgent,
+                  widgetType: 'input-form',
+                  status: 'prompting',
+                  inputForm: followUpPrompt.inputForm,
+                }
+              : undefined,
+          },
+        ]);
+        if (followUpPrompt.questionOptions?.length) {
+          setSuggestedQuestions(followUpPrompt.questionOptions);
+        }
+        return;
       }
     }
 
@@ -10024,6 +10550,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             widgetType: surfaceIntent.tool,
             workspaceTool: surfaceIntent.tool,
             status: 'expanded',
+          };
+        } else if (surfaceIntent.surface === 'hatch-studio') {
+          surfacePayload = {
+            kind: 'hatch-studio',
+            agent: AgentType.CAD_MANAGER,
+            widgetType: 'hatch-studio',
+            status: 'expanded',
+            hatchStudio: surfaceIntent.hatchStudio,
           };
         } else {
           // cad-standards-editor
@@ -10171,7 +10705,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // service access or superuser is present. Boundary Agent turns are exempt: free
     // users get 5 fingerprinted free deeds that are metered separately, so a deed can
     // be drafted at any time until the allowance runs out.
-    const requestedAgent = agentOverride ?? activeAgent;
+    const requestedAgent = agentOverride ?? forcedAgent ?? activeAgent;
     if (isFreeTierTimeLocked && requestedAgent !== AgentType.DEED_READER) {
       setIsLockDismissed(false);
       setShowHostCostReminder(true);
@@ -10223,8 +10757,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
     // A CACP hand-off names the agent that must answer; interactive use follows
     // whichever agent the user has open (defaulting to LSVZ_AGENT when unplugged).
-    const effectiveActiveAgent = activeAgent || AgentType.LSVZ_AGENT;
-    const agent = agentOverride ?? effectiveActiveAgent;
+    // Force Agent overrides the interactive choice for testing.
+    const effectiveActiveAgent = forcedAgent ?? activeAgent ?? AgentType.LSVZ_AGENT;
+    const agent = agentOverride ?? forcedAgent ?? effectiveActiveAgent;
     let chat: Chat | null = null;
     let setHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>> | null = null;
     
@@ -10256,11 +10791,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         case AgentType.FLOOD_AGENT: return; // Flood Agent uses the FloatingPanel, not the chat box
         case AgentType.STRUCTURES_AGENT: chat = structuresChat; setHistory = setStructuresChatHistory; break;
         case AgentType.SOILS_AGENT: chat = soilsChat; setHistory = setSoilsChatHistory; break;
+        case AgentType.ROADING_AGENT: chat = roadingChat; setHistory = setRoadingChatHistory; break;
         case AgentType.AR_AGENT: return; // AR agent doesn't use chat
         case AgentType.FIELD_BOOK: return; // Field book uses notepad, not chat
         case AgentType.FILE_MANAGER: return; // File manager doesn't use chat
         case AgentType.TEXT_EDITOR: return; // Text editor doesn't use chat
         default: return;
+    }
+
+    // A forced test request switches the visible agent so the user sees the
+    // forced agent's stream and history rather than the previously active one.
+    if (forcedAgent && forcedAgent !== activeAgent) {
+      setInitializedAgents(prev => new Set(prev).add(forcedAgent));
+      setActiveAgent(forcedAgent);
     }
 
     // When LSVZ Orchestrator delegates a turn to a specialist agent while LSVZ is active,
@@ -10287,7 +10830,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           });
         }
         else if (agent === AgentType.RAW_CRAWLER) initialFileContext = rawFile?.content || '';
-        else if (agent === AgentType.CIVIL_DRAFTER) {
+        else if (agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT) {
           initialFileContext = (planFiles && planFiles.length > 0) ? planFiles : (rawFile?.content || '');
           initialTrainingContext = dxfFile?.forTraining ? dxfFile : undefined;
         }
@@ -10326,6 +10869,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           case AgentType.STANDARDS_COMPLIANCE: setStandardsComplianceChat(freshChat); break;
           case AgentType.STRUCTURES_AGENT: setStructuresChat(freshChat); break;
           case AgentType.SOILS_AGENT: setSoilsChat(freshChat); break;
+          case AgentType.ROADING_AGENT: setRoadingChat(freshChat); break;
         }
         setInitializedAgents(prev => new Set(prev).add(agent));
       } catch (initErr: any) {
@@ -10363,7 +10907,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // from a clean context: system prompt + point database + imagery + the one
     // new instruction. Rebuilding is the uniform way to clear history across
     // the Gemini SDK, Vertex, and Claude chat implementations.
-    if (agent === AgentType.CIVIL_DRAFTER) {
+    if (agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT) {
       const cdCtx = getCivilDrafterContextConfig();
       if (cdCtx) {
         civilDrafterTurnsSinceResetRef.current += 1;
@@ -10373,11 +10917,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         const wantReset = (cdCtx.freshContextPerDraw && drawIntent) || hitTurnLimit;
         const cdFileContext: string | SessionFile[] | null =
           (planFiles && planFiles.length > 0) ? planFiles
-          : (rawFile ? rawFile.content : null);
+          : (rawFile ? rawFile.content : '');
         if (wantReset && cdFileContext !== null) {
           const cdTraining = dxfFile?.forTraining ? dxfFile : undefined;
-          const freshChat = startChatWithOverride(AgentType.CIVIL_DRAFTER, cdFileContext, cdTraining);
-          setCivilDrafterChat(freshChat);
+          const freshChat = startChatWithOverride(agent, cdFileContext, cdTraining);
+          if (agent === AgentType.CIVIL_DRAFTER) setCivilDrafterChat(freshChat);
+          else setRoadingChat(freshChat);
           chat = freshChat;
           civilDrafterTurnsSinceResetRef.current = 1;
           const fixedTextChars = typeof cdFileContext === 'string'
@@ -10451,22 +10996,52 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }
 
     stopGenerationRef.current = false;
-    const isInternalFollowUp =
-      askPeerDepth > 0 ||
-      query.startsWith('[CACP ') ||
-      query.startsWith('[KB RECALL');
 
-    if (!isInternalFollowUp && agentRegistry.isCacpEnabled(agent)) {
-      // Broadcast the user's request over the CACP Intent Router so routing
-      // telemetry and mismatch suggestions are captured in the CACP Activity Log.
+    if (!isInternalFollowUp && !forcedAgent && agentRegistry.isCacpEnabled(agent)) {
+      // CACP intent gate — ENFORCED, not advisory. If the request clearly
+      // belongs to another specialist, hand it to that agent before this one
+      // runs a single token. Previously this route was only broadcast/logged,
+      // so a Point Editor could "draw the road" itself instead of consulting
+      // the Roading Agent. LSAI keeps its own orchestration/delegation flow.
+      const isAutoDraftTurn =
+        query.includes('**AUTO DRAFT') ||
+        query.includes('**STAGE ') ||
+        pendingAutoDraftImagesRef.current.length > 0;
+      const handoff = agent !== AgentType.LSVZ_AGENT && !isAutoDraftTurn
+        ? resolveIntentHandoff(query, agent)
+        : null;
+      if (handoff && handoff.agent !== agent) {
+        const fromLabel = agentConfig[agent]?.label || agent;
+        const toLabel = handoff.displayName;
+        setInitializedAgents(prev => new Set(prev).add(handoff.agent));
+        setLastActiveAgent(agent);
+        setActiveAgent(handoff.agent);
+        const targetSetHistory = getSetHistoryForAgent(handoff.agent);
+        if (targetSetHistory) {
+          targetSetHistory(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            {
+              role: MessageRole.MODEL,
+              text: `🔀 **CACP handoff — ${fromLabel} → ${toLabel}**\n\nMatched: ${handoff.matchedOn.slice(0, 3).join(', ')}. **${toLabel}** owns this work; continuing there.`,
+            },
+          ]);
+        }
+        logActionToFieldbook(`CACP handoff: ${fromLabel} → ${toLabel} (${handoff.matchedOn.slice(0, 3).join(', ')}).`);
+        setTimeout(() => { void handleSendMessage(query, handoff.agent, askPeerDepth + 1); }, 0);
+        return;
+      }
+      // No mismatch: broadcast the user's request so peers can claim it (ask-
+      // around) and the routing decision is captured in the CACP Activity Log.
       void interAgentComm.offerRequest(agent, query).catch(() => { /* non-fatal */ });
     }
 
     if (isInternalFollowUp) {
       setHistory(prev => [...prev, { role: MessageRole.MODEL, text: '' }]);
     } else {
+      closeCanvasFlashInput();
       const userMessage: ChatMessage = { role: MessageRole.USER, text: query };
-      setHistory(prev => [...prev, userMessage, { role: MessageRole.MODEL, text: '' }]);
+      setHistory(prev => [...markPendingA2UICompleted(prev), userMessage, { role: MessageRole.MODEL, text: '' }]);
     }
     setIsLoading(true);
     setError(null);
@@ -10532,13 +11107,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         context = `---BEGIN POINT DATABASE---\n${JSON.stringify(contextPointLists, null, 2)}\n---END POINT DATABASE---\n\n`;
     } else if (agent === AgentType.GNSS_AGENT || agent === AgentType.DRONE_AGENT) {
       // GNSS and Drone agents have their own context handling
-    } else if (agent === AgentType.CIVIL_DRAFTER) {
-        // Civil Drafter gets the full point database so it can reference session points
-        // in addition to the uploaded file content baked into its system prompt.
+    } else if (agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT) {
+        // Civil Drafter and Roading Agent get the full point database so they can reference
+        // session points in addition to the uploaded file content baked into their system prompt.
         // The context panel can suppress this large per-turn block to shrink requests.
         const cdCtx = getCivilDrafterContextConfig();
         if (!cdCtx || cdCtx.includePointDatabase) {
             context = `---BEGIN POINT DATABASE---\n${JSON.stringify(contextPointLists, null, 2)}\n---END POINT DATABASE---\n\n`;
+        }
+        if (agent === AgentType.ROADING_AGENT && centerlines.length > 0) {
+            context += `---BEGIN CENTERLINE DATA---\n${JSON.stringify(centerlines, null, 2)}\n---END CENTERLINE DATA---\n\n`;
         }
         // Manually drawn CAD entities live in `lines`, not the point database.
         // Without this block the drafter cannot see circles, arrays, polylines,
@@ -10603,13 +11181,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     let fullResponse = '';
     let queryToSend: string | Part[] = context + queryPrefix + query;
 
-    // -- CIVIL DRAFTER: GIMBAL VISION SURVEY ----------------------------------
-    // When the user sends a draw-intent message to the Civil Drafter and there
-    // are survey points loaded, we render the scene at multiple zoom levels and
-    // inject the resulting PNG frames as Gemini Vision inlineData Parts.  This
-    // gives the model spatial context it would otherwise never have.
+    // -- CIVIL DRAFTER & ROADING AGENT: GIMBAL VISION SURVEY ------------------
+    // When the user sends a draw-intent message to the Civil Drafter or Roading
+    // Agent and there are survey points loaded, we render the scene at multiple
+    // zoom levels and inject the resulting PNG frames as Gemini Vision inlineData
+    // Parts. This gives the model spatial context it would otherwise never have.
     const hasDrafterContext = points.length > 0 || (boundaryFiles && boundaryFiles.length > 0) || lines.length > 0;
-    if (agent === AgentType.CIVIL_DRAFTER && hasDrafterContext && isDrawIntent(query) && (getCivilDrafterContextConfig()?.attachVisionImagery ?? true)) {
+    if ((agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT) && hasDrafterContext && isDrawIntent(query) && (getCivilDrafterContextConfig()?.attachVisionImagery ?? true)) {
         // Decide whether to re-scan: first time, or point/feature set changed >5 %
         const prevCount  = lastVisionPointCountRef.current;
         const currentFeatureCount = points.length + (boundaryFiles?.length ?? 0) * 10 + lines.length;
@@ -11317,14 +11895,37 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
 
 
-      const requestedInputForm = !jsonContentToParse
-        ? deriveA2UIInputForm(
-            [thinkingClarification?.question, finalResultText, thinking]
-              .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
-              .join('\n\n'),
-            { agent },
-          )
-        : null;
+      const combinedResponseProse = [thinkingClarification?.question, finalResultText, thinking]
+        .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+        .join('\n\n');
+
+      const inlineCheckboxExtract = !jsonContentToParse
+        ? extractInlineCheckboxes(finalResultText)
+        : { items: [], datasetTooLarge: false, totalCount: 0 };
+
+      const requestedInputForm =
+        thinkingClarification?.inputForm ??
+        (!jsonContentToParse
+          ? deriveA2UIInputForm(combinedResponseProse, { agent }) ??
+            (inlineCheckboxExtract.items.length > 0
+              ? {
+                  title: 'Select options',
+                  description: 'Toggle the options below and submit.',
+                  fields: inlineCheckboxExtract.items.map(item => ({
+                    id: item.id,
+                    label: item.label,
+                    type: 'checkbox' as const,
+                    defaultChecked: item.defaultChecked,
+                  })),
+                  submitLabel: 'Apply selection',
+                }
+              : null)
+          : null);
+
+      const inlineQuestionExtract =
+        !jsonContentToParse && !requestedInputForm && !thinkingClarification?.options.length
+          ? extractInlineQuestionOptions(finalResultText)
+          : { options: [], datasetTooLarge: false, totalCount: 0 };
 
       // Only update history if we didn't already handle it in an early return
       if (!skipFinallyUpdate) {
@@ -11348,6 +11949,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               model: currentModelName,
               questionOptions: thinkingClarification?.options.length
                 ? thinkingClarification.options
+                : inlineQuestionExtract.options.length > 0
+                ? inlineQuestionExtract.options
                 : undefined,
               a2ui: zoningSourceLedger
                 ? {
@@ -11451,6 +12054,23 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               const targetAgent = String(payload.targetAgent || '') as AgentType;
               const delegatedQuery = String(payload.query || query);
               const targetLabel = agentConfig[targetAgent]?.label || targetAgent;
+              if (forcedAgent && targetAgent !== forcedAgent) {
+                setHistory(prev => {
+                  const newHist = [...prev];
+                  const last = newHist[newHist.length - 1];
+                  if (last && last.role === MessageRole.MODEL) {
+                    newHist[newHist.length - 1] = {
+                      ...last,
+                      text: `🔒 **Force Agent test mode — delegation blocked**\n\nThis turn is pinned to **${agentConfig[forcedAgent]?.label ?? forcedAgent}**; the hand-off to **${targetLabel}** was not dispatched.`,
+                      result: undefined,
+                    };
+                  }
+                  return newHist;
+                });
+                logActionToFieldbook(`Force Agent: blocked ${agent} delegation to ${targetLabel}.`);
+                skipFinallyUpdate = true;
+                return;
+              }
               setHistory(prev => {
                 const newHist = [...prev];
                 const last = newHist[newHist.length - 1];
@@ -11472,6 +12092,23 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               const isGeoSkill = skillId === 'geo_extract_features' || skillId === 'geo_extract_roads';
               const ownerManifest = agentRegistry.findOwnerOfSkill(skillId);
               const ownerLabel = ownerManifest?.displayName ?? 'Peer Agent';
+              if (forcedAgent && ownerManifest && ownerManifest.agent !== forcedAgent) {
+                setHistory(prev => {
+                  const newHist = [...prev];
+                  const last = newHist[newHist.length - 1];
+                  if (last && last.role === MessageRole.MODEL) {
+                    newHist[newHist.length - 1] = {
+                      ...last,
+                      text: `🔒 **Force Agent test mode — peer assist blocked**\n\nThis turn is pinned to **${agentConfig[forcedAgent]?.label ?? forcedAgent}**; \`${skillId}\` belongs to **${ownerLabel}** and was not dispatched.`,
+                      result: undefined,
+                    };
+                  }
+                  return newHist;
+                });
+                logActionToFieldbook(`Force Agent: blocked ${agent} askPeer "${skillId}" (owned by ${ownerLabel}).`);
+                skipFinallyUpdate = true;
+                return;
+              }
               if (isGeoSkill) {
                 // Immediately replace raw askPeer JSON in chat bubble with clean status
                 setHistory(prev => {
@@ -11645,16 +12282,35 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           let uncertaintyFound = false;
           let closureReportFound = false;
 
-          // CLARIFYING QUESTIONS & OPTIONS (for Civil Drafter or any agent asking questions)
+          // CLARIFYING QUESTIONS, OPTIONS & FOLLOW-UP PARAMETER FIELDS (for any agent asking questions)
           const rawOptions = parsedJson.options || parsedJson.suggestedQuestions || parsedJson.clarifyingQuestions;
           const optionsList: string[] = Array.isArray(rawOptions)
             ? rawOptions.filter((o: any) => typeof o === 'string' && o.trim().length > 0)
             : [];
+          const hasJsonFields = Array.isArray(parsedJson.fields) && parsedJson.fields.length > 0;
+          const jsonInputForm = hasJsonFields
+            ? buildA2UIInputFormFromNeedsInput(
+                {
+                  ...parsedJson,
+                  question:
+                    typeof parsedJson.question === 'string' && parsedJson.question.trim()
+                      ? parsedJson.question.trim()
+                      : typeof parsedJson.description === 'string' && parsedJson.description.trim()
+                      ? parsedJson.description.trim()
+                      : 'Provide the requested parameters to continue.',
+                },
+                {
+                  title: typeof parsedJson.title === 'string' ? parsedJson.title : undefined,
+                  agent,
+                },
+              )
+            : null;
 
-          if (parsedJson.question || optionsList.length > 0) {
-            console.log('[CLARIFYING QUESTIONS] Found question/options:', {
+          if (parsedJson.question || optionsList.length > 0 || jsonInputForm) {
+            console.log('[CLARIFYING QUESTIONS] Found question/options/fields:', {
               question: parsedJson.question,
               options: optionsList,
+              fieldsCount: jsonInputForm?.fields.length ?? 0,
             });
             if (optionsList.length > 0) {
               setSuggestedQuestions(optionsList);
@@ -11664,17 +12320,34 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               const lastMsg = newHistory[newHistory.length - 1];
               if (lastMsg && lastMsg.role === MessageRole.MODEL) {
                 const questionText = typeof parsedJson.question === 'string' ? parsedJson.question : '';
+                const singleOpenQuestionForm =
+                  !jsonInputForm && optionsList.length === 0 && questionText
+                    ? buildA2UIInputFormFromNeedsInput({ question: questionText, field: 'answer' }, { agent })
+                    : null;
+                const resolvedForm = jsonInputForm ?? singleOpenQuestionForm;
                 newHistory[newHistory.length - 1] = {
                   ...lastMsg,
                   text: questionText ? questionText : lastMsg.text,
                   result: questionText ? questionText : lastMsg.result,
                   questionOptions: optionsList.length > 0 ? optionsList : undefined,
+                  needsInput: Boolean(resolvedForm),
+                  a2ui: resolvedForm
+                    ? {
+                        kind: 'input-form',
+                        agent,
+                        widgetType: 'input-form',
+                        status: 'prompting',
+                        inputForm: resolvedForm,
+                      }
+                    : lastMsg.a2ui,
                 };
               }
               return newHistory;
             });
-            if (parsedJson.question) {
-              logActionToFieldbook(`${agent}: Asked clarifying question with ${optionsList.length} option(s).`);
+            if (parsedJson.question || jsonInputForm) {
+              logActionToFieldbook(
+                `${agent}: Asked clarifying follow-up (${optionsList.length} option(s), ${jsonInputForm?.fields.length ?? 0} field(s)).`,
+              );
             }
           }
 
@@ -12352,6 +13025,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                     const defaultPointLayerByAgent: Partial<Record<AgentType, string>> = {
                       [AgentType.DEED_READER]:            'L-DEED-POINT',
                       [AgentType.CIVIL_DRAFTER]:          'L-SURV-POINT',
+                      [AgentType.ROADING_AGENT]:          'L-SURV-POINT',
                       [AgentType.RAW_CRAWLER]:            'L-SURV-POINT',
                       [AgentType.CENTERLINE_STATIONING]:  'L-CENTERLINE-POINT',
                       [AgentType.CIVIL_PLAN_EXPERT]:      'L-PLAN-POINT',
@@ -12451,7 +13125,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                  ? ch.pointNumbers.map(pn => aiToCacpMap.get(String(pn)) ?? String(pn))
                  : [],
              }));
-             const widthExpanded = agent === AgentType.CIVIL_DRAFTER
+             const isCorridorDrafter = agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT;
+             const widthExpanded = isCorridorDrafter
                ? expandWidthCodedChains(remappedChains, (pn) => chainLookup.get(pn))
                : { chains: remappedChains, points: [] };
              if (widthExpanded.points.length > 0) {
@@ -12468,9 +13143,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                  return next;
                });
              }
-             const repairedChains = agent === AgentType.CIVIL_DRAFTER
+             const bankRepairedChains = isCorridorDrafter
                ? repairBankCorridorChains(widthExpanded.chains, (pn) => chainLookup.get(pn))
                : widthExpanded.chains;
+             const repairedChains = isCorridorDrafter
+               ? repairRoadCorridorChains(bankRepairedChains, (pn) => chainLookup.get(pn))
+               : bankRepairedChains;
              const chainLines = expandChainsToLines(repairedChains, (pn) => {
                const p = chainLookup.get(pn);
                return p ? { easting: p.easting, northing: p.northing } : undefined;
@@ -12480,6 +13158,23 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                  ? [...parsedJson.lines, ...chainLines]
                  : chainLines;
                logActionToFieldbook(`Ordered ${repairedChains.length} feature chain(s) into ${chainLines.length} line segment(s) (deterministic bank/edge ordering).`);
+
+               // When Roading Agent drafts road chains directly from points, sync any centerline chain to Stationing & CL
+               if (agent === AgentType.ROADING_AGENT) {
+                 const clChain = repairedChains.find(
+                   ch => /CNTR|CENTER|CL/i.test(ch.layer ?? '') || /(?:^|[-_])cl(?:[-_]|$)|centerline/i.test(ch.polylineId ?? ''),
+                 );
+                 if (clChain && clChain.pointNumbers.length >= 2) {
+                   const clVertices = clChain.pointNumbers
+                     .map(pn => chainLookup.get(String(pn)))
+                     .filter((p): p is SurveyPoint => Boolean(p))
+                     .map(p => ({ easting: p.easting, northing: p.northing }));
+                   if (clVertices.length >= 2) {
+                     const syncedCl = buildCenterlineFromVertices(clVertices, 'Drafted Road CL');
+                     setCenterlines(prev => [syncedCl, ...prev.filter(c => c.name !== syncedCl.name)]);
+                   }
+                 }
+               }
              }
            }
            if (parsedJson.lines && Array.isArray(parsedJson.lines)) {
@@ -12506,6 +13201,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             const defaultLineLayerByAgent: Partial<Record<AgentType, string>> = {
               [AgentType.DEED_READER]:            'L-DEED-BOUNDARY',
               [AgentType.CIVIL_DRAFTER]:          'L-LINEWORK',
+              [AgentType.ROADING_AGENT]:          'L-ROAD',
               [AgentType.RAW_CRAWLER]:            'L-LINEWORK',
               [AgentType.CENTERLINE_STATIONING]:  'L-CENTERLINE',
               [AgentType.CIVIL_PLAN_EXPERT]:      'L-LINEWORK',
@@ -13658,7 +14354,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     attributeScale, pointLayers, showView, logActionToFieldbook, highlights, pdfViewerFiles, textEditorContent, activeTextEditorFile, currentPosition, handleOpenFileInEditor, offlineMapAreas,
     wmsServices, activeWmsLayers, addHighlights, plotGeoJsonFile, customSymbols, handleGenerateContours, points, contourSettings, contourLabels, linesVisible, centerlinesVisible,
     lineLabelScale, hasConfirmedApiKey, setStandardsComplianceLastReport, formatComplianceReportText, buildStandardsComplianceReport, runVisualComplianceAudit, cadManagerContext,
-    applySymbolVisibilityCommand, addNotification
+    applySymbolVisibilityCommand, addNotification, getSetHistoryForAgent
   ]);
 
   // CACP hand-offs from the Civil 3D connector arrive on the sync socket, which
@@ -15160,6 +15856,134 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const handleClearDimensions = useCallback(() => {
     setDimensions([]);
   }, []);
+
+  const handleAddHatch = useCallback((hatch: CanvasHatch) => {
+    setHatches(prev => [...prev, hatch]);
+    logActionToFieldbook(`Added ${hatch.patternName} hatch on layer ${hatch.layer}${hatch.areaSqFt ? ` (${hatch.areaSqFt.toFixed(1)} sq ft)` : ''}.`);
+  }, [logActionToFieldbook]);
+
+  const handleUpdateHatch = useCallback((hatchId: string, patch: Partial<CanvasHatch>) => {
+    setHatches(prev => prev.map(h => h.id === hatchId ? { ...h, ...patch } : h));
+  }, []);
+
+  const handleDeleteHatch = useCallback((hatchId: string) => {
+    setHatches(prev => prev.filter(h => h.id !== hatchId));
+  }, []);
+
+  const handleStartCanvasHatchFromA2UI = useCallback((opts: {
+    mode: 'pick-area' | 'select-object';
+    patternName: string;
+    scale: number;
+    angleDeg: number;
+    opacity: number;
+    color?: string;
+    layer?: string;
+  }) => {
+    showView('canvas');
+    setTimeout(() => {
+      canvas2dRef.current?.startHatchMode?.(opts);
+    }, 30);
+  }, [showView]);
+
+  const handleApplyHatchToSelectionFromA2UI = useCallback((opts: {
+    patternName: string;
+    scale: number;
+    angleDeg: number;
+    opacity: number;
+    color?: string;
+    layer?: string;
+  }) => {
+    const selectedLines = canvas2dRef.current?.getSelectedLineGeometry?.() ?? [];
+    if (selectedLines.length === 0) {
+      canvas2dRef.current?.startHatchMode?.({ ...opts, mode: 'select-object' });
+      return;
+    }
+    const ptMap = new Map<string, SurveyPoint>();
+    for (const p of points) ptMap.set(p.pointNumber, p);
+    const ids = selectedLines.map(l => l.id || `${l.from}-${l.to}`);
+    const region = resolveHatchFromSelectedEntities(ids, lines, ptMap, boundaryFiles);
+    if (region) {
+      handleAddHatch({
+        id: `hatch_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        patternName: opts.patternName,
+        loops: region.loops,
+        scale: opts.scale,
+        angleDeg: opts.angleDeg,
+        opacity: opts.opacity,
+        color: opts.color,
+        layer: opts.layer || activeDrawingLayer || 'V-ANNO-PATT',
+        associativeLineIds: region.boundingLineIds,
+        sourceMode: 'select-object',
+        areaSqFt: region.areaSqFt,
+        createdAt: new Date().toISOString(),
+      });
+    } else {
+      canvas2dRef.current?.startHatchMode?.({ ...opts, mode: 'select-object' });
+    }
+  }, [points, lines, boundaryFiles, handleAddHatch, activeDrawingLayer]);
+
+  const handleCountHatchCircles = useCallback(
+    () => collectVisibleCircleEntities(lines, points).length,
+    [lines, points],
+  );
+
+  const handleHatchCirclesFromA2UI = useCallback((opts: {
+    patternName: string;
+    scale: number;
+    angleDeg: number;
+    opacity: number;
+    color?: string;
+    layer?: string;
+  }) => {
+    showView('canvas');
+    const circleEntities = collectVisibleCircleEntities(lines, points);
+    const ptMap = new Map<string, SurveyPoint>();
+    for (const p of points) ptMap.set(p.pointNumber, p);
+
+    const timestamp = Date.now();
+    const newHatches: CanvasHatch[] = [];
+    circleEntities.forEach((line, index) => {
+      const lineId = line.id || `${line.from}-${line.to}`;
+      const region = resolveHatchFromSelectedEntities([lineId], lines, ptMap, boundaryFiles);
+      if (!region) return;
+      newHatches.push({
+        id: `hatch_circle_${timestamp}_${index}`,
+        patternName: opts.patternName,
+        loops: region.loops,
+        scale: opts.scale,
+        angleDeg: opts.angleDeg,
+        opacity: opts.opacity,
+        color: opts.color,
+        layer: opts.layer || activeDrawingLayer || 'V-ANNO-PATT',
+        associativeLineIds: region.boundingLineIds,
+        sourceMode: 'select-object',
+        areaSqFt: region.areaSqFt,
+        createdAt: new Date().toISOString(),
+      });
+    });
+
+    if (newHatches.length === 0) {
+      setTimeout(() => {
+        canvas2dRef.current?.startHatchMode?.({ ...opts, mode: 'select-object' });
+      }, 30);
+      flashCanvasMessage(
+        circleEntities.length === 0
+          ? 'No circles found on this drawing — select the objects to hatch.'
+          : 'Those circles could not be closed — select them on the canvas.',
+        { tone: 'error' },
+      );
+      return;
+    }
+
+    setHatches(prev => [...prev, ...newHatches]);
+    logActionToFieldbook(
+      `Hatched ${newHatches.length} circle${newHatches.length === 1 ? '' : 's'} with ${opts.patternName}.`,
+    );
+    flashCanvasMessage(
+      `Hatched ${newHatches.length} circle${newHatches.length === 1 ? '' : 's'} with ${opts.patternName}.`,
+      { tone: 'success' },
+    );
+  }, [showView, lines, points, boundaryFiles, activeDrawingLayer, logActionToFieldbook]);
 
   // Computes closure for boundary calls drawn in the DrawingCanvas boundary-line mode.
   // Returns a summary or null if insufficient data.
@@ -16830,7 +17654,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             parcelLabelFormatter,
             parcelCadTextStyles,
             annotationCategories,
-            dimensions
+            dimensions,
+            hatches,
+            cadManagerState.standard?.hatches ?? [],
         );
         const blob = new Blob([dxfContent], { type: 'application/dxf;charset=utf-8' });
         triggerDownload(blob, options.fileName);
@@ -16839,7 +17665,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setError(`DXF Export Error: ${errorMessage}`);
     }
     setIsDxfExportModalOpen(false);
-  }, [points, visibleLines, visibleCenterlines, settings, customSymbols, contourLabels, parcelLabels, parcelLabelFormatter, parcelCadTextStyles, annotationCategories, dimensions]);
+  }, [points, visibleLines, visibleCenterlines, settings, customSymbols, contourLabels, parcelLabels, parcelLabelFormatter, parcelCadTextStyles, annotationCategories, dimensions, hatches, cadManagerState.standard?.hatches]);
 
 
    const handleExportPoints = useCallback((format: 'csv' | 'txt_comma' | 'txt_space') => {
@@ -16928,6 +17754,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         boundaryFiles,
         deedBatchJob: deedBatchJob ?? undefined,
         dimensions,
+        hatches: hatches.length > 0 ? hatches : undefined,
         tinSurfaces: tinSurfaces.length > 0 ? tinSurfaces : undefined,
         steepSlopeRuns: steepSlopeRuns.length > 0 ? steepSlopeRuns : undefined,
         inclusionBoundaries,
@@ -16957,6 +17784,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         rinexChatHistory, // Added rinexChatHistory
         zoningChatHistory,
         structuresChatHistory: structuresChatHistory.length > 0 ? structuresChatHistory : undefined,
+        roadingChatHistory: roadingChatHistory.length > 0 ? roadingChatHistory : undefined,
+        roadCorridors: roadCorridors.length > 0 ? roadCorridors : undefined,
         standardsComplianceChatHistory,
         standardsComplianceControlFile,
         standardsComplianceControlFiles: standardsComplianceControlFile ? [standardsComplianceControlFile] : undefined,
@@ -17142,6 +17971,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   setDeedBatchJob(sessionState.deedBatchJob);
                 }
                 setDimensions(sessionState.dimensions || []);
+                setHatches(sessionState.hatches || []);
                 if (sessionState.tinSurfaces) {
                   setTinSurfaces(sessionState.tinSurfaces);
                 }
@@ -17198,6 +18028,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 setRinexChatHistory(needsMigration ? (sessionState.rinexChatHistory || []).map(migrateMessage) : sessionState.rinexChatHistory || []);
                 setZoningChatHistory(needsMigration ? (sessionState.zoningChatHistory || []).map(migrateMessage) : sessionState.zoningChatHistory || []);
                 setStructuresChatHistory(needsMigration ? (sessionState.structuresChatHistory || []).map(migrateMessage) : sessionState.structuresChatHistory || []);
+                setRoadingChatHistory(needsMigration ? (sessionState.roadingChatHistory || []).map(migrateMessage) : sessionState.roadingChatHistory || []);
+                setRoadCorridors(sessionState.roadCorridors || []);
                 setImageAnalyzerChatHistory(needsMigration ? (sessionState.imageAnalyzerChatHistory || []).map(migrateMessage) : sessionState.imageAnalyzerChatHistory || []);
                 setStandardsComplianceChatHistory(needsMigration ? (sessionState.standardsComplianceChatHistory || []).map(migrateMessage) : sessionState.standardsComplianceChatHistory || []);
                 setStandardsComplianceControlFile(sessionState.standardsComplianceControlFile || sessionState.standardsComplianceControlFiles?.[0] || null);
@@ -17871,7 +18703,74 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     activeAgent === AgentType.TITLE_SEARCH ? titleSearchChatHistory :
     activeAgent === AgentType.CAD_MANAGER ? cadManagerChatHistory :
     activeAgent === AgentType.STANDARDS_COMPLIANCE ? standardsComplianceChatHistory :
+    activeAgent === AgentType.ROADING_AGENT ? roadingChatHistory :
     gpsStakeoutChatHistory;
+
+  // Cursor-anchored numeric inputs: a flash mirrors only a quick number form
+  // beside the canvas cursor. Questions with option buttons, text questions and
+  // forms with choices stay in Quick Thought / the chat, so the same prompt is
+  // never raised twice at once.
+  const canvasFlashInputKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const pending = (() => {
+      for (let index = currentChatHistory.length - 1; index >= 0; index -= 1) {
+        const message = currentChatHistory[index];
+        if (message.role === MessageRole.USER) break;
+        const a2ui = message.a2ui;
+        const msgAgent = a2ui?.agent ?? activeAgent ?? AgentType.LSVZ_AGENT;
+
+        if (
+          a2ui?.kind === 'input-form' &&
+          a2ui.inputForm &&
+          a2ui.status !== 'completed' &&
+          a2ui.status !== 'dismissed'
+        ) {
+          const form = a2ui.inputForm;
+          // A flash exists to collect a number without crossing the screen.
+          // Selects, checkboxes, text fields and buttons belong to Quick Thought.
+          if (
+            form.fields.length === 0 ||
+            !form.fields.every(field => field.type === 'number')
+          ) {
+            return null;
+          }
+          return {
+            kind: 'form' as const,
+            key: `${index}:${msgAgent}:${form.title ?? ''}:${form.fields.map(field => field.id).join('|')}`,
+            form,
+            agent: msgAgent,
+          };
+        }
+
+        // A follow-up with clickable choices is a Quick Thought prompt, never a flash.
+        if (message.questionOptions && message.questionOptions.length > 0) {
+          return null;
+        }
+      }
+      return null;
+    })();
+
+    if (!pending) {
+      if (canvasFlashInputKeyRef.current) {
+        canvasFlashInputKeyRef.current = null;
+        closeCanvasFlashInput();
+      }
+      return;
+    }
+    if (canvasFlashInputKeyRef.current === pending.key) return;
+
+    const target = pending;
+    canvasFlashInputKeyRef.current = target.key;
+    openCanvasFlashForInputForm({
+      id: target.key,
+      form: target.form,
+      onSubmit: message => {
+        closeCanvasFlashInput();
+        flashCanvasMessage('Sent — the agent is continuing.', { tone: 'success' });
+        void handleSendMessage(message, target.agent);
+      },
+    });
+  }, [currentChatHistory, activeAgent, handleSendMessage]);
 
   const dockedA2UIMessage = dockedA2UIKey
     ? [...currentChatHistory].reverse().find(msg =>
@@ -18062,14 +18961,20 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           return (
             <HatchManagerPanel
               customHatches={cadManagerState.standard?.hatches ?? []}
-              onCustomHatchesChange={(hatches) => {
+              onCustomHatchesChange={(nextHatches) => {
                 if (cadManagerState.standard) {
                   cadManagerContext.dispatch({
                     type: 'SET_STANDARD',
-                    payload: { ...cadManagerState.standard, hatches },
+                    payload: { ...cadManagerState.standard, hatches: nextHatches },
                   });
                 }
               }}
+              canvasHatches={hatches}
+              onUpdateCanvasHatch={handleUpdateHatch}
+              onDeleteCanvasHatch={handleDeleteHatch}
+              onStartCanvasHatch={handleStartCanvasHatchFromA2UI}
+              availableLayers={activeCadLayers.map(l => l.name)}
+              activeLayer={activeDrawingLayer || 'V-ANNO-PATT'}
             />
           );
         case 'annotate-manager':
@@ -18130,9 +19035,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               onToggleOfflineMapAreaVisibility={handleToggleOfflineMapAreaVisibility}
               cadLayers={activeCadLayers}
               cadLayerVisibility={cadLayerVisibility}
-              cadLayerColors={cadLayerColors}
+              cadLayerColors={cadLayerColorMap}
               onToggleCadLayer={handleToggleCadLayer}
               onCadLayerColorChange={handleCadLayerColorChange}
+              cadLayerLinetypes={layerLinetypeMap}
+              cadLinetypeOptions={cadLinetypeOptions}
+              onCadLayerLinetypeChange={(name, lineType) => handleCadLayerPropertyChange(name, { lineType })}
             />
           );
         case 'compliance-summary':
@@ -18242,10 +19150,60 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               points={points}
               lines={lines}
               projectName={jobInfo?.jobName}
-              cadLayerColors={cadLayerColors}
+              cadLayerColors={cadLayerColorMap}
               profileData={profileData}
               profileInfo={profileInfo}
             />
+          );
+        case 'roading-panel':
+          return (
+            <div className="p-3">
+              <RoadingPanel
+                roadSurveyPointCount={points.filter((p: SurveyPoint) => /\b(EP|EOP|CL|CURB|TBC|ROW|ROAD|PAVE)\b/i.test(p.description || '')).length}
+                totalPointCount={points.length}
+                centerlines={centerlines}
+                roadCorridors={roadCorridors}
+                hasBackgroundImagery={Boolean(settings.googleMaps?.enabled)}
+                isWorking={isRoadingWorking}
+                onSynthesizeExisting={async (params) => {
+                  setIsRoadingWorking(true);
+                  try {
+                    await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_synthesize_existing', params);
+                  } finally {
+                    setIsRoadingWorking(false);
+                  }
+                }}
+                onDesignCorridor={async (params) => {
+                  setIsRoadingWorking(true);
+                  try {
+                    await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_design_corridor', params as unknown as Record<string, unknown>);
+                  } finally {
+                    setIsRoadingWorking(false);
+                  }
+                }}
+                onGenerateProfileAndSections={async (params) => {
+                  setIsRoadingWorking(true);
+                  try {
+                    await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_generate_profile_and_sections', params);
+                  } finally {
+                    setIsRoadingWorking(false);
+                  }
+                }}
+                onAddTerminusOrTieIn={async (params) => {
+                  setIsRoadingWorking(true);
+                  try {
+                    await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_add_culdesac_or_fillet', params);
+                  } finally {
+                    setIsRoadingWorking(false);
+                  }
+                }}
+                onClearCorridors={async (corridorId) => {
+                  await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_clear', { corridorId });
+                }}
+                onOpenStationingAgent={() => setActiveAgent(AgentType.CENTERLINE_STATIONING)}
+                onOpenProfileView={() => showView('profile')}
+              />
+            </div>
           );
         default:
           return null;
@@ -18297,8 +19255,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       activeCadLayers,
       cadLayerVisibility,
       cadLayerColors,
+      cadLayerColorMap,
+      layerLinetypeMap,
+      cadLinetypeOptions,
       handleToggleCadLayer,
       handleCadLayerColorChange,
+      handleCadLayerPropertyChange,
       standardsComplianceLastReport,
       standardsComplianceSubjectFile,
       standardsComplianceControlFile,
@@ -18394,11 +19356,41 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     onImagesSubmitted: handleImagesSubmitted,
     onCenterlineSessionStart: handleCenterlineSessionStart,
     onClFileUploaded: handleClFileUploaded,
+    centerlineCount: centerlines.length,
+    onRoadingSynthesizeExisting: (opts) => {
+      void interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_synthesize_existing', {
+        ...opts,
+        useOsmWays: true,
+        syncCenterline: true,
+      });
+    },
+    onRoadingDesignCorridor: (opts) => {
+      void interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_design_corridor', {
+        ...opts,
+        crownSlopePct: 2.0,
+        curbWidthFt: 0.5,
+        gutterWidthFt: 1.5,
+        sidewalkWidthFt: 5.0,
+        sidewalkOffsetFt: 4.0,
+        stationIntervalFt: 50,
+        autoGenerateProfile: true,
+      });
+    },
+    onOpenRoadingStudio: () => {
+      setIsRoadingPanelVisible(true);
+      setIsToolShelfVisible(true);
+      toggleToolDock('roading', true);
+    },
     onCadManagerSessionStart: handleCadManagerSessionStart,
     onCadManagerFileUploaded: handleCadManagerFileUploaded,
     onOpenCadStandards: handleOpenCadStandardsSheet,
     onOpenCadWorkspace: handleOpenCadWorkspace,
     onOpenSpreadsheetEditor: handleOpenSpreadsheetEditor,
+    onStartCanvasHatch: handleStartCanvasHatchFromA2UI,
+    onApplyHatchToSelection: handleApplyHatchToSelectionFromA2UI,
+    onHatchCircles: handleHatchCirclesFromA2UI,
+    onCountHatchCircles: handleCountHatchCircles,
+    onOpenHatchManager: () => showView('hatchmanager'),
     renderWorkspaceTool,
     onSubmitInput: (message, payload) => {
       void handleSendMessage(message, payload.agent);
@@ -18444,6 +19436,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     handleOpenCadStandardsSheet,
     handleOpenCadWorkspace,
     handleOpenSpreadsheetEditor,
+    handleStartCanvasHatchFromA2UI,
+    handleApplyHatchToSelectionFromA2UI,
+    handleHatchCirclesFromA2UI,
+    handleCountHatchCircles,
+    showView,
     renderWorkspaceTool,
     handleStartDivideSelection,
     handleDivideSelectedLines,
@@ -18505,6 +19502,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   
   const chatHeaderControls = (
     <>
+      {settings.forceAgent && (
+        <span
+          className="inline-flex h-6 items-center gap-1 rounded border border-amber-400/40 bg-amber-500/15 px-2 text-[10px] font-semibold text-amber-200"
+          title={`Force Agent test mode: interactive chat requests go to ${agentConfig[settings.forceAgent]?.label ?? settings.forceAgent}. CACP handoff and peer delegation are disabled for those turns.`}
+        >
+          🔒 <span className="hidden sm:inline">{agentConfig[settings.forceAgent]?.label ?? settings.forceAgent} forced</span>
+        </span>
+      )}
       <CacpBadge agent={activeAgent} onClick={(a) => setCacpManifestAgent(a)} />
       {activeAgent === AgentType.CIVIL_DRAFTER && isCurrentAgentInitialized && (
         <button
@@ -18718,7 +19723,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }}
       onDraft={async (prompt, images) => {
         pendingAutoDraftImagesRef.current = images ?? [];
-        await handleSendMessage(prompt);
+        await handleSendMessage(prompt, AgentType.CIVIL_DRAFTER);
       }}
       getCanvasLineCount={() => linesRef.current.length}
       onCanvasLines={(newLines, sourceTag) => {
@@ -18894,6 +19899,64 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         inclusionBoundaries={inclusionBoundaries}
         activeInclusionBoundaryId={activeInclusionBoundaryId}
         onSelectInclusionBoundary={setActiveInclusionBoundaryId}
+      />
+    </FloatingPanel>
+  );
+
+  const renderRoadingPanel = (docked: boolean) => (
+    <FloatingPanel
+      title="Roading Studio"
+      accentBorder="border-amber-500/40"
+      isDocked={docked}
+      onToggleDock={() => toggleToolDock('roading')}
+      onClose={() => setIsRoadingPanelVisible(false)}
+      initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
+      initialY={140}
+    >
+      <RoadingPanel
+        roadSurveyPointCount={points.filter((p: SurveyPoint) => /\b(EP|EOP|CL|CURB|TBC|ROW|ROAD|PAVE)\b/i.test(p.description || '')).length}
+        totalPointCount={points.length}
+        centerlines={centerlines}
+        roadCorridors={roadCorridors}
+        hasBackgroundImagery={Boolean(settings.googleMaps?.enabled)}
+        isWorking={isRoadingWorking}
+        onSynthesizeExisting={async (params) => {
+          setIsRoadingWorking(true);
+          try {
+            await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_synthesize_existing', params);
+          } finally {
+            setIsRoadingWorking(false);
+          }
+        }}
+        onDesignCorridor={async (params) => {
+          setIsRoadingWorking(true);
+          try {
+            await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_design_corridor', params as unknown as Record<string, unknown>);
+          } finally {
+            setIsRoadingWorking(false);
+          }
+        }}
+        onGenerateProfileAndSections={async (params) => {
+          setIsRoadingWorking(true);
+          try {
+            await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_generate_profile_and_sections', params);
+          } finally {
+            setIsRoadingWorking(false);
+          }
+        }}
+        onAddTerminusOrTieIn={async (params) => {
+          setIsRoadingWorking(true);
+          try {
+            await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_add_culdesac_or_fillet', params);
+          } finally {
+            setIsRoadingWorking(false);
+          }
+        }}
+        onClearCorridors={async (corridorId) => {
+          await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_clear', { corridorId });
+        }}
+        onOpenStationingAgent={() => setActiveAgent(AgentType.CENTERLINE_STATIONING)}
+        onOpenProfileView={() => showView('profile')}
       />
     </FloatingPanel>
   );
@@ -19631,6 +20694,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           onUndock: () => toggleToolDock('soils', false),
         }]
       : []),
+    ...(isRoadingPanelVisible
+      ? [{
+          id: 'roading',
+          title: 'Roading Studio',
+          icon: <RoadIcon className="w-3.5 h-3.5 text-amber-400" />,
+          content: renderRoadingPanel(true),
+          isDocked: dockedTools.roading,
+          onDock: () => toggleToolDock('roading', true),
+          onUndock: () => toggleToolDock('roading', false),
+        }]
+      : []),
     ...(isGpsStakeoutFloatingVisible
       ? [{
           id: 'gpsStakeout',
@@ -20044,10 +21118,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                     </button>
                                     {/* Canvas tools promoted from the floating toolbar */}
                                     <button
-                                        onClick={() => handleOpenCadWorkspace()}
+                                        onClick={() => handleOpenSpreadsheetEditor()}
                                         className="p-2 rounded-full transition-colors hover:bg-gray-700 text-gray-300"
-                                        title="CAD Standards — open the A2UI workspace"
-                                        aria-label="CAD Standards"
+                                        title="CAD Standards spreadsheet — open full screen"
+                                        aria-label="Open CAD Standards spreadsheet"
+                                        data-testid="toolbar-open-cad-spreadsheet"
                                     >
                                         <ToolbarStandardsIcon className="h-[18px] w-[18px]" />
                                     </button>
@@ -20294,6 +21369,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onUpdateDimension={handleUpdateDimension}
                                         onDeleteDimension={handleDeleteDimension}
                                         onClearDimensions={handleClearDimensions}
+                                        hatches={hatches}
+                                        onAddHatch={handleAddHatch}
+                                        onUpdateHatch={handleUpdateHatch}
+                                        onDeleteHatch={handleDeleteHatch}
+                                        onOpenHatchManager={() => showView('hatchmanager')}
                                         onAddPoint={handleAddPoint}
                                         nextAvailablePointNumber={nextAvailablePointNumber}
                                         dimensionScale={dimensionScale}
@@ -20329,6 +21409,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         linetypes={cadManagerState.standard?.linetypes}
                                         globalLinetypeScale={cadManagerState.standard?.globalLinetypeScale ?? 1}
                                         layerLinetypeMap={layerLinetypeMap}
+                                        layerColors={cadLayerColorMap}
                                         agentMessages={currentChatHistory}
                                         onSendAgentMessage={handleSendMessage}
                                         onStopGenerating={handleStopGenerating}
@@ -20482,7 +21563,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                             }}
                                             onDraft={async (prompt, images) => {
                                                 pendingAutoDraftImagesRef.current = images ?? [];
-                                                await handleSendMessage(prompt);
+                                                await handleSendMessage(prompt, AgentType.CIVIL_DRAFTER);
                                             }}
                                             getCanvasLineCount={() => linesRef.current.length}
                                             onCanvasLines={(newLines, sourceTag) => {
@@ -20643,9 +21724,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                         onToggleOfflineMapAreaVisibility={handleToggleOfflineMapAreaVisibility}
                                                         cadLayers={activeCadLayers}
                                                         cadLayerVisibility={cadLayerVisibility}
-                                                        cadLayerColors={cadLayerColors}
+                                                        cadLayerColors={cadLayerColorMap}
                                                         onToggleCadLayer={handleToggleCadLayer}
                                                         onCadLayerColorChange={handleCadLayerColorChange}
+                                                        cadLayerLinetypes={layerLinetypeMap}
+                                                        cadLinetypeOptions={cadLinetypeOptions}
+                                                        onCadLayerLinetypeChange={(name, lineType) => handleCadLayerPropertyChange(name, { lineType })}
                                                         inclusionBoundaries={inclusionBoundaries.map(b => ({ id: b.id, name: b.name, polylineId: b.polylineId }))}
                                                         inclusionBoundaryVisibility={(() => {
                                                             const v: Record<string, boolean> = {};
@@ -20846,9 +21930,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onToggleOfflineMapAreaVisibility={handleToggleOfflineMapAreaVisibility}
                                         cadLayers={activeCadLayers}
                                         cadLayerVisibility={cadLayerVisibility}
-                                        cadLayerColors={cadLayerColors}
+                                        cadLayerColors={cadLayerColorMap}
                                         onToggleCadLayer={handleToggleCadLayer}
                                         onCadLayerColorChange={handleCadLayerColorChange}
+                                        cadLayerLinetypes={layerLinetypeMap}
+                                        cadLinetypeOptions={cadLinetypeOptions}
+                                        onCadLayerLinetypeChange={(name, lineType) => handleCadLayerPropertyChange(name, { lineType })}
                                     />
                                 ) : activeVisualPanel === 'ar' ? (
                                     <ARView
@@ -20881,7 +21968,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                       points={points}
                                       lines={lines}
                                       projectName={jobInfo?.jobName}
-                                      cadLayerColors={cadLayerColors}
+                                      cadLayerColors={cadLayerColorMap}
                                       profileData={profileData}
                                       profileInfo={profileInfo}
                                     />
@@ -21595,6 +22682,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               />
             </FloatingPanel>
           )}
+          {isRoadingPanelVisible && !dockedTools.roading && renderRoadingPanel(false)}
           {/* Profile Agent � client-side profile generator panel */}
           {isProfileGenPanelVisible && !dockedTools.profileGen && (
             <ProfileGenerationPanel

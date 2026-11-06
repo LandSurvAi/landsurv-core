@@ -40,8 +40,13 @@ interface LayerManagerPanelProps {
     cadLayerVisibility?: Record<string, boolean>;
     /** Per-layer canvas color overrides. */
     cadLayerColors?: Record<string, string>;
+    /** Layer name → default linetype from the CAD standard. */
+    cadLayerLinetypes?: Record<string, string>;
+    /** Linetypes available for layer defaults. */
+    cadLinetypeOptions?: string[];
     onToggleCadLayer?: (layerName: string) => void;
     onCadLayerColorChange?: (layerName: string, color: string) => void;
+    onCadLayerLinetypeChange?: (layerName: string, lineType: string) => void;
     /** Named inclusion-boundary groups (one entry per polylineId). Each is a
      *  closed inclusion polyline produced by shrinkwrap, the Boundary Editor,
      *  or manual drawing. Visibility toggles flip `hidden` on every SurveyLine
@@ -124,8 +129,11 @@ const LayerManagerPanel: React.FC<LayerManagerPanelProps> = (props) => {
         cadLayers = [],
         cadLayerVisibility = {},
         cadLayerColors = {},
+        cadLayerLinetypes = {},
+        cadLinetypeOptions = [],
         onToggleCadLayer,
         onCadLayerColorChange,
+        onCadLayerLinetypeChange,
         inclusionBoundaries = [],
         inclusionBoundaryVisibility = {},
         inclusionBoundarySegmentCounts = {},
@@ -148,6 +156,16 @@ const LayerManagerPanel: React.FC<LayerManagerPanelProps> = (props) => {
     }, [cadLayers]);
 
     const cadLayerCount = effectiveCadLayers.length;
+    const cadLinetypeNames = useMemo(() => {
+        const names = new Set<string>(['CONTINUOUS']);
+        for (const name of cadLinetypeOptions) {
+            if (name?.trim()) names.add(name.trim().toUpperCase());
+        }
+        for (const name of Object.values(cadLayerLinetypes)) {
+            if (name?.trim()) names.add(name.trim().toUpperCase());
+        }
+        return Array.from(names).sort();
+    }, [cadLinetypeOptions, cadLayerLinetypes]);
 
     return (
         <div className="w-full h-full bg-gray-900 flex flex-col rounded-md overflow-hidden light-theme:bg-white">
@@ -174,6 +192,7 @@ const LayerManagerPanel: React.FC<LayerManagerPanelProps> = (props) => {
                     {effectiveCadLayers.map(layer => {
                         const isVisible = cadLayerVisibility[layer.name] !== false;
                         const colorOverride = cadLayerColors[layer.name] || BUILTIN_LAYER_COLORS[layer.name];
+                        const lineType = (cadLayerLinetypes[layer.name] || 'CONTINUOUS').toUpperCase();
                         const badges: string[] = [];
                         if (layer.isPointLayer) badges.push('PT');
                         if (layer.isLineLayer) badges.push('LN');
@@ -201,8 +220,26 @@ const LayerManagerPanel: React.FC<LayerManagerPanelProps> = (props) => {
                                             value={colorOverride || '#ffffff'}
                                             onChange={e => onCadLayerColorChange(layer.name, e.target.value)}
                                             className="w-6 h-6 bg-transparent border-none cursor-pointer rounded"
-                                            title={`Color for ${layer.name}`}
+                                            aria-label={`Color for ${layer.name}`}
+                                            title={`Layer color for ${layer.name}`}
                                         />
+                                    )}
+                                    {onCadLayerLinetypeChange ? (
+                                        <select
+                                            value={lineType}
+                                            onChange={e => onCadLayerLinetypeChange(layer.name, e.target.value)}
+                                            className="w-[92px] shrink-0 rounded border border-gray-600 bg-gray-800 px-1.5 py-1 font-mono text-[10px] text-cyan-200 focus:border-cyan-500 focus:outline-none"
+                                            aria-label={`Linetype for ${layer.name}`}
+                                            title={`Layer linetype for ${layer.name}`}
+                                        >
+                                            {cadLinetypeNames.map(name => (
+                                                <option key={name} value={name}>{name}</option>
+                                            ))}
+                                        </select>
+                                    ) : (
+                                        <span className="max-w-[92px] truncate font-mono text-[10px] text-gray-400" title={lineType}>
+                                            {lineType}
+                                        </span>
                                     )}
                                     <button
                                         onClick={() => onToggleCadLayer?.(layer.name)}

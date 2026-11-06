@@ -54,13 +54,20 @@ const AGENT_CAPABILITY_PHRASES: Partial<Record<AgentType, string[]>> = {
     'divide selected line', 'divide selected arc', 'divide into points',
     'divide into segments', 'subdivide line', 'segment a line', 'points along a line',
   ],
+  [AgentType.ROADING_AGENT]: [
+    'road', 'roads', 'roadway', 'roading', 'street', 'alignment', 'centerline profile',
+    'curb', 'gutter', 'sidewalk', 'pavement', 'draw a road', 'draw the road', 'draw road',
+    'design a road', 'design road', 'road design', 'road corridor', 'corridor',
+    'typical section', 'cul-de-sac', 'cul de sac', 'crown slope', 'lane width',
+    'edge of pavement', 'right of way', 'right-of-way', 'driveway apron',
+    'synthesize road', 'existing road', 'proposed road', 'highway',
+  ],
   [AgentType.CIVIL_DRAFTER]: [
-    'road', 'roadway', 'street', 'alignment', 'centerline profile', 'curb', 'gutter',
-    'sidewalk', 'pipe', 'sewer', 'storm', 'drain', 'culvert', 'utility trench',
+    'pipe', 'sewer', 'storm', 'drain', 'culvert', 'utility trench',
     'grading', 'subdivision', 'plan and profile', 'plan set', 'cross section',
-    'pavement', 'easement plat', 'civil plan', 'construction plan', 'draw a road',
-    'draw the road', 'draw road', 'linework', 'polyline', 'right of way', 'right-of-way',
-    'breakline', 'breaklines', 'top of bank', 'toe of slope', 'edge of pavement',
+    'easement plat', 'civil plan', 'construction plan',
+    'linework', 'polyline',
+    'breakline', 'breaklines', 'top of bank', 'toe of slope',
     'ditch', 'swale', 'tree line', 'fence line', 'connect the shots', 'connect the points',
   ],
   [AgentType.CENTERLINE_STATIONING]: [
@@ -267,6 +274,27 @@ export function routeIntent(request: string, currentAgent?: AgentType): IntentRo
  * suggestion the caller can surface ("Civil Drafter can take this — hand off?").
  */
 export function shouldDefer(request: string, currentAgent: AgentType): IntentMatch | null {
+  const route = routeIntent(request, currentAgent);
+  return route.isMismatched && route.primary ? route.primary : null;
+}
+
+/**
+ * Action verbs that mean the user is asking for work to be performed, not merely
+ * asking a question. Only work requests are auto-handed-off: a Point Editor user
+ * who asks "how many points are along the road?" must keep their Point Editor.
+ */
+const HANDOFF_ACTION_VERB_RE = /\b(draw|draft|design|create|make|build|synthesi[sz]e|extract|trace|plot|place|generate|model|add|lay\s*out)\b/i;
+
+/**
+ * Enforced dispatch decision: the agent that should take this request before the
+ * current agent acts, or null when the current agent should keep it.
+ *
+ * Unlike {@link shouldDefer} (advisory), this is meant to be consulted by the
+ * chat dispatcher so a mismatched agent never gets to run the request itself.
+ * Questions without an action verb are never hijacked.
+ */
+export function resolveIntentHandoff(request: string, currentAgent: AgentType): IntentMatch | null {
+  if (!HANDOFF_ACTION_VERB_RE.test(request)) return null;
   const route = routeIntent(request, currentAgent);
   return route.isMismatched && route.primary ? route.primary : null;
 }

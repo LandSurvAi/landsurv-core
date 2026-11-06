@@ -1,5 +1,8 @@
 import Drawing from 'dxf-writer';
-import { DEFAULT_PARCEL_LABEL_FORMATTER, type SurveyPoint, type SurveyLine, type Centerline, type CenterlinePI, type Settings, type DxfExportOptions, type PointSymbol, type CustomSymbol, type ContourLabel, type ParcelCadTextStyle, type ParcelLabel, type ParcelLabelFormatter, type AnnotationCategoryStyle, type AnnotationDimension } from '../types.ts';
+import { DEFAULT_PARCEL_LABEL_FORMATTER, type SurveyPoint, type SurveyLine, type Centerline, type CenterlinePI, type Settings, type DxfExportOptions, type PointSymbol, type CustomSymbol, type ContourLabel, type ParcelCadTextStyle, type ParcelLabel, type ParcelLabelFormatter, type AnnotationCategoryStyle, type AnnotationDimension, type CanvasHatch } from '../types.ts';
+import { getHatchByName, type HatchDefinition } from '../services/hatchLibrary.ts';
+import { buildSymbolMatchers, resolveSymbol } from './symbolResolver.ts';
+import { extractSymbolCadPrimitives, drawPrimitivesToDxfWriter } from './symbolCadPrimitives.ts';
 import { calculateCenterlineLength, calculateCurveGeometry, calculatePointFromStationOffset, formatStation } from './stationing.ts';
 import { applyAnnotationTextCase, resolveAnnotationCategoryTextStyle } from './annotationTextStyle.ts';
 import { buildParcelLabelLines, resolveEffectiveParcelTextStyle } from './parcelLabelFormatter.ts';
@@ -408,6 +411,95 @@ function steepSlopeFillsToRawDxf(
     return out;
 }
 
+export function canvasHatchesToRawDxf(
+    hatches: CanvasHatch[],
+    customHatches: HatchDefinition[],
+    handles: HandleAllocator,
+): string {
+    let out = '';
+
+    for (const h of hatches) {
+        if (h.hidden || !h.loops || h.loops.length === 0) continue;
+        const validLoops = h.loops.filter(l => l.vertices && l.vertices.length >= 3);
+        if (validLoops.length === 0) continue;
+
+        const layerName = normalizeLayerName(h.layer, 'HATCH');
+        const trueColor = hexToTrueColorInt(h.color);
+        const patDef = getHatchByName(h.patternName, customHatches);
+        const patName = (patDef?.name || h.patternName || 'ANSI31').toUpperCase();
+        const isSolid = patName === 'SOLID' || (patDef ? patDef.lines.length === 0 && patName === 'SOLID' : false);
+        const scale = Number.isFinite(h.scale) && h.scale > 0 ? h.scale : 1.0;
+        const angleDeg = Number.isFinite(h.angleDeg) ? h.angleDeg : 0.0;
+        const angleRad = (angleDeg * Math.PI) / 180;
+        const cosA = Math.cos(angleRad);
+        const sinA = Math.sin(angleRad);
+
+        const handleHex = handles.next();
+        out += `0\nHATCH\n`;
+        out += `5\n${handleHex}\n`;
+        out += `100\nAcDbEntity\n`;
+        out += `8\n${layerName}\n`;
+        if (trueColor !== null) out += `420\n${trueColor}\n`;
+        out += `100\nAcDbHatch\n`;
+        out += `10\n0.0\n20\n0.0\n30\n0.0\n`; // elevation point
+        out += `210\n0.0\n220\n0.0\n230\n1.0\n`; // extrusion
+        out += `2\n${patName}\n`;
+        out += `70\n${isSolid ? 1 : 0}\n`; // 1 = solid fill, 0 = pattern fill
+        out += `71\n0\n`; // non-associative
+        out += `91\n${validLoops.length}\n`; // number of boundary paths
+
+        for (let idx = 0; idx < validLoops.length; idx++) {
+            const loop = validLoops[idx];
+            // 92: boundary path type flag: 2 = Polyline, +1 = External (outer), +16 = Outermost (hole)
+            const pathFlag = loop.isHole ? 18 : 3;
+            out += `92\n${pathFlag}\n`;
+            out += `72\n1\n`; // has bulge
+            out += `73\n1\n`; // is closed
+            out += `93\n${loop.vertices.length}\n`;
+            for (const v of loop.vertices) {
+                out += `10\n${v.x.toFixed(4)}\n20\n${v.y.toFixed(4)}\n42\n0.0\n`;
+            }
+            out += `97\n0\n`; // 0 source boundary objects
+        }
+
+        out += `75\n0\n`; // Hatch style: 0 = Hatch "odd parity" area (normal island detection)
+        out += `76\n${patDef?.isAcadStandard === false ? 0 : 1}\n`; // 1 = Predefined, 0 = User-defined
+
+        if (!isSolid) {
+            const defLines = patDef && patDef.lines.length > 0
+                ? patDef.lines
+                : [{ angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 0.125 }];
+
+            out += `52\n${angleDeg.toFixed(4)}\n`;
+            out += `41\n${scale.toFixed(4)}\n`;
+            out += `77\n0\n`; // not double
+            out += `78\n${defLines.length}\n`;
+
+            for (const l of defLines) {
+                const effAngle = l.angle + angleDeg;
+                const ox = (l.originX * cosA - l.originY * sinA) * scale;
+                const oy = (l.originX * sinA + l.originY * cosA) * scale;
+                const dx = (l.deltaX * cosA - l.deltaY * sinA) * scale;
+                const dy = (l.deltaX * sinA + l.deltaY * cosA) * scale;
+                const dashes = l.dashes ?? [];
+
+                out += `53\n${effAngle.toFixed(4)}\n`;
+                out += `43\n${ox.toFixed(4)}\n44\n${oy.toFixed(4)}\n`;
+                out += `45\n${dx.toFixed(4)}\n46\n${dy.toFixed(4)}\n`;
+                out += `79\n${dashes.length}\n`;
+                for (const d of dashes) {
+                    out += `49\n${(d * scale).toFixed(4)}\n`;
+                }
+            }
+        }
+
+        out += `47\n1.0\n`; // pixel size
+        out += `98\n0\n`; // 0 seed points
+    }
+
+    return out;
+}
+
 function parcelLabelsToRawMText(
     parcelLabels: ParcelLabel[],
     textHeight: number,
@@ -566,6 +658,8 @@ export function generateDxf(
     parcelCadTextStyles: ParcelCadTextStyle[] = [],
     annotationCategories: AnnotationCategoryStyle[] = [],
     dimensions: AnnotationDimension[] = [],
+    hatches: CanvasHatch[] = [],
+    customHatches: HatchDefinition[] = [],
 ): string {
     const { coordinatePrecision } = settings;
     const { includePoints, includeLines, includeCenterlines, pointScale, steepSlopeFillStyle = 'solid' } = options;
@@ -627,6 +721,8 @@ export function generateDxf(
 
     if (includePoints) {
         const symbolScale = baseTextHeight * 0.5;
+        const activeCustomSymbols = (customSymbols || []).filter(s => !s.hidden && !s.isDefault);
+        const symbolMatchers = activeCustomSymbols.length > 0 ? buildSymbolMatchers(activeCustomSymbols) : [];
 
         pointMap.forEach((p, pn) => {
             const pointLayer = normalizeLayerName(p.layer, 'POINTS');
@@ -634,7 +730,20 @@ export function generateDxf(
             d.setActiveLayer(pointLayer);
             
             let symbolDrawn = false;
-            // TODO: Add custom symbol drawing logic here if needed for DXF export.
+            if (activeCustomSymbols.length > 0 && p.desc && settings.showPointSymbols !== false) {
+                const resolved = resolveSymbol(p.desc, activeCustomSymbols, symbolMatchers);
+                if (resolved.symbol) {
+                    const primitives = extractSymbolCadPrimitives(resolved.symbol, {
+                        originX: p.x,
+                        originY: p.y,
+                        worldSize: symbolScale * (resolved.symbol.scale || 1),
+                    });
+                    if (primitives.length > 0) {
+                        drawPrimitivesToDxfWriter(d, primitives);
+                        symbolDrawn = true;
+                    }
+                }
+            }
             
             if (!symbolDrawn && p.symbol) {
                 const s = symbolScale / 2;
@@ -959,6 +1068,13 @@ export function generateDxf(
             ensureLayer(d, knownLayers, knownLineTypes, normalizeLayerName(line.layer, 'LINES'));
         });
     }
+    if (hatches.length > 0) {
+        hatches.forEach(h => {
+            if (!h.hidden) {
+                ensureLayer(d, knownLayers, knownLineTypes, normalizeLayerName(h.layer, 'HATCH'));
+            }
+        });
+    }
 
     let baseDxf = d.toDxfString();
 
@@ -989,6 +1105,9 @@ export function generateDxf(
     }
     if (includeLines && steepSlopeFillLines.length > 0) {
         rawEntities += steepSlopeFillsToRawDxf(steepSlopeFillLines, steepSlopeFillStyle, handles);
+    }
+    if (hatches.length > 0) {
+        rawEntities += canvasHatchesToRawDxf(hatches, customHatches, handles);
     }
     if (parcelLabels.length > 0) {
         rawEntities += parcelLabelsToRawMText(parcelLabels, baseTextHeight * 0.8, parcelLabelFormatter, parcelCadTextStyles, propertyOwnerCategory, handles);
