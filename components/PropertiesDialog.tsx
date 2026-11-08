@@ -1,6 +1,23 @@
 import React, { useMemo, useRef, useState } from 'react';
-import type { SurveyLine } from '../types';
+import { Boxes } from 'lucide-react';
+import type {
+  AnnotationCategoryStyle,
+  AnnotationTextStyle,
+  CanvasTextAnnotation,
+  GisFeature,
+  SurveyLine,
+} from '../types';
 import { createLayerValueLookup, getLayerValue } from '../utils/cadEntityStyle.ts';
+import { buildPropertiesA2UISpec } from '../utils/a2uiProperties.ts';
+import {
+  gisFeaturesForSelectedLines,
+  metadataEntries,
+  metadataFeatureName,
+  type MetadataEntry,
+} from '../utils/featureMetadata.ts';
+import { openA2UISurface } from '../services/a2uiSurfaces.ts';
+import { A2UIProperties } from './A2UIProperties.tsx';
+import { TextPropertiesSection } from './TextPropertiesSection.tsx';
 
 export interface PropertiesDialogProps {
   isOpen: boolean;
@@ -8,6 +25,13 @@ export interface PropertiesDialogProps {
   /** Currently selected entity ids (SurveyLine.id or `from-to`). */
   selectedIds: string[];
   lines: SurveyLine[];
+  /** Selected standalone text entities. */
+  selectedTextIds?: string[];
+  textAnnotations?: CanvasTextAnnotation[];
+  textStyles?: AnnotationTextStyle[];
+  annotationCategories?: AnnotationCategoryStyle[];
+  onUpdateTextAnnotations?: (ids: string[], patch: Partial<CanvasTextAnnotation>) => void;
+  onDeleteTextAnnotations?: (ids: string[]) => void;
   availableLayers?: string[];
   /** Linetypes from the loaded CAD standard. */
   availableLinetypes?: string[];
@@ -21,7 +45,31 @@ export interface PropertiesDialogProps {
   onSelectAll: () => void;
   onClearSelection: () => void;
   onConvertToBoundary?: (lines: SurveyLine[]) => void;
+  /** Live GIS features whose generated linework is selected. */
+  gisFeatures?: GisFeature[];
+  /** Parcel summaries matched to selected parcel linework by parcel id. */
+  parcelSummaries?: Array<{
+    parcelId: string | null;
+    attributes?: Record<string, unknown>;
+  }>;
 }
+
+const MetadataTable: React.FC<{ entries: MetadataEntry[] }> = ({ entries }) => (
+  entries.length === 0 ? (
+    <p className="px-2 py-1.5 text-[10px] text-gray-500">No attributes returned.</p>
+  ) : (
+    <dl className="divide-y divide-gray-800/70">
+      {entries.map(entry => (
+        <div key={entry.key} className="grid grid-cols-[minmax(6rem,0.8fr),1fr] gap-2 px-2 py-1">
+          <dt className="truncate text-[10px] text-gray-400" title={entry.key}>{entry.label}</dt>
+          <dd className="break-words text-right font-mono text-[10px] text-gray-100" title={entry.value}>
+            {entry.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  )
+);
 
 const FALLBACK_LINETYPES = ['CONTINUOUS', 'DASHED', 'HIDDEN', 'CENTER', 'PHANTOM', 'DOT', 'FENCELINE1'];
 
@@ -58,6 +106,12 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
   onClose,
   selectedIds,
   lines,
+  selectedTextIds = [],
+  textAnnotations = [],
+  textStyles = [],
+  annotationCategories = [],
+  onUpdateTextAnnotations,
+  onDeleteTextAnnotations,
   availableLayers,
   availableLinetypes = [],
   layerColors = {},
@@ -67,6 +121,8 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
   onSelectAll,
   onClearSelection,
   onConvertToBoundary,
+  gisFeatures = [],
+  parcelSummaries = [],
 }) => {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ offsetX: number; offsetY: number } | null>(null);
@@ -76,6 +132,38 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
     const ids = new Set(selectedIds);
     return lines.filter(line => ids.has(lineId(line)));
   }, [lines, selectedIds]);
+
+  const selectedGisFeatures = useMemo(
+    () => gisFeaturesForSelectedLines(gisFeatures, selectedIds),
+    [gisFeatures, selectedIds],
+  );
+
+  const selectedParcels = useMemo(() => {
+    const parcelIds = new Set(
+      selected.map(line => line.parcelId).filter((id): id is string => !!id),
+    );
+    return parcelSummaries.filter(parcel =>
+      !!parcel.parcelId && parcelIds.has(parcel.parcelId),
+    );
+  }, [parcelSummaries, selected]);
+
+  const selectedText = useMemo(() => {
+    const ids = new Set(selectedTextIds);
+    return textAnnotations.filter(annotation => ids.has(annotation.id));
+  }, [textAnnotations, selectedTextIds]);
+
+  const a2uiSpec = useMemo(() => buildPropertiesA2UISpec({
+    lines,
+    selectedLineIds: selectedIds,
+    textAnnotations,
+    selectedTextIds,
+    textStyles,
+    categories: annotationCategories,
+    availableLayers,
+    availableLinetypes,
+    gisFeatures,
+    parcelSummaries,
+  }), [lines, selectedIds, textAnnotations, selectedTextIds, textStyles, annotationCategories, availableLayers, availableLinetypes, gisFeatures, parcelSummaries]);
 
   const counts = useMemo(() => {
     const result = { Line: 0, Arc: 0, Circle: 0, Polyline: 0 };
@@ -169,8 +257,23 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
 
   const ids = selected.map(lineId);
   const count = selected.length;
+  const totalCount = count + selectedText.length;
   const single = count === 1 ? selected[0] : null;
   const mixed = <span className="text-amber-300/90">(mixed)</span>;
+
+  const openA2UI = () => {
+    openA2UISurface({
+      key: 'canvas-properties',
+      definitionId: 'canvas-properties',
+      title: 'Properties',
+      subtitle: 'A2UI property snapshot',
+      category: 'workspace',
+      accent: 'cyan',
+      size: 'standard',
+      source: 'canvas-properties',
+      content: <A2UIProperties spec={a2uiSpec} />,
+    });
+  };
 
   return (
     <div
@@ -196,9 +299,18 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
         <div>
           <div className="text-[10px] uppercase tracking-wider text-cyan-400">Properties</div>
           <div className="font-semibold text-gray-100">
-            {count === 0 ? 'No selection' : count === 1 ? '1 entity selected' : `${count} entities selected`}
+            {totalCount === 0 ? 'No selection' : totalCount === 1 ? '1 object selected' : `${totalCount} objects selected`}
           </div>
         </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={openA2UI}
+            className="inline-flex items-center gap-1 rounded border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-1 text-[9px] font-semibold uppercase tracking-wide text-cyan-200 hover:bg-cyan-500/20"
+            title="Open this selection as an A2UI property surface"
+          >
+            <Boxes className="h-3 w-3" /> A2UI
+          </button>
         <button
           type="button"
           onClick={onClose}
@@ -210,10 +322,21 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
             <path d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
+        </div>
       </div>
 
       <div className="space-y-3 p-3">
-        {count === 0 ? (
+        {selectedText.length > 0 && onUpdateTextAnnotations && onDeleteTextAnnotations && (
+          <TextPropertiesSection
+            annotations={selectedText}
+            styles={textStyles}
+            categories={annotationCategories}
+            availableLayers={availableLayers}
+            onUpdate={onUpdateTextAnnotations}
+            onDelete={onDeleteTextAnnotations}
+          />
+        )}
+        {count === 0 && selectedText.length === 0 ? (
           <div className="rounded-lg border border-gray-700/60 bg-gray-900/60 p-3 text-gray-400">
             Select entities on the canvas to inspect and edit their properties.
             <div className="mt-2 flex gap-2">
@@ -226,7 +349,7 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
               </button>
             </div>
           </div>
-        ) : (
+        ) : count > 0 ? (
           <>
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-lg border border-gray-700/60 bg-gray-900/60 p-2 font-mono text-[11px]">
               <span className="text-gray-400">Lines</span><span>{counts.Line}</span>
@@ -247,6 +370,49 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
                 </>
               )}
             </div>
+
+            {(selectedParcels.length > 0 || selectedGisFeatures.length > 0) && (
+              <section
+                data-testid="selection-metadata"
+                className="overflow-hidden rounded-lg border border-emerald-500/25 bg-emerald-950/10"
+              >
+                <div className="border-b border-emerald-500/20 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-300">
+                  Selected metadata
+                </div>
+                {selectedParcels.map(parcel => {
+                  const entries = metadataEntries(parcel.attributes);
+                  return (
+                    <details
+                      key={`parcel-${parcel.parcelId}`}
+                      open={selectedParcels.length + selectedGisFeatures.length === 1}
+                      className="border-b border-gray-800/70 last:border-b-0"
+                    >
+                      <summary className="cursor-pointer px-2.5 py-1.5 text-[10px] text-gray-200">
+                        <span className="font-semibold text-emerald-200">Parcel {parcel.parcelId ?? '—'}</span>
+                        <span className="ml-1 text-gray-500">· {entries.length} fields</span>
+                      </summary>
+                      <MetadataTable entries={entries} />
+                    </details>
+                  );
+                })}
+                {selectedGisFeatures.map((feature, index) => {
+                  const entries = metadataEntries(feature.properties);
+                  return (
+                    <details
+                      key={`gis-${feature.id}`}
+                      open={selectedParcels.length + selectedGisFeatures.length === 1}
+                      className="border-b border-gray-800/70 last:border-b-0"
+                    >
+                      <summary className="cursor-pointer px-2.5 py-1.5 text-[10px] text-gray-200">
+                        <span className="font-semibold text-emerald-200">{metadataFeatureName(feature, index)}</span>
+                        <span className="ml-1 text-gray-500">· {feature.type} · {entries.length} fields</span>
+                      </summary>
+                      <MetadataTable entries={entries} />
+                    </details>
+                  );
+                })}
+              </section>
+            )}
 
             <label className="block">
               <span className="mb-1 block text-[10px] uppercase tracking-wider text-gray-400">Layer</span>
@@ -376,7 +542,7 @@ export const PropertiesDialog: React.FC<PropertiesDialogProps> = ({
               </button>
             </div>
           </>
-        )}
+        ) : null}
       </div>
     </div>
   );

@@ -405,7 +405,7 @@ export const homepageAgentCards = [
     {
         type: AgentType.GIS_AGENT,
         title: 'GIS Agent',
-        description: 'Upload a .geojson file to analyze GIS features, query properties, and plot data on the canvas.',
+        description: 'Analyze GeoJSON or ask for live public layers — county lines, State Plane zones, districts, streams, water bodies, watersheds — directly on the canvas.',
         icon: GisAgentIcon,
         color: 'teal',
         actionType: 'agent' as const,

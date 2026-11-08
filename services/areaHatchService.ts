@@ -35,7 +35,7 @@ export interface SoilReportLookup {
 export const DEFAULT_FLOOD_HATCH: Required<AreaHatchSettings> = {
   style: 'lines',
   patternName: 'AUTO',
-  scale: 50,
+  scale: 10,
   angleDeg: 0,
   opacity: 0.35,
   color: '#22d3ee',
@@ -44,42 +44,21 @@ export const DEFAULT_FLOOD_HATCH: Required<AreaHatchSettings> = {
 
 export const DEFAULT_SOIL_HATCH: Required<AreaHatchSettings> = {
   style: 'lines',
-  patternName: 'AUTO',
-  // Feet between hatch lines. Soil sheets are reviewed at site scale, so the
-  // old 100-ft default read as a few giant stripes rather than soil texture.
-  scale: 25,
+  patternName: 'SOLID',
+  // Retained so switching back to a line pattern keeps the fine site-scale
+  // spacing; solid color fills ignore spacing and angle.
+  scale: 10,
   angleDeg: 0,
   opacity: 0.3,
   color: '#d6b98c',
   showLabels: true,
 };
 
-function fallbackPattern(): HatchDefinition {
-  return getHatchByName('EARTH') ?? ALL_BUILT_IN_HATCHES[0];
-}
-
 function autoFloodPattern(area: MapAreaFeature): HatchDefinition {
   const subtype = String(area.attributes?.subtype ?? '').toUpperCase();
   if (subtype.includes('FLOODWAY')) return getHatchForFemaZone('FLOODWAY');
   const zone = String(area.attributes?.zone ?? 'AE').toUpperCase();
   return getHatchForFemaZone(zone);
-}
-
-function autoSoilPattern(area: MapAreaFeature, report?: SoilReportLookup | null): HatchDefinition {
-  const mukey = String(area.attributes?.mukey ?? '');
-  const hydGroup = report?.[mukey]?.hydgrpdcd?.toUpperCase()
-    ?? String(area.attributes?.hydgrpdcd ?? '').toUpperCase();
-  if (hydGroup === 'A') return getHatchByName('SAND') ?? fallbackPattern();
-  if (hydGroup === 'B') return getHatchByName('GRAVEL') ?? fallbackPattern();
-  if (hydGroup === 'C') return getHatchByName('EARTH') ?? fallbackPattern();
-  if (hydGroup === 'D') return getHatchByName('MUDST') ?? fallbackPattern();
-
-  const name = `${area.attributes?.muname ?? ''} ${area.attributes?.musym ?? ''}`.toLowerCase();
-  if (/(sand|sandy)/.test(name)) return getHatchByName('SAND') ?? fallbackPattern();
-  if (/(gravel|gravelly|shingle|stone)/.test(name)) return getHatchByName('GRAVEL') ?? fallbackPattern();
-  if (/(clay|clayey|shrink)/.test(name)) return getHatchByName('MUDST') ?? fallbackPattern();
-  if (/(muck|peat|marsh|wetland|swamp)/.test(name)) return getHatchByName('SWAMP') ?? fallbackPattern();
-  return getHatchByName('EARTH') ?? fallbackPattern();
 }
 
 export function resolveAreaPattern(
@@ -106,7 +85,9 @@ export function resolveAreaPattern(
     return autoFloodPattern(area);
   }
 
-  return autoSoilPattern(area, report);
+  // Soils default to solid fills. AUTO is treated as solid too so sessions
+  // saved with the old automatic line patterns migrate on their next rebuild.
+  return getHatchByName('SOLID') ?? ALL_BUILT_IN_HATCHES[0];
 }
 
 /**
@@ -123,6 +104,98 @@ export function hatchScaleForSpacing(pattern: HatchDefinition, spacingFt: number
   return Math.max(0.05, Math.min(500, spacing / (delta * 16)));
 }
 
+interface HslColor {
+  h: number;
+  s: number;
+  l: number;
+}
+
+function hexToHsl(hex: string | undefined): HslColor {
+  const normalized = (hex ?? '').trim().replace(/^#/, '');
+  const expanded = normalized.length === 3
+    ? normalized.split('').map(char => char + char).join('')
+    : normalized;
+  if (!/^[0-9a-f]{6}$/i.test(expanded)) return { h: 36, s: 0.46, l: 0.69 };
+
+  const r = parseInt(expanded.slice(0, 2), 16) / 255;
+  const g = parseInt(expanded.slice(2, 4), 16) / 255;
+  const b = parseInt(expanded.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  const l = (max + min) / 2;
+  if (delta < 1e-6) return { h: 36, s: 0, l };
+
+  let h: number;
+  if (max === r) h = ((g - b) / delta) % 6;
+  else if (max === g) h = (b - r) / delta + 2;
+  else h = (r - g) / delta + 4;
+  h *= 60;
+  if (h < 0) h += 360;
+
+  return {
+    h,
+    s: Math.min(1, delta / Math.max(1e-6, 1 - Math.abs(2 * l - 1))),
+    l,
+  };
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const hue = ((h % 360) + 360) % 360;
+  const saturation = Math.max(0, Math.min(1, s));
+  const lightness = Math.max(0, Math.min(1, l));
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const x = chroma * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const m = lightness - chroma / 2;
+
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (hue < 60) [r, g, b] = [chroma, x, 0];
+  else if (hue < 120) [r, g, b] = [x, chroma, 0];
+  else if (hue < 180) [r, g, b] = [0, chroma, x];
+  else if (hue < 240) [r, g, b] = [0, x, chroma];
+  else if (hue < 300) [r, g, b] = [x, 0, chroma];
+  else [r, g, b] = [chroma, 0, x];
+
+  const channel = (value: number) => Math.round(
+    Math.max(0, Math.min(1, value + m)) * 255,
+  ).toString(16).padStart(2, '0');
+  return `#${channel(r)}${channel(g)}${channel(b)}`;
+}
+
+/**
+ * Categorical soil colors use a golden-angle hue wheel seeded by the control's
+ * base color. Successive map units land ~137.5° apart, which distributes
+ * categories evenly without knowing how many will be fetched, while a muted
+ * saturation/lightness band keeps labels readable over aerial imagery.
+ */
+function soilColorForIndex(index: number, baseColor: string | undefined): string {
+  const base = hexToHsl(baseColor);
+  const hue = (base.s < 0.04 ? 36 : base.h) + index * 137.508;
+  const saturation = Math.min(0.46, Math.max(0.34, base.s));
+  const lightness = Math.min(0.70, Math.max(0.60, base.l)) + (index % 2 === 0 ? 0 : 0.025);
+  return hslToHex(hue, saturation, lightness);
+}
+
+function soilMapUnitKey(area: MapAreaFeature): string {
+  const mukey = String(area.attributes?.mukey ?? '').trim();
+  if (mukey) return `mukey:${mukey}`;
+  const musym = String(area.attributes?.musym ?? '').trim();
+  if (musym) return `musym:${musym}`;
+  return `area:${area.id}`;
+}
+
+function buildSoilColorMap(
+  areas: MapAreaFeature[],
+  baseColor: string | undefined,
+): Map<string, string> {
+  const keys = Array.from(new Set(areas.map(soilMapUnitKey))).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+  const colors = new Map<string, string>();
+  keys.forEach((key, index) => colors.set(key, soilColorForIndex(index, baseColor)));
+  return colors;
+}
+
 export function buildAreaHatches(
   areas: MapAreaFeature[],
   rawSettings: Partial<AreaHatchSettings> | null | undefined,
@@ -134,12 +207,19 @@ export function buildAreaHatches(
     ...(rawSettings ?? {}),
   };
   const createdAt = new Date().toISOString();
+  const soilColors = kind === 'soils'
+    ? buildSoilColorMap(areas, settings.color)
+    : null;
 
   const hatches: CanvasHatch[] = [];
   for (const area of areas) {
     if (!area.loops || area.loops.length === 0) continue;
     const pattern = resolveAreaPattern(area, settings, kind, report);
     if (!pattern) continue;
+    const fallbackColor = settings.color || pattern.previewColor || (kind === 'flood' ? '#22d3ee' : '#d6b98c');
+    const color = pattern.name === 'SOLID'
+      ? soilColors?.get(soilMapUnitKey(area)) ?? fallbackColor
+      : fallbackColor;
     hatches.push({
       id: `${area.source}-hatch-${area.id}`,
       name: area.labelLines[0] || pattern.name,
@@ -147,9 +227,10 @@ export function buildAreaHatches(
       loops: area.loops,
       scale: hatchScaleForSpacing(pattern, settings.scale),
       angleDeg: settings.angleDeg ?? 0,
-      color: settings.color || pattern.previewColor || (kind === 'flood' ? '#22d3ee' : '#d6b98c'),
+      color,
       opacity: settings.opacity,
       layer: area.layer,
+      generationId: area.generationId,
       areaSqFt: area.areaSqFt,
       sourceMode: 'agent',
       createdAt,
@@ -196,6 +277,7 @@ export function buildAreaLabels(
       lines: kind === 'flood' ? area.labelLines : soilLabelLines(area, report),
       category: kind === 'flood' ? 'flood-zones' : 'soil-map-units',
       source: area.source,
+      generationId: area.generationId,
     }))
     .filter(label => label.lines.length > 0);
 }

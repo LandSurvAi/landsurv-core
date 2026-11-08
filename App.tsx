@@ -64,14 +64,19 @@ import {
 } from './utils/civilDrafterVision.ts';
 import { type ZoningContext, type AutoDraftImage } from './utils/autoDraftOrchestrator.ts';
 import { getStaticMap, clearStaticMapsCache } from './services/staticMapsService.ts';
-import { clearMapCache } from './utils/mapTileCache.ts';
+import { clearMapCache, getCachedBitmap, mapWithConcurrency } from './utils/mapTileCache.ts';
+import { fetchImageBlobViaProxy } from './utils/corsProxy.ts';
+import { pointRangeBbox, centerRadiusBbox, planDownloadTiles, type MapBbox } from './utils/mapDownloadPlan.ts';
 import { buildSymbolMatchers, resolveSymbol } from './utils/symbolResolver.ts';
 import { parseSymbolCommand, type SymbolVisibilityCommand } from './utils/symbolCommandParser.ts';
 import { parseLocalChatCommand } from './utils/chatCommandParser.ts';
+import { applyAnnotationStyleCommand } from './utils/annotationStyleCommand.ts';
 import { normalizeCadLayerColor, normalizeCadLayerLinetype, parseCadLayerChatCommand } from './services/cadLayerChatCommands.ts';
 import CadLayerPicker from './components/CadLayerPicker.tsx';
+import LegendPicker from './components/LegendPicker.tsx';
 import { SURVEY_SYMBOL_LIBRARY } from './data/surveySymbolLibrary.ts';
 import { parsePointFile, pointListToString } from './utils/pointFile.ts';
+import { dedupeIncomingPoints } from './utils/pointDedupe.ts';
 import {
   buildTinFromPoints,
   buildTinFromContours,
@@ -83,6 +88,7 @@ import { importTinSurfaceFromSessionFileAsync } from './services/tinImportClient
 import { runSteepSlopeAnalysis, steepSlopeRunToSurveyLines } from './services/SteepSlopeService.ts';
 import { ESRI_STATE_SERVICES } from './utils/esriStateServices.ts';
 import { readContourElevation } from './utils/esriContourAttributes.ts';
+import { esriSpatialReferenceWkid } from './utils/esriSpatialReference.ts';
 import { nationalContourFetchOptions, type ContourFetchOptions } from './utils/usgsNationalContours.ts';
 import { detectContourSourceIntent, CONTOUR_SOURCE_OPTIONS, CONTOUR_AGENT_QUICK_THOUGHTS } from './services/contourSourceIntent.ts';
 import { runClawDirectives, parseClawDirectives } from './utils/clawClient.ts';
@@ -93,6 +99,7 @@ import { setBootstrapStatus } from './utils/zoningBootstrap.ts';
 import { extractStreamingPointsAndLines } from './utils/streamingJsonParser.ts';
 import { isDemoApiKey } from './services/proxyGenAI.ts';
 import { setBearingDistanceMode } from './services/annotationPreferences.ts';
+import { buildPointLabelAnnotations, describeLabelAllResult } from './services/annotationStudio.ts';
 import { APP_VERSION as APP_VERSION_CONST } from './utils/appVersion.ts';
 import { buildCadManagerSessionState, createSessionZip, generateSessionFileName, toAliasRecord } from './utils/sessionZip.ts';
 import { isOssBuild } from './utils/ossMode.ts';
@@ -187,6 +194,7 @@ import { DockModeControl, type DockMode } from './components/DockModeControl.tsx
 import FloodPanel from './components/FloodPanel.tsx';
 import StructuresPanel from './components/StructuresPanel.tsx';
 import SoilsPanel from './components/SoilsPanel.tsx';
+import StreamsPanel, { type StreamsPanelResult } from './components/StreamsPanel.tsx';
 import { buildAreaHatches, buildAreaLabels } from './services/areaHatchService.ts';
 import RoadingPanel from './components/RoadingPanel.tsx';
 import ShrinkwrapPanel from './components/ShrinkwrapPanel.tsx';
@@ -238,7 +246,7 @@ import {
 import { loadClaudeConfig, setClaudeConfig, type ClaudeModel } from './services/claudeConfig.ts';
 import { generateDxf } from './utils/dxf.ts';
 import { parseDxfGeometry } from './utils/dxfGeometryParser.ts';
-import { expandChainsToLines, expandWidthCodedChains, repairBankCorridorChains, repairRoadCorridorChains, type DrafterChain } from './utils/linework.ts';
+import { expandChainsToLines, expandWidthCodedChains, orderPointsAlongFeature, repairBankCorridorChains, repairRoadCorridorChains, type DrafterChain } from './utils/linework.ts';
 import { buildCenterlineFromVertices } from './services/roadingSkillHandlers.ts';
 import { buildCivilDrafterLineworkContext } from './utils/civilDrafterLinework.ts';
 import {
@@ -254,14 +262,15 @@ import {
   toggleLineLabelRotation,
   swapLineBearingDirection,
 } from './utils/geometryOperations.ts';
-import { parseClFile, calculateCenterlineLength, calculatePointFromStationOffset, formatStation, getCenterlineKeyStations } from './utils/stationing.ts';
+import { parseClFile, calculateCenterlineLength, calculatePointFromStationOffset, formatStation, getCenterlineKeyStations, resolveBeginStation } from './utils/stationing.ts';
 // FIX: Import the new `calculateClosure` function to enable robust, client-side closure calculations.
 import { parseBearingToRadians, parseDistance, inverse, direct, directCurve, calculateChordDistance, calculateClosure, formatBearing, swapBearingDirection, rotateBearing } from './utils/cogo.ts';
 // FIX: Import the new `generateProfile` function to enable client-side profile calculations.
-import { generateContours, generateProfile, generateContoursAsIsoPaths, isoPathsToSurveyLines, suppressEsriContoursInsidePolygon, buildPolygonFromSegments, pointInPolygon, getSegPairs, clipSegmentToPolygon } from './utils/contouring.ts';
+import { generateContours, generateProfile, generateContoursAsIsoPaths, isoPathsToSurveyLines, surveyLinesToIsoPaths, suppressEsriContoursInsidePolygon, buildPolygonFromSegments, pointInPolygon, getSegPairs, clipSegmentToPolygon } from './utils/contouring.ts';
+import { generateContourLabelsFromIsoPaths, generateContourLabelsFromLines, strikeContourLabels } from './utils/contourLabels.ts';
 import { DEFAULT_CONTOUR_LINE_LAYERS, resolveContourLineLayersViaCacp, type ContourLineLayerAssignment } from './services/contourLayerResolver.ts';
 // FIX: Import `CustomSymbol`, `ContourSettings` and `ContourLabel` to be used with new features.
-import { type ChatMessage, MessageRole, type SurveyPoint, type SurveyLine, type CutSheetRow, type CutSheetInfo, AgentType, type SessionFile, type SessionState, type Centerline, JobInfo, Settings, PdfHighlight, type PointList, WmsService, ActiveWmsLayer, DxfExportOptions, VisualPanel, type OfflineMapArea, type ChatMessageAction, SettingsContext, AgentContext, UIContext, HighlightContext, Chat, Modality, Part, ProjectionSetting, type CustomSymbol, type AnnotationRule, type ContourSettings, type ContourLabel, type StreetLabel, type ProfilePoint, type ProfileInfo, type ClosureReport, type GisFeature, type DeedMetadata, type TitleSearchData, type BoundaryFile, type BoundaryFileCall, type AnnotationDimension, type CanvasHatch, type EsriServiceInfo, type InclusionBoundary, type DraftingStyleEntry, type ContourGeneration, type IsoPath, type ParcelLabel, type MapAreaFeature, type MapAreaLabel, type SoilMapUnit, type AnnotationCategoryStyle, type DeedSummary, type AppNotification, type TinSurface, type SteepSlopeBand, type SteepSlopeRunResult, DEFAULT_ANNOTATION_CATEGORIES, type ParcelLabelFormatter, type ParcelCadTextStyle, DEFAULT_PARCEL_LABEL_FORMATTER, type StandardsComplianceCheckSelection, type StandardsComplianceReport, type ComplianceSourceMode, type SessionSaveOptions } from './types.ts';
+import { type ChatMessage, MessageRole, type SurveyPoint, type SurveyLine, type CutSheetRow, type CutSheetInfo, AgentType, type SessionFile, type SessionState, type Centerline, JobInfo, Settings, PdfHighlight, type PointList, WmsService, ActiveWmsLayer, DxfExportOptions, VisualPanel, type OfflineMapArea, type ChatMessageAction, SettingsContext, AgentContext, UIContext, HighlightContext, Chat, Modality, Part, ProjectionSetting, type CustomSymbol, type AnnotationRule, type ContourSettings, type ContourLabel, type StreetLabel, type ProfilePoint, type ProfileInfo, type ClosureReport, type GisFeature, type DeedMetadata, type TitleSearchData, type BoundaryFile, type BoundaryFileCall, type AnnotationDimension, type CanvasHatch, type HatchBoundaryLoop, type EsriServiceInfo, type InclusionBoundary, type DraftingStyleEntry, type ContourGeneration, type GenerationBlock, type IsoPath, type ParcelLabel, type MapAreaFeature, type MapAreaLabel, type SoilMapUnit, type AnnotationCategoryStyle, type AnnotationTextStyle, type CanvasTextAnnotation, DEFAULT_ANNOTATION_TEXT_STYLES, type DeedSummary, type AppNotification, type TinSurface, type SteepSlopeBand, type SteepSlopeRunResult, DEFAULT_ANNOTATION_CATEGORIES, type ParcelLabelFormatter, type ParcelCadTextStyle, DEFAULT_PARCEL_LABEL_FORMATTER, type StandardsComplianceCheckSelection, type StandardsComplianceReport, type ComplianceSourceMode, type SessionSaveOptions } from './types.ts';
 import { DEFAULT_PARCEL_CAD_TEXT_STYLES } from './utils/parcelLabelFormatter.ts';
 // FIX: Corrected import of startGeminiChat. Renamed import 'startChat' to 'startGeminiChat' to match export.
 import { startGeminiChat, selectContextSources, getModelForAgent, getAutoModelForAgent, summarizeDeed, investigateDeedClosure, isClaudeModel, isOpenAIModel, isGrokModel, extractZoningDistrictsFromMap, runVisualStandardsComplianceAudit, processAndCorrectCoordinates, AUTO_FAST_MODEL, type DeedClosureReview, type DeedClosureHypothesis } from './services/geminiService.ts';
@@ -299,10 +308,14 @@ import {
 import {
   extractInlineCheckboxes,
   extractInlineQuestionOptions,
+  getAgentInitialQuickThoughtOptions,
   resolveA2UIFollowUpPrompt,
 } from './services/a2uiQuickThought.ts';
 import { A2UISurface, A2UIHostContext, WORKSPACE_TOOL_LABELS, type A2UIHostContextValue } from './components/A2UISurface.tsx';
+import { scoutActivityStore } from './services/scoutActivityStore.ts';
+import type { GisActivityEvent } from './services/gisServiceResolver.ts';
 import { A2UISurfaceHost } from './components/A2UISurfaceHost.tsx';
+import { A2UILegendStudio, openLegendStudioSurface } from './components/A2UILegendStudio.tsx';
 import { A2UIClosureInvestigation } from './components/A2UIClosureInvestigation.tsx';
 import { A2UIStationingControls } from './components/A2UIStationingControls.tsx';
 import { A2UISpreadsheet } from './components/A2UISpreadsheet.tsx';
@@ -310,6 +323,7 @@ import { A2UIPublicSurfaceLayer } from './components/A2UIPublicSurfaceLayer.tsx'
 import { A2UICacpReview } from './components/A2UICacpReview.tsx';
 import { A2UICacpManifestExplorer } from './components/A2UICacpManifestExplorer.tsx';
 import { closeA2UISurface, openA2UISurface } from './services/a2uiSurfaces.ts';
+import { applyLegendPatchToHatches, legendStore, type LegendDrawingLayer } from './services/legendStudio.ts';
 import { buildCacpReviewContext, isNotableCacpEntry, retryCacpReviewItem, startCacpSurfaceBridge } from './services/cacpSurfaceBridge.ts';
 import { resolveA2UISurfaceIntent } from './services/a2uiSurfaceIntent.ts';
 import { buildPointListSurfaceData, createBlankSpreadsheetSpec } from './utils/a2uiSpreadsheet.ts';
@@ -324,6 +338,7 @@ import type { ProjectLocationAction } from './components/LsaiProjectLocationPane
 import { decodePlusCode } from './utils/plusCode.ts';
 import { isAddPointCommand, parsePointLocation } from './utils/pointLocationInput.ts';
 import type { A2UICacpReviewContext, A2UIGpsRoverSnapshot, A2UIPayload, A2UISpreadsheetSpec, A2UIWorkspaceToolId, CountyGisStatus, CountyParcelAttempt, ProjectLocationCluster, ProjectLocationClusterSet } from './types.ts';
+import type { GisResolution } from './services/gisServiceResolver.ts';
 import { exampleHighwayCl } from './assets/example.highway.cl.ts';
 import { CacpBadge } from './components/CacpBadge.tsx';
 import { hashKey } from './utils/hashKey';
@@ -587,6 +602,7 @@ const A2UI_DOCK_TITLES: Record<string, string> = {
     'roading-panel': 'Roading Studio',
     'gps-rover': 'GPS Rover',
     'project-location': 'Project Location',
+    'soil-limitations': 'Soil Limitations',
 };
 
 
@@ -692,6 +708,7 @@ interface DrawingCanvasHandles {
   getTransform: () => { scale: number; offsetX: number; offsetY: number };
   setTransform: (transform: { scale: number; offsetX: number; offsetY: number }) => void;
   getViewCenterWorld?: () => { easting: number; northing: number };
+  getViewportBboxWorld?: () => { minE: number; maxE: number; minN: number; maxN: number; minX: number; maxX: number; minY: number; maxY: number };
   isPointInView?: (easting: number, northing: number) => boolean;
   isBboxInView?: (minE: number, maxE: number, minN: number, maxN: number) => boolean;
   getMapOverlayTiles?: () => Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: any; opacity?: number }>;
@@ -708,6 +725,10 @@ interface DrawingCanvasHandles {
     color?: string;
     layer?: string;
   }) => void;
+  /** Arm the in-canvas TEXT tool from the Annotation Manager. */
+  startTextPlacement?: (options?: { styleName?: string }) => void;
+  /** Open the in-place editor for an existing canvas text entity. */
+  startTextEdit?: (id: string) => void;
 }
 interface CutSheetPanelHandles {
   downloadDocx: () => void;
@@ -1423,11 +1444,16 @@ const AppContent = () => {
   // Optional BFE linework summary from the last fetch.
   const [lastFloodBfe, setLastFloodBfe] = useState<{ count: number; datum: string | null; error?: string } | null>(null);
   // Flood Agent → Sheet View notes handoff (id makes consumption idempotent).
-  const [pendingSheetNotes, setPendingSheetNotes] = useState<{ id: string; text: string } | null>(null);
+  const [pendingSheetNotes, setPendingSheetNotes] = useState<{
+    id: string;
+    text: string;
+    mode?: 'titleblock' | 'sheet-notes';
+    title?: string;
+  } | null>(null);
   // Closed FEMA polygons kept for live hatch + annotation rebuilding.
   const [lastFloodAreas, setLastFloodAreas] = useState<MapAreaFeature[]>([]);
   // FIRMETTE (v26.05.19.1) � cached FEMA NFHL map image stored in session.
-  const [floodFirmetteData, setFloodFirmetteData] = useState<{ url: string; bbox: string; fetchedAt: string; imageDataUrl?: string } | null>(null);
+  const [floodFirmetteData, setFloodFirmetteData] = useState<{ url: string; bbox: string; fetchedAt: string; imageDataUrl?: string; pdfDataUrl?: string; pdfFileName?: string } | null>(null);
   const [isFetchingFirmette, setIsFetchingFirmette] = useState(false);
   const [isFirmetteViewerVisible, setIsFirmetteViewerVisible] = useState(false);
 
@@ -1450,11 +1476,23 @@ const AppContent = () => {
   const [isSoilsPanelVisible, setIsSoilsPanelVisible] = useState(false);
   const [isFetchingSoils, setIsFetchingSoils] = useState(false);
   const [isFetchingSoilReport, setIsFetchingSoilReport] = useState(false);
+  const [isDownloadingSoilReport, setIsDownloadingSoilReport] = useState(false);
   const [lastSoilsResult, setLastSoilsResult] = useState<import('./services/soilsService.ts').SoilsFetchResult | null>(null);
   const [soilMapUnits, setSoilMapUnits] = useState<SoilMapUnit[]>([]);
   // Closed SSURGO polygons kept for live hatch + annotation rebuilding.
   const [lastSoilAreas, setLastSoilAreas] = useState<MapAreaFeature[]>([]);
-  const [soilReportData, setSoilReportData] = useState<Record<string, { hydgrpdcd?: string; drclassdcd?: string; taxclname?: string; farmlndcl?: string }> | null>(null);
+  const [soilReportData, setSoilReportData] = useState<Record<string, import('./services/soilsService.ts').SoilReportRow> | null>(null);
+  const [soilLimitationsReport, setSoilLimitationsReport] = useState<import('./services/soilLimitationsReport.ts').SoilLimitationsReport | null>(null);
+  const [isCompilingSoilLimitations, setIsCompilingSoilLimitations] = useState(false);
+  const [isDownloadingSoilLimitations, setIsDownloadingSoilLimitations] = useState(false);
+
+  // GIS_AGENT — Streams & Watersheds panel. Presets and a free-form topic both
+  // go through the same live-layer pipeline (`handleShowGisLayer`).
+  const [isStreamsPanelVisible, setIsStreamsPanelVisible] = useState(false);
+  const [isFetchingStreamLayer, setIsFetchingStreamLayer] = useState(false);
+  const [streamLayerNames, setStreamLayerNames] = useState<string[]>([]);
+  const [lastStreamLayerResult, setLastStreamLayerResult] = useState<StreamsPanelResult | null>(null);
+  const [streamLayerError, setStreamLayerError] = useState<string | null>(null);
 
   const DEFAULT_STANDARDS_CHECKS: StandardsComplianceCheckSelection = {
     title_block: true,
@@ -1496,6 +1534,10 @@ const AppContent = () => {
 
   // ANNOTATION CATEGORIES (v26.05.19.15) � per-category style overrides.
   const [annotationCategories, setAnnotationCategories] = useState<AnnotationCategoryStyle[]>(DEFAULT_ANNOTATION_CATEGORIES);
+  // Named text styles + standalone canvas text (manual notes and generated labels).
+  const [annotationTextStyles, setAnnotationTextStyles] = useState<AnnotationTextStyle[]>(DEFAULT_ANNOTATION_TEXT_STYLES);
+  const [activeAnnotationTextStyle, setActiveAnnotationTextStyle] = useState<string>(DEFAULT_ANNOTATION_TEXT_STYLES[0].name);
+  const [textAnnotations, setTextAnnotations] = useState<CanvasTextAnnotation[]>([]);
 
   // PARCEL LABEL FORMATTER � Boundary Agent parcel label field include/exclude + typography controls.
   const [parcelLabelFormatter, setParcelLabelFormatter] = useState<ParcelLabelFormatter>(DEFAULT_PARCEL_LABEL_FORMATTER);
@@ -1658,6 +1700,7 @@ const AppContent = () => {
     flood: 'toolshelf',
     structures: 'toolshelf',
     soils: 'toolshelf',
+    streams: 'toolshelf',
     roading: 'toolshelf',
     gpsStakeout: 'toolshelf',
     gnss: 'toolshelf',
@@ -1895,6 +1938,11 @@ const AppContent = () => {
   const [showAutoDraftPanel, setShowAutoDraftPanel] = useState(false);
   const [isHeaderZoomMenuOpen, setIsHeaderZoomMenuOpen] = useState(false);
   const [isHeaderZoomToPointOpen, setIsHeaderZoomToPointOpen] = useState(false);
+  // Canvas address lookup: geocode a US address and zoom the canvas to it.
+  const [isAddressLookupOpen, setIsAddressLookupOpen] = useState(false);
+  const [addressLookupQuery, setAddressLookupQuery] = useState('');
+  const [addressLookupError, setAddressLookupError] = useState<string | null>(null);
+  const [isAddressLookupLoading, setIsAddressLookupLoading] = useState(false);
   const [isHeaderFindPointsOpen, setIsHeaderFindPointsOpen] = useState(false);
   const [headerZoomPointNumber, setHeaderZoomPointNumber] = useState('');
   const [headerFindPointsQuery, setHeaderFindPointsQuery] = useState('');
@@ -1980,6 +2028,40 @@ const AppContent = () => {
   const canvas2dRef = useRef<DrawingCanvasHandles>(null);
   const cutSheetRef = useRef<CutSheetPanelHandles>(null);
   const [canvasTransform, setCanvasTransform] = useState<{ scale: number; offsetX: number; offsetY: number } | null>(null);
+
+  // First-run tour: open the agent tool shelf briefly, slide it closed, then
+  // flash the command bar's Tools tab so the re-open affordance is discoverable.
+  const [toolShelfIntroPulse, setToolShelfIntroPulse] = useState(false);
+  const toolShelfIntroPlayedRef = useRef(false);
+  const isToolShelfVisibleRef = useRef(isToolShelfVisible);
+  useEffect(() => {
+    isToolShelfVisibleRef.current = isToolShelfVisible;
+  }, [isToolShelfVisible]);
+  useEffect(() => {
+    if (toolShelfIntroPlayedRef.current) return;
+    if (isInitialScreen || showWelcome || activeVisualPanel !== 'canvas') return;
+    toolShelfIntroPlayedRef.current = true;
+
+    try {
+      if (localStorage.getItem('landsurv.tool-shelf-intro.v2') === '1') return;
+      localStorage.setItem('landsurv.tool-shelf-intro.v2', '1');
+    } catch { /* private mode — still run once this session */ }
+
+    // If an agent already opened a real panel, don't hide the user's workspace.
+    if (isToolShelfVisibleRef.current) return;
+
+    const closeDelayMs = 2200;
+    const pulseDelayMs = 760;
+    setIsToolShelfVisible(true);
+    window.setTimeout(() => {
+      setIsToolShelfVisible(false);
+      window.setTimeout(() => setToolShelfIntroPulse(true), pulseDelayMs);
+    }, closeDelayMs);
+    window.setTimeout(
+      () => setToolShelfIntroPulse(false),
+      closeDelayMs + pulseDelayMs + 3600
+    );
+  }, [isInitialScreen, showWelcome, activeVisualPanel, setIsToolShelfVisible]);
   
   // Ref to always access current pointLists (avoids stale closure in async handlers)
   const pointListsRef = useRef(pointLists);
@@ -2206,7 +2288,6 @@ const AppContent = () => {
   const [gpsPanelRequestId, setGpsPanelRequestId] = useState(0);
   // GPS Rover independent floating panels (v26.05.19.1) � persistent across agent context changes like Point List.
   const [isGpsRoverPanelVisible, setIsGpsRoverPanelVisible] = useState(false);
-  const [contourAutoOpenGis, setContourAutoOpenGis] = useState<boolean>(false);
   // Floating Contour dialogs (v26.05.17.33) � replace the in-chat ContourChat with two draggable panels.
   const [isContourGenPanelVisible, setIsContourGenPanelVisible] = useState<boolean>(false);
   const [isContourGenMinimized, setIsContourGenMinimized] = useState<boolean>(false);
@@ -2224,7 +2305,27 @@ const AppContent = () => {
   // Multi-generation contour objects (v26.05.19.3) � each ContourGeneration stores
   // IsoPaths (mathematical representation) + settings for auto-regen and blend.
   const [contourGenerations, setContourGenerations] = useState<ContourGeneration[]>([]);
+  const [contourLabelTool, setContourLabelTool] = useState<'place' | 'erase' | null>(null);
   const [isContourManagementVisible, setIsContourManagementVisible] = useState<boolean>(false);
+  useEffect(() => {
+    if (activeAgent !== AgentType.CONTOURING_AGENT) setContourLabelTool(null);
+  }, [activeAgent]);
+  /** Non-destructive FEMA/soils generation blocks, keyed by the ids on their output entities. */
+  const [generationBlocks, setGenerationBlocks] = useState<GenerationBlock[]>([]);
+  /** Incrementing token so double-clicking the same contour generation re-expands it. */
+  const [contourFocusRequest, setContourFocusRequest] = useState<{ id: string; token: number } | null>(null);
+  const activeFloodGeneration = useMemo(() => {
+    for (let index = generationBlocks.length - 1; index >= 0; index -= 1) {
+      if (generationBlocks[index].kind === 'flood') return generationBlocks[index];
+    }
+    return null;
+  }, [generationBlocks]);
+  const activeSoilsGeneration = useMemo(() => {
+    for (let index = generationBlocks.length - 1; index >= 0; index -= 1) {
+      if (generationBlocks[index].kind === 'soils') return generationBlocks[index];
+    }
+    return null;
+  }, [generationBlocks]);
   // Ref mirrors for use inside effects without dependency churn.
   const linesRef = useRef<SurveyLine[]>([]);
   // Map imagery queued by the Auto Draft orchestrator � consumed by the next
@@ -2308,11 +2409,22 @@ const AppContent = () => {
       const currentGens = contourGenerationsRef.current;
       if (currentGens.length === 0 || points.length < 3) return;
       const currentLines = linesRef.current;
-      const nonContourLines = currentLines.filter(l => !l.contourGenId);
+      const esriGenerationIds = new Set(
+        currentGens.filter(gen => gen.source === 'esri').map(gen => gen.id),
+      );
+      // Online generations are not regenerated from survey points, so keep
+      // their rendered segments while survey generations are rebuilt.
+      const nonContourLines = currentLines.filter(
+        l => !l.contourGenId || esriGenerationIds.has(l.contourGenId),
+      );
     const updatedGens: ContourGeneration[] = [];
     const newContourLines: SurveyLine[] = [];
     const newLabels: ContourLabel[] = [];
     for (const gen of currentGens) {
+      if (gen.source === 'esri') {
+        updatedGens.push(gen);
+        continue;
+      }
       const ignoredSet = new Set(gen.settings.ignoredPointNumbers ?? []);
       let pts = points.filter(p => !ignoredSet.has(p.pointNumber));
       const flt = gen.settings.pointFilterDescription.trim().toUpperCase();
@@ -2341,10 +2453,11 @@ const AppContent = () => {
             maxElevation: gen.settings.maxElevation ?? null,
           }
         );
+        const taggedLabels = labels.map(label => ({ ...label, contourGenId: gen.id }));
         const updatedGen: ContourGeneration = {
           ...gen,
           isoPaths,
-          labels,
+          labels: taggedLabels,
           lastGeneratedAt: new Date().toISOString(),
           pointCount: pts.length,
           excludedPointCount: elevationReport.missingElevation + elevationReport.outOfRange,
@@ -2356,7 +2469,7 @@ const AppContent = () => {
         updatedGens.push(updatedGen);
         if (gen.visible) {
           newContourLines.push(...isoPathsToSurveyLines(isoPaths, gen.id, contourLayers));
-          newLabels.push(...labels);
+          newLabels.push(...taggedLabels);
         }
       } catch {
         updatedGens.push(gen);
@@ -2364,7 +2477,12 @@ const AppContent = () => {
     }
       setContourGenerations(updatedGens);
       setLines([...nonContourLines, ...newContourLines]);
-      setContourLabels(newLabels);
+      // Preserve manual labels and labels from online/ESRI generations; only
+      // survey-generation labels are rebuilt when points change.
+      setContourLabels(prev => [
+        ...prev.filter(label => !label.contourGenId || esriGenerationIds.has(label.contourGenId)),
+        ...newLabels,
+      ]);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points]); // intentionally only triggered by point changes
@@ -3577,12 +3695,23 @@ const AppContent = () => {
   }, []);
 
   // -- CAD Layer visibility handlers (from CAD Manager SSOT) -----------------
-  const handleToggleCadLayer = useCallback((layerName: string) => {
-    setCadLayerVisibility(prev => ({
-      ...prev,
-      [layerName]: prev[layerName] === false ? true : false,
-    }));
+  const handleApplyCadLayerVisibility = useCallback((layerNames: string[], visible: boolean) => {
+    const names = layerNames.filter(Boolean);
+    if (names.length === 0) return;
+    const nameSet = new Set(names);
+    setCadLayerVisibility(prev => {
+      const next = { ...prev };
+      for (const name of nameSet) next[name] = visible;
+      return next;
+    });
+    // View is the master: hiding a layer also drops it from the legend, and
+    // showing it restores both. Legend-only hiding stays in the legend store.
+    legendStore.setLayersViewVisibility(names, visible);
   }, [setCadLayerVisibility]);
+
+  const handleToggleCadLayer = useCallback((layerName: string) => {
+    handleApplyCadLayerVisibility([layerName], cadLayerVisibility[layerName] === false);
+  }, [cadLayerVisibility, handleApplyCadLayerVisibility]);
 
   // -------------------------------------------------------------------------
 
@@ -3649,6 +3778,48 @@ const AppContent = () => {
     }
     return { ...merged, ...cadLayerColors };
   }, [cadManagerState.standard, cadLayerColors]);
+
+  /** Layers actually present on the drawing, summarized for the legend. */
+  const legendDrawingLayers = useMemo((): LegendDrawingLayer[] => {
+    const usage = new Map<string, { lineCount: number; hatchCount: number; patternName?: string }>();
+    const bump = (name: string, kind: 'line' | 'hatch', patternName?: string) => {
+      if (!name) return;
+      const current = usage.get(name) ?? { lineCount: 0, hatchCount: 0 };
+      if (kind === 'line') current.lineCount += 1;
+      else current.hatchCount += 1;
+      if (patternName) current.patternName = patternName;
+      usage.set(name, current);
+    };
+    for (const line of lines) bump(line.layer || '', 'line');
+    for (const hatch of hatches) bump(hatch.layer || '', 'hatch', hatch.patternName);
+    const palette = ['#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#ec4899', '#64748b'];
+    return Array.from(usage.entries())
+      .filter(([name]) => !/^(?:0|DEFPOINTS|MODELSPACE|PAPERSPACE)$/i.test(name.trim()))
+      .sort((a, b) =>
+        (b[1].lineCount + b[1].hatchCount) - (a[1].lineCount + a[1].hatchCount) || a[0].localeCompare(b[0]),
+      )
+      .slice(0, 24)
+      .map(([name, info], index) => ({
+        name,
+        color: cadLayerColorMap[name] ?? palette[index % palette.length],
+        linetype: layerLinetypeMap[name],
+        patternName: info.patternName,
+        lineCount: info.lineCount,
+        hatchCount: info.hatchCount,
+      }));
+  }, [lines, hatches, cadLayerColorMap, layerLinetypeMap]);
+
+  /** Canvas view filtering for hatches; mirrors visibleLines and points. */
+  const visibleHatches = useMemo(
+    () => hatches.filter(hatch => !hatch.hidden && (!hatch.layer || cadLayerVisibility[hatch.layer] !== false)),
+    [hatches, cadLayerVisibility],
+  );
+
+  // Drawing → legend. Refresh entry baselines from what is actually on the
+  // canvas; deliberate legend edits stay in `overrides` and are not clobbered.
+  useEffect(() => {
+    legendStore.syncFromDrawing(legendDrawingLayers);
+  }, [legendDrawingLayers]);
 
   /** Linetypes offered by the layer picker: standard library + any layer/code defaults. */
   const cadLinetypeOptions = useMemo((): string[] => {
@@ -4036,6 +4207,8 @@ const AppContent = () => {
     setAreaLabels([]);
     setLastFloodAreas([]);
     setLastSoilAreas([]);
+    setGenerationBlocks([]);
+    setContourFocusRequest(null);
     setTinSurfaces([]);
     setDraftingStyleLibrary([]);
     setCanvasTransform(null);
@@ -4047,6 +4220,7 @@ const AppContent = () => {
     setPointLists([{ id: 'working', name: 'Unsaved Points', points: [], isVisible: true }]);
     setLines([]);
     setContourLabels([]);
+    setContourLabelTool(null);
     setLineLabelScale(1);
     setCenterlines([]);
     setLinesVisible(true);
@@ -4139,6 +4313,14 @@ const AppContent = () => {
   const handleCadLayerColorChange = useCallback((layerName: string, color: string) => {
     handleCadLayerPropertyChange(layerName, { color });
   }, [handleCadLayerPropertyChange]);
+
+  // Legend → drawing. A legend edit restyles that layer's hatches and layer
+  // properties, so the canvas, paperspace sheet, and legend stay one model.
+  useEffect(() => legendStore.onApply(patch => {
+    setHatches(prev => applyLegendPatchToHatches(prev, patch));
+    if (patch.color) handleCadLayerColorChange(patch.layer, patch.color);
+    if (patch.linetype) handleCadLayerPropertyChange(patch.layer, { lineType: patch.linetype });
+  }), [handleCadLayerColorChange, handleCadLayerPropertyChange, setHatches]);
 
   // Natural-language undo ("undo the last boundary edit") � registers the
   // history_query / history_undo_to CACP skills against the canvas history.
@@ -6956,7 +7138,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                       questionOptions: [...CONTOUR_SOURCE_OPTIONS],
                     }
                   : {
-                      questionOptions: ['Yes, upload points', 'Continue without uploading'],
+                      questionOptions: ['Upload Points', 'Continue without uploading'],
                       a2ui: {
                         kind: 'intake-prompt' as const,
                         agent: AgentType.CONTOURING_AGENT,
@@ -6997,7 +7179,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           ),
           ...(!hasPoints
             ? {
-                questionOptions: ['Yes, upload points', 'Continue without uploading'],
+                questionOptions: ['Upload Points', 'Continue without uploading'],
                 a2ui: {
                   kind: 'intake-prompt' as const,
                   agent: AgentType.STEEP_SLOPE_AGENT,
@@ -7044,7 +7226,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 ),
                 ...(!hasPoints
                   ? {
-                      questionOptions: ['Yes, upload points', 'Continue without uploading'],
+                      questionOptions: ['Upload Points', 'Continue without uploading'],
                       a2ui: {
                         kind: 'intake-prompt' as const,
                         agent: AgentType.PROFILE_AGENT,
@@ -7091,7 +7273,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 ),
                 ...(!hasPoints
                   ? {
-                      questionOptions: ['Yes, upload points', 'Continue without uploading'],
+                      questionOptions: ['Upload Points', 'Continue without uploading'],
                       a2ui: {
                         kind: 'intake-prompt' as const,
                         agent: AgentType.COGO_AGENT,
@@ -7346,8 +7528,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     getSetHistoryForAgent,
   ]);
 
-  // First access to an agent: open the tool shelf on its primary workspace
-  // tool. Tabs already docked by other agents stay available.
+  // First access to an agent: dock its primary workspace tool. The shelf itself
+  // stays closed; only the user or an A2UI action reveals it.
   const autoOpenedAgentToolRef = useRef<Set<AgentType>>(new Set());
   useEffect(() => {
     if (isInitialScreen || !activeAgent) return;
@@ -7355,10 +7537,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     const primaryToolKey = agentPrimaryToolKey[activeAgent];
     if (!primaryToolKey) return;
     autoOpenedAgentToolRef.current.add(activeAgent);
-    // Civil Drafter opens with an actionable Quick Thought. Auto Draft and the
-    // tool shelf stay closed until the user asks for them.
-    if (activeAgent === AgentType.CIVIL_DRAFTER) return;
-    setIsToolShelfVisible(true);
     setToolDockModes(prev =>
       prev[primaryToolKey] === 'toolshelf' ? prev : { ...prev, [primaryToolKey]: 'toolshelf' }
     );
@@ -7472,59 +7650,60 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }
   }, [activeAgent, isInitialScreen, initializedAgents, startSession, startChatWithOverride, showView]);
 
-  // Soils Agent: auto-show floating panel when agent activated; auto-hide when leaving.
-  // Auto-initialize Gemini chat on first activation so the AI description tab works.
+  // Soils Agent: show its panel on activation and keep the conversation shell
+  // available even when Gemini initialization is deferred. The welcome and its
+  // Quick Thoughts must not depend on the optional AI chat session.
   useEffect(() => {
     if (activeAgent === AgentType.SOILS_AGENT && !isInitialScreen) {
       setIsSoilsPanelVisible(true);
       if (!initializedAgents.has(AgentType.SOILS_AGENT)) {
+        startSession();
         try {
-          startSession();
           const newChat = startChatWithOverride(AgentType.SOILS_AGENT, '');
           setSoilsChat(newChat);
-          setSoilsChatHistory([{
-            role: MessageRole.MODEL,
-            text: buildAgentWelcome(AgentType.SOILS_AGENT, `Use <strong>Fetch Soils</strong> to load the SSURGO linework, then <strong>Fetch Soil Report</strong> for the attribute tables.`),
-          }]);
-          setSuggestedQuestions([
-            'What soil types are present in this area?',
-            'Fetch soil report for all map units',
-            'Clear soil linework',
-          ]);
-          setInitializedAgents(prev => new Set(prev).add(AgentType.SOILS_AGENT));
-          showView('canvas');
-          setError(null);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          setError(`Soils Agent init: ${msg}`);
+        } catch (chatErr) {
+          console.warn('[Soils Agent] AI chat deferred:', chatErr);
         }
+        setInitializedAgents(prev => new Set(prev).add(AgentType.SOILS_AGENT));
       }
+      setSoilsChatHistory(prev => (
+        prev.length === 0
+          ? [{
+              role: MessageRole.MODEL,
+              text: buildAgentWelcome(AgentType.SOILS_AGENT, `Use <strong>Fetch Soils</strong> to load the SSURGO linework, then <strong>Fetch Soil Report</strong> for the attribute tables.`),
+            }]
+          : prev
+      ));
+      setSuggestedQuestions(getAgentInitialQuickThoughtOptions(AgentType.SOILS_AGENT));
+      showView('canvas');
+      setError(null);
     } else {
       setIsSoilsPanelVisible(false);
     }
   }, [activeAgent, isInitialScreen, initializedAgents, startSession, startChatWithOverride, showView]);
 
-  // Contouring Agent (v26.05.17.33): auto-show Generation panel; auto-hide both panels
-  // when leaving the agent so the floating dialogs stay in-context.
+  // GIS Agent: the Streams & Watersheds panel is its primary layer tool, so it
+  // opens with the agent and closes when the user leaves the agent.
   useEffect(() => {
-    if (activeAgent === AgentType.CONTOURING_AGENT && !isInitialScreen) {
-      setIsContourGenPanelVisible(true);
-      setIsContourGenMinimized(false);
-      // With no survey points, surface the public GIS sources immediately
-      // instead of making the user hunt for the ESRI panel.
-      if (points.length === 0) {
-        setIsContourEsriPanelVisible(true);
-        setIsContourEsriMinimized(false);
-        setIsToolShelfVisible(true);
-        setToolDockMode('contourEsri', 'toolshelf');
-      }
+    if (activeAgent === AgentType.GIS_AGENT && !isInitialScreen) {
+      setIsStreamsPanelVisible(true);
     } else {
+      setIsStreamsPanelVisible(false);
+    }
+  }, [activeAgent, isInitialScreen]);
+
+  // Contouring Agent: keep both floating dialogs closed when the agent is
+  // selected. Explicit requests (Quick Thought / "Open ESRI REST sources")
+  // open them through openContourGisPanel. Switching away closes them so they
+  // do not linger over another workspace.
+  useEffect(() => {
+    if (activeAgent !== AgentType.CONTOURING_AGENT || isInitialScreen) {
       setIsContourGenPanelVisible(false);
       setIsContourEsriPanelVisible(false);
       setIsContourGenMinimized(false);
       setIsContourEsriMinimized(false);
     }
-  }, [activeAgent, isInitialScreen, points.length, setToolDockMode]);
+  }, [activeAgent, isInitialScreen]);
 
   // Steep Slope Agent: auto-show slope tools panel while active.
   useEffect(() => {
@@ -9086,6 +9265,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             : `Survey ${contourSettings.contourInterval}ft (Gen ${existingGens.length + 1})`;
         const genId = `gen-${Date.now()}`;
 
+        const taggedLabels = newLabels.map(label => ({ ...label, contourGenId: genId }));
         const newGeneration: ContourGeneration = {
             id: genId,
             name: genName,
@@ -9100,7 +9280,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 : null,
             elevationFilterSuppressed: elevationReport.suppressed,
             isoPaths,
-            labels: newLabels,
+            labels: taggedLabels,
             visible: true,
         };
 
@@ -9113,8 +9293,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             const existingLines = prevLines.filter(l => !l.type?.startsWith('contour') || (l.contourGenId && l.contourGenId !== genId));
             return [...existingLines, ...contourLines];
         });
-        setContourLabels(newLabels);
+        setContourLabels(prev => [
+            ...prev.filter(label => label.contourGenId !== genId),
+            ...taggedLabels,
+        ]);
         setContourGenerations(prev => [...prev, newGeneration]);
+        setContourFocusRequest({ id: genId, token: Date.now() });
         setIsContourManagementVisible(true);
         logActionToFieldbook(`CACP contour layers: ${contourLayers.minorLayer} (minor) / ${contourLayers.majorLayer} (major).`);
 
@@ -9300,6 +9484,43 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     input.click();
   }, [handleImportTinSurface]);
 
+  const scoutAbortRef = useRef<AbortController | null>(null);
+
+  const beginScoutActivity = useCallback((title: string, subtitle?: string) => {
+    scoutAbortRef.current?.abort();
+    const controller = new AbortController();
+    scoutAbortRef.current = controller;
+    const run = {
+      id: `scout-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      signal: controller.signal,
+    };
+    scoutActivityStore.begin({ id: run.id, title, subtitle });
+    return run;
+  }, []);
+
+  const pushScoutActivity = useCallback((runId: string, event: GisActivityEvent) => {
+    scoutActivityStore.push(runId, {
+      id: event.id,
+      at: event.at ?? Date.now(),
+      phase: event.phase ?? 'scout',
+      message: event.message,
+      url: event.url,
+      level: event.level ?? 'info',
+    });
+  }, []);
+
+  const finishScoutActivity = useCallback(
+    (runId: string, status: 'success' | 'error', summary: string) => {
+      scoutActivityStore.finish(runId, status, summary);
+    },
+    [],
+  );
+
+  const handleScoutStop = useCallback(() => {
+    scoutAbortRef.current?.abort();
+    scoutActivityStore.cancelCurrent('Stopped by the user.');
+  }, []);
+
   const openTinSurfacesSurface = useCallback(() => {
     openA2UISurface({
       key: 'workspace-tin-surfaces',
@@ -9336,9 +9557,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
   // -- ContourGeneration management callbacks (v26.05.19.3) ------------------
   const handleContourGenToggleVisible = useCallback((id: string, visible: boolean) => {
+    const generation = contourGenerationsRef.current.find(g => g.id === id);
     setContourGenerations(prev => prev.map(g => {
       if (g.id !== id) return g;
-      const updated = { ...g, visible };
+      const updated = { ...g, visible, labels: g.labels.map(label => ({ ...label, contourGenId: id })) };
       // Sync lines: insert or remove this generation's segments.
       setLines(pl => {
         const without = pl.filter(l => l.contourGenId !== id);
@@ -9354,6 +9576,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       });
       return updated;
     }));
+    if (generation) {
+      const labels = generation.labels.map(label => ({ ...label, contourGenId: id }));
+      setContourLabels(prev => [
+        ...prev.filter(label => label.contourGenId !== id),
+        ...(visible ? labels : []),
+      ]);
+    }
   }, []);
 
   const handleContourGenRename = useCallback((id: string, name: string) => {
@@ -9416,7 +9645,101 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const handleContourGenDelete = useCallback((id: string) => {
     setContourGenerations(prev => prev.filter(g => g.id !== id));
     setLines(pl => pl.filter(l => l.contourGenId !== id));
+    setContourLabels(prev => prev.filter(label => label.contourGenId !== id));
   }, []);
+
+  const handleClearContourLabels = useCallback(() => {
+    setContourLabels([]);
+    setContourGenerations(prev => prev.map(generation =>
+      generation.labels.length > 0 ? { ...generation, labels: [] } : generation
+    ));
+    logActionToFieldbook('Contour labels: cleared all labels from the drawing.');
+  }, [logActionToFieldbook]);
+
+  const handleAutoLabelContours = useCallback(() => {
+    const visibleGenerations = contourGenerations.filter(generation => generation.visible);
+    const rebuiltLabels: ContourLabel[] = [];
+
+    if (visibleGenerations.length > 0) {
+      const updated = contourGenerations.map(generation => {
+        if (!generation.visible) return generation;
+        const labels = generateContourLabelsFromIsoPaths(generation.isoPaths, {
+          labelDensity: generation.settings.labelDensity,
+        }).map(label => ({ ...label, contourGenId: generation.id }));
+        rebuiltLabels.push(...labels);
+        return {
+          ...generation,
+          labels,
+          settings: { ...generation.settings, showLabels: true },
+        };
+      });
+      setContourGenerations(updated);
+    } else {
+      rebuiltLabels.push(...generateContourLabelsFromLines(
+        lines.filter(line => line.type?.startsWith('contour') && !line.hidden),
+        { labelDensity: contourSettings.labelDensity },
+      ));
+    }
+
+    setContourLabels(prev => [
+      ...prev.filter(label => !label.contourGenId),
+      ...rebuiltLabels,
+    ]);
+    setContourSettings(prev => ({ ...prev, showLabels: true }));
+    logActionToFieldbook(`Contour labels: rebuilt ${rebuiltLabels.length} label(s) from visible contours.`);
+  }, [contourGenerations, contourSettings.labelDensity, lines, logActionToFieldbook]);
+
+  const handleContourLabelStrike = useCallback((
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+    mode: 'place' | 'erase',
+    toleranceWorld: number,
+  ) => {
+    const result = strikeContourLabels({
+      labels: contourLabels,
+      lines,
+      start,
+      end,
+      mode,
+      eraseTolerance: toleranceWorld,
+      duplicateTolerance: Math.max(1, toleranceWorld * 0.4),
+    });
+
+    if (result.removedLabels.length > 0) {
+      const removedKeys = new Set(result.removedLabels.map(label => `${label.x}|${label.y}|${label.text}`));
+      setContourGenerations(prev => prev.map(generation => ({
+        ...generation,
+        labels: generation.labels.filter(label => !removedKeys.has(`${label.x}|${label.y}|${label.text}`)),
+      })));
+    }
+    setContourLabels(result.labels);
+    logActionToFieldbook(
+      mode === 'place'
+        ? `Contour labels: placed ${result.added} label(s) by strike line.`
+        : `Contour labels: erased ${result.removed} label(s) by strike line.`,
+    );
+  }, [contourLabels, lines, logActionToFieldbook]);
+
+  /**
+   * Canvas double-click on generated linework opens the source tool without
+   * altering geometry: contour generations focus their management/parameter
+   * panel; FEMA and soils blocks reopen the matching area tool.
+   */
+  const handleOpenGeneration = useCallback((generationId: string) => {
+    if (contourGenerations.some(generation => generation.id === generationId)) {
+      setContourFocusRequest(previous => ({
+        id: generationId,
+        token: (previous?.token ?? 0) + 1,
+      }));
+      setIsContourManagementVisible(true);
+      return;
+    }
+
+    const block = generationBlocks.find(candidate => candidate.id === generationId);
+    if (!block) return;
+    if (block.kind === 'flood') setIsFloodPanelVisible(true);
+    if (block.kind === 'soils') setIsSoilsPanelVisible(true);
+  }, [contourGenerations, generationBlocks]);
 
   // Build a deterministic in-session TIN from current survey points so both
   // Auto Draft and Steep Slope tools operate on the same source surface.
@@ -9593,17 +9916,27 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
    * Mode 'inclusion': builds a bbox from drawn inclusion lines ? queries service.
    * Mode 'description': geocodes the text via Nominatim then queries service.
    */
-  const handleFetchEsriContours = useCallback(async (
+  const handleFetchEsriContoursCore = useCallback(async (
     serviceUrl: string,
     mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
     opts?: ContourFetchOptions,
-  ): Promise<{ ok: boolean; featureCount: number; segmentCount: number; layerName: string; message: string }> => {
+  ): Promise<{
+    ok: boolean;
+    featureCount: number;
+    segmentCount: number;
+    layerName: string;
+    message: string;
+    bboxWgs84?: [number, number, number, number];
+    serviceUrl?: string;
+    resolvedSource?: string;
+  }> => {
     // USGS National Map layers arrive pre-classified (index / intermediate /
     // supplemental) and each gets its own CAD layer; custom/state services keep
     // the historical single ESRI-CONTOUR layer and elevation-based split.
     const layerName = opts?.layerName ?? 'ESRI-CONTOUR';
     const clearPrefix = opts?.clearPrefix ?? 'ESRI-CONTOUR';
+    let resolvedBboxWgs84: [number, number, number, number] | null = null;
     setIsFetchingEsri(true);
     setError(null);
     try {
@@ -9707,8 +10040,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         if ((north - south) < MIN_SPAN) { south = centerLat - MIN_SPAN / 2; north = centerLat + MIN_SPAN / 2; }
         if ((east - west) < MIN_SPAN)  { west  = centerLon - MIN_SPAN / 2; east  = centerLon + MIN_SPAN / 2; }
         // Always keep WGS84 from Nominatim for the service query.
-        // Step 2 converts to the service's native SR; outSR requests
-        // features back in the project coordinate system if epsg is set.
+        // Step 2 converts the bbox to the service's native SR; output is
+        // requested in WGS84 and converted to the project EPSG using the SR
+        // actually reported by the response.
         xmin = west; ymin = south; xmax = east; ymax = north;
         inSR = 4326;
         dbgLog('ESRI', { step: '1-bbox-description', nominatimHit: hit.display_name, rawBbox: hit.boundingbox, xmin, ymin, xmax, ymax, inSR, epsg });
@@ -9758,6 +10092,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
       }
 
+      resolvedBboxWgs84 = [xmin, ymin, xmax, ymax];
+
       // -- 2. Query ESRI REST service -----------------------------------------
       // First, fetch service metadata to get its native spatial reference so we
       // can convert the bbox into the service's own coordinate system rather than
@@ -9766,7 +10102,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       // their native SR).
       let queryXmin = xmin, queryYmin = ymin, queryXmax = xmax, queryYmax = ymax;
       let queryInSR = inSR;
-      let queryOutSR = epsg || inSR;
+      // Always ask for WGS84 output. PASDA and 3DEP may silently ignore an
+      // unsupported State Plane outSR and return their native coordinates;
+      // 4326 is universally supported, and the response's actual SR is used
+      // when converting the geometry below.
+      let queryOutSR = 4326;
 
       // Preflight: probe the service metadata. Cheaper than the query endpoint
       // and lets us surface upstream outages ("Service ... not started", auth
@@ -9802,10 +10142,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             const ne = proj4mod('EPSG:4326', `EPSG:${nativeWkid}`, [xmax, ymax]);
             queryXmin = sw[0]; queryYmin = sw[1]; queryXmax = ne[0]; queryYmax = ne[1];
             queryInSR = nativeWkid;
-            // Always request output in the service's native SR so ArcGIS Server
-            // will definitely support it. If the project uses a different EPSG we
-            // convert each point client-side after parsing (see step 4).
-            queryOutSR = nativeWkid;
+            // Keep outSR at 4326. The query bbox uses the native SR for older
+            // servers that only accept native input, but output stays WGS84.
             dbgLog('ESRI', { step: '2-converted', nativeWkid, queryXmin, queryYmin, queryXmax, queryYmax, queryInSR, queryOutSR, projectEpsg: epsg });
           } catch (proj4err) {
             dbgLog('ESRI', { step: '2-proj4-error', error: String(proj4err) });
@@ -9818,16 +10156,20 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
       // -- 3. Query helper (single tile) --------------------------------------
       type EsriFeature = { geometry?: { paths?: number[][][] }; attributes?: Record<string, unknown> };
-      const fetchTile = async (qXmin: number, qYmin: number, qXmax: number, qYmax: number) => {
+      const fetchTile = async (
+        qXmin: number, qYmin: number, qXmax: number, qYmax: number,
+        queryInSr = queryInSR,
+        queryOutSr = queryOutSR,
+      ) => {
         const tileParams = new URLSearchParams({
           where: '1=1',
           geometry: `${qXmin},${qYmin},${qXmax},${qYmax}`,
           geometryType: 'esriGeometryEnvelope',
-          inSR: String(queryInSR),
+          inSR: String(queryInSr),
           spatialRel: 'esriSpatialRelIntersects',
           outFields: '*',
           returnGeometry: 'true',
-          outSR: String(queryOutSR),
+          outSR: String(queryOutSr),
           f: 'json',
         });
         const url = `${serviceUrl}/query?${tileParams.toString()}`;
@@ -9835,11 +10177,34 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         if (!r.ok) throw new Error(translateEsriUpstreamError({ httpStatus: r.status, httpStatusText: r.statusText }, serviceUrl));
         const d = await r.json();
         if (d.error) throw new Error(translateEsriUpstreamError({ arcgisError: d.error }, serviceUrl));
-        return { features: (d.features ?? []) as EsriFeature[], exceeded: !!d.exceededTransferLimit, url };
+        return {
+          features: (d.features ?? []) as EsriFeature[],
+          exceeded: !!d.exceededTransferLimit,
+          // Never assume the server honored outSR. PASDA/3DEP can return
+          // native coordinates even when outSR asked for State Plane.
+          outWkid: esriSpatialReferenceWkid(d.spatialReference),
+          url,
+        };
       };
 
-      const rootTile = await fetchTile(queryXmin, queryYmin, queryXmax, queryYmax);
-      const queryUrl = rootTile.url;
+      let rootTile = await fetchTile(queryXmin, queryYmin, queryXmax, queryYmax);
+      let queryUrl = rootTile.url;
+
+      // Some ArcGIS Server builds silently return zero when the request is in
+      // a projected SR (even their own). Retry the same AOI in WGS84 before
+      // declaring the service empty; USGS/state services accept this form.
+      if (rootTile.features.length === 0 && inSR === 4326 && queryInSR !== 4326) {
+        const wgs84Tile = await fetchTile(xmin, ymin, xmax, ymax, 4326, 4326);
+        if (wgs84Tile.features.length > 0) {
+          rootTile = wgs84Tile;
+          queryUrl = wgs84Tile.url;
+          queryXmin = xmin; queryYmin = ymin; queryXmax = xmax; queryYmax = ymax;
+          queryInSR = 4326;
+          queryOutSR = 4326;
+          dbgLog('ESRI', { step: '3-wgs84-retry', featureCount: rootTile.features.length, queryUrl });
+        }
+      }
+
       dbgLog('ESRI', { step: '3-query', queryUrl });
       dbgLog('ESRI', { step: '4-response', featureCount: rootTile.features.length, exceededTransferLimit: rootTile.exceeded });
       let features: EsriFeature[] = rootTile.features;
@@ -9920,21 +10285,36 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         readContourElevation(attrs).elevation;
 
       // -- 4. Convert to SurveyLines ------------------------------------------
-      // If the project EPSG differs from the queryOutSR (service native SR),
-      // convert each coordinate client-side so points land in the right canvas space.
+      // Use the SR the response actually reports, not the SR we requested.
+      // PASDA North can answer an outSR=27048 request with 2271 geometry, and
+      // 3DEP/PASDA South can answer with 3857 geometry. Trusting outSR in those
+      // cases shifts the same contours by hundreds of thousands of feet.
+      const responseOutSR = rootTile.outWkid ?? queryOutSR;
       let ptConvert: ((xy: [number, number]) => [number, number]) | null = null;
-      if (epsg && epsg !== queryOutSR) {
+      if (epsg && epsg !== responseOutSR) {
         try {
-          const proj4mod = (await import('proj4')).default;
-          ptConvert = (xy) => proj4mod(`EPSG:${queryOutSR}`, `EPSG:${epsg}`, xy) as [number, number];
-          dbgLog('ESRI', { step: '4-client-convert', from: queryOutSR, to: epsg });
+          const { makePointConverter } = await import('./services/esriRestClient.ts');
+          ptConvert = await makePointConverter(responseOutSR, epsg);
+          if (!ptConvert) {
+            throw new Error(`No projection definition for EPSG:${responseOutSR} -> EPSG:${epsg}`);
+          }
+          dbgLog('ESRI', { step: '4-client-convert', from: responseOutSR, to: epsg, requestedOutSR: queryOutSR });
           // Log a sample coordinate so alignment can be verified in the browser console
           const samplePath = features[0]?.geometry?.paths?.[0];
           if (samplePath?.[0]) {
             const raw: [number, number] = [samplePath[0][0], samplePath[0][1]];
-            dbgLog('ESRI', { step: '4-sample-vertex', raw, converted: ptConvert(raw) });
+            const converted = ptConvert(raw);
+            if (!Number.isFinite(converted[0]) || !Number.isFinite(converted[1])) {
+              throw new Error(`Projection produced non-finite coordinates for EPSG:${responseOutSR} -> EPSG:${epsg}`);
+            }
+            dbgLog('ESRI', { step: '4-sample-vertex', raw, converted });
           }
-        } catch { /* proj4 unavailable � keep native coords */ }
+        } catch (err) {
+          throw new Error(
+            `Contours were returned in EPSG:${responseOutSR}, but could not be converted to project EPSG:${epsg}. ` +
+            `Refusing to place unconverted coordinates on the canvas. ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
       }
 
       const newLines: SurveyLine[] = [];
@@ -9992,15 +10372,74 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         outputLines = clipped;
       }
 
-      setLines((prev: SurveyLine[]) => [...prev.filter((l: SurveyLine) => !l.layer?.startsWith(clearPrefix)), ...outputLines]);
+      const now = new Date().toISOString();
+      const generationId = `online-gen-${Date.now()}`;
+      const isoPaths = surveyLinesToIsoPaths(outputLines);
+      const onlineLabels = contourSettings.showLabels
+        ? generateContourLabelsFromIsoPaths(isoPaths, { labelDensity: contourSettings.labelDensity })
+          .map(label => ({ ...label, contourGenId: generationId }))
+        : [];
+      const vertexKeys = new Set<string>();
+      let minElevation = Infinity;
+      let maxElevation = -Infinity;
+      for (const path of isoPaths) {
+        if (Number.isFinite(path.elevation)) {
+          minElevation = Math.min(minElevation, path.elevation);
+          maxElevation = Math.max(maxElevation, path.elevation);
+        }
+        for (const vertex of path.vertices) vertexKeys.add(`${vertex.x},${vertex.y}`);
+      }
+      const onlineGeneration: ContourGeneration = {
+        id: generationId,
+        name: `Online ${layerName} contours`,
+        createdAt: now,
+        lastGeneratedAt: now,
+        settings: { ...contourSettings },
+        activeInclusionBoundaryId: activeInclusionBoundaryRef.current?.id ?? null,
+        pointCount: vertexKeys.size,
+        elevationRange: Number.isFinite(minElevation)
+          ? { min: minElevation, max: maxElevation }
+          : null,
+        isoPaths,
+        labels: onlineLabels,
+        visible: true,
+        source: 'esri',
+        serviceUrl,
+      };
+      const generatedLines = outputLines.map(line => ({ ...line, contourGenId: generationId }));
+      setLines((prev: SurveyLine[]) => [...prev.filter((l: SurveyLine) => !l.layer?.startsWith(clearPrefix)), ...generatedLines]);
+      setContourGenerations(prev => [...prev, onlineGeneration]);
+      setContourLabels(prev => [
+        ...prev.filter(label => label.contourGenId !== generationId),
+        ...onlineLabels,
+      ]);
+      setContourFocusRequest({ id: generationId, token: Date.now() });
+      // A prior Clear Canvas (or a layer toggle) can leave linesVisible false.
+      // Newly fetched contours must be visible, otherwise the fetch looks like
+      // it succeeded but nothing reaches the canvas.
+      setLinesVisible(true);
+      setCadLayerVisibility(prev => ({ ...prev, [layerName]: true }));
       dbgLog('ESRI', { step: '5-success', newLineCount: outputLines.length, exceededTransferLimit, tilesFetched });
       const tileSummary = tilesFetched > 1 ? ` across ${tilesFetched} tile(s)${tilesSubdivided > 0 ? ` (${tilesSubdivided} further subdivided)` : ''}` : '';
       const partialNote = exceededTransferLimit
         ? (userStoppedTiling ? ' � tiling stopped by user, coverage is partial' : ' � transfer limit reached on the deepest tile(s), coverage may be partial')
         : '';
-      const summary = `Fetched ${outputLines.length} contour segments onto layer ${layerName} from ${serviceUrl} (${features.length} features${tileSummary}${partialNote}).`;
+      const summary = `Fetched ${outputLines.length} contour segments onto layer ${layerName} from ${serviceUrl} (${features.length} features${tileSummary}${partialNote}). Saved contour generation "${onlineGeneration.name}" for TIN creation.`;
       logActionToFieldbook(summary);
       showView('canvas');
+      // Frame the imported contours so a fetch made from another view cannot
+      // leave the new geometry off-screen.
+      let minE = Infinity, maxE = -Infinity, minN = Infinity, maxN = -Infinity;
+      for (const line of outputLines) {
+        if (!line.fromPt || !line.toPt) continue;
+        minE = Math.min(minE, line.fromPt.x, line.toPt.x);
+        maxE = Math.max(maxE, line.fromPt.x, line.toPt.x);
+        minN = Math.min(minN, line.fromPt.y, line.toPt.y);
+        maxN = Math.max(maxN, line.fromPt.y, line.toPt.y);
+      }
+      if (Number.isFinite(minE) && Number.isFinite(maxE) && maxE > minE && maxN > minN) {
+        setTimeout(() => canvas2dRef.current?.zoomToBbox(minE, maxE, minN, maxN, 0.15), 150);
+      }
       if (exceededTransferLimit) {
         setError(userStoppedTiling
           ? `?? Tiling stopped after ${tilesFetched} tile(s) � coverage is partial.`
@@ -10013,6 +10452,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         segmentCount: outputLines.length,
         layerName,
         message: summary,
+        bboxWgs84: resolvedBboxWgs84 ?? undefined,
+        serviceUrl,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -10022,11 +10463,216 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       // transfer-limit warning.
       const displayMs = msg.length > 120 || msg.includes('\n') ? 20000 : 7000;
       setTimeout(() => setError(null), displayMs);
-      return { ok: false, featureCount: 0, segmentCount: 0, layerName, message: msg };
+      return {
+        ok: false,
+        featureCount: 0,
+        segmentCount: 0,
+        layerName,
+        message: msg,
+        bboxWgs84: resolvedBboxWgs84 ?? undefined,
+        serviceUrl,
+      };
     } finally {
       setIsFetchingEsri(false);
     }
-  }, [lines, points, settings, contourSettings, logActionToFieldbook, showView, dbgLog]);
+  }, [lines, points, settings, contourSettings, logActionToFieldbook, showView, dbgLog, setLinesVisible, setCadLayerVisibility, setContourGenerations]);
+
+  /**
+   * Contour fetch with automatic live-source fallback.
+   *
+   * The core handler queries exactly one service. This wrapper handles the two
+   * cases that used to dead-end with "no geometry":
+   *   • no service URL supplied — resolve the best live source first (PASDA in
+   *     Pennsylvania, the state registry elsewhere);
+   *   • a source that answers with zero features — ask the resolver for
+   *     verified alternatives (PASDA, ArcGIS Online, Scout portal browser)
+   *     and retry each through the same core pipeline.
+   */
+  const handleFetchEsriContours = useCallback(async (
+    serviceUrl: string | undefined,
+    mode: 'inclusion' | 'description' | 'project',
+    descriptionText?: string,
+    opts?: ContourFetchOptions,
+  ) => {
+    const requested = (serviceUrl ?? '').trim();
+    const tried = new Set<string>();
+    if (requested) tried.add(requested.toLowerCase());
+    const projectIsPennsylvania =
+      displayedProjectLocationSet.clusters.some(cluster =>
+        /^(?:pa|pennsylvania)$/i.test(cluster.jurisdiction?.state?.trim() ?? ''),
+      ) || [2271, 2272].includes(Number(settings.projection?.epsg));
+
+    const bboxForResolution = async (): Promise<[number, number, number, number]> => {
+      if (mode === 'description') {
+        const { geocodeLocationText } = await import('./utils/aoiResolver.ts');
+        return geocodeLocationText(descriptionText ?? '');
+      }
+      const { resolveAoi } = await import('./utils/aoiResolver.ts');
+      const activeB = activeInclusionBoundaryRef.current;
+      const inclusionLines = lines.filter(line =>
+        line.type === 'inclusion' && (!activeB || line.polylineId === activeB.polylineId)
+      );
+      const aoi = await resolveAoi({
+        points,
+        lines: mode === 'project' ? [] : inclusionLines,
+        projectEpsg: settings.projection?.epsg,
+        locationText: descriptionText,
+      });
+      return aoi.bboxWgs84;
+    };
+
+    const jurisdictionForBbox = (bbox: [number, number, number, number]) => {
+      const cx = (bbox[0] + bbox[2]) / 2;
+      const cy = (bbox[1] + bbox[3]) / 2;
+      const cluster = displayedProjectLocationSet.clusters.find(candidate => {
+        const b = candidate.estimate.bboxWgs84;
+        return !!b && cx >= b[0] && cx <= b[2] && cy >= b[1] && cy <= b[3];
+      }) ?? displayedProjectLocationSet.clusters[0];
+      return cluster?.jurisdiction;
+    };
+
+    const tryResolvedSources = async (
+      bbox: [number, number, number, number],
+    ): Promise<{
+      success: boolean;
+      result?: Awaited<ReturnType<typeof handleFetchEsriContoursCore>>;
+      resolution?: GisResolution;
+      lastResult?: Awaited<ReturnType<typeof handleFetchEsriContoursCore>> | null;
+    }> => {
+      const { resolveGisServices } = await import('./services/gisServiceResolver.ts');
+      const jurisdiction = jurisdictionForBbox(bbox);
+      const scoutRun = beginScoutActivity(
+        'Resolving contours',
+        `${jurisdiction?.county ? `${jurisdiction.county} County` : 'Project'} · live GIS`,
+      );
+      const resolution = await resolveGisServices({
+        kind: 'contours',
+        bboxWgs84: bbox,
+        state: jurisdiction?.state,
+        county: jurisdiction?.county,
+        signal: scoutRun.signal,
+        onActivity: event => pushScoutActivity(scoutRun.id, event),
+        log: (msg, payload) => dbgLog('Resolver', { msg, ...((payload as object) ?? {}) }),
+      }).catch((error: unknown) => {
+        finishScoutActivity(
+          scoutRun.id,
+          'error',
+          error instanceof Error ? error.message : String(error),
+        );
+        throw error;
+      });
+      const verifiedCount = resolution.sources.filter(source => source.verified).length;
+      finishScoutActivity(
+        scoutRun.id,
+        verifiedCount > 0 ? 'success' : 'error',
+        `${verifiedCount} verified of ${resolution.sources.length} live source(s).`,
+      );
+
+      let lastResult: Awaited<ReturnType<typeof handleFetchEsriContoursCore>> | null = null;
+      for (const source of resolution.sources.slice(0, 4)) {
+        const key = source.url.toLowerCase();
+        if (tried.has(key)) continue;
+        tried.add(key);
+        // Do not inherit a USGS layer name on a PASDA/state fallback: that
+        // would wipe the USGS class and mislabel the imported geometry.
+        const fallbackLayer = source.provider === 'pasda'
+          ? 'PASDA-CONTOUR'
+          : source.provider === 'federal' || /usgs/i.test(source.label)
+            ? 'USGS-CONTOUR-LARGE'
+            : 'ESRI-CONTOUR';
+        const fallbackOpts: ContourFetchOptions = {
+          ...(opts ?? {}),
+          layerName: fallbackLayer,
+          clearPrefix: fallbackLayer,
+          contourType: undefined,
+        };
+        const retried = await handleFetchEsriContoursCore(source.url, mode, descriptionText, fallbackOpts);
+        if (retried.ok) {
+          logActionToFieldbook(
+            `Contour source: ${source.label} returned geometry after the original source did not.`,
+          );
+          return {
+            success: true,
+            result: {
+              ...retried,
+              resolvedSource: source.label,
+              message: `${retried.message} Source: ${source.label}${
+                typeof source.featureCount === 'number'
+                  ? ` (${source.featureCount.toLocaleString()} features at this footprint)`
+                  : ''
+              }.`,
+            },
+          };
+        }
+        lastResult = retried;
+      }
+      return { success: false, resolution, lastResult };
+    };
+
+    // A PA project must try the complete PASDA mosaics before honoring an
+    // explicit national/state source. Without this, a USGS or stale PASDA URL
+    // wins simply because it was passed in, and the resolver never runs.
+    if (requested && projectIsPennsylvania) {
+      try {
+        const bbox = await bboxForResolution();
+        const outcome = await tryResolvedSources(bbox);
+        if (outcome.success && outcome.result) return outcome.result;
+      } catch {
+        /* fall through to the explicitly requested source */
+      }
+    }
+
+    if (!requested) {
+      try {
+        const bbox = await bboxForResolution();
+        const outcome = await tryResolvedSources(bbox);
+        if (outcome.success && outcome.result) return outcome.result;
+        if (outcome.lastResult) return outcome.lastResult;
+        return {
+          ok: false,
+          featureCount: 0,
+          segmentCount: 0,
+          layerName: opts?.layerName ?? 'ESRI-CONTOUR',
+          message: `No live contour source returned geometry for this project. ${outcome.resolution?.warnings.join(' ') ?? ''}`.trim(),
+          bboxWgs84: bbox,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          featureCount: 0,
+          segmentCount: 0,
+          layerName: opts?.layerName ?? 'ESRI-CONTOUR',
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+
+    const first = await handleFetchEsriContoursCore(requested, mode, descriptionText, opts);
+    if (first.ok || opts?.autoResolve === false || !first.bboxWgs84) return first;
+    const noGeometry = /returned no contour features|No valid polyline geometry|No contour segments fell inside/i.test(first.message);
+    if (!noGeometry) return first;
+
+    try {
+      const outcome = await tryResolvedSources(first.bboxWgs84);
+      if (outcome.success && outcome.result) return outcome.result;
+      if (outcome.lastResult) {
+        return {
+          ...outcome.lastResult,
+          message: `${first.message} ${outcome.lastResult.message}`.trim(),
+          bboxWgs84: first.bboxWgs84,
+        };
+      }
+      return {
+        ...first,
+        message: `${first.message} ${outcome.resolution?.warnings.join(' ') ?? ''}`.trim(),
+      };
+    } catch (error) {
+      return {
+        ...first,
+        message: `${first.message} Live-source resolver failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }, [handleFetchEsriContoursCore, displayedProjectLocationSet, points, lines, settings.projection?.epsg, dbgLog, logActionToFieldbook]);
 
   /**
    * Flood Agent (v26.05.17.16) \u2014 fetch FEMA NFHL flood-hazard polygons for
@@ -10037,7 +10683,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
     bboxOverride?: [number, number, number, number] | null,
-    options?: import('./services/floodService.ts').FloodFetchOptions,
+    options?: import('./services/floodService.ts').FloodFetchOptions & { clipToBoundary?: boolean },
   ): Promise<{ ok: boolean; featureCount: number; message: string }> => {
     setIsFetchingFlood(true);
     setError(null);
@@ -10080,23 +10726,93 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         bboxWgs84 = await geocodeAreaDescription(descriptionText || '');
       }
 
+      const shouldClip = mode === 'inclusion' || options?.clipToBoundary === true;
+      let clipLoops: HatchBoundaryLoop[] = [];
+      if (shouldClip) {
+        const { buildInclusionBoundaryLoops } = await import('./services/soilLimitationsReport.ts');
+        const activeB = activeInclusionBoundaryRef.current;
+        clipLoops = buildInclusionBoundaryLoops(lines, points, activeB?.polylineId ?? null);
+        if (clipLoops.length === 0) clipLoops = buildInclusionBoundaryLoops(lines, points, null);
+      }
+
       const result = await fetchFemaFloodHazards(bboxWgs84, epsg, options);
       if (result.lines.length === 0) {
         throw new Error(`FEMA NFHL returned no flood-hazard polygons for that area${result.exceededTransferLimit ? ' (transfer limit reached \u2014 try a smaller area)' : ''}.`);
       }
+
+      let areas = result.areas;
+      let floodLines = result.lines;
+      let featureCount = result.featureCount;
+      let zoneCounts = result.zoneCounts;
+      let trimmedToBoundary = false;
+      if (clipLoops.length > 0) {
+        const { clipMapAreaFeatures, areaFeaturesToSurveyLines } = await import('./services/resourceClipService.ts');
+        areas = clipMapAreaFeatures(result.areas, clipLoops);
+        if (areas.length === 0) {
+          throw new Error('No FEMA flood-hazard polygons intersect the active inclusion boundary.');
+        }
+        floodLines = areaFeaturesToSurveyLines(areas, 'flood');
+        featureCount = areas.length;
+        zoneCounts = {};
+        for (const area of areas) {
+          const zone = String(area.attributes?.zone ?? 'UNKNOWN').toUpperCase();
+          zoneCounts[zone] = (zoneCounts[zone] ?? 0) + 1;
+        }
+        trimmedToBoundary = true;
+      }
+
+      const generationId = `fema-${Date.now()}`;
+      const createdAt = new Date().toISOString();
+      areas = areas.map(area => ({ ...area, generationId }));
+      floodLines = floodLines.map(line => ({ ...line, generationId }));
+      const bfeLines = result.bfeLines.map(line => ({ ...line, generationId }));
+      const queryLabel = mode === 'description'
+        ? (descriptionText?.trim() || 'Description area')
+        : mode === 'inclusion'
+          ? (activeInclusionBoundaryRef.current?.name || 'Inclusion boundary')
+          : 'Project area';
+      const generation: GenerationBlock = {
+        id: generationId,
+        kind: 'flood',
+        name: `FEMA Flood — ${queryLabel}`,
+        createdAt,
+        parameters: [
+          { label: 'Source', value: 'FEMA National Flood Hazard Layer' },
+          { label: 'Query', value: queryLabel },
+          { label: 'BBox', value: bboxWgs84.map(value => value.toFixed(4)).join(', ') },
+          { label: 'BFE lines', value: result.bfeCount > 0 ? `${result.bfeCount} included` : 'None returned' },
+          { label: 'Clipping', value: trimmedToBoundary ? 'Active inclusion boundary' : 'Full query area' },
+          { label: 'Result', value: `${featureCount} polygons · ${Object.keys(zoneCounts).length} zones` },
+        ],
+        query: {
+          mode,
+          description: mode === 'description' ? descriptionText?.trim() || undefined : undefined,
+          bbox: bboxWgs84,
+          includeBfe: options?.includeBfe === true,
+          clippedToBoundary: trimmedToBoundary,
+          inclusionBoundaryName: activeInclusionBoundaryRef.current?.name,
+        },
+        lineIds: [...floodLines, ...bfeLines].map(line => line.id || `${line.from}-${line.to}`),
+        areaIds: areas.map(area => area.id),
+      };
       setLines((prev: SurveyLine[]) => [
         ...prev.filter((l: SurveyLine) =>
           !(l.layer || '').startsWith('FEMA-FLOOD-') && !(l.layer || '').startsWith('FEMA-BFE')),
-        ...result.lines,
-        ...result.bfeLines,
+        ...floodLines,
+        ...bfeLines,
       ]);
-      setLastFloodResult({ zoneCounts: result.zoneCounts, featureCount: result.featureCount });
-      setLastFloodAreas(result.areas);
+      setLastFloodResult({ zoneCounts, featureCount });
+      setLastFloodAreas(areas);
       setLastFloodBfe({ count: result.bfeCount, datum: result.bfeDatum, error: result.bfeError });
+      setGenerationBlocks(prev => [
+        ...prev.filter(block => block.kind !== 'flood'),
+        generation,
+      ]);
       logActionToFieldbook(
-        `Fetched ${result.lines.length} FEMA NFHL flood-hazard segments ` +
-        `(${result.featureCount} polygons across ${Object.keys(result.zoneCounts).length} zone codes)` +
-        `${result.bfeCount ? ` plus ${result.bfeCount} BFE line features` : ''}.`,
+        `Fetched ${floodLines.length} FEMA NFHL flood-hazard segments ` +
+        `(${featureCount} polygons across ${Object.keys(zoneCounts).length} zone codes)` +
+        `${result.bfeCount ? ` plus ${result.bfeCount} BFE line features` : ''}` +
+        `${trimmedToBoundary ? ' trimmed to the inclusion boundary' : ''}.`,
       );
       showView('canvas');
       if (result.exceededTransferLimit) {
@@ -10105,9 +10821,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
       return {
         ok: true,
-        featureCount: result.featureCount,
-        message: `Fetched ${result.featureCount} FEMA flood-hazard polygons across ${Object.keys(result.zoneCounts).length} zone codes` +
-          `${result.bfeCount ? ` and ${result.bfeCount} BFE lines` : ''}.`,
+        featureCount,
+        message: `Fetched ${featureCount} FEMA flood-hazard polygons across ${Object.keys(zoneCounts).length} zone codes` +
+          `${result.bfeCount ? ` and ${result.bfeCount} BFE lines` : ''}` +
+          `${trimmedToBoundary ? ', trimmed to the inclusion boundary' : ''}.`,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -10125,6 +10842,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setLastFloodResult(null);
     setLastFloodBfe(null);
     setLastFloodAreas([]);
+    setGenerationBlocks(prev => prev.filter(block => block.kind !== 'flood'));
     setHatches(prev => prev.filter(h => !(h.layer || '').startsWith('FEMA-FLOOD-')));
     setAreaLabels(prev => prev.filter(l => l.source !== 'fema-flood'));
     logActionToFieldbook('Cleared FEMA NFHL flood-zone and BFE linework, hatches, and annotations.');
@@ -10146,40 +10864,81 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
    * layers for an authentic FIRM-style image.  The result is stored as a
    * base64 data URL so the viewer works offline once loaded.
    */
-  const handleFetchFirmette = useCallback(async () => {
-    if (isFetchingFirmette) return;
-    // Derive bbox from current flood lines (FEMA-FLOOD-* layers).
-    const floodLines = lines.filter((l: SurveyLine) => (l.layer || '').startsWith('FEMA-FLOOD-'));
-    if (floodLines.length === 0) {
-      setError('Fetch flood zones first to define the firmette area.');
-      setTimeout(() => setError(null), 5000);
-      return;
+  const handleFetchFirmette = useCallback(async (): Promise<{ ok: boolean; message: string; fileName?: string }> => {
+    if (isFetchingFirmette) {
+      return { ok: false, message: 'A FIRMETTE download is already in progress.' };
     }
+    // Prefer the fetched flood geometry, then the active inclusion boundary,
+    // then the project points — so "get the flood map" works before a flood
+    // fetch has been run.
+    const floodLines = lines.filter((l: SurveyLine) => (l.layer || '').startsWith('FEMA-FLOOD-'));
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const l of floodLines) {
       // Lines are in project coords � re-project to WGS84 for FEMA API.
+      const epsg = settings.projection?.epsg;
+      if (!epsg) continue;
       try {
-        const fromProjDef = proj4.defs(`EPSG:${settings.projection.epsg}`);
+        const fromProjDef = proj4.defs(`EPSG:${epsg}`);
         if (fromProjDef) {
-          const [fx, fy] = proj4(`EPSG:${settings.projection.epsg}`, 'WGS84', [l.fromPt.x, l.fromPt.y]);
-          const [tx, ty] = proj4(`EPSG:${settings.projection.epsg}`, 'WGS84', [l.toPt.x, l.toPt.y]);
+          const [fx, fy] = proj4(`EPSG:${epsg}`, 'WGS84', [l.fromPt.x, l.fromPt.y]);
+          const [tx, ty] = proj4(`EPSG:${epsg}`, 'WGS84', [l.toPt.x, l.toPt.y]);
           minX = Math.min(minX, fx, tx); minY = Math.min(minY, fy, ty);
           maxX = Math.max(maxX, fx, tx); maxY = Math.max(maxY, fy, ty);
         }
       } catch { /* skip unprojectable lines */ }
     }
     if (!isFinite(minX)) {
-      setError('Could not determine firmette area from flood lines.');
+      const inclusionBbox = getInclusionBboxWgs84(activeInclusionBoundaryId);
+      if (inclusionBbox) {
+        [minX, minY, maxX, maxY] = inclusionBbox;
+      }
+    }
+    if (!isFinite(minX) && points.length > 0) {
+      let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity;
+      for (const point of points) {
+        if (!isFinite(point.easting) || !isFinite(point.northing)) continue;
+        px0 = Math.min(px0, point.easting); py0 = Math.min(py0, point.northing);
+        px1 = Math.max(px1, point.easting); py1 = Math.max(py1, point.northing);
+      }
+      if (isFinite(px0)) {
+        const epsg = settings.projection?.epsg;
+        if (!epsg || epsg === 4326) {
+          [minX, minY, maxX, maxY] = [px0, py0, px1, py1];
+        } else {
+          const corners: Array<[number, number]> = [[px0, py0], [px1, py0], [px0, py1], [px1, py1]];
+          let lon0 = Infinity, lat0 = Infinity, lon1 = -Infinity, lat1 = -Infinity;
+          for (const corner of corners) {
+            try {
+              const [lon, lat] = proj4(`EPSG:${epsg}`, 'EPSG:4326', corner);
+              if (isFinite(lon) && isFinite(lat)) {
+                lon0 = Math.min(lon0, lon); lat0 = Math.min(lat0, lat);
+                lon1 = Math.max(lon1, lon); lat1 = Math.max(lat1, lat);
+              }
+            } catch { /* skip unprojectable corner */ }
+          }
+          if (isFinite(lon0)) {
+            minX = lon0; minY = lat0; maxX = lon1; maxY = lat1;
+          }
+        }
+      }
+    }
+    if (!isFinite(minX)) {
+      const message = 'Could not determine a flood-map area. Fetch flood zones, draw an inclusion boundary, or load project points first.';
+      setError(message);
       setTimeout(() => setError(null), 5000);
-      return;
+      return { ok: false, message };
     }
     // Pad bbox slightly so boundary features aren't clipped.
     const padLng = (maxX - minX) * 0.08;
     const padLat = (maxY - minY) * 0.08;
     const bboxStr = `${(minX - padLng).toFixed(6)},${(minY - padLat).toFixed(6)},${(maxX + padLng).toFixed(6)},${(maxY + padLat).toFixed(6)}`;
     // Portrait firmette size (roughly half-letter, proportional to 8.5�11).
-    const width = 850; const height = 1100;
-    const url = `https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/export?bbox=${bboxStr}&bboxSR=4326&size=${width},${height}&imageSR=4326&layers=show%3A0%2C1%2C2%2C3%2C4%2C5%2C6%2C7%2C8%2C9%2C10%2C11%2C12%2C13%2C14%2C15%2C16%2C19%2C20%2C21%2C24%2C25%2C27%2C28&format=png32&transparent=false&f=image&dpi=96`;
+    const { buildFemaFirmetteImageUrl } = await import('./services/floodService.ts');
+    const url = buildFemaFirmetteImageUrl(bboxStr, { width: 850, height: 1100 });
+    let outcome: { ok: boolean; message: string; fileName?: string } = {
+      ok: false,
+      message: 'FIRMETTE download failed.',
+    };
     setIsFetchingFirmette(true);
     logActionToFieldbook(`Fetching FEMA FIRMETTE for bbox ${bboxStr}�`);
     try {
@@ -10192,18 +10951,48 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         reader.onerror = reject;
         reader.readAsDataURL(blob);
       });
-      const firmette = { url, bbox: bboxStr, fetchedAt: new Date().toISOString(), imageDataUrl: dataUrl };
-      setFloodFirmetteData(firmette);
+      const fetchedAt = new Date().toISOString();
+      const { buildFirmettePdf } = await import('./services/femaReportPdf.ts');
+      const artifact = buildFirmettePdf({
+        imageDataUrl: dataUrl,
+        bbox: bboxStr,
+        projectName: jobInfo.jobName,
+        generatedAt: new Date(fetchedAt),
+      });
+      addGeneratedFile({
+        name: artifact.fileName,
+        content: `FEMA FIRMETTE PDF - bbox ${bboxStr}`,
+        fileData: artifact.dataUrl,
+      });
+      triggerDownload(artifact.blob, artifact.fileName);
+      setFloodFirmetteData({
+        url,
+        bbox: bboxStr,
+        fetchedAt,
+        imageDataUrl: dataUrl,
+        pdfDataUrl: artifact.dataUrl,
+        pdfFileName: artifact.fileName,
+      });
       setIsFirmetteViewerVisible(true);
-      logActionToFieldbook(`FIRMETTE stored � bbox ${bboxStr}.`);
+      outcome = {
+        ok: true,
+        message: `FEMA FIRMETTE PDF downloaded: **${artifact.fileName}**. Stored in the File Manager.`,
+        fileName: artifact.fileName,
+      };
+      logActionToFieldbook(`FEMA FIRMETTE PDF downloaded: ${artifact.fileName} (bbox ${bboxStr}).`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      outcome = { ok: false, message: msg };
       setError(`FIRMETTE fetch failed: ${msg}`);
       setTimeout(() => setError(null), 8000);
     } finally {
       setIsFetchingFirmette(false);
     }
-  }, [isFetchingFirmette, lines, settings.projection.epsg, logActionToFieldbook]);
+    return outcome;
+  }, [
+    isFetchingFirmette, lines, points, activeInclusionBoundaryId, getInclusionBboxWgs84,
+    settings.projection?.epsg, jobInfo.jobName, addGeneratedFile, logActionToFieldbook,
+  ]);
 
   // --- STRUCTURES AGENT ----------------------------------------------------
   const handleFetchStructures = useCallback(async (
@@ -10325,7 +11114,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
     bboxOverride?: [number, number, number, number] | null,
-  ): Promise<{ ok: boolean; featureCount: number; message: string }> => {
+    options?: { clipToBoundary?: boolean; boundaryLoops?: HatchBoundaryLoop[] },
+  ): Promise<{ ok: boolean; featureCount: number; message: string; mapUnits?: SoilMapUnit[]; areas?: MapAreaFeature[] }> => {
     setIsFetchingSoils(true);
     setError(null);
     try {
@@ -10365,20 +11155,94 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         bboxWgs84 = await geocodeAreaDescription(descriptionText || '');
       }
 
+      const shouldClip = mode === 'inclusion' || options?.clipToBoundary === true;
+      let clipLoops: HatchBoundaryLoop[] = options?.boundaryLoops ?? [];
+      if (shouldClip && clipLoops.length === 0) {
+        const { buildInclusionBoundaryLoops } = await import('./services/soilLimitationsReport.ts');
+        const activeB = activeInclusionBoundaryRef.current;
+        clipLoops = buildInclusionBoundaryLoops(lines, points, activeB?.polylineId ?? null);
+        if (clipLoops.length === 0) clipLoops = buildInclusionBoundaryLoops(lines, points, null);
+      }
+
       const result = await fetchSsurgoSoils(bboxWgs84, epsg);
       if (result.featureCount === 0) {
         throw new Error('SSURGO returned no soil map units for that area. Try a larger bounding box or a different location.');
       }
+
+      let areas = result.areas;
+      let areaLines = result.lines;
+      let mapUnits = result.mapUnits;
+      let featureCount = result.featureCount;
+      let zoneCounts = result.zoneCounts;
+      let trimmedToBoundary = false;
+      if (clipLoops.length > 0) {
+        const { clipMapAreaFeatures, areaFeaturesToSurveyLines } = await import('./services/resourceClipService.ts');
+        areas = clipMapAreaFeatures(result.areas, clipLoops);
+        if (areas.length === 0) {
+          throw new Error('No SSURGO soil map units intersect the active inclusion boundary.');
+        }
+        areaLines = areaFeaturesToSurveyLines(areas, 'soils');
+        featureCount = areas.length;
+        zoneCounts = {};
+        for (const area of areas) {
+          const musym = String(area.attributes?.musym ?? 'UNKNOWN').toUpperCase();
+          zoneCounts[musym] = (zoneCounts[musym] ?? 0) + 1;
+        }
+        const presentMukeys = new Set(areas.map(area => String(area.attributes?.mukey ?? '')).filter(Boolean));
+        const presentMusyms = new Set(areas.map(area => String(area.attributes?.musym ?? '')).filter(Boolean));
+        mapUnits = result.mapUnits.filter(unit => presentMukeys.has(unit.mukey) || presentMusyms.has(unit.musym));
+        trimmedToBoundary = true;
+      }
+
+      const generationId = `soils-${Date.now()}`;
+      const createdAt = new Date().toISOString();
+      areas = areas.map(area => ({ ...area, generationId }));
+      areaLines = areaLines.map(line => ({ ...line, generationId }));
+      const queryLabel = mode === 'description'
+        ? (descriptionText?.trim() || 'Description area')
+        : mode === 'inclusion'
+          ? (activeInclusionBoundaryRef.current?.name || 'Inclusion boundary')
+          : 'Project area';
+      const generation: GenerationBlock = {
+        id: generationId,
+        kind: 'soils',
+        name: `SSURGO Soils — ${queryLabel}`,
+        createdAt,
+        parameters: [
+          { label: 'Source', value: 'USDA NRCS SSURGO' },
+          { label: 'Query', value: queryLabel },
+          { label: 'BBox', value: bboxWgs84.map(value => value.toFixed(4)).join(', ') },
+          { label: 'Clipping', value: trimmedToBoundary ? 'Active inclusion boundary' : 'Full query area' },
+          { label: 'Result', value: `${featureCount} polygons · ${mapUnits.length} map units` },
+        ],
+        query: {
+          mode,
+          description: mode === 'description' ? descriptionText?.trim() || undefined : undefined,
+          bbox: bboxWgs84,
+          clippedToBoundary: trimmedToBoundary,
+          inclusionBoundaryName: activeInclusionBoundaryRef.current?.name,
+        },
+        lineIds: areaLines.map(line => line.id || `${line.from}-${line.to}`),
+        areaIds: areas.map(area => area.id),
+      };
       // Replace existing SOILS-* lines with fresh results.
       setLines((prev: SurveyLine[]) => [
         ...prev.filter((l: SurveyLine) => !l.layer?.startsWith('SOILS-')),
-        ...result.lines,
+        ...areaLines,
       ]);
-      setSoilMapUnits(result.mapUnits);
-      setLastSoilsResult(result);
-      setLastSoilAreas(result.areas);
+      setSoilMapUnits(mapUnits);
+      setLastSoilsResult({ ...result, lines: areaLines, areas, mapUnits, featureCount, zoneCounts });
+      setLastSoilAreas(areas);
+      setGenerationBlocks(prev => [
+        ...prev.filter(block => block.kind !== 'soils'),
+        generation,
+      ]);
       setSoilReportData(null); // clear stale tabular data on fresh fetch
-      logActionToFieldbook(`Fetched ${result.featureCount} SSURGO soil map-unit polygons (${Object.keys(result.zoneCounts).length} map unit symbols).`);
+      setSoilLimitationsReport(null); // report is tied to the previous soil set
+      logActionToFieldbook(
+        `Fetched ${featureCount} SSURGO soil map-unit polygons (${Object.keys(zoneCounts).length} map unit symbols)` +
+        `${trimmedToBoundary ? ' trimmed to the inclusion boundary' : ''}.`,
+      );
       showView('canvas');
       if (result.exceededTransferLimit) {
         setError('?? SSURGO result set may be truncated (service transfer limit reached). Try a smaller area.');
@@ -10386,8 +11250,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
       return {
         ok: true,
-        featureCount: result.featureCount,
-        message: `Fetched ${result.featureCount} SSURGO soil map units (${Object.keys(result.zoneCounts).length} symbols).`,
+        featureCount,
+        message: `Fetched ${featureCount} SSURGO soil map units (${Object.keys(zoneCounts).length} symbols)` +
+          `${trimmedToBoundary ? ', trimmed to the inclusion boundary' : ''}.`,
+        mapUnits,
+        areas,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -10404,7 +11271,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setSoilMapUnits([]);
     setLastSoilsResult(null);
     setLastSoilAreas([]);
+    setGenerationBlocks(prev => prev.filter(block => block.kind !== 'soils'));
     setSoilReportData(null);
+    setSoilLimitationsReport(null);
     setHatches(prev => prev.filter(h => !(h.layer || '').startsWith('SOILS-')));
     setAreaLabels(prev => prev.filter(l => l.source !== 'ssurgo-soils'));
     logActionToFieldbook('Cleared SSURGO soil map-unit linework, hatches, and annotations.');
@@ -10475,6 +11344,304 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setIsFetchingSoilReport(false);
     }
   }, [soilMapUnits, logActionToFieldbook]);
+
+  /** Fetch the tabular SSURGO report if needed, then download it as a PDF. */
+  const handleDownloadSoilReport = useCallback(async (options?: {
+    mapUnits?: SoilMapUnit[];
+  }): Promise<{ ok: boolean; message: string; fileName?: string }> => {
+    const units = options?.mapUnits ?? soilMapUnits;
+    if (units.length === 0) {
+      const message = 'No soil map units are loaded. Fetch SSURGO soils first or draw an inclusion boundary.';
+      setError(message);
+      setTimeout(() => setError(null), 6000);
+      return { ok: false, message };
+    }
+
+    setIsDownloadingSoilReport(true);
+    setError(null);
+    try {
+      const mukeys = units.map(unit => unit.mukey).filter(Boolean);
+      let data = options?.mapUnits ? null : soilReportData;
+      if (!data) {
+        const { fetchSoilReport } = await import('./services/soilsService.ts');
+        data = await fetchSoilReport(mukeys);
+        setSoilReportData(data);
+      }
+      const { buildSoilsReportPdf } = await import('./services/femaReportPdf.ts');
+      const artifact = buildSoilsReportPdf({
+        mapUnits: units,
+        reportData: data,
+        projectName: jobInfo.jobName,
+      });
+      addGeneratedFile({
+        name: artifact.fileName,
+        content: `USDA NRCS SSURGO soil report - ${units.length} map units`,
+        fileData: artifact.dataUrl,
+      });
+      triggerDownload(artifact.blob, artifact.fileName);
+      logActionToFieldbook(`USDA SSURGO soil report PDF downloaded (${artifact.fileName}, ${units.length} map units).`);
+      return {
+        ok: true,
+        message: `USDA SSURGO soil report PDF downloaded: **${artifact.fileName}** (${units.length} map units). Stored in the File Manager.`,
+        fileName: artifact.fileName,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Soil Report PDF: ${msg}`);
+      setTimeout(() => setError(null), 12000);
+      return { ok: false, message: msg };
+    } finally {
+      setIsDownloadingSoilReport(false);
+    }
+  }, [soilMapUnits, soilReportData, jobInfo.jobName, addGeneratedFile, logActionToFieldbook]);
+
+  /**
+   * Compile the PA E&S limitations report for the loaded SSURGO soils.
+   *
+   * Areas are clipped to the active inclusion boundary when one exists. With no
+   * boundary the report still runs over the project AOI and records a boundary
+   * advisory so the chat can invite the user to draw one.
+   */
+  const handleCompileSoilLimitations = useCallback(async (options?: {
+    forceRefresh?: boolean;
+    /** Suppress the side panel when the report is rendered inline through A2UI. */
+    openPanel?: boolean;
+  }): Promise<{
+    ok: boolean;
+    message: string;
+    report?: import('./services/soilLimitationsReport.ts').SoilLimitationsReport | null;
+  }> => {
+    setIsCompilingSoilLimitations(true);
+    setError(null);
+    try {
+      const { fetchSoilLimitationsChart } = await import('./services/soilLimitationsService.ts');
+      const { buildSoilLimitationsReport, buildInclusionBoundaryLoops, buildBoundaryFileLoops } =
+        await import('./services/soilLimitationsReport.ts');
+
+      const activeBoundary = activeInclusionBoundaryRef.current;
+      const activeBoundaryLoops = activeBoundary
+        ? buildInclusionBoundaryLoops(lines, points, activeBoundary.polylineId)
+        : [];
+      let boundaryLoops = activeBoundaryLoops;
+      if (boundaryLoops.length === 0) {
+        boundaryLoops = buildInclusionBoundaryLoops(lines, points, null);
+      }
+      let boundaryName: string | null = activeBoundaryLoops.length > 0
+        ? activeBoundary!.name
+        : (boundaryLoops.length > 0 ? 'Inclusion area' : null);
+      let boundaryKind: 'inclusion' | 'boundary' | null = boundaryLoops.length > 0 ? 'inclusion' : null;
+
+      // With no inclusion polygon, use the active deed boundary file as the AOI
+      // so limitations and acreage stop at the parcel line.
+      if (boundaryLoops.length === 0) {
+        const fromBoundaryFile = buildBoundaryFileLoops(boundaryFiles, points, activeBoundaryFileId || null);
+        if (fromBoundaryFile.loops.length > 0) {
+          boundaryLoops = fromBoundaryFile.loops;
+          boundaryName = fromBoundaryFile.name;
+          boundaryKind = 'boundary';
+        }
+      }
+
+      let units = soilMapUnits;
+      let areas = lastSoilAreas;
+
+      // A boundary may have been drawn or moved since the last SSURGO fetch.
+      // Refresh the polygons so the clipped acreage belongs to this boundary.
+      const shouldRefreshSoils = boundaryLoops.length > 0 || units.length === 0 || areas.length === 0;
+      if (shouldRefreshSoils) {
+        // Derive the query bbox from the AOI loops themselves; a deed boundary
+        // has no inclusion polyline for getInclusionBboxWgs84 to fall back to.
+        let boundaryBboxWgs84: [number, number, number, number] | null = null;
+        if (boundaryLoops.length > 0) {
+          let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+          for (const loop of boundaryLoops) {
+            for (const vertex of loop.vertices) {
+              if (!Number.isFinite(vertex.x) || !Number.isFinite(vertex.y)) continue;
+              x0 = Math.min(x0, vertex.x);
+              y0 = Math.min(y0, vertex.y);
+              x1 = Math.max(x1, vertex.x);
+              y1 = Math.max(y1, vertex.y);
+            }
+          }
+          if (Number.isFinite(x0)) {
+            const epsg = settings.projection?.epsg;
+            if (epsg && epsg !== 4326) {
+              const proj4mod = (await import('proj4')).default;
+              const sw = proj4mod(`EPSG:${epsg}`, 'EPSG:4326', [x0, y0]) as [number, number];
+              const ne = proj4mod(`EPSG:${epsg}`, 'EPSG:4326', [x1, y1]) as [number, number];
+              boundaryBboxWgs84 = [sw[0], sw[1], ne[0], ne[1]];
+            } else {
+              boundaryBboxWgs84 = [x0, y0, x1, y1];
+            }
+          }
+        }
+        let bbox = boundaryBboxWgs84 ?? getInclusionBboxWgs84(activeInclusionBoundaryId);
+        if (!bbox) {
+          const locationText = [jobInfo.siteAddress, jobInfo.siteMunicipality]
+            .filter((part): part is string => Boolean(part && part.trim()))
+            .join(', ');
+          try {
+            const { resolveAoi } = await import('./utils/aoiResolver.ts');
+            const aoi = await resolveAoi({
+              points,
+              lines,
+              projectEpsg: settings.projection?.epsg,
+              locationText: locationText || undefined,
+            });
+            bbox = aoi.bboxWgs84;
+          } catch {
+            const message =
+              'No inclusion or deed boundary is present. Draw a boundary on the canvas (or add project points / a site address), then compile the limitations report again.';
+            setError(message);
+            setTimeout(() => setError(null), 8000);
+            return { ok: false, message };
+          }
+        }
+        const fetched = await handleFetchSoils(
+          boundaryLoops.length > 0 ? 'inclusion' : 'project',
+          undefined,
+          bbox,
+          boundaryLoops.length > 0 ? { boundaryLoops, clipToBoundary: true } : undefined,
+        );
+        if (!fetched.ok) {
+          return { ok: false, message: fetched.message };
+        }
+        units = fetched.mapUnits ?? [];
+        areas = fetched.areas ?? [];
+        if (units.length === 0 || areas.length === 0) {
+          return { ok: false, message: 'SSURGO returned no soil polygons for the report area.' };
+        }
+      }
+
+      let reportData = soilReportData;
+      const mukeys = units.map(unit => unit.mukey).filter(Boolean);
+      if (!reportData && mukeys.length > 0) {
+        const { fetchSoilReport } = await import('./services/soilsService.ts');
+        reportData = await fetchSoilReport(mukeys);
+        setSoilReportData(reportData);
+      }
+
+      const chart = await fetchSoilLimitationsChart({
+        state: 'PA',
+        forceRefresh: options?.forceRefresh === true,
+      });
+      const report = buildSoilLimitationsReport({
+        areas,
+        mapUnits: units,
+        reportData,
+        chart,
+        boundaryLoops,
+        boundaryName,
+        boundaryKind,
+        projectName: jobInfo.jobName,
+      });
+
+      if (report.units.length === 0) {
+        const message = report.boundaryPresent
+          ? 'No SSURGO soil map units intersect the active AOI boundary.'
+          : 'SSURGO returned no soil polygons for the report area.';
+        setError(message);
+        setTimeout(() => setError(null), 8000);
+        return { ok: false, message, report };
+      }
+
+      setSoilLimitationsReport(report);
+      if (options?.openPanel !== false) setIsSoilsPanelVisible(true);
+      logActionToFieldbook(
+        `Compiled PA E&S soil limitations report: ${report.units.length} map units, ${report.soilAcres.toFixed(2)} ac within ${report.areaLabel}.`,
+      );
+      const boundaryPrompt = report.boundaryPresent
+        ? ''
+        : ' No inclusion or deed boundary is present, so areas cover the project AOI. Draw a boundary for exact within-AOI areas — or tell me to keep using the AOI.';
+      return {
+        ok: true,
+        message: `Compiled the PA E&S limitations report for **${report.units.length}** soil map unit${report.units.length === 1 ? '' : 's'} (${report.soilAcres.toFixed(2)} ac) using ${report.chartCached ? 'the cached' : 'the'} Table E.1 chart.${boundaryPrompt}`,
+        report,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`Soil Limitations Report: ${message}`);
+      setTimeout(() => setError(null), 12000);
+      return { ok: false, message };
+    } finally {
+      setIsCompilingSoilLimitations(false);
+    }
+  }, [
+    activeBoundaryFileId, activeInclusionBoundaryId, boundaryFiles, getInclusionBboxWgs84,
+    handleFetchSoils, jobInfo.jobName, jobInfo.siteAddress, jobInfo.siteMunicipality,
+    lastSoilAreas, lines, logActionToFieldbook, points, settings.projection?.epsg,
+    soilMapUnits, soilReportData,
+  ]);
+
+  /** Compile (if needed) and download the PA E&S limitations report as a PDF. */
+  const handleDownloadSoilLimitationsReport = useCallback(async (): Promise<{
+    ok: boolean;
+    message: string;
+    fileName?: string;
+  }> => {
+    let report = soilLimitationsReport;
+    if (!report) {
+      const compiled = await handleCompileSoilLimitations();
+      if (!compiled.ok || !compiled.report) {
+        return { ok: false, message: compiled.message };
+      }
+      report = compiled.report;
+    }
+
+    setIsDownloadingSoilLimitations(true);
+    setError(null);
+    try {
+      const { buildSoilLimitationsReportPdf } = await import('./services/soilLimitationsReportPdf.ts');
+      const artifact = buildSoilLimitationsReportPdf({
+        report,
+        generatedAt: new Date(report.generatedAt),
+      });
+      addGeneratedFile({
+        name: artifact.fileName,
+        content: `PA E&S soil limitations report - ${report.units.length} map units`,
+        fileData: artifact.dataUrl,
+      });
+      triggerDownload(artifact.blob, artifact.fileName);
+      const boundaryNote = report.boundaryPresent
+        ? `clipped to ${report.areaLabel}`
+        : 'project AOI without an inclusion boundary';
+      logActionToFieldbook(
+        `PA E&S soil limitations report PDF downloaded (${artifact.fileName}, ${report.units.length} map units, ${boundaryNote}).`,
+      );
+      return {
+        ok: true,
+        message: `PA E&S limitations report downloaded: **${artifact.fileName}** (${report.units.length} map units, ${report.soilAcres.toFixed(2)} ac, ${boundaryNote}).`,
+        fileName: artifact.fileName,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`Soil Limitations PDF: ${message}`);
+      setTimeout(() => setError(null), 12000);
+      return { ok: false, message };
+    } finally {
+      setIsDownloadingSoilLimitations(false);
+    }
+  }, [addGeneratedFile, handleCompileSoilLimitations, logActionToFieldbook, soilLimitationsReport]);
+
+  /** Place the compiled limitations/resolutions text on the active paper-space sheet. */
+  const handleAddSoilLimitationsToSheet = useCallback(async (): Promise<void> => {
+    // Recompile so the block reflects the AOI currently on the canvas instead of
+    // a report that may predate a drawn inclusion or deed boundary.
+    const compiled = await handleCompileSoilLimitations();
+    const report = compiled.ok ? compiled.report : null;
+    if (!report) return;
+    const { buildSoilLimitationsSheetNotes } = await import('./services/soilLimitationsReport.ts');
+    const text = buildSoilLimitationsSheetNotes(report);
+    if (!text.trim()) return;
+    setPendingSheetNotes({
+      id: `soil-limits-${Date.now()}`,
+      text,
+      mode: 'sheet-notes',
+      title: 'SOIL LIMITATIONS — PA E&S TABLE E.1',
+    });
+    showView('sheetview');
+    logActionToFieldbook('Queued a compact PA E&S soil-limitations block on the active paper-space sheet.');
+  }, [handleCompileSoilLimitations, logActionToFieldbook, showView]);
 
   // --- STREET LABELS (v26.05.19.4) -----------------------------------------
   // Fetches named road centerlines within the active inclusion boundary bbox
@@ -10590,6 +11757,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           });
         });
         setLastFloodResult(null);
+        setGenerationBlocks(prev => prev.filter(block => block.kind !== 'flood'));
         logActionToFieldbook(`CACP clear_flood_zones � removed ${removed} FEMA NFHL segments.`);
         return { requestId: message.id, from: AgentType.FLOOD_AGENT, success: true, data: { removedLines: removed }, timestamp: Date.now() };
       } catch (e) {
@@ -10602,7 +11770,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
   // CACP — Centerline & Stationing skills (`cl_create_from_description`,
   // `cl_create_from_points`, `place_station_offset_point`, `generate_stationed_points`).
-  useClSkills({ setCenterlines, logActionToFieldbook });
+  useClSkills({ setCenterlines, pointListsRef, logActionToFieldbook });
   useStationingSkills({ centerlinesRef, pointListsRef, setPointLists, logActionToFieldbook });
 
   /** Raise a standalone A2UI spreadsheet from the catalog or a CACP action. */
@@ -10625,6 +11793,254 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       `Opened A2UI spreadsheet "${title}" (${spec.rows.length} rows).`,
     );
   }, [logActionToFieldbook]);
+
+  /**
+   * CACP `resolve_gis_service` — shared entry point for any agent that needs a
+   * live public REST layer when the registered source has no geometry. PASDA
+   * is tried first for Pennsylvania projects, then ArcGIS Online + Scout.
+   */
+  /** Resolve the WGS84 AOI shared by every live GIS resolver / overlay request. */
+  const resolveGisAoiBbox = useCallback(async (
+    mode: 'project' | 'inclusion' | 'description',
+    descriptionText?: string,
+    bboxOverride?: [number, number, number, number] | null,
+  ): Promise<[number, number, number, number]> => {
+    if (bboxOverride) return bboxOverride;
+    if (mode === 'description') {
+      const { geocodeLocationText } = await import('./utils/aoiResolver.ts');
+      const geocoded = await geocodeLocationText(descriptionText ?? '');
+      if (!geocoded) throw new Error('Could not geocode the description into a GIS area of interest.');
+      return geocoded;
+    }
+    const { resolveAoi } = await import('./utils/aoiResolver.ts');
+    const activeB = activeInclusionBoundaryRef.current;
+    const inclusionLines = lines.filter(line =>
+      line.type === 'inclusion' && (!activeB || line.polylineId === activeB.polylineId)
+    );
+    const aoi = await resolveAoi({
+      points,
+      lines: mode === 'project' ? [] : inclusionLines,
+      projectEpsg: settings.projection?.epsg,
+      locationText: descriptionText,
+    });
+    return aoi.bboxWgs84;
+  }, [points, lines, settings.projection?.epsg]);
+
+  const handleResolveGisService = useCallback(async (request: {
+    kind: 'contours' | 'parcels' | 'flood' | 'soils' | 'custom';
+    query?: string;
+    mode?: 'project' | 'inclusion' | 'description';
+    descriptionText?: string;
+    bboxOverride?: [number, number, number, number] | null;
+  }): Promise<GisResolution> => {
+    const bbox = await resolveGisAoiBbox(
+      request.mode ?? 'project',
+      request.descriptionText,
+      request.bboxOverride,
+    );
+    const cx = (bbox[0] + bbox[2]) / 2;
+    const cy = (bbox[1] + bbox[3]) / 2;
+    const cluster = displayedProjectLocationSet.clusters.find(candidate => {
+      const b = candidate.estimate.bboxWgs84;
+      return !!b && cx >= b[0] && cx <= b[2] && cy >= b[1] && cy <= b[3];
+    }) ?? displayedProjectLocationSet.clusters[0];
+    const { resolveGisServices } = await import('./services/gisServiceResolver.ts');
+    const scoutRun = beginScoutActivity(
+      `Resolving ${request.kind}`,
+      `${cluster?.jurisdiction?.county ? `${cluster.jurisdiction.county} County` : 'Project'} · live GIS`,
+    );
+    const resolution = await resolveGisServices({
+      kind: request.kind,
+      query: request.query,
+      bboxWgs84: bbox,
+      state: cluster?.jurisdiction?.state,
+      county: cluster?.jurisdiction?.county,
+      includeScout: true,
+      signal: scoutRun.signal,
+      onActivity: event => pushScoutActivity(scoutRun.id, event),
+      log: (msg, payload) => dbgLog('Resolver', { msg, ...((payload as object) ?? {}) }),
+    }).catch((error: unknown) => {
+      finishScoutActivity(
+        scoutRun.id,
+        'error',
+        error instanceof Error ? error.message : String(error),
+      );
+      throw error;
+    });
+    const verifiedCount = resolution.sources.filter(source => source.verified).length;
+    finishScoutActivity(
+      scoutRun.id,
+      verifiedCount > 0 ? 'success' : 'error',
+      `${verifiedCount} verified of ${resolution.sources.length} live source(s).`,
+    );
+    logActionToFieldbook(
+      `GIS resolver (${request.query || request.kind}) — ${resolution.sources.filter(source => source.verified).length} verified live source(s) for this footprint.`,
+    );
+    return resolution;
+  }, [resolveGisAoiBbox, displayedProjectLocationSet, dbgLog, logActionToFieldbook]);
+
+  /**
+   * CACP `gis_show_live_layer` — the GIS Agent's general map-layer entry point.
+   * The topic is free-form; the resolver and Scout find the layer rather than a
+   * hardcoded list. Geometry is queried for the project AOI and drawn as
+   * lightweight linework on its own CAD layer (no synthetic survey points).
+   */
+  const handleShowGisLayer = useCallback(async (request: {
+    topic: string;
+    serviceUrl?: string;
+    label?: string;
+    mode?: 'project' | 'inclusion' | 'description';
+    descriptionText?: string;
+    bboxOverride?: [number, number, number, number] | null;
+    maxFeatures?: number;
+  }): Promise<{
+    ok: boolean;
+    topic: string;
+    label: string;
+    layerName: string;
+    featureCount: number;
+    segmentCount: number;
+    sourceUrl?: string;
+    provider?: string;
+    names: string[];
+    message: string;
+  }> => {
+    const topic = request.topic.trim();
+    if (!topic) throw new Error('A GIS topic is required.');
+    if (!settings.projection?.epsg) {
+      throw new Error('Set the project coordinate system (EPSG) before plotting a live GIS layer.');
+    }
+    const bbox = await resolveGisAoiBbox(
+      request.mode ?? 'project',
+      request.descriptionText,
+      request.bboxOverride,
+    );
+
+    let sourceUrl = request.serviceUrl?.trim() || '';
+    let label = request.label?.trim() || topic;
+    let provider = 'custom';
+    if (!sourceUrl) {
+      const resolution = await handleResolveGisService({
+        kind: 'custom',
+        query: topic,
+        mode: request.mode,
+        descriptionText: request.descriptionText,
+        bboxOverride: bbox,
+      });
+      const source = resolution.sources.find(candidate => candidate.verified) ?? resolution.sources[0];
+      if (!source?.url) {
+        throw new Error(`No live GIS layer was found for "${topic}" in this area of interest.`);
+      }
+      sourceUrl = source.url;
+      label = source.label || label;
+      provider = source.provider;
+    }
+
+    const { queryLayerGeoJson } = await import('./utils/arcgisServerClient.ts');
+    const maxFeatures = Math.min(20_000, Math.max(1, request.maxFeatures ?? 4_000));
+    const geoJson = await queryLayerGeoJson(sourceUrl, {
+      bboxWgs84: bbox,
+      maxFeatures,
+      // About one screen pixel across the AOI: keeps statewide district rings
+      // small without visibly changing the displayed boundary.
+      maxAllowableOffset: Math.max((bbox[2] - bbox[0]) / 1200, 1e-8),
+    });
+
+    const { buildGisOverlay } = await import('./services/gisOverlayService.ts');
+    const overlay = buildGisOverlay(geoJson, settings.projection.epsg, request.label || topic);
+    if (overlay.lines.length === 0) {
+      throw new Error(`The live layer "${label}" returned features, but none contained drawable linework.`);
+    }
+
+    setLines(prev => [
+      ...prev.filter(line => line.layer !== overlay.layerName),
+      ...overlay.lines,
+    ]);
+    setLinesVisible(true);
+    setCadLayerVisibility(prev => ({ ...prev, [overlay.layerName]: true }));
+    setGisFeatures(prev => [
+      ...prev.filter(feature => !String(feature.id ?? '').startsWith(`${overlay.layerName}-`)),
+      ...overlay.features,
+    ].slice(-20_000));
+
+    const names = overlay.names.slice(0, 20);
+    const nameSummary = names.length > 0 ? ` (${names.slice(0, 5).join(', ')}${names.length > 5 ? '…' : ''})` : '';
+    const partial = geoJson.exceededTransferLimit ? ' The service capped the result; narrow the AOI for full coverage.' : '';
+    const message = `Drew ${overlay.featureCount.toLocaleString()} feature(s) from "${label}" on layer ${overlay.layerName}${nameSummary}.${partial}`;
+    logActionToFieldbook(`GIS Agent: ${message}`);
+    if (overlay.bbox) {
+      const [minE, minN, maxE, maxN] = overlay.bbox;
+      setTimeout(() => {
+        if (maxE > minE && maxN > minN) canvas2dRef.current?.zoomToBbox(minE, maxE, minN, maxN, 0.15);
+      }, 120);
+    }
+
+    return {
+      ok: true,
+      topic,
+      label,
+      layerName: overlay.layerName,
+      featureCount: overlay.featureCount,
+      segmentCount: overlay.lines.length,
+      sourceUrl,
+      provider,
+      names,
+      message,
+    };
+  }, [
+    settings.projection?.epsg,
+    resolveGisAoiBbox,
+    handleResolveGisService,
+    setLines,
+    setLinesVisible,
+    setCadLayerVisibility,
+    setGisFeatures,
+    logActionToFieldbook,
+    canvas2dRef,
+  ]);
+
+  /**
+   * Streams panel — draws a live stream / watershed layer for a preset or a
+   * free-form topic. Layers drawn here replace each other so the canvas does
+   * not accumulate overlapping hydrography; other GIS layers are untouched.
+   */
+  const handleDrawStreamLayer = useCallback(async (topic: string) => {
+    const trimmed = topic.trim();
+    if (!trimmed) return;
+    setIsFetchingStreamLayer(true);
+    setStreamLayerError(null);
+    if (streamLayerNames.length > 0) {
+      const previous = new Set(streamLayerNames);
+      setLines(prev => prev.filter((line: SurveyLine) => !previous.has(line.layer)));
+      setGisFeatures(prev => prev.filter(feature =>
+        !streamLayerNames.some(name => String(feature.id ?? '').startsWith(`${name}-`)),
+      ));
+      setStreamLayerNames([]);
+    }
+    try {
+      const result = await handleShowGisLayer({ topic: trimmed });
+      setLastStreamLayerResult(result);
+      setStreamLayerNames([result.layerName]);
+    } catch (error) {
+      setLastStreamLayerResult(null);
+      setStreamLayerError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsFetchingStreamLayer(false);
+    }
+  }, [handleShowGisLayer, streamLayerNames, setLines, setGisFeatures]);
+
+  const handleClearStreamLayers = useCallback(() => {
+    const names = new Set(streamLayerNames);
+    if (names.size > 0) {
+      setLines(prev => prev.filter((line: SurveyLine) => !names.has(line.layer)));
+      setGisFeatures(prev => prev.filter(feature =>
+        !streamLayerNames.some(name => String(feature.id ?? '').startsWith(`${name}-`)),
+      ));
+    }
+    setStreamLayerNames([]);
+    setLastStreamLayerResult(null);
+    setStreamLayerError(null);
+  }, [streamLayerNames, setLines, setGisFeatures]);
 
   // CACP — Domain skill handlers across Structures, Soils, Contouring, Steep
   // Slope, Profile, Voice, AR, DXF, Civil Drafter, Civil Plan Expert, CAD
@@ -10658,6 +12074,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setSoilReportData,
     handleFetchSoils,
     handleClearSoilsLines,
+    lastSoilAreas,
+    handleCompileSoilLimitationsReport: handleCompileSoilLimitations,
     contourSettings,
     contourGenerations,
     setContourGenerations,
@@ -10671,6 +12089,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     openSpreadsheetSurface,
     handleFetchEsriContours,
     handleDiscoverPublicContourServices,
+    handleResolveGisService,
+    handleShowGisLayer,
     steepSlopeRuns,
     setSteepSlopeRuns,
     activeInclusionBoundaryId,
@@ -10802,17 +12222,60 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         throw new Error(`No parcels found for that area${hint}.`);
       }
 
+      // Inclusion mode uses the drawn polygon as a bbox, so the county returns
+      // whole parcels that can extend well past it. Trim the drawn linework to
+      // the actual boundary (contours, flood and soils already do) and keep
+      // only the parcels and labels that still have visible geometry.
+      let parcelLines = result.lines;
+      let parcelLabelPoints = result.labelPoints;
+      let parcelSummaries = result.parcels;
+      let trimmedToBoundary = false;
+      if (mode === 'inclusion') {
+        const { buildInclusionBoundaryLoops } = await import('./services/soilLimitationsReport.ts');
+        const activeB = activeInclusionBoundaryRef.current;
+        let clipLoops = buildInclusionBoundaryLoops(lines, points, activeB?.polylineId ?? null);
+        if (clipLoops.length === 0) clipLoops = buildInclusionBoundaryLoops(lines, points, null);
+        if (clipLoops.length > 0) {
+          const { clipSurveyLinesToBoundaries } = await import('./services/resourceClipService.ts');
+          const { pointInPolygon } = await import('./utils/contouring.ts');
+          parcelLines = clipSurveyLinesToBoundaries(result.lines, clipLoops);
+          if (parcelLines.length === 0) {
+            throw new Error('No parcel lines fall inside the active inclusion boundary. Check that the boundary overlaps the county parcel fabric.');
+          }
+          const polygons = clipLoops.filter(loop => loop.isHole !== true && loop.vertices.length >= 3);
+          parcelLabelPoints = result.labelPoints.filter(point =>
+            polygons.some(polygon => pointInPolygon(point.x, point.y, polygon.vertices))
+          );
+          const keptParcels = new Set<number>();
+          for (const line of parcelLines) {
+            const match = /^PARCEL-(\d+)-/.exec(line.id ?? '');
+            if (match) keptParcels.add(Number(match[1]));
+          }
+          if (keptParcels.size > 0) {
+            parcelSummaries = result.parcels.filter((_, index) => keptParcels.has(index));
+          }
+          trimmedToBoundary = true;
+          dbgLog('Parcel', {
+            step: 'clip-to-inclusion',
+            beforeSegments: result.lines.length,
+            afterSegments: parcelLines.length,
+            beforeParcels: result.parcels.length,
+            afterParcels: parcelSummaries.length,
+          });
+        }
+      }
+
       setLines((prev: SurveyLine[]) => [
         ...prev.filter((l: SurveyLine) => l.layer !== PARCEL_LAYER_TAG),
-        ...result.lines,
+        ...parcelLines,
       ]);
-      setLastFetchedParcels(result.parcels);
+      setLastFetchedParcels(parcelSummaries);
       setLastParcelEnrichment(result.enrichment ?? null);
 
       // Create parcel centroid annotation labels with N/F owner notation.
-      if (result.labelPoints.length > 0) {
+      if (parcelLabelPoints.length > 0) {
         const ts = Date.now();
-        const newLabels: ParcelLabel[] = result.labelPoints.map((lp, i) => ({
+        const newLabels: ParcelLabel[] = parcelLabelPoints.map((lp, i) => ({
           id: `PARCEL-LBL-${i}-${ts}`,
           x: lp.x,
           y: lp.y,
@@ -10823,7 +12286,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setParcelLabels(newLabels);
       }
       logActionToFieldbook(
-        `Fetched ${result.parcels.length} parcels (${result.lines.length} segments) from ${service.label}` +
+        `Fetched ${parcelSummaries.length} parcels (${parcelLines.length} segments)` +
+        `${trimmedToBoundary ? ' trimmed to the inclusion boundary' : ''} from ${service.label}` +
         `${result.exceededTransferLimit ? ' � transfer limit reached, try a smaller area' : ''}.`
       );
       showView('canvas');
@@ -10833,8 +12297,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
       return {
         ok: true,
-        featureCount: result.parcels.length,
-        message: `Fetched ${result.parcels.length} parcels (${result.lines.length} segments) from ${service.label}.`,
+        featureCount: parcelSummaries.length,
+        message: `Fetched ${parcelSummaries.length} parcels (${parcelLines.length} segments)` +
+          `${trimmedToBoundary ? ' trimmed to the inclusion boundary' : ''} from ${service.label}.`,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -10865,14 +12330,54 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     descriptionText?: string,
     bboxOverride?: [number, number, number, number] | null,
   ) => {
-    const { searchParcelServicesNearby } = await import('./services/parcelGisService.ts');
+    const { resolveGisServices } = await import('./services/gisServiceResolver.ts');
     const bbox = bboxOverride
       ? { xmin: bboxOverride[0], ymin: bboxOverride[1], xmax: bboxOverride[2], ymax: bboxOverride[3] }
       : await resolveParcelBbox(mode, descriptionText);
-    return searchParcelServicesNearby(bbox, {
-      log: (msg, payload) => dbgLog('Parcel', { msg, ...((payload as object) ?? {}) }),
+    const cx = (bbox.xmin + bbox.xmax) / 2;
+    const cy = (bbox.ymin + bbox.ymax) / 2;
+    const cluster = displayedProjectLocationSet.clusters.find(candidate => {
+      const b = candidate.estimate.bboxWgs84;
+      return !!b && cx >= b[0] && cx <= b[2] && cy >= b[1] && cy <= b[3];
+    }) ?? displayedProjectLocationSet.clusters[0];
+    const scoutRun = beginScoutActivity(
+      'Finding parcel services',
+      `${cluster?.jurisdiction?.county ? `${cluster.jurisdiction.county} County` : 'Project'} · live GIS`,
+    );
+    const resolution = await resolveGisServices({
+      kind: 'parcels',
+      bboxWgs84: [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax],
+      state: cluster?.jurisdiction?.state,
+      county: cluster?.jurisdiction?.county,
+      includeScout: true,
+      signal: scoutRun.signal,
+      onActivity: event => pushScoutActivity(scoutRun.id, event),
+      log: (msg, payload) => dbgLog('ParcelResolver', { msg, ...((payload as object) ?? {}) }),
+    }).catch((error: unknown) => {
+      finishScoutActivity(
+        scoutRun.id,
+        'error',
+        error instanceof Error ? error.message : String(error),
+      );
+      throw error;
     });
-  }, [resolveParcelBbox, dbgLog]);
+    const verifiedCount = resolution.sources.filter(source => source.verified).length;
+    finishScoutActivity(
+      scoutRun.id,
+      verifiedCount > 0 ? 'success' : 'error',
+      `${verifiedCount} verified of ${resolution.sources.length} live source(s).`,
+    );
+    return resolution.sources.map(source => ({
+      itemId: source.id,
+      title: source.label,
+      publisher: source.provider,
+      url: source.url,
+      snippet: source.notes
+        ?? (source.verified
+          ? `${source.featureCount?.toLocaleString() ?? 'Some'} features at this footprint`
+          : undefined),
+    }));
+  }, [resolveParcelBbox, displayedProjectLocationSet, dbgLog]);
 
   // --- LSAI PROJECT LOCATION ------------------------------------------------
   // The single owner of "where is this project?". Every cluster is located
@@ -10989,10 +12494,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     });
     try {
       if (layer === 'flood') {
-        return await handleFetchFloodZones('project', undefined, bbox);
+        return await handleFetchFloodZones('project', undefined, bbox, { clipToBoundary: useInclusion });
       }
       if (layer === 'soils') {
-        return await handleFetchSoils('project', undefined, bbox);
+        return await handleFetchSoils('project', undefined, bbox, { clipToBoundary: useInclusion });
       }
       const {
         classifyParcelFetchIssue,
@@ -11003,20 +12508,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         state: cluster.jurisdiction?.state,
         county: cluster.jurisdiction?.county,
       });
-      if (candidates.length === 0) {
-        const guidance = parcelFetchGuidance('no-service', jurisdictionLabel);
-        setCountyGisStatus({
-          state: 'error',
-          message: `No County parcel layer is available for ${jurisdictionLabel}.`,
-          guidance,
-          jurisdictionLabel,
-          attempts: [],
-          clusterIndex: cluster.index,
-          updatedAt: Date.now(),
-        });
-        return { ok: false, featureCount: 0, message: guidance };
-      }
-
       const attempts: CountyParcelAttempt[] = [];
       const publish = (
         state: CountyGisStatus['state'],
@@ -11035,7 +12526,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         });
       };
 
-      publish('loading', `Contacting ${candidates[0].service.label}…`);
+      if (candidates.length === 0) {
+        // Do NOT give up here. An unregistered county is exactly the case the
+        // live discovery + Scout fallback below exists to solve.
+        publish('loading', `No registered parcel layer for ${jurisdictionLabel} — searching live sources…`);
+      } else {
+        publish('loading', `Contacting ${candidates[0].service.label}…`);
+      }
       for (const candidate of candidates) {
         const result = await handleFetchParcels(candidate.service, 'project', undefined, bbox);
         const issue = result.ok ? undefined : classifyParcelFetchIssue(result.message);
@@ -11064,63 +12561,97 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
       }
 
-      // Last resort: discover another public parcel layer over the same
-      // footprint. This is the only fallback for providers that publish county
-      // layers but no statewide fabric (e.g. Pennsylvania), or when the
-      // curated county server itself is unavailable.
+      // Automatic live discovery: the resolver checks county-scoped ArcGIS
+      // Online results, PASDA/state portals, and Scout, then verifies each
+      // candidate's feature count before we retry it.
+      const triedParcelUrls = new Set(
+        candidates.map(candidate => candidate.service.url.toLowerCase()),
+      );
       try {
-        const { describeParcelService, searchParcelServicesNearby } = await import(
-          './services/parcelGisService.ts'
+        const { describeParcelService: describeLiveParcelService } = await import('./services/parcelGisService.ts');
+        const { resolveGisServices } = await import('./services/gisServiceResolver.ts');
+        const scoutRun = beginScoutActivity(
+          'Resolving parcels',
+          `${cluster.jurisdiction?.county ? `${cluster.jurisdiction.county} County` : 'Project'} · live GIS`,
         );
-        const discovered = await searchParcelServicesNearby(
-          { xmin: bbox[0], ymin: bbox[1], xmax: bbox[2], ymax: bbox[3] },
-          { log: () => {} },
+        const resolution = await resolveGisServices({
+          kind: 'parcels',
+          bboxWgs84: [bbox[0], bbox[1], bbox[2], bbox[3]],
+          state: cluster.jurisdiction?.state,
+          county: cluster.jurisdiction?.county,
+          includeScout: true,
+          signal: scoutRun.signal,
+          onActivity: event => pushScoutActivity(scoutRun.id, event),
+          log: (msg, payload) => dbgLog('ParcelResolver', { msg, ...((payload as object) ?? {}) }),
+        }).catch((error: unknown) => {
+          finishScoutActivity(
+            scoutRun.id,
+            'error',
+            error instanceof Error ? error.message : String(error),
+          );
+          throw error;
+        });
+        const liveVerifiedCount = resolution.sources.filter(source => source.verified).length;
+        finishScoutActivity(
+          scoutRun.id,
+          liveVerifiedCount > 0 ? 'success' : 'error',
+          `${liveVerifiedCount} verified of ${resolution.sources.length} live source(s).`,
         );
-        let probed = 0;
-        for (const candidate of discovered) {
-          if (probed >= 2) break;
-          if (!candidate.url) continue;
-          if (candidates.some(existing => existing.service.url === candidate.url)) continue;
-          probed += 1;
-          const discoveredAttempt: CountyParcelAttempt = {
-            label: candidate.title || 'Discovered county layer',
+        const liveSources = resolution.sources
+          .filter(source => source.verified && !triedParcelUrls.has(source.url.toLowerCase()))
+          .slice(0, 3);
+        for (const source of liveSources) {
+          triedParcelUrls.add(source.url.toLowerCase());
+          const liveAttempt: CountyParcelAttempt = {
+            label: source.label,
             match: 'custom',
             ok: false,
-            message: 'Probing discovered layer…',
+            message: 'Probing live portal layer…',
             featureCount: 0,
             issue: 'unknown',
           };
-          attempts.push(discoveredAttempt);
-          publish('loading', `Trying discovered layer: ${candidate.title}…`);
+          attempts.push(liveAttempt);
+          publish('loading', `Trying live portal layer: ${source.label}…`);
           try {
-            const probe = await describeParcelService(candidate.url, { label: candidate.title });
+            const probe = await describeLiveParcelService(source.url, {
+              label: source.label,
+              state: cluster.jurisdiction?.state,
+            });
             const result = await handleFetchParcels(probe.def, 'project', undefined, bbox);
-            discoveredAttempt.label = probe.def.label;
-            discoveredAttempt.ok = result.ok;
-            discoveredAttempt.message = result.message;
-            discoveredAttempt.featureCount = result.featureCount;
-            discoveredAttempt.issue = result.ok
-              ? undefined
-              : classifyParcelFetchIssue(result.message);
+            liveAttempt.label = probe.def.label;
+            liveAttempt.ok = result.ok;
+            liveAttempt.message = result.message;
+            liveAttempt.featureCount = result.featureCount;
+            liveAttempt.issue = result.ok ? undefined : classifyParcelFetchIssue(result.message);
             if (result.ok) {
               publish('success', result.message, {
                 serviceLabel: probe.def.label,
                 attempts: [...attempts],
                 featureCount: result.featureCount,
                 usedStatewide: false,
-                guidance: 'Used a county parcel layer discovered through ArcGIS Online.',
+                guidance: 'Used a live county parcel layer resolved by the GIS resolver.',
               });
               return result;
             }
           } catch (error) {
-            discoveredAttempt.message = error instanceof Error ? error.message : String(error);
-            discoveredAttempt.issue = classifyParcelFetchIssue(discoveredAttempt.message);
+            liveAttempt.message = error instanceof Error ? error.message : String(error);
+            liveAttempt.issue = classifyParcelFetchIssue(liveAttempt.message);
           }
-          publish('loading', `${discoveredAttempt.label} could not be loaded — continuing…`);
+          publish('loading', `${liveAttempt.label} could not be loaded — continuing…`);
         }
       } catch {
-        // Discovery is best-effort; the structured failure below still tells
-        // the user what happened and how to recover.
+        // Scout is optional; the structured failure below still applies.
+      }
+
+      if (attempts.length === 0) {
+        attempts.push({
+          label: jurisdictionLabel,
+          match: 'custom',
+          ok: false,
+          message: 'No live public parcel layer was found for this footprint.',
+          featureCount: 0,
+          issue: 'no-service',
+        });
       }
 
       const issue = attempts[0]?.issue ?? 'unknown';
@@ -12396,18 +13927,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // request gets a Quick Thought choice before any model call.
     if (!agentOverride && askPeerDepth === 0 && !isInternalFollowUp) {
       const contourSetHistory = getSetHistoryForAgent(AgentType.CONTOURING_AGENT);
-      const activateContourAgent = (openConversation = true) => {
+      const activateContourAgent = (openConversation = false) => {
         if (!initializedAgents.has(AgentType.CONTOURING_AGENT)) {
           initializeContouringAgent();
         }
         setActiveAgent(AgentType.CONTOURING_AGENT);
+        setSuggestedQuestions([...CONTOUR_AGENT_QUICK_THOUGHTS]);
         if (openConversation) {
           setIsChatPanelVisible(true);
           setAgentChatOpenSignal(n => n + 1);
         }
       };
       const openContourGisPanel = () => {
-        activateContourAgent();
+        activateContourAgent(false);
         setIsContourGenPanelVisible(true);
         setIsContourGenMinimized(false);
         setIsContourEsriPanelVisible(true);
@@ -12454,7 +13986,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
 
       if (contourIntent?.kind === 'gis') {
-        openContourGisPanel();
         const hasInclusion = lines.some((line: SurveyLine) => line.type === 'inclusion') && !!settings.projection?.epsg;
         const hasProjectExtent = points.length > 0 && !!settings.projection?.epsg;
         const aoiMode: 'inclusion' | 'project' | null = hasInclusion
@@ -12463,11 +13994,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             ? 'project'
             : null;
         const source = contourIntent.usgsSource;
+        const projectIsPennsylvania =
+          displayedProjectLocationSet.clusters.some(cluster =>
+            /^(?:pa|pennsylvania)$/i.test(cluster.jurisdiction?.state?.trim() ?? ''),
+          ) || [2271, 2272].includes(Number(settings.projection?.epsg));
+        // In Pennsylvania, the project location is enough to use PASDA. Do not
+        // stop at a source picker just because the request didn't name a URL.
+        const usePasda = projectIsPennsylvania;
 
-        if (!source || !aoiMode) {
-          const guidance = !source
-            ? 'The <strong>ESRI REST Sources</strong> panel is open. Pick a state service or paste a custom ArcGIS layer URL, then download.'
-            : 'USGS 3DEP is ready in the <strong>ESRI REST Sources</strong> panel. I need an area first: draw an <strong>inclusion boundary</strong>, load <strong>georeferenced survey points</strong>, or use <strong>Describe Area</strong> in the panel.';
+        if (!aoiMode) {
+          // Only open the floating source picker when the request actually
+          // needs an area. A direct fetch must leave the panel closed.
+          openContourGisPanel();
+          const guidance = `I can fetch ${usePasda ? 'PASDA PAMAP' : (source?.name ?? 'live public GIS')} contours, but I need an area first: draw an <strong>inclusion boundary</strong>, load <strong>georeferenced survey points</strong>, or use <strong>Describe Area</strong> in the panel.`;
           contourSetHistory?.(prev => [
             ...markPendingA2UICompleted(prev),
             { role: MessageRole.USER, text: query },
@@ -12476,20 +14015,22 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           return;
         }
 
+        activateContourAgent(false);
+        const sourceLabel = usePasda ? 'PASDA PAMAP 2ft contours' : (source?.name ?? 'live public GIS contours');
         contourSetHistory?.(prev => [
           ...markPendingA2UICompleted(prev),
           { role: MessageRole.USER, text: query },
           {
             role: MessageRole.MODEL,
-            text: `Fetching <strong>${source.name}</strong> for the ${aoiMode === 'inclusion' ? 'inclusion boundary' : 'project extent'}…`,
+            text: `Fetching <strong>${sourceLabel}</strong> for the ${aoiMode === 'inclusion' ? 'inclusion boundary' : 'project extent'}…`,
           },
         ]);
 
         const result = await handleFetchEsriContours(
-          source.url,
+          usePasda || !source ? undefined : source.url,
           aoiMode,
           undefined,
-          nationalContourFetchOptions(source),
+          usePasda || !source ? undefined : nationalContourFetchOptions(source),
         );
 
         contourSetHistory?.(prev => {
@@ -12500,7 +14041,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               ...last,
               text: result.ok
                 ? result.message
-                : `Could not fetch USGS contours: ${result.message} The <strong>ESRI REST Sources</strong> panel is open so you can try another area or source.`,
+                : `Could not fetch ${usePasda ? 'PASDA' : (source?.name ?? 'public GIS')} contours: ${result.message} The <strong>ESRI REST Sources</strong> panel is open so you can try another area or source.`,
               result: result.ok ? result.message : undefined,
             };
           }
@@ -12576,6 +14117,216 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         'What can I change in Project Settings?',
         'Open the CACP manifests',
         'Show blocked CACP traffic',
+      ]);
+      return;
+    }
+
+    // "Label all inverts" and similar requests run locally against the point
+    // descriptions, using the Annotation Manager's rules and text styles.
+    if (localCommand?.action === 'label-all' && !agentOverride && askPeerDepth === 0) {
+      const commandSetHistory = getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
+      const result = buildPointLabelAnnotations(points, localCommand.request, {
+        rules: customAnnotations,
+        styleName: activeAnnotationTextStyle,
+        existingAnnotations: textAnnotations,
+        categoryId: 'callout',
+      });
+      if (result.annotations.length > 0) {
+        setTextAnnotations(prev => [...prev, ...result.annotations]);
+      }
+      commandSetHistory?.(prev => [
+        ...markPendingA2UICompleted(prev),
+        { role: MessageRole.USER, text: query },
+        { role: MessageRole.MODEL, text: describeLabelAllResult(localCommand.request, result) },
+      ]);
+      setSuggestedQuestions([
+        'Open the Annotate Manager',
+        'Label all utility poles',
+        'Edit the text style',
+      ]);
+      return;
+    }
+
+    // Natural annotation sizing / font / wipeout requests are deterministic
+    // edits. They apply to every matching category and standalone text object.
+    if (localCommand?.action === 'style-annotations' && !agentOverride && askPeerDepth === 0) {
+      const commandSetHistory = getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
+      const result = applyAnnotationStyleCommand(localCommand.command, {
+        categories: annotationCategories,
+        styles: annotationTextStyles,
+        annotations: textAnnotations,
+      });
+      setAnnotationCategories(result.categories);
+      setAnnotationTextStyles(result.styles);
+      if (result.textCount > 0) setTextAnnotations(result.annotations);
+      commandSetHistory?.(prev => [
+        ...markPendingA2UICompleted(prev),
+        { role: MessageRole.USER, text: query },
+        { role: MessageRole.MODEL, text: `**Annotation style applied.** ${result.summary}` },
+      ]);
+      setSuggestedQuestions([
+        'Adjust all FEMA text size to L80',
+        'Make soils text a little smaller',
+        'Turn on wipeout for all text',
+      ]);
+      return;
+    }
+
+    // FEMA FIRMETTE / flood map and SSURGO soil report requests are document
+    // actions, not questions. Run them locally so the PDF is actually produced.
+    if (localCommand?.action === 'get-firmette' && !agentOverride && askPeerDepth === 0) {
+      const commandSetHistory = getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
+      const result = await handleFetchFirmette();
+      commandSetHistory?.(prev => [
+        ...markPendingA2UICompleted(prev),
+        { role: MessageRole.USER, text: query },
+        { role: MessageRole.MODEL, text: result.message },
+      ]);
+      setSuggestedQuestions([
+        'Get the soils report',
+        'Show the FEMA flood zones',
+        'Clear flood areas',
+      ]);
+      return;
+    }
+
+    if (localCommand?.action === 'show-soil-limitations' && !agentOverride && askPeerDepth === 0) {
+      const commandSetHistory = getSetHistoryForAgent(activeAgent || AgentType.SOILS_AGENT);
+      const result = await handleCompileSoilLimitations({ openPanel: false });
+      if (!result.ok || !result.report) {
+        commandSetHistory?.(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          {
+            role: MessageRole.MODEL,
+            text: `I couldn't compile the soil limitations report: ${result.message}`,
+            result: result.message,
+            quickThoughtLabel: 'Soil limitations',
+            quickThoughtText: result.message,
+          },
+        ]);
+        setSuggestedQuestions([
+          'Fetch soils for this area',
+          'Draw an inclusion boundary',
+          'Open Soils tools',
+        ]);
+        return;
+      }
+
+      const report = result.report;
+      const acres =
+        report.soilAcres > 0 && report.soilAcres < 0.01
+          ? '<0.01'
+          : report.soilAcres.toFixed(2);
+      const unitLabel = `${report.units.length} map unit${report.units.length === 1 ? '' : 's'}`;
+      const reply =
+        `**PA E&S soil limitations** — ${unitLabel} · **${acres} ac** in ${report.areaLabel}. ` +
+        'The limitations and resolutions are inline below; download the PDF or add the block to the active sheet when ready.';
+      commandSetHistory?.(prev => [
+        ...markPendingA2UICompleted(prev),
+        { role: MessageRole.USER, text: query },
+        {
+          role: MessageRole.MODEL,
+          text: reply,
+          result: reply,
+          quickThoughtLabel: 'Soil limitations',
+          quickThoughtText: report.boundaryPresent
+            ? `${unitLabel} · ${acres} ac within ${report.areaLabel}. Review limitations and resolutions.`
+            : `${unitLabel} · ${acres} ac across the project AOI. Draw a boundary for exact acreage.`,
+          a2ui: {
+            kind: 'soil-limitations',
+            agent: AgentType.SOILS_AGENT,
+            widgetType: 'soil-limitations',
+            status: 'expanded',
+            soilLimitations: report,
+          },
+        },
+      ]);
+      setSuggestedQuestions([
+        'Download soil limitations report',
+        'Show the soil map units',
+        'Clear soil linework',
+      ]);
+      return;
+    }
+
+    if (localCommand?.action === 'get-soil-limitations-report' && !agentOverride && askPeerDepth === 0) {
+      const commandSetHistory = getSetHistoryForAgent(activeAgent || AgentType.SOILS_AGENT);
+      const result = await handleDownloadSoilLimitationsReport();
+      const reply = result.ok
+        ? result.message
+        : `Soil limitations report failed: ${result.message}`;
+      commandSetHistory?.(prev => [
+        ...markPendingA2UICompleted(prev),
+        { role: MessageRole.USER, text: query },
+        { role: MessageRole.MODEL, text: reply },
+      ]);
+      setSuggestedQuestions([
+        'Show the soil map units',
+        'Fetch the soil report',
+        'Clear soil linework',
+      ]);
+      return;
+    }
+
+    if (localCommand?.action === 'get-soils-report' && !agentOverride && askPeerDepth === 0) {
+      const commandSetHistory = getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
+      let units = soilMapUnits;
+      let areaNote = '';
+      if (units.length === 0) {
+        let bbox = getInclusionBboxWgs84(activeInclusionBoundaryId);
+        if (!bbox && points.length > 0) {
+          // Like the FIRMETTE, the report request works from the project area
+          // even before an inclusion boundary has been drawn.
+          const validPoints = points.filter((point: SurveyPoint) =>
+            Number.isFinite(point.easting) && Number.isFinite(point.northing),
+          );
+          if (validPoints.length > 0) {
+            const { projectBboxToWgs84 } = await import('./services/roadExtractionService.ts');
+            bbox = projectBboxToWgs84(
+              {
+                minE: Math.min(...validPoints.map((point: SurveyPoint) => point.easting)),
+                maxE: Math.max(...validPoints.map((point: SurveyPoint) => point.easting)),
+                minN: Math.min(...validPoints.map((point: SurveyPoint) => point.northing)),
+                maxN: Math.max(...validPoints.map((point: SurveyPoint) => point.northing)),
+              },
+              settings.projection?.epsg,
+            );
+          }
+        }
+        if (!bbox) {
+          const message = 'No soil map units are loaded. Draw an inclusion boundary or load project points first, then ask again.';
+          commandSetHistory?.(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            { role: MessageRole.MODEL, text: message },
+          ]);
+          return;
+        }
+        const fetchResult = await handleFetchSoils('project', undefined, bbox);
+        units = fetchResult.mapUnits ?? [];
+        if (!fetchResult.ok || units.length === 0) {
+          const message = `Soil report failed: ${fetchResult.message}`;
+          commandSetHistory?.(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            { role: MessageRole.MODEL, text: message },
+          ]);
+          return;
+        }
+        areaNote = ' SSURGO map units were fetched for the project area first.';
+      }
+      const result = await handleDownloadSoilReport({ mapUnits: units });
+      const reply = result.ok ? `${result.message}${areaNote}` : `Soil report failed: ${result.message}`;
+      commandSetHistory?.(prev => [
+        ...markPendingA2UICompleted(prev),
+        { role: MessageRole.USER, text: query },
+        { role: MessageRole.MODEL, text: reply },
+      ]);
+      setSuggestedQuestions([
+        'Get the FEMA FIRMETTE',
+        'Clear soil linework',
+        'Show the soil map units',
       ]);
       return;
     }
@@ -15685,12 +17436,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                    ch => /CNTR|CENTER|CL/i.test(ch.layer ?? '') || /(?:^|[-_])cl(?:[-_]|$)|centerline/i.test(ch.polylineId ?? ''),
                  );
                  if (clChain && clChain.pointNumbers.length >= 2) {
-                   const clVertices = clChain.pointNumbers
+                   const clPointList = clChain.pointNumbers
                      .map(pn => chainLookup.get(String(pn)))
-                     .filter((p): p is SurveyPoint => Boolean(p))
-                     .map(p => ({ easting: p.easting, northing: p.northing }));
+                     .filter((p): p is SurveyPoint => Boolean(p));
+                   const clVertices = clPointList.map(p => ({ easting: p.easting, northing: p.northing }));
                    if (clVertices.length >= 2) {
-                     const syncedCl = buildCenterlineFromVertices(clVertices, 'Drafted Road CL');
+                     const syncedCl = buildCenterlineFromVertices(
+                       clVertices,
+                       'Drafted Road CL',
+                       'cl-road',
+                       resolveBeginStation(undefined, clPointList[0]?.description),
+                     );
                      setCenterlines(prev => [syncedCl, ...prev.filter(c => c.name !== syncedCl.name)]);
                    }
                  }
@@ -15941,6 +17697,59 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 : enrichedLinesFiltered;
               if (linesToPlot.length > 0) {
                 setLines(prevLines => [...prevLines, ...linesToPlot]);
+              }
+              // Roading Agent: whenever it drafts road linework from the survey
+              // shots, look up the existing street name from OSM and place it on
+              // the drawn alignment automatically.
+              if (agent === AgentType.ROADING_AGENT && linesToPlot.length > 0) {
+                const centerlineLines = linesToPlot.filter(l => /C-ROAD-CNTR/i.test(l.layer || ''));
+                let nameLines: SurveyLine[] = centerlineLines;
+                if (nameLines.length === 0) {
+                  const roadGroups = new Map<string, SurveyLine[]>();
+                  for (const line of linesToPlot) {
+                    if (!/^(L-ROAD|C-ROAD-LANE|V-ROAD-CURB)$/i.test((line.layer || '').trim())) continue;
+                    const groupKey = line.polylineId || line.layer || 'road';
+                    const group = roadGroups.get(groupKey) ?? [];
+                    group.push(line);
+                    roadGroups.set(groupKey, group);
+                  }
+                  nameLines = [...roadGroups.values()].sort((a, b) => b.length - a.length)[0] ?? [];
+                }
+                const roadNodes = new Map<string, { pointNumber: string; easting: number; northing: number }>();
+                for (const line of nameLines) {
+                  for (const pt of [line.fromPt, line.toPt]) {
+                    if (!pt) continue;
+                    const nodeKey = `${pt.x.toFixed(3)},${pt.y.toFixed(3)}`;
+                    roadNodes.set(nodeKey, { pointNumber: nodeKey, easting: pt.x, northing: pt.y });
+                  }
+                }
+                const orderedNodeKeys = orderPointsAlongFeature([...roadNodes.values()]);
+                const roadPath = orderedNodeKeys.map(nodeKey => {
+                  const node = roadNodes.get(nodeKey)!;
+                  return { x: node.easting, y: node.northing };
+                });
+                if (roadPath.length >= 2) {
+                  void (async () => {
+                    try {
+                      const { fetchRoadLabelsAlongAlignment } = await import('./services/streetNameService.ts');
+                      const labels = await fetchRoadLabelsAlongAlignment(
+                        roadPath,
+                        settings.projection?.epsg,
+                        { toleranceFt: 60, maxLabels: 1, existingLabels: streetLabels },
+                      );
+                      if (labels.length > 0) {
+                        setStreetLabels(prev => {
+                          const existing = new Set(prev.map(label => label.text.trim().toLowerCase()));
+                          const fresh = labels.filter(label => !existing.has(label.text.trim().toLowerCase()));
+                          return fresh.length > 0 ? [...prev, ...fresh] : prev;
+                        });
+                        logActionToFieldbook(`Roading Agent: placed existing street name "${labels[0].text}" on the drawn road.`);
+                      }
+                    } catch {
+                      // Name lookup is best-effort; the road still drafts offline.
+                    }
+                  })();
+                }
               }
               if (agent === AgentType.DEED_READER) {
                 const suppressed = enrichedLinesFiltered.length - linesToPlot.length;
@@ -16540,7 +18349,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             const existingLines = prevLines.filter(l => !l.type?.startsWith('contour'));
                             return [...existingLines, ...contourLines];
                         });
-                        setContourLabels(newLabels);
+                        setContourLabels(prev => [...prev.filter(label => !label.contourGenId), ...newLabels]);
                         showView('canvas');
                     } catch (e) {
                          setError(`Contour Generation Error: ${(e as Error).message}`);
@@ -16636,7 +18445,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         const existingLines = prevLines.filter(l => !l.type?.startsWith('contour'));
                         return [...existingLines, ...contourLines];
                     });
-                    setContourLabels(newLabels);
+                    setContourLabels(prev => [...prev.filter(label => !label.contourGenId), ...newLabels]);
 
                     showView('canvas');
                     visualDataFound = true;
@@ -16927,7 +18736,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     imageAnalyzerChatHistory, fieldbookNotes, cutSheetData, cutSheetInfo, activeModel, activeVisualPanel, closureReports,
     isPdfViewerFullscreen, isVisualPanelFullscreen, isChatPanelVisible,
     attributeScale, pointLayers, showView, logActionToFieldbook, highlights, pdfViewerFiles, textEditorContent, activeTextEditorFile, currentPosition, handleOpenFileInEditor, offlineMapAreas,
-    wmsServices, activeWmsLayers, addHighlights, plotGeoJsonFile, customSymbols, handleGenerateContours, points, contourSettings, contourLabels, linesVisible, centerlinesVisible,
+    wmsServices, activeWmsLayers, addHighlights, plotGeoJsonFile, customSymbols, handleGenerateContours, points, textAnnotations, activeAnnotationTextStyle, customAnnotations,
+    handleFetchFirmette, handleFetchSoils, handleDownloadSoilReport, handleDownloadSoilLimitationsReport, soilMapUnits, getInclusionBboxWgs84, activeInclusionBoundaryId,
+    contourSettings, contourLabels, linesVisible, centerlinesVisible,
     lineLabelScale, hasConfirmedApiKey, setStandardsComplianceLastReport, formatComplianceReportText, buildStandardsComplianceReport, runVisualComplianceAudit, cadManagerContext,
     applySymbolVisibilityCommand, addNotification, getSetHistoryForAgent, handleFetchEsriContours, toggleToolDock, initializeContouringAgent,
     closePointEntrySurface, openCivilDrafterContextSurface,
@@ -17837,27 +19648,29 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, [logActionToFieldbook]);
 
   const handlePointsUploaded = useCallback((newPoints: SurveyPoint[], fileName: string) => {
-    logActionToFieldbook(`Uploaded and added ${newPoints.length} points from file: ${fileName}`);
+    const { accepted, skipped } = dedupeIncomingPoints(newPoints, pointLists.flatMap(l => l.points));
+    if (accepted.length === 0) {
+        setError(`All ${newPoints.length} point${newPoints.length === 1 ? '' : 's'} in "${fileName}" are already on the canvas — nothing was imported.`);
+        setTimeout(() => setError(null), 4000);
+        return;
+    }
+    if (skipped.length > 0) {
+        setError(`${skipped.length} duplicate point${skipped.length === 1 ? ' was' : 's were'} skipped (point numbers already on the canvas).`);
+        setTimeout(() => setError(null), 4000);
+    }
+    logActionToFieldbook(`Uploaded and added ${accepted.length} points from file: ${fileName}${skipped.length > 0 ? ` (${skipped.length} duplicates skipped)` : ''}`);
     setPointLists(prevLists => {
-        const allExistingPointNumbers = new Set(prevLists.flatMap(l => l.points).map(p => p.pointNumber));
-        const uniqueNewPoints = newPoints.filter(p => !allExistingPointNumbers.has(p.pointNumber));
-        if (uniqueNewPoints.length < newPoints.length) {
-            const skippedCount = newPoints.length - uniqueNewPoints.length;
-            setError(`${skippedCount} point(s) were skipped due to duplicate point numbers.`);
-            setTimeout(() => setError(null), 4000);
-        }
-
         const workingListIndex = prevLists.findIndex(l => l.id === 'working');
-        if (workingListIndex === -1) return [...prevLists, { id: 'working', name: 'Unsaved Points', points: uniqueNewPoints, isVisible: true }];
+        if (workingListIndex === -1) return [...prevLists, { id: 'working', name: 'Unsaved Points', points: accepted, isVisible: true }];
         
         const newLists = [...prevLists];
-        newLists[workingListIndex] = { ...newLists[workingListIndex], points: [...newLists[workingListIndex].points, ...uniqueNewPoints] };
+        newLists[workingListIndex] = { ...newLists[workingListIndex], points: [...newLists[workingListIndex].points, ...accepted] };
         return newLists;
     });
-    const summaryLabel = `${fileName} (${newPoints.length} pts)`;
+    const summaryLabel = `${fileName} (${accepted.length} pts)`;
     const confirmMsg: ChatMessage = {
       role: MessageRole.MODEL,
-      text: `I have loaded <strong>${newPoints.length.toLocaleString()} point${newPoints.length === 1 ? '' : 's'}</strong> from <strong>"${fileName}"</strong> onto the canvas! Ask me to filter points, run COGO calculations, or inspect the point list.`,
+      text: `I have loaded <strong>${accepted.length.toLocaleString()} point${accepted.length === 1 ? '' : 's'}</strong> from <strong>"${fileName}"</strong> onto the canvas! Ask me to filter points, run COGO calculations, or inspect the point list.${skipped.length > 0 ? ` ${skipped.length} duplicate point${skipped.length === 1 ? ' was' : 's were'} skipped.` : ''}`,
     };
     const activeSetHistory = getSetHistoryForAgent(activeAgent) ?? setPointEditorChatHistory;
     activeSetHistory(prev => [...markPendingA2UICompleted(prev, summaryLabel), confirmMsg]);
@@ -17872,10 +19685,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       kind: 'points',
       severity: 'success',
       title: 'Points loaded',
-      message: `${newPoints.length.toLocaleString()} point${newPoints.length === 1 ? '' : 's'} from "${fileName}" are now on the canvas.`,
+      message: `${accepted.length.toLocaleString()} point${accepted.length === 1 ? '' : 's'} from "${fileName}" are now on the canvas.`,
     });
     setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
-  }, [logActionToFieldbook, showView, activeAgent, getSetHistoryForAgent, setPointEditorChatHistory, canvas2dRef, addNotification]);
+  }, [logActionToFieldbook, showView, activeAgent, getSetHistoryForAgent, setPointEditorChatHistory, canvas2dRef, addNotification, pointLists]);
 
   // Handler to start Point Editor with an empty session (no file upload)
   const handlePointEditorSessionStart = useCallback(() => {
@@ -17923,27 +19736,25 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       return;
     }
 
-    logActionToFieldbook(`Imported ${newPoints.length} points as new list from file: ${fileName}`);
+    const { accepted, skipped } = dedupeIncomingPoints(newPoints, pointLists.flatMap(l => l.points));
+    if (accepted.length === 0) {
+      setError(`All ${newPoints.length} point${newPoints.length === 1 ? '' : 's'} in "${fileName}" are already on the canvas — nothing was imported.`);
+      setTimeout(() => setError(null), 4000);
+      return;
+    }
+    if (skipped.length > 0) {
+      setError(`${skipped.length} duplicate point${skipped.length === 1 ? ' was' : 's were'} skipped (point numbers already on the canvas).`);
+      setTimeout(() => setError(null), 4000);
+    }
+
+    logActionToFieldbook(`Imported ${accepted.length} points as new list from file: ${fileName}${skipped.length > 0 ? ` (${skipped.length} duplicates skipped)` : ''}`);
     
     setPointLists(prevLists => {
-      const allExistingPointNumbers = new Set(prevLists.flatMap(l => l.points).map(p => p.pointNumber));
-      const uniqueNewPoints = newPoints.filter(p => !allExistingPointNumbers.has(p.pointNumber));
-      
-      if (uniqueNewPoints.length < newPoints.length) {
-        const skippedCount = newPoints.length - uniqueNewPoints.length;
-        setError(`${skippedCount} point(s) were skipped due to duplicate point numbers.`);
-        setTimeout(() => setError(null), 4000);
-      }
-      
-      if (uniqueNewPoints.length === 0) {
-        return prevLists;
-      }
-
       const listName = fileName.replace(/\.[^/.]+$/, ""); // remove extension
       const newList: PointList = {
         id: Date.now().toString(),
         name: listName,
-        points: uniqueNewPoints,
+        points: accepted,
         isVisible: true,
       };
 
@@ -17956,9 +19767,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       kind: 'points',
       severity: 'success',
       title: 'Point list imported',
-      message: `${newPoints.length.toLocaleString()} point${newPoints.length === 1 ? '' : 's'} from "${fileName}" were added as a new point list.`,
+      message: `${accepted.length.toLocaleString()} point${accepted.length === 1 ? '' : 's'} from "${fileName}" were added as a new point list.`,
     });
-  }, [logActionToFieldbook, showView, addNotification]);
+  }, [logActionToFieldbook, showView, addNotification, pointLists]);
 
   // Handler for importing points from Civil 3D
   const handleImportPointsFromC3D = useCallback((importedPoints: SurveyPoint[], sourceListName: string) => {
@@ -17968,27 +19779,25 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       return;
     }
 
-    logActionToFieldbook(`Imported ${importedPoints.length} points from Civil 3D: ${sourceListName}`);
+    const { accepted, skipped } = dedupeIncomingPoints(importedPoints, pointLists.flatMap(l => l.points));
+    if (accepted.length === 0) {
+      setError(`All ${importedPoints.length} point${importedPoints.length === 1 ? '' : 's'} from Civil 3D are already on the canvas — nothing was imported.`);
+      setTimeout(() => setError(null), 4000);
+      return;
+    }
+    if (skipped.length > 0) {
+      setError(`${skipped.length} duplicate point${skipped.length === 1 ? ' was' : 's were'} skipped (point numbers already on the canvas).`);
+      setTimeout(() => setError(null), 4000);
+    }
+
+    logActionToFieldbook(`Imported ${accepted.length} points from Civil 3D: ${sourceListName}${skipped.length > 0 ? ` (${skipped.length} duplicates skipped)` : ''}`);
     
     setPointLists(prevLists => {
-      const allExistingPointNumbers = new Set(prevLists.flatMap(l => l.points).map(p => p.pointNumber));
-      const uniqueNewPoints = importedPoints.filter(p => !allExistingPointNumbers.has(p.pointNumber));
-      
-      if (uniqueNewPoints.length < importedPoints.length) {
-        const skippedCount = importedPoints.length - uniqueNewPoints.length;
-        setError(`${skippedCount} point(s) were skipped due to duplicate point numbers.`);
-        setTimeout(() => setError(null), 4000);
-      }
-      
-      if (uniqueNewPoints.length === 0) {
-        return prevLists;
-      }
-
       const listName = `C3D - ${sourceListName}`;
       const newList: PointList = {
         id: `c3d-${Date.now().toString()}`,
         name: listName,
-        points: uniqueNewPoints,
+        points: accepted,
         isVisible: true,
       };
 
@@ -17996,7 +19805,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     });
     
     showView('canvas');
-  }, [logActionToFieldbook, showView]);
+  }, [logActionToFieldbook, showView, pointLists]);
 
   const handleAddLine = useCallback((newLine: SurveyLine) => {
     pushHistory(`Drew line ${newLine.from}�${newLine.to}`);
@@ -20670,12 +22479,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         activeInclusionBoundaryId,
         floodFirmette: floodFirmetteData ?? null,
         contourGenerations: contourGenerations.length > 0 ? contourGenerations : undefined,
+        generationBlocks: generationBlocks.length > 0 ? generationBlocks : undefined,
         streetLabels: streetLabels.length > 0 ? streetLabels : undefined,
         parcelLabels: parcelLabels.length > 0 ? parcelLabels : undefined,
         areaLabels: areaLabels.length > 0 ? areaLabels : undefined,
         floodAreas: lastFloodAreas.length > 0 ? lastFloodAreas : undefined,
         soilAreas: lastSoilAreas.length > 0 ? lastSoilAreas : undefined,
         annotationCategories: annotationCategories,
+        annotationTextStyles: annotationTextStyles,
+        activeAnnotationTextStyle: activeAnnotationTextStyle,
+        textAnnotations: textAnnotations.length > 0 ? textAnnotations : undefined,
         jobInfo,
         rawChatHistory,
         deedChatHistory,
@@ -20783,7 +22596,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     pointEditorChatHistory, fieldbookLog, gpsStakeoutChatHistory, lsvzChatHistory, planExpertChatHistory, imageAnalyzerChatHistory, gisChatHistory, contouringChatHistory, steepSlopeChatHistory, profileChatHistory, fieldbookNotes,
     pointLists, lines, contourLabels, centerlines, wmsServices, activeWmsLayers, offlineMapAreas, cutSheetData, cutSheetInfo, activeAgent, activeModel,
     activeVisualPanel, pdfViewerFiles, highlights, customSymbols, closureReports, boundaryFiles,
-    inclusionBoundaries, activeInclusionBoundaryId, floodFirmetteData, contourGenerations, streetLabels,
+    inclusionBoundaries, activeInclusionBoundaryId, floodFirmetteData, contourGenerations, generationBlocks, streetLabels,
     isVisualPanelFullscreen, attributeScale, pointLayers, activeTextEditorFile, isChatPanelVisible, linesVisible, centerlinesVisible,
     profileData, profileInfo, APP_VERSION, lineLabelScale, draftingStyleLibrary,
     soilMapUnits, soilsChatHistory, standardsComplianceChatHistory, standardsComplianceControlFile,
@@ -20876,6 +22689,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 setOfflineMapAreas(sessionState.offlineMapAreas || []);
                 setCustomSymbols((sessionState.customSymbols || []).filter(s => !s.isDefault));
                 setCustomAnnotations(sessionState.customAnnotations || []);
+                setTextAnnotations(sessionState.textAnnotations || []);
+                setAnnotationTextStyles(
+                  sessionState.annotationTextStyles && sessionState.annotationTextStyles.length > 0
+                    ? sessionState.annotationTextStyles
+                    : DEFAULT_ANNOTATION_TEXT_STYLES,
+                );
+                setActiveAnnotationTextStyle(
+                  sessionState.activeAnnotationTextStyle || DEFAULT_ANNOTATION_TEXT_STYLES[0].name,
+                );
                 if (typeof sessionState.annotationScale === 'number') setAnnotationScale(sessionState.annotationScale);
                 setClosureReports(sessionState.closureReports || []);
                 setBoundaryFiles(sessionState.boundaryFiles || []);
@@ -20902,6 +22724,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   setContourGenerations(sessionState.contourGenerations);
                   setIsContourManagementVisible(true);
                 }
+                setGenerationBlocks(sessionState.generationBlocks || []);
                 if (sessionState.streetLabels && sessionState.streetLabels.length > 0) {
                   setStreetLabels(sessionState.streetLabels);
                 }
@@ -21321,6 +23144,67 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setZoomTarget(null);
   }, []);
 
+  const closeAddressLookup = useCallback(() => {
+    setIsAddressLookupOpen(false);
+    setAddressLookupError(null);
+  }, []);
+
+  const handleAddressLookup = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (isAddressLookupLoading) return;
+
+    const query = addressLookupQuery.trim();
+    if (!query) {
+      setAddressLookupError('Enter a street address or place.');
+      return;
+    }
+
+    const epsg = settings.projection.epsg;
+    if (!epsg) {
+      setAddressLookupError('Set a project projection in Settings before zooming to an address.');
+      return;
+    }
+
+    setIsAddressLookupLoading(true);
+    setAddressLookupError(null);
+    try {
+      const { geocodePlace } = await import('./utils/arcgisServerClient.ts');
+      const place = await geocodePlace(query);
+      if (!place) {
+        setAddressLookupError('No match found. Try a full street address with city, state and ZIP.');
+        return;
+      }
+
+      const projectCrs = `EPSG:${epsg}`;
+      // About a 300 m tall window around the matched address. The longitude
+      // span is widened by latitude so the view stays square on the ground.
+      const halfLat = 0.0015;
+      const halfLon = halfLat / Math.max(0.2, Math.cos((place.lat * Math.PI) / 180));
+      const corners = [
+        [place.lon - halfLon, place.lat - halfLat],
+        [place.lon + halfLon, place.lat - halfLat],
+        [place.lon + halfLon, place.lat + halfLat],
+        [place.lon - halfLon, place.lat + halfLat],
+      ].map(([lon, lat]) => proj4('EPSG:4326', projectCrs, [lon, lat]) as [number, number]);
+
+      const minE = Math.min(...corners.map(([e]) => e));
+      const maxE = Math.max(...corners.map(([e]) => e));
+      const minN = Math.min(...corners.map(([, n]) => n));
+      const maxN = Math.max(...corners.map(([, n]) => n));
+      if (![minE, maxE, minN, maxN].every(Number.isFinite)) {
+        throw new Error('The address could not be converted to the project coordinate system.');
+      }
+
+      canvas2dRef.current?.zoomToBbox(minE, maxE, minN, maxN, 0.1);
+      setIsAddressLookupOpen(false);
+      setAddressLookupQuery('');
+    } catch (error) {
+      setAddressLookupError(error instanceof Error ? error.message : 'Address lookup failed.');
+    } finally {
+      setIsAddressLookupLoading(false);
+    }
+  }, [addressLookupQuery, isAddressLookupLoading, settings.projection.epsg]);
+
   const handleARMenuAction = useCallback((action: string, point: SurveyPoint) => {
     switch (action) {
       case 'stake':
@@ -21382,88 +23266,142 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setActiveWmsLayers(prev => prev.filter(l => l.serviceUrl !== serviceUrl));
   }, []);
 
-  const handleDownloadMapArea = useCallback(async (name: string, centerPointNumber: string, radius: number) => {
+  const handleDownloadMapArea = useCallback(async (name: string, centerPointNumber: string, range: number) => {
     setIsLoading(true); // Can use a more specific loader later
     setError(null);
     try {
-        const centerPoint = points.find(p => p.pointNumber === centerPointNumber);
-        if (!centerPoint) throw new Error(`Point number "${centerPointNumber}" not found.`);
-        if (radius <= 0) throw new Error("Radius must be a positive number.");
         if (!settings.projection.epsg) throw new Error("A State Plane projection must be set in Settings to download map areas.");
-
-        const bbox: [number, number, number, number] = [
-            centerPoint.easting - radius,
-            centerPoint.northing - radius,
-            centerPoint.easting + radius,
-            centerPoint.northing + radius
-        ];
-
-        const resolution = 2048; // Fixed resolution for simplicity
 
         const layersToDownload = activeWmsLayers.filter(l => l.isVisible);
         if (layersToDownload.length === 0) {
             throw new Error("No WMS layers are currently visible to download.");
         }
 
-        const downloadedLayersPromises = layersToDownload.map(async (activeLayer) => {
-            const service = wmsServices.find(s => s.url === activeLayer.serviceUrl);
-            if (!service) return null;
-
-            const wmsUrl = new URL(service.url);
-            wmsUrl.searchParams.set('service', 'WMS');
-            wmsUrl.searchParams.set('request', 'GetMap');
-            wmsUrl.searchParams.set('layers', activeLayer.layerName);
-            wmsUrl.searchParams.set('styles', '');
-            wmsUrl.searchParams.set('version', '1.3.0');
-            wmsUrl.searchParams.set('width', resolution.toString());
-            wmsUrl.searchParams.set('height', resolution.toString());
-            wmsUrl.searchParams.set('crs', `EPSG:${settings.projection.epsg}`);
-            wmsUrl.searchParams.set('bbox', bbox.join(','));
-            wmsUrl.searchParams.set('format', 'image/png');
-            wmsUrl.searchParams.set('transparent', 'true');
-
-            const proxiedUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(wmsUrl.toString())}`;
-
-            const response = await fetch(proxiedUrl);
-            if (!response.ok) throw new Error(`Failed to fetch map from ${service.title}`);
-
-            const blob = await response.blob();
-            if (!blob.type.startsWith('image/')) {
-                const errorText = await blob.text();
-                console.error(`WMS service returned non-image content for ${service.title}:`, errorText);
-                throw new Error(`WMS service "${service.title}" did not return a valid image.`);
+        // Anchor downloads to the points in the file (plus the requested
+        // range) so an offline area covers the survey rather than a circle.
+        // Fall back to a chosen point, then to the current map view.
+        let bbox: MapBbox | null = pointRangeBbox(points, range);
+        if (!bbox && centerPointNumber) {
+            const centerPoint = points.find(p => p.pointNumber === centerPointNumber);
+            if (centerPoint) bbox = centerRadiusBbox(centerPoint, range);
+        }
+        if (!bbox) {
+            const view = canvas2dRef.current?.getViewportBboxWorld?.();
+            if (view
+                && Number.isFinite(view.minE) && Number.isFinite(view.maxE)
+                && Number.isFinite(view.minN) && Number.isFinite(view.maxN)
+                && view.maxE > view.minE && view.maxN > view.minN) {
+                bbox = [view.minE, view.minN, view.maxE, view.maxN];
             }
-            
-            const imageData = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result as string);
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
-            });
+        }
+        if (!bbox) {
+            throw new Error("No points in the file and the map view is unavailable. Pan the map to the area you want to download.");
+        }
 
-            return {
+        // Bounded power-of-two tile grid: large tracts grow the cell size
+        // instead of firing hundreds of requests or allocating a huge canvas.
+        const plan = planDownloadTiles(bbox, { tilePx: 1024, maxTiles: 16, pxPerUnit: 2, maxPixelsPerSide: 4096 });
+        if (!plan) throw new Error("The selected map area is too small to download.");
+
+        const projectCrs = `EPSG:${settings.projection.epsg}`;
+        type TileJob = { layerIndex: number; tileIndex: number; url: string; key: string };
+        const jobs: TileJob[] = [];
+
+        layersToDownload.forEach((activeLayer, layerIndex) => {
+            const service = wmsServices.find(s => s.url === activeLayer.serviceUrl);
+            if (!service) return;
+
+            plan.tiles.forEach((tile, tileIndex) => {
+                const wmsUrl = new URL(service.url);
+                wmsUrl.searchParams.set('service', 'WMS');
+                wmsUrl.searchParams.set('request', 'GetMap');
+                wmsUrl.searchParams.set('layers', activeLayer.layerName);
+                wmsUrl.searchParams.set('styles', '');
+                wmsUrl.searchParams.set('version', '1.3.0');
+                wmsUrl.searchParams.set('width', String(plan.tilePx));
+                wmsUrl.searchParams.set('height', String(plan.tilePx));
+                wmsUrl.searchParams.set('crs', projectCrs);
+                wmsUrl.searchParams.set('bbox', tile.bbox.join(','));
+                wmsUrl.searchParams.set('format', 'image/png');
+                wmsUrl.searchParams.set('transparent', 'true');
+
+                jobs.push({
+                    layerIndex,
+                    tileIndex,
+                    url: wmsUrl.toString(),
+                    key: `wms-offline|${wmsUrl.toString()}`,
+                });
+            });
+        });
+
+        if (jobs.length === 0) throw new Error("No WMS services matched the visible layers.");
+
+        // Fetch tiles concurrently (cached tiles return instantly) instead of
+        // one slow 2048px request per layer.
+        const loaded = await mapWithConcurrency(jobs, 6, async job => {
+            try {
+                const bitmap = await getCachedBitmap(job.key, () => fetchImageBlobViaProxy(job.url));
+                return { ...job, bitmap };
+            } catch (err) {
+                console.error(`[OfflineMap] Tile download failed for ${job.url}`, err);
+                return null;
+            }
+        });
+        const ok = loaded.filter((item): item is NonNullable<typeof item> => item !== null);
+        if (ok.length === 0) throw new Error("Failed to download any map tiles. Check the WMS service connection and try again.");
+
+        const tilesByLayer = new Map<number, Array<{ tileIndex: number; bitmap: ImageBitmap }>>();
+        for (const item of ok) {
+            const list = tilesByLayer.get(item.layerIndex) ?? [];
+            list.push({ tileIndex: item.tileIndex, bitmap: item.bitmap });
+            tilesByLayer.set(item.layerIndex, list);
+        }
+
+        const downloadedLayers: OfflineMapArea['layers'] = [];
+        for (let layerIndex = 0; layerIndex < layersToDownload.length; layerIndex++) {
+            const layerTiles = tilesByLayer.get(layerIndex);
+            if (!layerTiles || layerTiles.length < plan.tiles.length) {
+                console.warn(`[OfflineMap] Skipping ${layersToDownload[layerIndex]?.layerName}: ${layerTiles?.length ?? 0}/${plan.tiles.length} tiles downloaded.`);
+                continue;
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = plan.widthPx;
+            canvas.height = plan.heightPx;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error("Could not create a canvas to assemble the offline map.");
+
+            for (const { tileIndex, bitmap } of layerTiles) {
+                const tile = plan.tiles[tileIndex];
+                // Row 0 is the south edge; canvas rows run north-to-south.
+                const canvasRow = plan.rows - 1 - tile.row;
+                ctx.drawImage(bitmap, tile.col * plan.tilePx, canvasRow * plan.tilePx, plan.tilePx, plan.tilePx);
+            }
+
+            const activeLayer = layersToDownload[layerIndex];
+            downloadedLayers.push({
                 serviceUrl: activeLayer.serviceUrl,
                 layerName: activeLayer.layerName,
                 opacity: activeLayer.opacity,
-                imageData: imageData,
-            };
-        });
+                imageData: canvas.toDataURL('image/png'),
+            });
+        }
 
-        const downloadedLayers = (await Promise.all(downloadedLayersPromises)).filter((l): l is NonNullable<typeof l> => l !== null);
-        
-        // FIX: Added the missing `isVisible` property to the new OfflineMapArea object to match the type definition.
+        if (downloadedLayers.length === 0) throw new Error("Failed to assemble the offline map.");
+
         const newArea: OfflineMapArea = {
             id: Date.now().toString(),
             name,
-            bbox,
-            width: radius * 2,
-            height: radius * 2,
+            bbox: plan.gridBbox,
+            width: plan.widthWorld,
+            height: plan.heightWorld,
             layers: downloadedLayers,
             isVisible: true,
         };
 
         setOfflineMapAreas(prev => [...prev, newArea]);
-        logActionToFieldbook(`Downloaded offline map area "${name}".`);
+        const coverage = points.length > 0 ? `${points.length} file point${points.length === 1 ? '' : 's'}` : 'the current map view';
+        logActionToFieldbook(`Downloaded offline map area "${name}" covering ${coverage} (${plan.tiles.length} tiles per layer).`);
 
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
@@ -21595,6 +23533,65 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setCustomAnnotations(prev => prev.filter(r => r.id !== ruleId));
     if (ruleToDelete) logActionToFieldbook(`Deleted annotation rule: "${ruleToDelete.name}"`);
   }, [customAnnotations, logActionToFieldbook, setCustomAnnotations]);
+
+  const handleAddTextAnnotation = useCallback((annotation: CanvasTextAnnotation) => {
+    setTextAnnotations(prev => [...prev, annotation]);
+    logActionToFieldbook(`Added text: "${annotation.text.split('\n')[0].slice(0, 60)}"`);
+  }, [logActionToFieldbook]);
+
+  const handleUpdateTextAnnotation = useCallback((id: string, patch: Partial<CanvasTextAnnotation>) => {
+    setTextAnnotations(prev => prev.map(annotation => (
+      annotation.id === id ? { ...annotation, ...patch } : annotation
+    )));
+  }, []);
+
+  const handleDeleteTextAnnotation = useCallback((id: string) => {
+    setTextAnnotations(prev => prev.filter(annotation => annotation.id !== id));
+  }, []);
+
+  const handleAddTextAnnotations = useCallback((annotations: CanvasTextAnnotation[]) => {
+    if (annotations.length === 0) return;
+    setTextAnnotations(prev => [...prev, ...annotations]);
+    logActionToFieldbook(
+      `Generated ${annotations.length} text label${annotations.length === 1 ? '' : 's'}`,
+    );
+  }, [logActionToFieldbook]);
+
+  // Renaming a named style follows through to every reference (active style,
+  // canvas text, annotation rules, and category bindings) instead of leaving
+  // orphaned style names behind.
+  const handleTextStylesChange = useCallback((nextStyles: AnnotationTextStyle[]) => {
+    const renames = new Map<string, string>();
+    annotationTextStyles.forEach(previous => {
+      const next = nextStyles.find(style => style.id === previous.id);
+      if (next && next.name !== previous.name) renames.set(previous.name, next.name);
+    });
+
+    setAnnotationTextStyles(nextStyles);
+    if (renames.size === 0) return;
+
+    setTextAnnotations(prev => prev.map(annotation => {
+      const renamed = annotation.styleName ? renames.get(annotation.styleName) : undefined;
+      return renamed ? { ...annotation, styleName: renamed } : annotation;
+    }));
+    setCustomAnnotations(prev => prev.map(rule => {
+      const renamed = rule.textStyleName ? renames.get(rule.textStyleName) : undefined;
+      return renamed ? { ...rule, textStyleName: renamed } : rule;
+    }));
+    setAnnotationCategories(prev => prev.map(category => {
+      const renamed = category.textStyleName ? renames.get(category.textStyleName) : undefined;
+      return renamed ? { ...category, textStyleName: renamed } : category;
+    }));
+    setActiveAnnotationTextStyle(active => renames.get(active) ?? active);
+  }, [annotationTextStyles]);
+
+  const handleRequestTextPlacement = useCallback(() => {
+    canvas2dRef.current?.startTextPlacement?.();
+  }, []);
+
+  const handleEditCanvasText = useCallback((id: string) => {
+    canvas2dRef.current?.startTextEdit?.(id);
+  }, []);
   
   const showDoc = useCallback(() => setIsDocVisible(true), []);
   const showTech = useCallback(() => setIsTechPageVisible(true), []);
@@ -21642,6 +23639,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     activeAgent === AgentType.CAD_MANAGER ? cadManagerChatHistory :
     activeAgent === AgentType.STANDARDS_COMPLIANCE ? standardsComplianceChatHistory :
     activeAgent === AgentType.ROADING_AGENT ? roadingChatHistory :
+    activeAgent === AgentType.SOILS_AGENT ? soilsChatHistory :
     gpsStakeoutChatHistory;
 
   // Cursor-anchored quick inputs: a flash mirrors a one/two-field plain form
@@ -21929,6 +23927,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 onFetchStreetNames={handleFetchStreetNames}
                 onClearStreetLabels={() => setStreetLabels([])}
                 hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
+                textAnnotations={textAnnotations}
+                textStyles={annotationTextStyles}
+                activeTextStyleName={activeAnnotationTextStyle}
+                onAddText={handleRequestTextPlacement}
+                onEditText={handleEditCanvasText}
+                onUpdateText={handleUpdateTextAnnotation}
+                onDeleteText={handleDeleteTextAnnotation}
+                onAddLabels={handleAddTextAnnotations}
+                onTextStylesChange={handleTextStylesChange}
+                onActiveTextStyleChange={setActiveAnnotationTextStyle}
               />
               <div className="border-t border-white/10 pt-3">
                 <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
@@ -22113,6 +24121,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               No legal description generated yet. Open the Boundary Editor and click &ldquo;Write Legal&rdquo;.
             </div>
           );
+        case 'legend':
+          return (
+            <A2UILegendStudio
+              availableLayers={legendDrawingLayers}
+              onOpenSheetView={() => showView('sheetview')}
+              onSetLayersViewVisible={handleApplyCadLayerVisibility}
+            />
+          );
         case 'sheet-view':
           return (
             <SheetView
@@ -22209,8 +24225,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       handleFetchStreetNames,
       setStreetLabels,
       lines,
+      legendDrawingLayers,
       annotationCategories,
       setAnnotationCategories,
+      textAnnotations,
+      annotationTextStyles,
+      activeAnnotationTextStyle,
+      handleAddTextAnnotation,
+      handleTextStylesChange,
+      handleUpdateTextAnnotation,
+      handleDeleteTextAnnotation,
+      handleAddTextAnnotations,
+      handleRequestTextPlacement,
+      handleEditCanvasText,
       parcelCadTextStyles,
       draftingStyleLibrary,
       setDraftingStyleLibrary,
@@ -22373,6 +24400,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
   const a2uiHostContextValue = useMemo<A2UIHostContextValue>(() => ({
     onOpenFullscreen: handleA2UIFullscreen,
+    onDownloadSoilLimitations: () => { void handleDownloadSoilLimitationsReport(); },
+    onAddSoilLimitationsToSheet: () => { void handleAddSoilLimitationsToSheet(); },
+    isDownloadingSoilLimitations,
     onApplyClusterProjection: applyClusterProjection,
     projectBboxWgs84: getInclusionBboxWgs84(activeInclusionBoundaryId),
     gpsPosition: currentPosition
@@ -22530,6 +24560,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       openGpsRoverPanel('stakeout');
     },
     onGpsCollectPoint: handleGpsCollectFromSurface,
+    onScoutStop: handleScoutStop,
     tinSurfaces,
     contourGenerationCount: contourGenerations.length,
     isImportingTin,
@@ -22585,6 +24616,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     onUseCanvasSelection: handleDivideSelectedLines,
   }), [
     handleA2UIFullscreen,
+    handleDownloadSoilLimitationsReport,
+    handleAddSoilLimitationsToSheet,
+    isDownloadingSoilLimitations,
     openCacpManifestSurface,
     handlePointsUploaded,
     handlePointEditorSessionStart,
@@ -23103,6 +25137,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
         inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
         lastResult={lastFloodResult}
+        generation={activeFloodGeneration}
         onClearFloodLines={handleClearFloodLines}
         inclusionBoundaries={inclusionBoundaries}
         activeInclusionBoundaryId={activeInclusionBoundaryId}
@@ -23111,9 +25146,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         floodHatch={settings.floodHatch}
         onFloodHatchChange={(patch) => setSettings(prev => ({
           ...prev,
-          floodHatch: { style: 'lines', scale: 50, opacity: 0.35, ...(prev.floodHatch ?? {}), ...patch },
+          floodHatch: { style: 'lines', scale: 10, opacity: 0.35, ...(prev.floodHatch ?? {}), ...patch },
         }))}
-        onFetchFirmette={handleFetchFirmette}
+        onFetchFirmette={() => { void handleFetchFirmette(); }}
         isFetchingFirmette={isFetchingFirmette}
         hasFirmette={!!floodFirmetteData}
         onViewFirmette={() => setIsFirmetteViewerVisible(true)}
@@ -23203,19 +25238,48 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         isFetching={isFetchingSoils}
         hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
         lastResult={lastSoilsResult}
+        generation={activeSoilsGeneration}
         onClearSoils={handleClearSoilsLines}
         soilMapUnits={soilMapUnits}
         onFetchReport={handleFetchSoilReport}
         isFetchingReport={isFetchingSoilReport}
+        onDownloadReport={() => { void handleDownloadSoilReport(); }}
+        isDownloadingReport={isDownloadingSoilReport}
         soilReportData={soilReportData}
+        soilLimitationsReport={soilLimitationsReport}
+        onCompileLimitations={() => { void handleCompileSoilLimitations(); }}
+        isCompilingLimitations={isCompilingSoilLimitations}
+        onDownloadLimitations={() => { void handleDownloadSoilLimitationsReport(); }}
+        isDownloadingLimitations={isDownloadingSoilLimitations}
+        onAddLimitationsToSheet={() => { void handleAddSoilLimitationsToSheet(); }}
         soilHatch={settings.soilHatch}
         onSoilHatchChange={(patch) => setSettings(prev => ({
           ...prev,
-          soilHatch: { style: 'lines', scale: 25, opacity: 0.3, ...(prev.soilHatch ?? {}), ...patch },
+          soilHatch: { style: 'lines', patternName: 'SOLID', scale: 10, opacity: 0.3, ...(prev.soilHatch ?? {}), ...patch },
         }))}
         inclusionBoundaries={inclusionBoundaries}
         activeInclusionBoundaryId={activeInclusionBoundaryId}
         onSelectInclusionBoundary={setActiveInclusionBoundaryId}
+      />
+    </FloatingPanel>
+  );
+
+  const renderStreamsPanel = (mode: DockMode) => (
+    <FloatingPanel
+      title="Streams & Watersheds"
+      accentBorder="border-teal-500/40"
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('streams', next)}
+      onClose={() => setIsStreamsPanelVisible(false)}
+      initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
+      initialY={200}
+    >
+      <StreamsPanel
+        onDrawLayer={handleDrawStreamLayer}
+        isFetching={isFetchingStreamLayer}
+        lastResult={lastStreamLayerResult}
+        error={streamLayerError}
+        onClearLayers={handleClearStreamLayers}
       />
     </FloatingPanel>
   );
@@ -23542,6 +25606,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         activeInclusionBoundaryId={activeInclusionBoundaryId}
         onSelectInclusionBoundary={setActiveInclusionBoundaryId}
         onManageInclusionBoundaries={() => setIsInclusionBoundariesPanelVisible(true)}
+        labelCount={contourLabels.length}
+        labelTool={contourLabelTool}
+        onSetLabelTool={setContourLabelTool}
+        onClearContourLabels={handleClearContourLabels}
+        onAutoLabelContours={handleAutoLabelContours}
       />
     </FloatingPanel>
   );
@@ -23583,6 +25652,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       dockMode={mode}
       onDockModeChange={next => setToolDockMode('contourMgmt', next)}
       generations={contourGenerations}
+      focusRequest={contourFocusRequest}
       inclusionBoundaries={inclusionBoundaries}
       onToggleVisible={handleContourGenToggleVisible}
       onRename={handleContourGenRename}
@@ -23595,6 +25665,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       recentlyCreatedTinGenerationId={recentlyCreatedTinGenerationId}
       onDelete={handleContourGenDelete}
       onNewGeneration={() => setIsContourGenPanelVisible(true)}
+      labelCount={contourLabels.length}
+      labelTool={contourLabelTool}
+      onSetLabelTool={setContourLabelTool}
+      onClearContourLabels={handleClearContourLabels}
+      onAutoLabelContours={handleAutoLabelContours}
       onClose={() => setIsContourManagementVisible(false)}
     />
   );
@@ -24042,6 +26117,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           onUndock: () => toggleToolDock('soils', false),
         }]
       : []),
+    ...(isStreamsPanelVisible
+      ? [{
+          id: 'streams',
+          title: 'Streams & Watersheds',
+          ownerAgent: AgentType.GIS_AGENT,
+          icon: <GisAgentIcon className="w-3.5 h-3.5 text-teal-400" />,
+          content: renderStreamsPanel(getToolDockMode('streams')),
+          isDocked: dockedTools.streams,
+          onDock: () => toggleToolDock('streams', true),
+          onUndock: () => toggleToolDock('streams', false),
+        }]
+      : []),
     ...(isRoadingPanelVisible
       ? [{
           id: 'roading',
@@ -24091,6 +26178,42 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }]
       : []),
   ];
+
+  // GIS Agent keeps a Streams chip next to the chat input so the panel can be
+  // reopened after it has been closed without leaving the agent.
+  const gisStreamsToolsRowAccessories = activeAgent === AgentType.GIS_AGENT ? (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <button
+        type="button"
+        onClick={() => {
+          requestToolShelfTab('streams');
+          setToolDockMode('streams', 'toolshelf');
+          setIsStreamsPanelVisible(true);
+          setIsToolShelfVisible(true);
+        }}
+        className={`black-hole-btn ${
+          !dockedTools.streams
+            ? 'black-hole-btn--blue'
+            : isStreamsPanelVisible
+              ? 'black-hole-btn--cyan'
+              : 'black-hole-btn--neutral'
+        } inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold text-white transition-all`}
+        title={dockedTools.streams ? 'Open Streams & Watersheds in the Tool Station' : 'Streams & Watersheds is floating on canvas — click to dock it'}
+      >
+        <GisAgentIcon className="w-3.5 h-3.5" />
+        <span>Streams</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => openLegendStudioSurface(legendDrawingLayers, { onSetLayersViewVisible: handleApplyCadLayerVisibility })}
+        className="black-hole-btn black-hole-btn--neutral inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold text-white transition-all"
+        title="Open the Legend editor — writes through to the drawing and paperspace sheet"
+      >
+        <span aria-hidden="true">▤</span>
+        <span>Legend</span>
+      </button>
+    </div>
+  ) : undefined;
 
   const boundaryToolsRowAccessories = activeAgent === AgentType.DEED_READER ? (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -24348,7 +26471,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             return;
                           }
                           startSession();
-                          setContourAutoOpenGis(true);
                           setIsContourEsriPanelVisible(true);
                           setIsContourEsriMinimized(false);
                           toggleToolDock('contourEsri', true);
@@ -24455,6 +26577,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onLayerColorChange={(name, color) => handleCadLayerPropertyChange(name, { color })}
                                         onLayerLinetypeChange={(name, lineType) => handleCadLayerPropertyChange(name, { lineType })}
                                     />
+                                    <LegendPicker
+                                        availableLayers={legendDrawingLayers}
+                                        onOpenEditor={() => openLegendStudioSurface(legendDrawingLayers, { onSetLayersViewVisible: handleApplyCadLayerVisibility })}
+                                        onOpenSheetView={() => showView('sheetview')}
+                                        onSetLayersViewVisible={handleApplyCadLayerVisibility}
+                                    />
                                     <button
                                         data-draw-menu-anchor
                                         onClick={() => {
@@ -24509,6 +26637,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         title={settings.googleMaps?.enabled ? 'Map Imagery: ON (Click to toggle)' : 'Map Imagery: OFF (Click to toggle)'}
                                     >
                                         MAP
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setAddressLookupError(null);
+                                            setIsAddressLookupOpen(true);
+                                        }}
+                                        className="p-2 rounded-full transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
+                                        title="Address — zoom the canvas to a US street address or place"
+                                        aria-label="Zoom to address"
+                                        data-testid="toolbar-address-lookup"
+                                    >
+                                        Address
                                     </button>
                                     <button onClick={() => undo()} disabled={!canUndo} className={`p-2 rounded-full transition-colors ${canUndo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canUndo && undoLabel ? `Undo: ${undoLabel} (Ctrl+Z or U)` : 'Nothing to undo'}><UndoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
                                     <button onClick={() => redo()} disabled={!canRedo} className={`p-2 rounded-full transition-colors ${canRedo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canRedo && redoLabel ? `Redo: ${redoLabel} (Ctrl+Y)` : 'Nothing to redo'}><RedoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
@@ -24632,6 +26772,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         isDesktop={isDesktop}
                                         onCommandBarHeightChange={setCommandBarHeight}
                                         commandBarRightExtension={isToolShelfVisible ? toolShelfWidth : 0}
+                                        commandBarIntroPulse={toolShelfIntroPulse}
                                         // The tool shelf owns the right edge; the left-docked
                                         // agent chat handles the conversation itself.
                                         isChatPanelVisible={isToolShelfVisible}
@@ -24672,6 +26813,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         points={streamPreviewPoints.length > 0 ? [...points, ...streamPreviewPoints.filter(sp => !points.some(p => p.pointNumber === sp.pointNumber))] : points} 
                                         lines={streamPreviewLines.length > 0 ? [...visibleLines, ...streamPreviewLines] : visibleLines} 
                                         contourLabels={contourLabels}
+                                        contourLabelTool={contourLabelTool}
+                                        onContourLabelStrike={handleContourLabelStrike}
+                                        onCancelContourLabelTool={() => setContourLabelTool(null)}
                                         streetLabels={streetLabels}
                                         centerlines={visibleCenterlines}
                                         customSymbols={customSymbols}
@@ -24750,7 +26894,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onUpdateDimension={handleUpdateDimension}
                                         onDeleteDimension={handleDeleteDimension}
                                         onClearDimensions={handleClearDimensions}
-                                        hatches={hatches}
+                                        onOpenGeneration={handleOpenGeneration}
+                                        hatches={visibleHatches}
                                         onAddHatch={handleAddHatch}
                                         onUpdateHatch={handleUpdateHatch}
                                         onDeleteHatch={handleDeleteHatch}
@@ -24766,10 +26911,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         annotationScale={annotationScale}
                                         setAnnotationScale={setAnnotationScale}
                                         parcelLabels={parcelLabels}
+                                        parcelSummaries={lastFetchedParcels}
+                                        gisFeatures={gisFeatures}
                                         mapAreaLabels={areaLabels}
                                         parcelLabelFormatter={parcelLabelFormatter}
                                         parcelCadTextStyles={parcelCadTextStyles}
                                         annotationCategories={annotationCategories}
+                                        textAnnotations={textAnnotations}
+                                        annotationTextStyles={annotationTextStyles}
+                                        activeTextStyleName={activeAnnotationTextStyle}
+                                        onAddTextAnnotation={handleAddTextAnnotation}
+                                        onUpdateTextAnnotation={handleUpdateTextAnnotation}
+                                        onDeleteTextAnnotation={handleDeleteTextAnnotation}
                                         boundaryFiles={boundaryFiles}
                                         activeBoundaryFileId={activeBoundaryFileId}
                                         showRotatedBearings={showRotatedBearings}
@@ -24820,7 +26973,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 </div>
                                             ) : undefined
                                         }
-                                        toolsRowAccessories={boundaryToolsRowAccessories}
+                                        toolsRowAccessories={gisStreamsToolsRowAccessories ?? boundaryToolsRowAccessories}
                                         hasDockableTools={dockableToolItems.length > 0}
                                         chatToolDialogs={
                                             dockableToolItems.filter(item =>
@@ -25283,6 +27436,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onFetchStreetNames={handleFetchStreetNames}
                                         onClearStreetLabels={() => setStreetLabels([])}
                                         hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
+                                        textAnnotations={textAnnotations}
+                                        textStyles={annotationTextStyles}
+                                        activeTextStyleName={activeAnnotationTextStyle}
+                                        onAddText={handleRequestTextPlacement}
+                                        onEditText={handleEditCanvasText}
+                                        onUpdateText={handleUpdateTextAnnotation}
+                                        onDeleteText={handleDeleteTextAnnotation}
+                                        onAddLabels={handleAddTextAnnotations}
+                                        onTextStylesChange={handleTextStylesChange}
+                                        onActiveTextStyleChange={setActiveAnnotationTextStyle}
                                     />
                                     <div className="mt-3 border-t border-white/10 pt-3">
                                         <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2 px-1">Annotation Categories</p>
@@ -25418,7 +27581,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                           activeAgent={activeAgent}
                           items={dockableToolItems}
                           headerControls={toolShelfHeaderControls}
-                          toolsRowAccessories={boundaryToolsRowAccessories}
+                          toolsRowAccessories={gisStreamsToolsRowAccessories ?? boundaryToolsRowAccessories}
                           requestedTabId={toolShelfTabRequest?.tabId}
                           requestedTabToken={toolShelfTabRequest?.token}
                           hideToolTabs={activeAgent === AgentType.DEED_READER}
@@ -25770,6 +27933,79 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               from `window.__landsurvLegal.open()`. Always mounted. */}
           <PermissiveSourcesExplainer />
           
+          {/* Canvas address lookup */}
+          {isAddressLookupOpen && (
+            <div
+              className="fixed inset-0 z-[9990] flex items-start justify-center bg-black/50 px-4 pt-24"
+              onClick={closeAddressLookup}
+            >
+              <form
+                onSubmit={handleAddressLookup}
+                onClick={event => event.stopPropagation()}
+                onKeyDown={event => {
+                  if (event.key === 'Escape') closeAddressLookup();
+                }}
+                className="w-full max-w-md rounded-xl border border-gray-700 bg-gray-800 p-5 shadow-2xl light-theme:border-gray-300 light-theme:bg-white"
+              >
+                <div className="mb-4 flex items-center justify-between">
+                  <h2 className="text-lg font-semibold text-white light-theme:text-gray-900">Zoom to address</h2>
+                  <button
+                    type="button"
+                    onClick={closeAddressLookup}
+                    aria-label="Close address lookup"
+                    className="text-gray-400 hover:text-white light-theme:text-gray-500 light-theme:hover:text-gray-900"
+                  >
+                    <XMarkIcon className="h-5 w-5" />
+                  </button>
+                </div>
+                <label
+                  htmlFor="canvas-address-lookup"
+                  className="mb-1.5 block text-xs font-medium text-gray-400 light-theme:text-gray-600"
+                >
+                  US street address, intersection, or place
+                </label>
+                <input
+                  id="canvas-address-lookup"
+                  autoFocus
+                  value={addressLookupQuery}
+                  onChange={event => {
+                    setAddressLookupQuery(event.target.value);
+                    if (addressLookupError) setAddressLookupError(null);
+                  }}
+                  placeholder="123 Main St, Norristown, PA"
+                  disabled={isAddressLookupLoading}
+                  className="w-full rounded-lg border border-gray-600 bg-gray-900/70 px-3 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500 light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-900"
+                />
+                {addressLookupError && (
+                  <p role="alert" className="mt-2 text-xs text-red-300 light-theme:text-red-700">
+                    {addressLookupError}
+                  </p>
+                )}
+                {!settings.projection.epsg && (
+                  <p className="mt-2 text-xs text-amber-300 light-theme:text-amber-700">
+                    A project projection is required before the canvas can zoom to an address.
+                  </p>
+                )}
+                <div className="mt-5 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeAddressLookup}
+                    className="rounded-lg px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 light-theme:text-gray-700 light-theme:hover:bg-gray-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isAddressLookupLoading || !addressLookupQuery.trim()}
+                    className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isAddressLookupLoading ? 'Looking up…' : 'Zoom'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
           {/* Model Config Popup - Quick access to current model info and Gemini settings */}
           {showModelConfigPopup && (
             <div className="fixed inset-0 bg-black/50 z-[9990] flex items-center justify-center" style={{ zIndex: 9990 }} onClick={() => setShowModelConfigPopup(false)}>
@@ -25960,9 +28196,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 floodHatch={settings.floodHatch}
                 onFloodHatchChange={(patch) => setSettings(prev => ({
                   ...prev,
-                  floodHatch: { style: 'lines', scale: 50, opacity: 0.35, ...(prev.floodHatch ?? {}), ...patch },
+                  floodHatch: { style: 'lines', scale: 10, opacity: 0.35, ...(prev.floodHatch ?? {}), ...patch },
                 }))}
-                onFetchFirmette={handleFetchFirmette}
+                onFetchFirmette={() => { void handleFetchFirmette(); }}
                 isFetchingFirmette={isFetchingFirmette}
                 hasFirmette={!!floodFirmetteData}
                 onViewFirmette={() => setIsFirmetteViewerVisible(true)}
@@ -25986,6 +28222,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               <div className="space-y-2 text-xs text-gray-400">
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-[10px] truncate text-gray-500">bbox: {floodFirmetteData.bbox}</span>
+                  {floodFirmetteData.pdfDataUrl && (
+                    <a
+                      href={floodFirmetteData.pdfDataUrl}
+                      download={floodFirmetteData.pdfFileName ?? 'FEMA_FIRMETTE.pdf'}
+                      className="flex-shrink-0 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-900/50 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-800/60"
+                    >
+                      Download PDF
+                    </a>
+                  )}
                   <a
                     href={floodFirmetteData.url}
                     target="_blank"
@@ -26056,11 +28301,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 soilMapUnits={soilMapUnits}
                 onFetchReport={handleFetchSoilReport}
                 isFetchingReport={isFetchingSoilReport}
+                onDownloadReport={() => { void handleDownloadSoilReport(); }}
+                isDownloadingReport={isDownloadingSoilReport}
                 soilReportData={soilReportData}
+                soilLimitationsReport={soilLimitationsReport}
+                onCompileLimitations={() => { void handleCompileSoilLimitations(); }}
+                isCompilingLimitations={isCompilingSoilLimitations}
+                onDownloadLimitations={() => { void handleDownloadSoilLimitationsReport(); }}
+                isDownloadingLimitations={isDownloadingSoilLimitations}
+                onAddLimitationsToSheet={() => { void handleAddSoilLimitationsToSheet(); }}
                 soilHatch={settings.soilHatch}
                 onSoilHatchChange={(patch) => setSettings(prev => ({
                   ...prev,
-                  soilHatch: { style: 'lines', scale: 25, opacity: 0.3, ...(prev.soilHatch ?? {}), ...patch },
+                  soilHatch: { style: 'lines', patternName: 'SOLID', scale: 10, opacity: 0.3, ...(prev.soilHatch ?? {}), ...patch },
                 }))}
                 inclusionBoundaries={inclusionBoundaries}
                 activeInclusionBoundaryId={activeInclusionBoundaryId}
@@ -26068,6 +28321,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               />
             </FloatingPanel>
           )}
+          {isStreamsPanelVisible && getToolDockMode('streams') === 'floating' && renderStreamsPanel('floating')}
           {isRoadingPanelVisible && getToolDockMode('roading') === 'floating' && renderRoadingPanel('floating')}
           {/* Profile Agent � client-side profile generator panel */}
           {isProfileGenPanelVisible && getToolDockMode('profileGen') === 'floating' && (
@@ -26341,6 +28595,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 activeInclusionBoundaryId={activeInclusionBoundaryId}
                 onSelectInclusionBoundary={setActiveInclusionBoundaryId}
                 onManageInclusionBoundaries={() => setIsInclusionBoundariesPanelVisible(true)}
+                labelCount={contourLabels.length}
+                labelTool={contourLabelTool}
+                onSetLabelTool={setContourLabelTool}
+                onClearContourLabels={handleClearContourLabels}
+                onAutoLabelContours={handleAutoLabelContours}
               />
             </FloatingPanel>
           )}
@@ -26747,6 +29006,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 openCivilDrafterContextSurface();
               }
               else if (definition.id === 'workspace-tin-surfaces') openTinSurfacesSurface();
+              else if (definition.id === 'workspace-legend') openLegendStudioSurface(legendDrawingLayers, { onSetLayersViewVisible: handleApplyCadLayerVisibility });
               else if (definition.id === 'workspace-spreadsheet') {
                 openSpreadsheetSurface(createBlankSpreadsheetSpec());
               }

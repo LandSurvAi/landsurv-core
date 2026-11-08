@@ -1,5 +1,7 @@
 import React from 'react';
 import { AnnotationCategoryStyle, DEFAULT_ANNOTATION_CATEGORIES, type ParcelCadTextStyle } from '../types';
+import { ANNOTATION_FONT_OPTIONS } from '../utils/annotationFonts.ts';
+import { LEROY_STANDARD_SIZES, formatLeroySize, leroyToScreenPx, nearestLeroySize } from '../utils/annotationSizing.ts';
 
 interface Props {
     categories: AnnotationCategoryStyle[];
@@ -9,7 +11,7 @@ interface Props {
     cadTextStyles: ParcelCadTextStyle[];
 }
 
-const FONT_OPTIONS = ['Arial', 'Arial Narrow', 'Calibri', 'Romans', 'Simplex'];
+const FONT_OPTIONS = ANNOTATION_FONT_OPTIONS;
 
 function update(
     categories: AnnotationCategoryStyle[],
@@ -158,6 +160,32 @@ export const AnnotationCategoryPanel: React.FC<Props> = ({
                                     <option key={font} value={font}>{font}</option>
                                 ))}
                             </select>
+                        </div>
+
+                        {/* Fixed size / Leroy reference */}
+                        <div className="grid grid-cols-[3.5rem,1fr,auto] gap-2 pl-6 items-center">
+                            <span className="text-[10px] text-gray-500">Size</span>
+                            <select
+                                aria-label={`Leroy size for ${cat.label}`}
+                                value={cat.leroySize ?? nearestLeroySize(cat.heightPx ?? 9.6)}
+                                onChange={e => {
+                                    const leroy = Number(e.target.value);
+                                    if (Number.isFinite(leroy) && leroy > 0) {
+                                        onChange(update(cats, cat.id, {
+                                            heightPx: leroyToScreenPx(leroy),
+                                            leroySize: leroy,
+                                        }));
+                                    }
+                                }}
+                                className="min-w-0 text-[10px] bg-white/5 border border-white/15 rounded px-1.5 py-1 text-gray-300"
+                            >
+                                {LEROY_STANDARD_SIZES.map(size => (
+                                    <option key={size} value={size}>{formatLeroySize(size)} · {leroyToScreenPx(size)} px</option>
+                                ))}
+                            </select>
+                            <span className="text-[9px] font-mono text-cyan-300/80">
+                                {Math.round((cat.heightPx ?? leroyToScreenPx(cat.leroySize ?? 80)) * 10) / 10}px
+                            </span>
                         </div>
 
                         {/* Row 3 — existing overrides */}

@@ -53,7 +53,7 @@ export const PointEditorPanel: React.FC<PointEditorPanelProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const photoUploadRef = useRef<HTMLInputElement>(null);
 
-  const [expandedListIds, setExpandedListIds] = useState<Set<string>>(new Set(['working']));
+  const [expandedListIds, setExpandedListIds] = useState<Set<string>>(new Set());
   const [confirmingDelete, setConfirmingDelete] = useState<{ type: 'point' | 'list', id: string } | null>(null);
   
   useEffect(() => {

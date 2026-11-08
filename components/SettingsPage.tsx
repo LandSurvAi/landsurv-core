@@ -617,7 +617,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             <span>
                                 <span className="block text-sm font-medium text-gray-300 light-theme:text-gray-700">Point Efficiency Mode</span>
                                 <span className="block text-xs text-gray-500 mt-0.5 light-theme:text-gray-600">
-                                    Draws points as a compressed dot cloud and skips their labels, symbols, and callouts when zoomed out or when the view holds a lot of points. Full detail returns as you zoom in. Off by default.
+                                    Draws points as a compressed dot cloud and skips their labels, symbols, and callouts when zoomed out or when the view holds a lot of points. Full detail returns as you zoom in. On by default.
                                 </span>
                             </span>
                         </label>
@@ -860,20 +860,15 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         <span className="font-medium text-gray-200 light-theme:text-gray-800">Enable map imagery overlay on canvas</span>
                     </label>
                     <p className="text-xs text-gray-500 light-theme:text-gray-500">
-                        Renders NAIP or Google Static Maps imagery beneath survey geometry, reprojected to match the project CRS. Requires a project projection to be set.
+                        Renders NAIP aerial imagery by default, reprojected to match the project CRS. Google satellite, hybrid, roadmap, and terrain are also available. Requires a project projection to be set.
                     </p>
 
-                    <div>
-                        <label htmlFor="gmApiKey" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Google Static Maps API Key <span className="text-gray-500 font-normal">(optional)</span></label>
-                        <input type="password" id="gmApiKey"
-                            value={settings.googleMaps?.apiKey ?? ''}
-                            onChange={e => handleGoogleMapsChange('apiKey', e.target.value)}
-                            placeholder="AIza…"
-                            className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
-                            autoComplete="off"
-                        />
-                        <p className="text-xs text-gray-500 mt-1">
-                            Optional for Google map types — NAIP does not require this key. Auto Draft and imagery fall back to your AI key or the built-in server proxy when this is blank. Get one at <a href="https://console.cloud.google.com/google/maps-apis/credentials" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">console.cloud.google.com</a>. Enable the <em>Maps Static API</em> on your project. Stored only in your browser.
+                    <div className="rounded-md border border-cyan-500/20 bg-cyan-500/5 p-3 light-theme:border-cyan-300 light-theme:bg-cyan-50">
+                        <p className="text-xs text-cyan-100/85 light-theme:text-cyan-900">
+                            Google Static Maps uses LandSurv's shared server-side key from Google Cloud Secret Manager. No personal Static Maps API key is needed.
+                        </p>
+                        <p className="mt-1 text-[11px] text-cyan-100/55 light-theme:text-cyan-800/75">
+                            Administrators can update the key in Secret Manager without redeploying the app. NAIP imagery does not use this key.
                         </p>
                     </div>
 
@@ -885,10 +880,10 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                 onChange={e => handleGoogleMapsChange('mapType', e.target.value)}
                                 className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
                             >
-                                <option value="roadmap">Roadmap</option>
-                                <option value="satellite">Satellite</option>
-                                <option value="naip">NAIP (USDA aerial)</option>
+                                <option value="naip">NAIP (USDA aerial) — default</option>
+                                <option value="satellite">Satellite (Google)</option>
                                 <option value="hybrid">Hybrid (satellite + labels)</option>
+                                <option value="roadmap">Roadmap</option>
                                 <option value="terrain">Terrain</option>
                             </select>
                         </div>

@@ -73,10 +73,16 @@ export const AreaHatchControls: React.FC<AreaHatchControlsProps> = ({
     if (selectedName === 'none') return getHatchByName('SOLID') ?? ALL_BUILT_IN_HATCHES[0];
     if (selectedName !== 'AUTO') return getHatchByName(selectedName) ?? ALL_BUILT_IN_HATCHES[0];
     if (kind === 'flood') return getHatchForFemaZone('AE');
-    return getHatchByName('EARTH') ?? ALL_BUILT_IN_HATCHES[0];
+    return getHatchByName('SOLID') ?? ALL_BUILT_IN_HATCHES[0];
   }, [kind, selectedName]);
 
   const hatchingEnabled = selectedName !== 'none';
+  const solidSoilFill = kind === 'soils' && (selectedName === 'SOLID' || selectedName === 'AUTO');
+  const patternLabel = (name: string) => {
+    if (kind === 'soils' && name === 'AUTO') return 'Auto — solid colors by map unit';
+    if (kind === 'soils' && name === 'SOLID') return 'Solid — auto color palette';
+    return PATTERN_LABELS[name] ?? name;
+  };
 
   const setHatchEnabled = (enabled: boolean) => {
     onChange?.({
@@ -147,14 +153,20 @@ export const AreaHatchControls: React.FC<AreaHatchControlsProps> = ({
           >
             {patternNames.map(name => (
               <option key={name} value={name}>
-                {PATTERN_LABELS[name] ?? name}
+                {patternLabel(name)}
               </option>
             ))}
           </select>
         </label>
       </div>
 
-      <div>
+      {solidSoilFill && (
+        <p className="text-[9px] leading-snug text-stone-500">
+          One solid fill per soil map unit, spaced around the hue wheel by the golden angle.
+        </p>
+      )}
+
+      <div className={solidSoilFill ? 'opacity-40' : ''}>
         <div className="mb-1 flex items-center justify-between">
           <label className="text-[10px] uppercase tracking-wide text-gray-400">Spacing</label>
           <span className={`font-mono text-[10px] ${
@@ -165,11 +177,11 @@ export const AreaHatchControls: React.FC<AreaHatchControlsProps> = ({
         </div>
         <input
           type="range"
-          min={kind === 'flood' ? 10 : 25}
+          min={kind === 'flood' ? 10 : 5}
           max={kind === 'flood' ? 200 : 400}
           step={5}
           value={settings.scale}
-          disabled={!hatchingEnabled}
+          disabled={!hatchingEnabled || solidSoilFill}
           onChange={event => onChange?.({ scale: Number(event.target.value) })}
           className={`w-full disabled:opacity-40 ${
             kind === 'flood' ? 'accent-cyan-400' : 'accent-stone-400'
@@ -177,7 +189,7 @@ export const AreaHatchControls: React.FC<AreaHatchControlsProps> = ({
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className={`grid grid-cols-2 gap-2 ${solidSoilFill ? 'opacity-40' : ''}`}>
         <label>
           <span className="mb-0.5 block text-[9px] uppercase tracking-wider text-gray-500">Angle</span>
           <input
@@ -186,13 +198,15 @@ export const AreaHatchControls: React.FC<AreaHatchControlsProps> = ({
             max={90}
             step={15}
             value={settings.angleDeg ?? 0}
-            disabled={!hatchingEnabled}
+            disabled={!hatchingEnabled || solidSoilFill}
             onChange={event => onChange?.({ angleDeg: Number(event.target.value) || 0 })}
             className="w-full rounded border border-gray-700 bg-gray-900 px-2 py-1 font-mono text-[11px] text-gray-200 disabled:opacity-50"
           />
         </label>
         <label>
-          <span className="mb-0.5 block text-[9px] uppercase tracking-wider text-gray-500">Color</span>
+          <span className="mb-0.5 block text-[9px] uppercase tracking-wider text-gray-500">
+            {solidSoilFill ? 'Palette base' : 'Color'}
+          </span>
           <input
             type="color"
             value={settings.color || defaults.color}

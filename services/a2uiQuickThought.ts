@@ -108,9 +108,12 @@ export const AGENT_INITIAL_QUICK_THOUGHTS: Record<AgentType, string[]> = {
     'Link an image to a point',
   ],
   [AgentType.GIS_AGENT]: [
-    'Upload a .geojson file',
-    'Browse the public ArcGIS catalog',
-    'Search parcels by owner',
+    'Show me county lines',
+    'Draw State Plane / SPC zones',
+    'Show school district lines',
+    'Draw streams and water bodies',
+    'Show watersheds',
+    'Open the legend',
   ],
   [AgentType.CONTOURING_AGENT]: [...CONTOUR_AGENT_QUICK_THOUGHTS],
   [AgentType.STEEP_SLOPE_AGENT]: [
@@ -157,6 +160,7 @@ export const AGENT_INITIAL_QUICK_THOUGHTS: Record<AgentType, string[]> = {
     'Upload a CAD standards file',
     'Open CAD Manager workspace',
     'Show the standards spreadsheet',
+    'Open the legend',
   ],
   [AgentType.STANDARDS_COMPLIANCE]: [
     'Upload PDFs for compliance audit',
@@ -175,7 +179,7 @@ export const AGENT_INITIAL_QUICK_THOUGHTS: Record<AgentType, string[]> = {
   ],
   [AgentType.SOILS_AGENT]: [
     'Fetch soils for this area',
-    'Fetch the soil report',
+    'Show soil limitations',
     'Open Soils tools',
   ],
   [AgentType.ROADING_AGENT]: [
@@ -185,7 +189,20 @@ export const AGENT_INITIAL_QUICK_THOUGHTS: Record<AgentType, string[]> = {
   ],
 };
 
-export function getAgentInitialQuickThoughtOptions(agent: AgentType): string[] {
+export interface AgentInitialQuickThoughtContext {
+  /** True when the canvas has no points, linework, centerlines, or boundaries yet. */
+  isWorkspaceEmpty?: boolean;
+}
+
+export function getAgentInitialQuickThoughtOptions(
+  agent: AgentType,
+  context: AgentInitialQuickThoughtContext = {},
+): string[] {
+  // LSAI is the front door to the whole suite. On a blank canvas, lead with the
+  // three intake actions instead of project questions that cannot be answered yet.
+  if (agent === AgentType.LSVZ_AGENT && context.isWorkspaceEmpty) {
+    return ['Upload points', 'Process a deed', 'Upload a PDF'];
+  }
   return AGENT_INITIAL_QUICK_THOUGHTS[agent] ?? [];
 }
 
@@ -208,6 +225,7 @@ export type A2UIQuickThoughtKind =
   | 'hatch-studio'
   | 'workspace-tool'
   | 'deed-summary'
+  | 'soil-limitations'
   | 'cacp-surface'
   | 'large-dataset';
 
@@ -427,6 +445,18 @@ export function decomposeMessageForQuickThought(
           datasetTooLarge: false,
           a2ui,
         };
+
+      case 'soil-limitations': {
+        const unitCount = a2ui.soilLimitations?.units.length ?? 0;
+        return {
+          hasActionablePrompt: true,
+          kind: 'soil-limitations',
+          agent: effectiveAgent,
+          datasetTooLarge: unitCount > 3,
+          totalItemCount: unitCount,
+          a2ui,
+        };
+      }
 
       case 'input-form': {
         const form = a2ui.inputForm;

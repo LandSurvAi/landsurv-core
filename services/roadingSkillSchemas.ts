@@ -103,7 +103,9 @@ export const ROADING_SKILLS: SkillSchema[] = [
       pointNumbers: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Optional ordered list of point numbers to chain into a new centerline alignment before generating the corridor.',
+        description:
+          'Optional ordered list of point numbers to chain into a new centerline alignment before generating the corridor. ' +
+          'When the first point description contains a station (e.g. "138+37.12 PC"), that station becomes the alignment begin station.',
       },
       laneCount: {
         type: 'integer',

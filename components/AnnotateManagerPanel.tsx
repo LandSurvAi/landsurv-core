@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { type AnnotationRule, type SurveyPoint, type Settings, type StreetLabel } from '../types';
+import { type AnnotationRule, type AnnotationTextStyle, type CanvasTextAnnotation, type SurveyPoint, type Settings, type StreetLabel, DEFAULT_ANNOTATION_TEXT_STYLES } from '../types';
 import { renderAnnotationTemplate, resolveAnnotation, buildAnnotationMatchers } from '../utils/annotationResolver';
 import { generateAnnotationRule } from '../services/geminiService';
 import { PencilSquareIcon, PlusIcon, EraserIcon, BrainCircuitIcon } from './icons';
+import { AnnotationTextStyleLibraryPanel, CanvasTextListPanel } from './AnnotationTextEditor.tsx';
 
 interface AnnotateManagerPanelProps {
   rules: AnnotationRule[];
@@ -25,6 +26,22 @@ interface AnnotateManagerPanelProps {
   onClearStreetLabels?: () => void;
   /** Whether an inclusion boundary exists (required for fetch). */
   hasInclusionBoundary?: boolean;
+  /** Standalone text entities currently on the canvas. */
+  textAnnotations?: CanvasTextAnnotation[];
+  /** Named text styles shared by manual text and generated labels. */
+  textStyles?: AnnotationTextStyle[];
+  /** Style used for newly placed text. */
+  activeTextStyleName?: string;
+  /** Arm the in-canvas text tool. */
+  onAddText?: () => void;
+  /** Open the in-canvas editor for an existing text entity. */
+  onEditText?: (id: string) => void;
+  onUpdateText?: (id: string, patch: Partial<CanvasTextAnnotation>) => void;
+  onDeleteText?: (id: string) => void;
+  /** Bulk-add generated labels ("Label all inverts"). */
+  onAddLabels?: (annotations: CanvasTextAnnotation[]) => void;
+  onTextStylesChange?: (styles: AnnotationTextStyle[]) => void;
+  onActiveTextStyleChange?: (name: string) => void;
 }
 
 const STARTER_RULES: Omit<AnnotationRule, 'id'>[] = [
@@ -65,7 +82,11 @@ const emptyRule = (category: 'existing' | 'proposed' = 'existing'): AnnotationRu
 export const AnnotateManagerPanel: React.FC<AnnotateManagerPanelProps> = ({
   rules, onAddRule, onUpdateRule, onDeleteRule, points, globalScale, onChangeGlobalScale, settings,
   streetLabels = [], isFetchingStreetLabels = false, onFetchStreetNames, onClearStreetLabels, hasInclusionBoundary = false,
+  textAnnotations = [], textStyles = DEFAULT_ANNOTATION_TEXT_STYLES, activeTextStyleName,
+  onAddText, onEditText, onUpdateText, onDeleteText, onAddLabels, onTextStylesChange, onActiveTextStyleChange,
 }) => {
+  const [tab, setTab] = useState<'rules' | 'styles' | 'text'>('rules');
+  const resolvedActiveStyle = activeTextStyleName || textStyles[0]?.name || DEFAULT_ANNOTATION_TEXT_STYLES[0].name;
   const [editing, setEditing] = useState<AnnotationRule | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [filterCategory, setFilterCategory] = useState<'all' | 'existing' | 'proposed'>('all');
@@ -169,6 +190,29 @@ export const AnnotateManagerPanel: React.FC<AnnotateManagerPanelProps> = ({
         </div>
       </div>
 
+      {/* Hub tabs — rules, text styles, and the text currently on the canvas */}
+      <div className="flex items-center gap-1 border-b border-gray-800 bg-gray-950/70 px-3 py-2">
+        {([
+          ['rules', 'Rules', rules.length],
+          ['styles', 'Text Styles', textStyles.length],
+          ['text', 'Text on Canvas', textAnnotations.length],
+        ] as const).map(([id, label, count]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+              tab === id
+                ? 'bg-cyan-700 text-white'
+                : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
+            }`}
+          >
+            {label} <span className={`ml-1 font-mono text-[10px] ${tab === id ? 'text-cyan-100' : 'text-gray-500'}`}>{count}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className={tab === 'rules' ? 'contents' : 'hidden'}>
       {/* Global scale */}
       <div className="px-4 py-2 border-b border-gray-800 flex items-center gap-4 bg-gray-900/40">
         <label htmlFor="global-annot-scale" className="text-xs font-medium text-gray-400 whitespace-nowrap">Global Annotation Scale</label>
@@ -410,6 +454,22 @@ export const AnnotateManagerPanel: React.FC<AnnotateManagerPanelProps> = ({
                   className="w-12 h-7 rounded bg-gray-800 border border-gray-700"
                 />
               </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Text style</label>
+                <select
+                  value={editing.textStyleName ?? ''}
+                  onChange={(e) => setEditing({ ...editing, textStyleName: e.target.value || undefined })}
+                  className="w-full px-2 py-1 text-sm rounded bg-gray-800 border border-gray-700 text-white"
+                >
+                  <option value="">Active style — {resolvedActiveStyle}</option>
+                  {textStyles.map(style => (
+                    <option key={style.id} value={style.name}>{style.name}</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[10px] text-gray-500">
+                  Height, font, width factor, oblique, case, and spacing for this rule’s labels.
+                </p>
+              </div>
               {/* Preview */}
               <div className="border border-gray-700 rounded p-3 bg-gray-800/40">
                 <p className="text-[11px] text-gray-500 mb-1">Preview (first matching point):</p>
@@ -438,6 +498,36 @@ export const AnnotateManagerPanel: React.FC<AnnotateManagerPanelProps> = ({
           )}
         </div>
       </div>
+      </div>
+
+      {tab === 'styles' && (
+        <div className="flex-1 overflow-y-auto p-3">
+          <AnnotationTextStyleLibraryPanel
+            styles={textStyles}
+            activeStyleName={resolvedActiveStyle}
+            onChange={onTextStylesChange ?? (() => {})}
+            onChangeActiveStyle={onActiveTextStyleChange ?? (() => {})}
+            globalScale={globalScale}
+          />
+        </div>
+      )}
+
+      {tab === 'text' && (
+        <div className="flex-1 overflow-y-auto p-3">
+          <CanvasTextListPanel
+            annotations={textAnnotations}
+            styles={textStyles}
+            activeStyleName={resolvedActiveStyle}
+            points={points}
+            rules={rules}
+            onAddText={onAddText}
+            onEditText={onEditText}
+            onUpdateText={onUpdateText}
+            onDeleteText={onDeleteText}
+            onAddLabels={onAddLabels}
+          />
+        </div>
+      )}
     </div>
   );
 };

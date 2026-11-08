@@ -79,7 +79,7 @@ export const AGENT_WELCOME_PROFILES: Partial<Record<AgentType, AgentWelcomeProfi
   [AgentType.GIS_AGENT]: {
     name: 'GIS',
     summary:
-      'I query, analyze, and plot GIS features and parcel data against the active project.',
+      'I find, verify, and draw live public GIS layers — county lines, State Plane zones, districts, streams, water bodies, watersheds, parcels — against the active project.',
   },
   [AgentType.CONTOURING_AGENT]: {
     name: 'Contouring',

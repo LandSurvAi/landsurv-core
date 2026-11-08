@@ -5,7 +5,8 @@
  * CACP skills declared in `services/AgentRegistry.ts` across:
  *   - Structures Agent (`structures_fetch_nsi`, `structures_rectify_footprints`,
  *     `structures_draw_footprints`, `structures_synthesize_single`, `structures_clear`)
- *   - Soils Agent (`fetch_soils`, `fetch_soil_report`, `clear_soils`, `get_soils_context`)
+ *   - Soils Agent (`fetch_soils`, `fetch_soil_report`, `clear_soils`, `get_soils_context`,
+ *     `build_soil_limitations_report`)
  *   - Contouring Agent (`generate_contours`, `generate_loaded_tin_contours`,
  *     `fetch_esri_rest_contours`, `discover_public_contour_services`)
  *   - Steep Slope Agent (`run_steep_slope_analysis`, `publish_steep_slope_layers`)
@@ -31,6 +32,7 @@ import {
   type ContourGeneration,
   type ContourSettings,
   type GisFeature,
+  type MapAreaFeature,
   type PointList,
   type ProfileInfo,
   type ProfilePoint,
@@ -70,8 +72,10 @@ import { knowledgeBase } from './KnowledgeBase';
 import type { StructuresFetchResult } from './structuresService';
 import type { BuildingFootprint } from './osmBuildingsService';
 import type { SoilReportRow } from './soilsService';
+import { formatSoilLimitationsMarkdown, type SoilLimitationsReport } from './soilLimitationsReport';
 import { ESRI_STATE_SERVICES } from '../utils/esriStateServices';
 import { USGS_NATIONAL_CONTOUR_SOURCES } from '../utils/usgsNationalContours';
+import type { GisResolution } from './gisServiceResolver';
 
 export interface DomainSkillHandlersOpts {
   points: SurveyPoint[];
@@ -108,6 +112,14 @@ export interface DomainSkillHandlersOpts {
     bboxOverride?: [number, number, number, number] | null,
   ) => Promise<unknown>;
   handleClearSoilsLines: () => void;
+  lastSoilAreas: MapAreaFeature[];
+  handleCompileSoilLimitationsReport: (options?: {
+    forceRefresh?: boolean;
+  }) => Promise<{
+    ok: boolean;
+    message: string;
+    report?: SoilLimitationsReport | null;
+  }>;
   // Contours & TIN
   contourSettings: ContourSettings;
   contourGenerations: ContourGeneration[];
@@ -138,8 +150,43 @@ export interface DomainSkillHandlersOpts {
     segmentCount: number;
     layerName: string;
     message: string;
+    bboxWgs84?: [number, number, number, number];
+    serviceUrl?: string;
+    resolvedSource?: string;
   }>;
   handleDiscoverPublicContourServices: (searchTerm: string) => Promise<void>;
+  /**
+   * Resolve a verified live GIS layer for any kind when the primary source has
+   * no geometry. The host owns the AOI, PASDA preference, and cache.
+   */
+  handleResolveGisService?: (request: {
+    kind: 'contours' | 'parcels' | 'flood' | 'soils' | 'custom';
+    query?: string;
+    mode?: 'project' | 'inclusion' | 'description';
+    descriptionText?: string;
+    bboxOverride?: [number, number, number, number] | null;
+  }) => Promise<GisResolution>;
+  /** Resolve any free-form GIS topic and draw it on the canvas. */
+  handleShowGisLayer?: (request: {
+    topic: string;
+    serviceUrl?: string;
+    label?: string;
+    mode?: 'project' | 'inclusion' | 'description';
+    descriptionText?: string;
+    bboxOverride?: [number, number, number, number] | null;
+    maxFeatures?: number;
+  }) => Promise<{
+    ok: boolean;
+    topic: string;
+    label: string;
+    layerName: string;
+    featureCount: number;
+    segmentCount: number;
+    sourceUrl?: string;
+    provider?: string;
+    names: string[];
+    message: string;
+  }>;
   // Steep Slope
   steepSlopeRuns: SteepSlopeRunResult[];
   setSteepSlopeRuns: React.Dispatch<React.SetStateAction<SteepSlopeRunResult[]>>;
@@ -574,6 +621,41 @@ export function registerDomainSkillHandlers(
     }),
   );
 
+  unsubs.push(
+    interAgentComm.onCommand('build_soil_limitations_report', async (message) => {
+      const opts = getOpts();
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      try {
+        const result = await opts.handleCompileSoilLimitationsReport({
+          forceRefresh: d.forceRefresh === true,
+        });
+        if (!result.ok || !result.report) {
+          return respond(message, AgentType.SOILS_AGENT, false, undefined, result.message);
+        }
+        opts.logActionToFieldbook(
+          `CACP build_soil_limitations_report — ${result.report.units.length} map unit(s), ` +
+          `${result.report.soilAcres.toFixed(2)} ac, ${result.report.areaLabel}.`,
+        );
+        return respond(message, AgentType.SOILS_AGENT, true, {
+          message: result.message,
+          markdown: formatSoilLimitationsMarkdown(result.report),
+          report: result.report as unknown as Record<string, unknown>,
+          boundaryPresent: result.report.boundaryPresent,
+          boundaryAdvisory: result.report.boundaryAdvisory,
+          soilAcres: result.report.soilAcres,
+        });
+      } catch (e) {
+        return respond(
+          message,
+          AgentType.SOILS_AGENT,
+          false,
+          undefined,
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    }),
+  );
+
   // ── 4. Contouring Agent skills ───────────────────────────────────────────
   unsubs.push(
     interAgentComm.onCommand('generate_contours', async (message) => {
@@ -946,16 +1028,9 @@ export function registerDomainSkillHandlers(
     interAgentComm.onCommand('fetch_esri_rest_contours', async (message) => {
       const opts = getOpts();
       const d = (message.data ?? {}) as Record<string, unknown>;
+      // serviceUrl is optional: omitting it lets the host resolve PASDA / a
+      // state or county service from the project location automatically.
       const serviceUrl = typeof d.serviceUrl === 'string' ? d.serviceUrl.trim() : '';
-      if (!serviceUrl) {
-        return respond(
-          message,
-          AgentType.CONTOURING_AGENT,
-          false,
-          undefined,
-          'serviceUrl is required.',
-        );
-      }
       const mode = (d.mode === 'description' ? 'description' : d.mode === 'project' ? 'project' : 'inclusion') as
         | 'project'
         | 'inclusion'
@@ -978,6 +1053,9 @@ export function registerDomainSkillHandlers(
           count: result.segmentCount,
           sr: { wkid: latest.settings.projection?.epsg ?? 4326 },
           layerName: result.layerName,
+          serviceUrl: result.serviceUrl ?? serviceUrl,
+          resolvedSource: result.resolvedSource,
+          resolvedAutomatically: !serviceUrl,
         });
       } catch (e) {
         return respond(
@@ -1019,7 +1097,14 @@ export function registerDomainSkillHandlers(
       const usgsIntermediate =
         USGS_NATIONAL_CONTOUR_SOURCES.find((source) => source.id === 'intermediate') ??
         USGS_NATIONAL_CONTOUR_SOURCES[0];
-      const curated = [
+      const curated: Array<{
+        name: string;
+        url: string;
+        region: string;
+        description: string;
+        dataType: string;
+        resolution: string;
+      }> = [
         {
           name: 'USGS 3DEP National Map Contours (Intermediate)',
           url: usgsIntermediate.url,
@@ -1037,14 +1122,190 @@ export function registerDomainSkillHandlers(
           resolution: layer.intervalFt ? `${layer.intervalFt}ft` : 'unknown',
         })),
       ];
+
+      // Live discovery first: PASDA / ArcGIS Online / Scout results are
+      // verified against the geocoded search area. Curated layers remain the
+      // deterministic fallback when the browser service is unavailable.
+      let liveServices: typeof curated = [];
+      if (opts.handleResolveGisService) {
+        try {
+          const resolution = await opts.handleResolveGisService({
+            kind: 'contours',
+            mode: 'description',
+            descriptionText: searchArea,
+          });
+          liveServices = resolution.sources.map(source => ({
+            name: source.label,
+            url: source.url,
+            region: stateEntry?.state ?? searchArea,
+            description: source.notes ?? `${source.provider} live service`,
+            dataType: 'contours',
+            resolution: typeof source.featureCount === 'number' && source.featureCount > 0
+              ? `${source.featureCount.toLocaleString()} features verified`
+              : 'live',
+          }));
+        } catch {
+          // Keep the curated list — live discovery is best-effort.
+        }
+      }
+
+      const seen = new Set<string>();
+      const services = [...liveServices, ...curated].filter((service) => {
+        const key = service.url.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
       return respond(message, AgentType.CONTOURING_AGENT, true, {
-        services: curated,
-        count: curated.length,
+        services,
+        count: services.length,
         sources: [
+          ...(liveServices.length > 0 ? ['LandSurv Scout'] : []),
           'USGS National Map',
           ...(stateEntry ? [stateEntry.abbr === 'PA' ? 'PASDA' : `${stateEntry.abbr} state GIS`] : []),
         ],
       });
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('resolve_gis_service', async (message) => {
+      const opts = getOpts();
+      if (!opts.handleResolveGisService) {
+        return respond(
+          message,
+          AgentType.GIS_AGENT,
+          false,
+          undefined,
+          'The live GIS resolver is unavailable in this session.',
+        );
+      }
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const allowedKinds = ['contours', 'parcels', 'flood', 'soils', 'custom'] as const;
+      type ResolveKind = typeof allowedKinds[number];
+      const kindRaw = String(d.kind ?? 'parcels').toLowerCase();
+      const kind: ResolveKind = (allowedKinds as readonly string[]).includes(kindRaw)
+        ? kindRaw as ResolveKind
+        : 'custom';
+      const modeRaw = String(d.mode ?? 'project');
+      const mode = modeRaw === 'inclusion' || modeRaw === 'description'
+        ? modeRaw
+        : 'project';
+      const descriptionText = typeof d.descriptionText === 'string'
+        ? d.descriptionText
+        : typeof d.description === 'string' ? d.description : undefined;
+      const query = typeof d.query === 'string' ? d.query.trim() : undefined;
+      let bboxOverride: [number, number, number, number] | null = null;
+      const rawBbox = d.bbox as unknown;
+      if (Array.isArray(rawBbox) && rawBbox.length === 4) {
+        const values = rawBbox.map(Number);
+        if (values.every(Number.isFinite)) {
+          bboxOverride = values as [number, number, number, number];
+        }
+      } else if (rawBbox && typeof rawBbox === 'object') {
+        const obj = rawBbox as Record<string, unknown>;
+        const values = [obj.xmin, obj.ymin, obj.xmax, obj.ymax].map(Number);
+        if (values.every(Number.isFinite)) {
+          bboxOverride = values as [number, number, number, number];
+        }
+      }
+      try {
+        const resolution = await opts.handleResolveGisService({
+          kind,
+          query,
+          mode,
+          descriptionText,
+          bboxOverride,
+        });
+        return respond(message, AgentType.GIS_AGENT, true, {
+          kind: resolution.kind,
+          bboxWgs84: resolution.bboxWgs84,
+          pasdaAvailable: resolution.pasdaAvailable,
+          count: resolution.sources.length,
+          verifiedCount: resolution.sources.filter(source => source.verified).length,
+          services: resolution.sources.map(source => ({
+            name: source.label,
+            url: source.url,
+            provider: source.provider,
+            geometryType: source.geometryType,
+            featureCount: source.featureCount,
+            verified: source.verified,
+            notes: source.notes,
+          })),
+          warnings: resolution.warnings,
+        });
+      } catch (error) {
+        return respond(
+          message,
+          AgentType.GIS_AGENT,
+          false,
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('gis_show_live_layer', async (message) => {
+      const opts = getOpts();
+      if (!opts.handleShowGisLayer) {
+        return respond(
+          message,
+          AgentType.GIS_AGENT,
+          false,
+          undefined,
+          'Live GIS layer drawing is unavailable in this session.',
+        );
+      }
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const topic = String(d.topic ?? d.query ?? '').trim();
+      if (!topic) {
+        return respond(message, AgentType.GIS_AGENT, false, undefined, 'topic is required.');
+      }
+      const modeRaw = String(d.mode ?? 'project');
+      const mode = modeRaw === 'inclusion' || modeRaw === 'description'
+        ? modeRaw
+        : 'project';
+      const descriptionText = typeof d.descriptionText === 'string'
+        ? d.descriptionText
+        : typeof d.description === 'string' ? d.description : undefined;
+      let bboxOverride: [number, number, number, number] | null = null;
+      const rawBbox = d.bbox as unknown;
+      if (Array.isArray(rawBbox) && rawBbox.length === 4) {
+        const values = rawBbox.map(Number);
+        if (values.every(Number.isFinite)) {
+          bboxOverride = values as [number, number, number, number];
+        }
+      } else if (rawBbox && typeof rawBbox === 'object') {
+        const obj = rawBbox as Record<string, unknown>;
+        const values = [obj.xmin, obj.ymin, obj.xmax, obj.ymax].map(Number);
+        if (values.every(Number.isFinite)) {
+          bboxOverride = values as [number, number, number, number];
+        }
+      }
+      try {
+        const result = await opts.handleShowGisLayer({
+          topic,
+          serviceUrl: typeof d.serviceUrl === 'string' ? d.serviceUrl.trim() : undefined,
+          label: typeof d.label === 'string' ? d.label.trim() : undefined,
+          mode,
+          descriptionText,
+          bboxOverride,
+          maxFeatures: typeof d.maxFeatures === 'number' && Number.isFinite(d.maxFeatures)
+            ? Math.min(20_000, Math.max(1, Math.floor(d.maxFeatures)))
+            : undefined,
+        });
+        return respond(message, AgentType.GIS_AGENT, true, result as unknown as Record<string, unknown>);
+      } catch (error) {
+        return respond(
+          message,
+          AgentType.GIS_AGENT,
+          false,
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     }),
   );
 

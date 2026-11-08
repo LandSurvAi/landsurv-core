@@ -8,7 +8,7 @@ const DB_NAME = 'landsurv-map-cache';
 const STORE = 'entries';
 const MAX_ENTRIES = 300;
 const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const BITMAP_LRU_MAX = 160;
+const BITMAP_LRU_MAX = 256;
 
 interface StoredEntry {
   key: string;

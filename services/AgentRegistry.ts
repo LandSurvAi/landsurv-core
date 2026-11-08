@@ -1575,10 +1575,12 @@ agentRegistry.register({
       inputs: {
         serviceUrl: {
           type: 'string',
-          required: true,
+          required: false,
           description:
-            'Base URL of the ESRI REST Feature Service or Map Service layer ' +
-            '(e.g. https://services.pasda.psu.edu/arcgis/rest/services/PAMAP_Contours/MapServer/2).',
+            'Optional base URL of the ESRI REST Feature Service or Map Service layer ' +
+            '(e.g. https://services.pasda.psu.edu/arcgis/rest/services/PAMAP_Contour_Mosaic_South/MapServer/0). ' +
+            'Omit it whenever the project location is known: the host resolves PASDA in Pennsylvania ' +
+            'and live state/county services elsewhere, with no user action required.',
         },
         mode: {
           type: 'string',
@@ -1997,6 +1999,38 @@ agentRegistry.register({
       ],
     },
     {
+      id: 'build_soil_limitations_report',
+      name: 'Compile State E&S Soil Limitations Report',
+      type: 'action' as const,
+      description:
+        'Compiles a state E&S-manual soil-limitations report for the loaded SSURGO map units. ' +
+        'For Pennsylvania, the Scout obtains and caches Appendix E, Table E.1 (limitations of ' +
+        'Pennsylvania soils pertaining to earthmoving projects), matches each soil series to the ' +
+        'chart, selects the appropriate resolutions from the E&S limitations/resolutions list, ' +
+        'and reports the area of every soil map unit within the active inclusion boundary. ' +
+        'Without a boundary it reports areas across the project AOI and includes a boundary advisory.',
+      inputs: {
+        forceRefresh: {
+          type: 'boolean',
+          description: 'Re-download and re-parse the state E&S manual instead of using the cached chart.',
+        },
+      },
+      outputs: {
+        report: {
+          type: 'object',
+          description:
+            'Compiled report: boundaryPresent, areaLabel, boundaryAcres, soilAcres, units ' +
+            '(symbol, name, acres, percent, limitations, resolutions) and unmatched map units.',
+        },
+        message: { type: 'string', description: 'Human-readable summary of the compiled report.' },
+      },
+      examples: [
+        'Civil Plan Expert is assembling an NPDES E&S plan and calls build_soil_limitations_report to add the Appendix E soil limitations and resolutions narrative with the acreage of each soil within the project boundary.',
+        'A reviewer asks whether any project soils are corrosive to concrete or prone to sinkholes. The Soils Agent compiles the PA Table E.1 report and answers from the matched series.',
+        'Civil Drafter calls build_soil_limitations_report before sizing infiltration BMPs so slow-percolation and seasonal-high-water-table resolutions are carried into the plan notes.',
+      ],
+    },
+    {
       id: 'clear_soils',
       name: 'Clear Soil Linework',
       type: 'action' as const,
@@ -2358,6 +2392,122 @@ agentRegistry.register({
   cacpEnabled: true,
   version: '1.0.0',
   skills: [
+    {
+      id: 'resolve_gis_service',
+      name: 'Resolve Live GIS Service',
+      type: 'action' as const,
+      description:
+        'Finds and verifies live public ArcGIS REST layers for the project footprint when the ' +
+        'registered/primary source returns no geometry. Automatically uses PASDA in Pennsylvania, ' +
+        'then ArcGIS Online, state GIS hubs, county portals, and the LandSurv Scout browser. ' +
+        'Returns only endpoints that answer a feature-count query for the AOI (or clearly marks ' +
+        'unverified candidates), so an agent can retry the fetch instead of telling the user no data exists.',
+      inputs: {
+        kind: {
+          type: 'string',
+          enum: ['contours', 'parcels', 'flood', 'soils', 'custom'],
+          required: true,
+          description: 'Layer type to resolve.',
+        },
+        mode: {
+          type: 'string',
+          enum: ['project', 'inclusion', 'description'],
+          description: 'Area of interest. Defaults to the project extent.',
+        },
+        descriptionText: {
+          type: 'string',
+          description: 'Place name or address when mode="description".',
+        },
+        query: {
+          type: 'string',
+          description: 'Free-form topic for kind="custom" (county lines, school districts, streams, water bodies, etc.).',
+        },
+        bbox: {
+          type: 'object',
+          description: 'Optional explicit WGS84 bbox { xmin, ymin, xmax, ymax } (or [w,s,e,n]).',
+        },
+      },
+      outputs: {
+        services: {
+          type: 'array',
+          items: { type: 'object' },
+          required: true,
+          description: 'Ranked { name, url, provider, geometryType, featureCount, verified, notes } entries.',
+        },
+        count: { type: 'integer', required: true },
+        verifiedCount: { type: 'integer', required: true },
+        pasdaAvailable: { type: 'boolean' },
+        warnings: { type: 'array', items: { type: 'string' } },
+      },
+      examples: [
+        'No contours came back for my Wayne County project — find a live source',
+        'Resolve the county tax-parcel REST endpoint for this footprint',
+        'Show county lines for this footprint',
+        'Find school district or voting district layers near the site',
+        'Find verified streams and water-body layers',
+        'Show the watershed or drainage basin for this footprint',
+      ],
+    },
+    {
+      id: 'gis_show_live_layer',
+      name: 'Show Live GIS Layer',
+      type: 'action' as const,
+      description:
+        'Resolves and draws ANY public GIS topic on the project canvas — not a fixed menu. ' +
+        'Use it for county lines, State Plane / SPC zones, school districts, voting precincts, ' +
+        'streams, water bodies, municipal boundaries, tax districts, or any other live layer. ' +
+        'The host resolves the AOI, searches PASDA/ArcGIS Online and LandSurv Scout, queries the ' +
+        'best verified layer for the project footprint, projects it into the project CRS, and ' +
+        'adds the linework to its own CAD layer.',
+      inputs: {
+        topic: {
+          type: 'string',
+          required: true,
+          description: 'The user\'s GIS topic in their own words, e.g. "school district lines" or "streams and water bodies".',
+        },
+        serviceUrl: {
+          type: 'string',
+          description: 'Optional known ArcGIS layer URL. Omit to discover it automatically.',
+        },
+        label: { type: 'string', description: 'Optional display label / CAD layer topic.' },
+        mode: {
+          type: 'string',
+          enum: ['project', 'inclusion', 'description'],
+          description: 'Area of interest. Defaults to the project extent.',
+        },
+        descriptionText: {
+          type: 'string',
+          description: 'Place name or address when mode="description".',
+        },
+        bbox: {
+          type: 'object',
+          description: 'Optional explicit WGS84 bbox { xmin, ymin, xmax, ymax } (or [w,s,e,n]).',
+        },
+        maxFeatures: {
+          type: 'integer',
+          description: 'Maximum features to query for the AOI (default 4000).',
+        },
+      },
+      outputs: {
+        ok:           { type: 'boolean', required: true },
+        topic:        { type: 'string', required: true },
+        label:        { type: 'string', required: true },
+        layerName:    { type: 'string', required: true },
+        featureCount: { type: 'integer', required: true },
+        segmentCount: { type: 'integer', required: true },
+        sourceUrl:    { type: 'string' },
+        provider:     { type: 'string' },
+        names:        { type: 'array', items: { type: 'string' } },
+        message:      { type: 'string', required: true },
+      },
+      examples: [
+        'User: "Show me county lines" → gis_show_live_layer({topic:"county lines"}).',
+        'User: "Draw the State Plane zones" → gis_show_live_layer({topic:"State Plane / SPC zones"}).',
+        'User: "Show school district lines" → gis_show_live_layer({topic:"school district lines"}).',
+        'User: "Show voting districts" → gis_show_live_layer({topic:"voting districts"}).',
+        'User: "Draw streams and water bodies" → gis_show_live_layer({topic:"streams and water bodies"}).',
+      ],
+    },
     {
       id: 'gis_get_features_summary',
       name: 'Get Loaded GIS Features Summary',

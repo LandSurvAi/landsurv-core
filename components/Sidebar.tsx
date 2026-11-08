@@ -3,7 +3,7 @@
 // - The `agentConfig` object is the single source of truth for agent icons, labels, and colors. When adding a new agent, add it to `agentConfig`.
 // - The `SidebarButton` and `NavButton` components define the consistent look and feel of all menu items. Maintain this consistency.
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AgentType, JobInfo, useAgent, useUI } from '../types.ts';
 import { 
     BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, BookOpenIcon, 
@@ -54,6 +54,7 @@ import { AgentConstellationIcon } from './icons.tsx';
 import { AdjustableWrenchIcon } from './toolbarIcons.tsx';
 import { getRetiredAgents } from '../utils/retiredAgents.ts';
 import { getGlobalSettings, subscribeGlobalSettings } from '../utils/globalSettings.ts';
+import { AGENT_SIDEBAR_LAYOUT_EVENT } from '../utils/layoutEvents.ts';
 
 interface SidebarProps {
     isSessionActive: boolean;
@@ -93,6 +94,9 @@ const SIDEBAR_DEFAULT_WIDTH = 264;
 const SIDEBAR_MIN_WIDTH = 208;
 const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_WIDTH_STORAGE_KEY = 'landsurv-agent-sidebar-width';
+const SIDEBAR_INTRO_STORAGE_KEY = 'landsurv.agent-sidebar-intro.v1';
+const SIDEBAR_INTRO_VISIBLE_MS = 2200;
+const SIDEBAR_TRANSITION_MS = 700;
 
 const AUTO_SELECTOR_OPTION = 'auto';
 const getSelectorModelValue = (modelName: string): string => modelName;
@@ -332,7 +336,9 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     const { activeVisualPanel, showView, showDoc, showTech, showInvestorForm, showReleaseLog, showSettings, showAbout } = useUI();
     const [isInfoOpen, setIsInfoOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<'agents' | 'views'>('agents');
-    const [isCollapsed, setIsCollapsed] = useState(false);
+    const [isCollapsed, setIsCollapsed] = useState(true);
+    const [showCollapsedRail, setShowCollapsedRail] = useState(true);
+    const [sidebarIntroPulse, setSidebarIntroPulse] = useState(false);
     const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
         try {
             const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
@@ -344,6 +350,77 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     });
     const [isResizingSidebar, setIsResizingSidebar] = useState(false);
     const sidebarRef = useRef<HTMLElement | null>(null);
+    const sidebarIntroPlayedRef = useRef(false);
+    const sidebarIntroTimersRef = useRef<number[]>([]);
+    const railSwapTimerRef = useRef<number | null>(null);
+
+    const clearSidebarIntroTimers = useCallback(() => {
+        sidebarIntroTimersRef.current.forEach(timer => window.clearTimeout(timer));
+        sidebarIntroTimersRef.current = [];
+    }, []);
+
+    const setIsCollapsedByUser = useCallback((collapsed: boolean) => {
+        clearSidebarIntroTimers();
+        setSidebarIntroPulse(false);
+        setIsCollapsed(collapsed);
+    }, [clearSidebarIntroTimers]);
+
+    // The command bar's agent socket is portaled to <body> and measured from an
+    // in-bar anchor. A width-only sidebar change moves the bar without resizing
+    // it, so announce the layout change and let the bar re-measure the anchor.
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        window.dispatchEvent(new Event(AGENT_SIDEBAR_LAYOUT_EVENT));
+    }, [isCollapsed, sidebarWidth, props.isDesktop]);
+
+    // Keep the expanded content mounted until the width animation finishes, then
+    // swap in the compact rail so the close reads as a slide rather than a snap.
+    useEffect(() => {
+        if (railSwapTimerRef.current !== null) {
+            window.clearTimeout(railSwapTimerRef.current);
+            railSwapTimerRef.current = null;
+        }
+        if (isCollapsed) {
+            railSwapTimerRef.current = window.setTimeout(() => {
+                railSwapTimerRef.current = null;
+                setShowCollapsedRail(true);
+            }, SIDEBAR_TRANSITION_MS);
+        } else {
+            setShowCollapsedRail(false);
+        }
+        return () => {
+            if (railSwapTimerRef.current !== null) {
+                window.clearTimeout(railSwapTimerRef.current);
+                railSwapTimerRef.current = null;
+            }
+        };
+    }, [isCollapsed]);
+
+    // First entry into the drawing area: reveal the panel briefly, settle it
+    // closed, then flash the re-open control. Stored so it only runs once.
+    useEffect(() => {
+        if (sidebarIntroPlayedRef.current) return;
+        if (activeVisualPanel !== 'canvas') return;
+        sidebarIntroPlayedRef.current = true;
+
+        try {
+            if (localStorage.getItem(SIDEBAR_INTRO_STORAGE_KEY) === '1') return;
+            localStorage.setItem(SIDEBAR_INTRO_STORAGE_KEY, '1');
+        } catch { /* private mode — still run once this session */ }
+
+        setIsCollapsed(false);
+        const closeTimer = window.setTimeout(() => {
+            setIsCollapsed(true);
+            const pulseDelay = SIDEBAR_TRANSITION_MS + 60;
+            const pulseTimer = window.setTimeout(() => setSidebarIntroPulse(true), pulseDelay);
+            const pulseEndTimer = window.setTimeout(
+                () => setSidebarIntroPulse(false),
+                pulseDelay + 3600
+            );
+            sidebarIntroTimersRef.current.push(pulseTimer, pulseEndTimer);
+        }, SIDEBAR_INTRO_VISIBLE_MS);
+        sidebarIntroTimersRef.current.push(closeTimer);
+    }, [activeVisualPanel]);
     const sidebarResizeState = useRef<{ startX: number; startWidth: number; latestWidth: number } | null>(null);
     const sidebarResizeFrame = useRef<number | null>(null);
     const [retiredAgents, setRetiredAgents] = useState<AgentType[]>([]);
@@ -531,7 +608,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                     {props.isDesktop && (
                         <button
                             type="button"
-                            onClick={() => setIsCollapsed(true)}
+                            onClick={() => setIsCollapsedByUser(true)}
                             className="hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-cyan-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04] lg:flex"
                             title="Hide agent panel"
                             aria-label="Hide agent panel"
@@ -828,93 +905,101 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
         </>
     );
 
-    // Desktop: a collapsed rail keeps the hide/show affordance reachable.
+    // Desktop: the compact rail is the resting state. The expanded content stays
+    // mounted through the width transition, then the rail swaps in.
     if (props.isDesktop) {
-        if (isCollapsed) {
-            // Collapsed rail: agent glyphs only — one click to any workspace, with
-            // the same agent colors as the expanded menu so the rail still reads.
-            const railOrder = getOrderedSidebarAgentKeys(agentOrderSidebar);
+        const railOrder = getOrderedSidebarAgentKeys(agentOrderSidebar);
 
-            return (
-                <aside className="relative flex w-12 flex-shrink-0 flex-col items-center border-r border-white/[0.07] bg-[#0a0f16] light-theme:border-gray-300 light-theme:bg-gray-100">
-                    <button
-                        type="button"
-                        onClick={() => setIsCollapsed(false)}
-                        className="flex h-11 w-full flex-shrink-0 items-center justify-center border-b border-white/[0.06] text-slate-300 transition-colors hover:bg-white/[0.07] hover:text-cyan-200 light-theme:border-gray-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04]"
-                        title="Show agent panel"
-                        aria-label="Show agent panel"
-                    >
-                        <ChevronDoubleRightIcon className="h-[18px] w-[18px]" />
-                    </button>
-                    <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto scrollbar-hide px-1.5 py-2">
-                        {railOrder.map(agentKey => {
-                            if (retiredAgents.includes(agentKey)) return null;
-                            const config = agentConfig[agentKey];
-                            if (!config) return null;
-                            const Icon = config.icon;
-                            const hexColor = agentThemeColors[agentKey] || '#94a3b8';
-                            const rgbColor = hexToRgb(hexColor);
-                            const isActive = activeAgent === agentKey;
-                            return (
-                                <button
-                                    key={agentKey}
-                                    type="button"
-                                    onClick={() => onAgentChange(agentKey)}
-                                    title={config.label}
-                                    aria-label={config.label}
-                                    className={`relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md transition-colors ${
-                                        isActive ? 'text-white' : 'hover:bg-white/[0.06] light-theme:hover:bg-black/[0.04]'
-                                    }`}
-                                    style={isActive ? {
-                                        background: `linear-gradient(150deg, rgba(${rgbColor},0.22), rgba(${rgbColor},0.05))`,
-                                        boxShadow: `inset 0 0 0 1px rgba(${rgbColor},0.32)`,
-                                    } : undefined}
-                                >
-                                    <Icon className="h-[18px] w-[18px]" style={{ color: isActive ? hexColor : `rgba(${rgbColor},0.8)` }} />
-                                    {isActive && (
-                                        <span
-                                            className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full"
-                                            style={{ backgroundColor: hexColor }}
-                                        />
-                                    )}
-                                </button>
-                            );
-                        })}
-                    </div>
-                </aside>
-            );
-        }
+        const collapsedRail = (
+            <>
+                <button
+                    type="button"
+                    onClick={() => setIsCollapsedByUser(false)}
+                    className={`flex h-11 w-full flex-shrink-0 items-center justify-center border-b border-white/[0.06] text-slate-300 transition-colors hover:bg-white/[0.07] hover:text-cyan-200 light-theme:border-gray-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04] ${
+                        sidebarIntroPulse ? 'sidebar-intro-flash' : ''
+                    }`}
+                    title="Show agent panel"
+                    aria-label="Show agent panel"
+                >
+                    <ChevronDoubleRightIcon className="h-[18px] w-[18px]" />
+                </button>
+                <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto scrollbar-hide px-1.5 py-2">
+                    {railOrder.map(agentKey => {
+                        if (retiredAgents.includes(agentKey)) return null;
+                        const config = agentConfig[agentKey];
+                        if (!config) return null;
+                        const Icon = config.icon;
+                        const hexColor = agentThemeColors[agentKey] || '#94a3b8';
+                        const rgbColor = hexToRgb(hexColor);
+                        const isActive = activeAgent === agentKey;
+                        return (
+                            <button
+                                key={agentKey}
+                                type="button"
+                                onClick={() => onAgentChange(agentKey)}
+                                title={config.label}
+                                aria-label={config.label}
+                                className={`relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md transition-colors ${
+                                    isActive ? 'text-white' : 'hover:bg-white/[0.06] light-theme:hover:bg-black/[0.04]'
+                                }`}
+                                style={isActive ? {
+                                    background: `linear-gradient(150deg, rgba(${rgbColor},0.22), rgba(${rgbColor},0.05))`,
+                                    boxShadow: `inset 0 0 0 1px rgba(${rgbColor},0.32)`,
+                                } : undefined}
+                            >
+                                <Icon className="h-[18px] w-[18px]" style={{ color: isActive ? hexColor : `rgba(${rgbColor},0.8)` }} />
+                                {isActive && (
+                                    <span
+                                        className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full"
+                                        style={{ backgroundColor: hexColor }}
+                                    />
+                                )}
+                            </button>
+                        );
+                    })}
+                </div>
+            </>
+        );
+
         return (
             <aside
                 ref={sidebarRef}
                 style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}
-                className="relative flex w-20 flex-shrink-0 flex-col border-r border-white/[0.07] bg-[#0a0f16] lg:w-[var(--sidebar-width)] light-theme:border-gray-300 light-theme:bg-gray-100"
+                className={`relative flex flex-shrink-0 flex-col overflow-hidden border-r border-white/[0.07] bg-[#0a0f16] transition-[width] duration-700 ease-in-out ${
+                    isCollapsed ? 'w-12' : 'w-20 lg:w-[var(--sidebar-width)]'
+                } light-theme:border-gray-300 light-theme:bg-gray-100`}
+                onTransitionEnd={(event) => {
+                    if (event.target !== event.currentTarget || event.propertyName !== 'width') return;
+                    window.dispatchEvent(new Event(AGENT_SIDEBAR_LAYOUT_EVENT));
+                }}
             >
-                <div
-                    data-testid="agent-sidebar-resize-handle"
-                    role="separator"
-                    aria-orientation="vertical"
-                    aria-label="Resize agent panel"
-                    title="Drag to resize agent panel"
-                    onMouseDown={handleSidebarResizeMouseDown}
-                    className="group absolute -right-[3px] top-0 z-30 hidden h-full w-[7px] cursor-col-resize lg:block"
-                >
-                    <span
-                        aria-hidden="true"
-                        className={`pointer-events-none absolute left-1/2 top-1/2 flex w-[5px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-[0_2px_10px_rgba(0,0,0,0.5)] transition-all duration-150 light-theme:bg-white ${
-                            isResizingSidebar
-                                ? 'h-16 border-cyan-300/70 bg-cyan-400/20'
-                                : 'h-14 border-white/15 bg-[#0b1119]/90 group-hover:h-16 group-hover:border-cyan-300/60 group-hover:bg-cyan-400/15'
-                        }`}
+                {isCollapsed && showCollapsedRail ? collapsedRail : sidebarContent}
+                {!isCollapsed && (
+                    <div
+                        data-testid="agent-sidebar-resize-handle"
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label="Resize agent panel"
+                        title="Drag to resize agent panel"
+                        onMouseDown={handleSidebarResizeMouseDown}
+                        className="group absolute -right-[3px] top-0 z-30 hidden h-full w-[7px] cursor-col-resize lg:block"
                     >
                         <span
-                            className={`h-7 w-px rounded-full transition-colors light-theme:bg-gray-400 ${
-                                isResizingSidebar ? 'bg-cyan-200' : 'bg-white/35 group-hover:bg-cyan-200/90'
+                            aria-hidden="true"
+                            className={`pointer-events-none absolute left-1/2 top-1/2 flex w-[5px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border shadow-[0_2px_10px_rgba(0,0,0,0.5)] transition-all duration-150 light-theme:bg-white ${
+                                isResizingSidebar
+                                    ? 'h-16 border-cyan-300/70 bg-cyan-400/20'
+                                    : 'h-14 border-white/15 bg-[#0b1119]/90 group-hover:h-16 group-hover:border-cyan-300/60 group-hover:bg-cyan-400/15'
                             }`}
-                        />
-                    </span>
-                </div>
-                {sidebarContent}
+                        >
+                            <span
+                                className={`h-7 w-px rounded-full transition-colors light-theme:bg-gray-400 ${
+                                    isResizingSidebar ? 'bg-cyan-200' : 'bg-white/35 group-hover:bg-cyan-200/90'
+                                }`}
+                            />
+                        </span>
+                    </div>
+                )}
             </aside>
         );
     }

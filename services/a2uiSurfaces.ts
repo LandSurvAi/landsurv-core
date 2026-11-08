@@ -544,6 +544,18 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
     keywords: ['legal writer', 'legal description', 'metes and bounds'],
   },
   {
+    id: 'workspace-legend',
+    title: 'Legend',
+    description:
+      'Edit the paperspace legend — labels, colors, hatch patterns, columns, and placement — and write the styles back to the drawing.',
+    category: 'workspace',
+    glyph: '▤',
+    accent: 'cyan',
+    audiences: ['workspace'],
+    agent: AgentType.CAD_MANAGER,
+    keywords: ['legend', 'symbol key', 'key map', 'hatch legend', 'paperspace legend'],
+  },
+  {
     id: 'workspace-sheet-view',
     title: 'Sheet View (24×36 Plot Layout)',
     description: 'Preview and configure the 24×36 paperspace plot sheet and titleblock.',

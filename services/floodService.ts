@@ -32,6 +32,37 @@ export const FEMA_NFHL_FLOOD_HAZ_URL =
 export const FEMA_NFHL_BFE_URL =
   'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/16';
 
+/** NFHL map-export endpoint used for FIRMETTE-style flood-map exhibits. */
+export const FEMA_NFHL_EXPORT_URL =
+  'https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/export';
+
+const FIRMETTE_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 24, 25, 27, 28].join(',');
+
+/**
+ * Build the FEMA NFHL export URL used for FIRMETTE imagery. The canvas uses
+ * PNG for the on-screen preview; the downloaded deliverable is wrapped into a
+ * PDF by femaReportPdf.
+ */
+export function buildFemaFirmetteImageUrl(
+  bbox: string,
+  options: { width?: number; height?: number } = {},
+): string {
+  const width = Math.max(100, Math.round(options.width ?? 850));
+  const height = Math.max(100, Math.round(options.height ?? 1100));
+  const params = new URLSearchParams({
+    bbox,
+    bboxSR: '4326',
+    size: `${width},${height}`,
+    imageSR: '4326',
+    layers: `show:${FIRMETTE_LAYERS}`,
+    format: 'png32',
+    transparent: 'false',
+    f: 'image',
+    dpi: '96',
+  });
+  return `${FEMA_NFHL_EXPORT_URL}?${params.toString()}`;
+}
+
 export interface FloodFetchResult {
   lines: SurveyLine[];
   /** Closed polygons for editable canvas hatches and centroid annotations. */

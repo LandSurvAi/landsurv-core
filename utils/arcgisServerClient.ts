@@ -308,53 +308,163 @@ export interface GeocodedPlace {
   lon: number;
   lat: number;
   label: string;
+  source?: 'census' | 'nominatim';
+}
+
+function normalizePlaceQuery(address: string): string {
+  return address
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\s*,\s*/g, ', ');
+}
+
+interface BackendGeocodeBody {
+  lon?: unknown;
+  lat?: unknown;
+  label?: unknown;
+  source?: unknown;
+  error?: unknown;
+  code?: unknown;
+}
+
+interface BackendGeocodeAttempt {
+  place: GeocodedPlace | null;
+  noMatch: boolean;
+  error?: string;
+}
+
+function placeFromBackendBody(body: BackendGeocodeBody): GeocodedPlace | null {
+  const lon = typeof body.lon === 'number'
+    ? body.lon
+    : typeof body.lon === 'string' ? Number(body.lon) : Number.NaN;
+  const lat = typeof body.lat === 'number'
+    ? body.lat
+    : typeof body.lat === 'string' ? Number(body.lat) : Number.NaN;
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+
+  const source = body.source === 'census' || body.source === 'nominatim'
+    ? body.source
+    : undefined;
+  const label = typeof body.label === 'string' && body.label.trim()
+    ? body.label
+    : `${lat}, ${lon}`;
+  return { lon, lat, label, ...(source ? { source } : {}) };
+}
+
+async function geocodeViaBackend(address: string, timeoutMs: number): Promise<BackendGeocodeAttempt> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const response = await fetch(`/api/geocode?address=${encodeURIComponent(address)}`, {
+      signal: ctl.signal,
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    const contentType = response.headers.get('content-type') ?? '';
+    let body: BackendGeocodeBody | null = null;
+    if (contentType.includes('json')) {
+      try {
+        body = await response.json() as BackendGeocodeBody;
+      } catch {
+        body = null;
+      }
+    }
+
+    if (response.ok) {
+      const place = body ? placeFromBackendBody(body) : null;
+      return place
+        ? { place, noMatch: false }
+        : { place: null, noMatch: false, error: 'Address lookup returned an invalid response.' };
+    }
+    if (response.status === 404 && body?.code === 'NO_MATCH') {
+      return { place: null, noMatch: true };
+    }
+    if (response.status === 404 && !body) {
+      return { place: null, noMatch: false, error: 'Address lookup service is not available.' };
+    }
+    return {
+      place: null,
+      noMatch: false,
+      error: typeof body?.error === 'string'
+        ? body.error
+        : `Address lookup failed (HTTP ${response.status}).`,
+    };
+  } catch (error) {
+    return {
+      place: null,
+      noMatch: false,
+      error: error instanceof Error && error.name === 'AbortError'
+        ? 'Address lookup timed out.'
+        : error instanceof Error ? error.message : 'Address lookup failed.',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function geocodeViaNominatimClient(address: string, timeoutMs: number): Promise<GeocodedPlace | null> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const url = new URL('https://nominatim.openstreetmap.org/search');
+    url.searchParams.set('q', address);
+    url.searchParams.set('format', 'jsonv2');
+    url.searchParams.set('limit', '1');
+    url.searchParams.set('countrycodes', 'us');
+    url.searchParams.set('addressdetails', '1');
+
+    const response = await fetch(url, {
+      signal: ctl.signal,
+      headers: { 'Accept-Language': 'en' },
+    });
+    if (!response.ok) {
+      throw new Error(`OpenStreetMap geocoder returned HTTP ${response.status}.`);
+    }
+    const hits = await response.json() as { lat?: string; lon?: string; display_name?: string }[];
+    const hit = hits?.[0];
+    const lat = parseFloat(hit?.lat ?? '');
+    const lon = parseFloat(hit?.lon ?? '');
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    return {
+      lon,
+      lat,
+      label: hit?.display_name ?? address,
+      source: 'nominatim',
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('OpenStreetMap geocoder timed out.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
- * Geocode a US place/address. Primary: OSM Nominatim (CORS-enabled, mirrors
- * the flood/contour agents). Fallback: US Census onelineaddress via the proxy
- * chain, which handles exact street addresses Nominatim sometimes misses.
- * Returns null when neither finds a match.
+ * Geocode a US place/address through the backend so Census is reachable
+ * server-side. The browser still has a direct Nominatim fallback for static
+ * builds and local development when the backend is offline.
+ * Returns null only when the backend positively reports no match.
  */
 export async function geocodePlace(address: string, opts: FetchJsonOptions = {}): Promise<GeocodedPlace | null> {
-  const trimmed = address.trim();
-  if (!trimmed) return null;
+  const query = normalizePlaceQuery(address);
+  if (!query) return null;
 
-  // 1) Nominatim — permissive CORS, no key, best for city/place queries.
+  const backend = await geocodeViaBackend(query, opts.directTimeoutMs ?? 14_000);
+  if (backend.place) return backend.place;
+  if (backend.noMatch) return null;
+
+  let fallbackError: string | null = null;
   try {
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), opts.directTimeoutMs ?? 12_000);
-    const resp = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(trimmed)}&format=json&limit=1&countrycodes=us`,
-      { signal: ctl.signal, headers: { 'Accept-Language': 'en' } },
-    );
-    clearTimeout(timer);
-    if (resp.ok) {
-      const arr = await resp.json() as { lat?: string; lon?: string; display_name?: string }[];
-      const hit = arr?.[0];
-      const lat = parseFloat(hit?.lat ?? '');
-      const lon = parseFloat(hit?.lon ?? '');
-      if (isFinite(lat) && isFinite(lon)) {
-        return { lon, lat, label: hit?.display_name ?? trimmed };
-      }
-    }
-  } catch { /* fall through to Census */ }
+    const place = await geocodeViaNominatimClient(query, opts.directTimeoutMs ?? 12_000);
+    if (place) return place;
+  } catch (error) {
+    fallbackError = error instanceof Error ? error.message : String(error);
+  }
 
-  // 2) Census Bureau onelineaddress — better for exact street addresses.
-  try {
-    const url = `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address=${encodeURIComponent(trimmed)}&benchmark=2020&format=json`;
-    const data = await fetchJsonResilient<{
-      result?: { addressMatches?: { matchedAddress?: string; coordinates?: { x?: number; y?: number } }[] };
-    }>(url, opts);
-    const match = data.result?.addressMatches?.[0];
-    const x = match?.coordinates?.x;
-    const y = match?.coordinates?.y;
-    if (match && typeof x === 'number' && typeof y === 'number') {
-      return { lon: x, lat: y, label: match.matchedAddress ?? trimmed };
-    }
-  } catch { /* no match anywhere */ }
-
-  return null;
+  const reason = backend.error ?? 'Address lookup is unavailable. Please try again.';
+  throw new Error(fallbackError ? `${reason} OpenStreetMap fallback: ${fallbackError}` : reason);
 }
 
 /** WGS84 envelope of roughly `radiusMiles` around a lon/lat point. */

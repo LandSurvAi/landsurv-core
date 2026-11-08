@@ -32,6 +32,13 @@ interface ContourGenerationPanelProps {
   onManageInclusionBoundaries?: () => void;
   /** Loaded TIN surfaces available for direct contour extraction. */
   tinSurfaces?: TinSurface[];
+  /** Number of contour labels currently rendered on the canvas. */
+  labelCount?: number;
+  /** Active strike-line mode. */
+  labelTool?: 'place' | 'erase' | null;
+  onSetLabelTool?: (tool: 'place' | 'erase' | null) => void;
+  onClearContourLabels?: () => void;
+  onAutoLabelContours?: () => void;
 }
 
 /**
@@ -62,6 +69,11 @@ export const ContourGenerationPanel: React.FC<ContourGenerationPanelProps> = ({
   onSelectInclusionBoundary,
   onManageInclusionBoundaries,
   tinSurfaces = [],
+  labelCount = 0,
+  labelTool = null,
+  onSetLabelTool,
+  onClearContourLabels,
+  onAutoLabelContours,
 }) => {
   const ignored = useMemo(() => new Set(settings.ignoredPointNumbers ?? []), [settings.ignoredPointNumbers]);
   const isTinSource = settings.sourceType === 'tin';
@@ -252,6 +264,57 @@ export const ContourGenerationPanel: React.FC<ContourGenerationPanelProps> = ({
             className="w-full accent-amber-500" disabled={!settings.showLabels}
           />
           <div className="flex justify-between text-xs text-gray-500 px-1"><span>Small</span><span>Large</span></div>
+        </div>
+
+        <div className="rounded border border-amber-700/30 bg-amber-950/10 p-2.5 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="text-[10px] uppercase font-semibold tracking-wide text-amber-300/80">Label Tools</div>
+            <span className="text-[10px] text-gray-500">{labelCount} on canvas</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => onSetLabelTool?.(labelTool === 'place' ? null : 'place')}
+              className={`py-1.5 rounded-md border text-xs font-medium transition-colors ${
+                labelTool === 'place'
+                  ? 'border-amber-400 bg-amber-600/30 text-amber-200'
+                  : 'border-gray-600 bg-gray-700/50 text-gray-300 hover:border-amber-500/60 hover:text-amber-200'
+              }`}
+            >
+              {labelTool === 'place' ? 'Stop Placing' : 'Place by Strike'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onSetLabelTool?.(labelTool === 'erase' ? null : 'erase')}
+              className={`py-1.5 rounded-md border text-xs font-medium transition-colors ${
+                labelTool === 'erase'
+                  ? 'border-rose-400 bg-rose-600/30 text-rose-200'
+                  : 'border-gray-600 bg-gray-700/50 text-gray-300 hover:border-rose-500/60 hover:text-rose-200'
+              }`}
+            >
+              {labelTool === 'erase' ? 'Stop Erasing' : 'Erase by Strike'}
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={onAutoLabelContours}
+              className="py-1.5 rounded-md border border-gray-600 bg-gray-700/50 text-xs font-medium text-gray-300 hover:border-amber-500/60 hover:text-amber-200 transition-colors"
+            >
+              Re-label
+            </button>
+            <button
+              type="button"
+              onClick={onClearContourLabels}
+              disabled={labelCount === 0}
+              className="py-1.5 rounded-md border border-gray-600 bg-gray-700/50 text-xs font-medium text-gray-300 hover:border-rose-500/60 hover:text-rose-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Clear Labels
+            </button>
+          </div>
+          <p className="text-[10px] leading-snug text-gray-500">
+            Drag a line across contours to place a label at every crossing. Erase mode removes the labels your line passes through. Press Esc to finish.
+          </p>
         </div>
 
         {/* ── Active Constraints summary ─────────────────────── */}

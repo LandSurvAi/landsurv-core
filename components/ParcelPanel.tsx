@@ -13,6 +13,7 @@ import {
 } from '../services/parcelGisService.ts';
 import { type AnnotationCategoryStyle, type ParcelCadTextStyle, type ParcelLabelFormatter, type SurveyLine, type SurveyPoint, DEFAULT_PARCEL_LABEL_FORMATTER } from '../types.ts';
 import { applyAnnotationTextCase } from '../utils/annotationTextStyle.ts';
+import { metadataEntries } from '../utils/featureMetadata.ts';
 import { buildParcelLabelLines, resolveEffectiveParcelTextStyle } from '../utils/parcelLabelFormatter.ts';
 import {
   detectJurisdictionFromBrowser,
@@ -657,6 +658,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
       block: '12',
       unit: '4',
       coordinates: [],
+      attributes: {},
     };
   }, [lastFetchedParcels]);
 
@@ -664,12 +666,19 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
   const filteredParcels = useMemo(() => {
     if (!parcelSearchFilter.trim()) return lastFetchedParcels;
     const q = parcelSearchFilter.trim().toLowerCase();
-    return lastFetchedParcels.filter(p => 
-      (p.parcelId && p.parcelId.toLowerCase().includes(q)) ||
-      (p.owner && p.owner.toLowerCase().includes(q)) ||
-      (p.deedBook && p.deedBook.toLowerCase().includes(q)) ||
-      (p.deedPage && p.deedPage.toLowerCase().includes(q))
-    );
+    return lastFetchedParcels.filter(p => {
+      const metadataText = Object.values(p.attributes ?? {})
+        .map(value => String(value ?? ''))
+        .join(' ')
+        .toLowerCase();
+      return (
+        (p.parcelId && p.parcelId.toLowerCase().includes(q)) ||
+        (p.owner && p.owner.toLowerCase().includes(q)) ||
+        (p.deedBook && p.deedBook.toLowerCase().includes(q)) ||
+        (p.deedPage && p.deedPage.toLowerCase().includes(q)) ||
+        metadataText.includes(q)
+      );
+    });
   }, [lastFetchedParcels, parcelSearchFilter]);
 
   const currentPos = pos ?? getDefaultPos();
@@ -1533,7 +1542,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                       type="text"
                       value={parcelSearchFilter}
                       onChange={e => setParcelSearchFilter(e.target.value)}
-                      placeholder="Filter parcels by ID or owner…"
+                      placeholder="Filter by ID, owner, book/page, or any metadata…"
                       className="w-full px-2.5 py-1.5 bg-gray-800 border border-gray-700 rounded-md text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-emerald-500 light-theme:bg-gray-100 light-theme:border-gray-300"
                     />
                     {parcelSearchFilter && (
@@ -1573,6 +1582,27 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                               {line}
                             </div>
                           ))}
+                        {(() => {
+                          const entries = metadataEntries(p.attributes);
+                          if (entries.length === 0) return null;
+                          return (
+                            <details className="mt-1.5 border-t border-gray-800/70 pt-1">
+                              <summary className="cursor-pointer text-[10px] font-medium text-cyan-400/90 hover:text-cyan-300">
+                                All metadata · {entries.length} fields
+                              </summary>
+                              <dl className="mt-1 space-y-0.5">
+                                {entries.map(entry => (
+                                  <div key={entry.key} className="grid grid-cols-[minmax(5.5rem,0.75fr),1fr] gap-2">
+                                    <dt className="truncate text-[10px] text-gray-500" title={entry.key}>{entry.label}</dt>
+                                    <dd className="break-words text-right font-mono text-[10px] text-gray-300" title={entry.value}>
+                                      {entry.value}
+                                    </dd>
+                                  </div>
+                                ))}
+                              </dl>
+                            </details>
+                          );
+                        })()}
                       </li>
                     ))}
                     {filteredParcels.length > 100 && (

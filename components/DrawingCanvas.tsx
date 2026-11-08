@@ -39,7 +39,12 @@ import {
     type ParcelCadTextStyle,
     type ParcelLabelFormatter,
     type CanvasHatch,
+    type CanvasTextAnnotation,
+    type AnnotationTextStyle,
+    type GisFeature,
+    DEFAULT_ANNOTATION_TEXT_STYLES,
 } from '../types.ts';
+import type { ParcelFeatureSummary } from '../services/parcelGisService.ts';
 import {
     ALL_BUILT_IN_HATCHES,
     getHatchByName,
@@ -51,7 +56,7 @@ import {
     type TracedHatchRegion,
 } from '../utils/hatchBoundaryTracer.ts';
 import type { LinetypeDefinition } from '../contexts/types/CadManager.types.ts';
-import { calculateCenterlineLength, calculateCurveGeometry, calculatePointFromStationOffset, formatAutoStationPointDescription, formatStationLabel, getCenterlineKeyStations } from '../utils/stationing.ts';
+import { calculateCenterlineLength, calculateCenterlineTangentBearing, calculateCurveGeometry, calculatePointFromStationOffset, formatAutoStationPointDescription, formatStationLabel, getCenterlineKeyStations, getStationAnnotationStations, normalizeStationLabelRotation, resolveBeginStation } from '../utils/stationing.ts';
 import { buildTangentArcNodes } from '../utils/baselineGeometry.ts';
 import { buildChainLine, isChainLineMode, type ChainLineMode } from '../utils/lineDrawing.ts';
 import { parseBearingToRadians, parseDistance, direct, inverse, formatBearing, calculateClosure, directCurve, calculateChordDistance } from '../utils/cogo.ts';
@@ -65,7 +70,9 @@ import { fetchImageBlobViaProxy } from '../utils/corsProxy.ts';
 import { getCachedBitmap, planMapTiles, mapWithConcurrency, decodeImageCached, trackTileLoad, subscribeTileActivity, getPendingTileCount, type PlannedTile } from '../utils/mapTileCache.ts';
 import { WebGpuBasemap, GpuLineBatch, parseCssColor, isWebGpuEnabled, WEBGPU_PREF_EVENT, type BasemapLayer, type BasemapSource, type WorldQuad } from '../utils/webgpuBasemap.ts';
 import { buildParcelLabelLines, resolveParcelTextStyle } from '../utils/parcelLabelFormatter.ts';
-import { applyAnnotationTextCase, resolveAnnotationCategoryTextStyle, resolveAnnotationTextSize, screenTextHeightToWorld } from '../utils/annotationTextStyle.ts';
+import { applyAnnotationTextCase, resolveAnnotationCategoryTextStyle, resolveCanvasTextStyle } from '../utils/annotationTextStyle.ts';
+import { categoryEffectiveHeightPx, resolveAnnotationMask } from '../utils/annotationSizing.ts';
+import { createCanvasTextAnnotation } from '../services/annotationStudio.ts';
 import {
     bucketProjectedPoints,
     createPointPrimitiveBucketBuffer,
@@ -78,6 +85,7 @@ import { getStaticMap, type StaticMapRequest } from '../services/staticMapsServi
 import { useCadManager } from '../contexts/CadManagerContext.tsx';
 import { useAppState, useErrorReporter } from '../contexts/AppStateContext.tsx';
 import { useDocumentScrollLock } from '../hooks/useDocumentScrollLock.ts';
+import { useDoubleTapShortcuts } from '../hooks/useDoubleTapShortcuts.ts';
 import { StandardsEditor } from './CadManager/StandardsEditor.tsx';
 import type { StandardDefinition } from '../contexts/types/CadManager.types';
 import { convertLinearUnits, getLinearUnitAbbreviation, type LinearUnit } from '../utils/linearUnits.ts';
@@ -99,6 +107,7 @@ import proj4 from 'proj4';
 import { createFloatingOriginContext } from '../utils/floatingOriginContext.ts';
 import { PointAgent } from '../services/PointAgent.ts';
 import { DimensionSettingsModal, type DimensionStyleSettings, DEFAULT_DIMENSION_SETTINGS } from './DimensionSettingsModal.tsx';
+import { InCanvasTextEditor } from './InCanvasTextEditor.tsx';
 import { DimensionSettingsPanel } from './DimensionSettingsPanel.tsx';
 import {
     formatDMS,
@@ -132,6 +141,7 @@ export const computeTangentArc = (
     direction: 'left' | 'right';
     tangentBearing: string;
     chordBearing: string;
+    end: { easting: number; northing: number };
     endTangent: { x: number; y: number };
 } | null => {
     const cx = end.easting - start.easting;
@@ -166,6 +176,80 @@ export const computeTangentArc = (
         direction,
         tangentBearing: formatBearing(normalizeBearing(Math.atan2(tangent.x, tangent.y))),
         chordBearing: formatBearing(normalizeBearing(Math.atan2(cx, cy))),
+        end: { easting: end.easting, northing: end.northing },
+        endTangent: {
+            x: tangent.x * cosS - tangent.y * sinS,
+            y: tangent.x * sinS + tangent.y * cosS,
+        },
+    };
+};
+
+/**
+ * Fixed-radius version of the tangent arc. The cursor chooses which side of
+ * the incoming tangent the curve turns toward, while the radius stays exactly
+ * as entered. The returned `end` is the resulting point on the circle, so a
+ * chained LINE can continue from the true arc endpoint rather than the cursor.
+ */
+export const computeFixedRadiusTangentArc = (
+    start: { easting: number; northing: number },
+    tangent: { x: number; y: number },
+    radius: number,
+    end: { easting: number; northing: number },
+): {
+    centerEasting: number;
+    centerNorthing: number;
+    radius: number;
+    arcLength: number;
+    sweep: number;
+    direction: 'left' | 'right';
+    tangentBearing: string;
+    chordBearing: string;
+    end: { easting: number; northing: number };
+    endTangent: { x: number; y: number };
+} | null => {
+    const r = Math.abs(Number(radius));
+    if (!Number.isFinite(r) || r < 1e-9) return null;
+    const cursorX = end.easting - start.easting;
+    const cursorY = end.northing - start.northing;
+    if (Math.hypot(cursorX, cursorY) < 1e-9) return null;
+
+    // Positive cross product means the cursor is left of travel, so the
+    // center (and the turn) is left. The opposite case mirrors the center.
+    const left = tangent.x * cursorY - tangent.y * cursorX >= 0;
+    const side = left ? 1 : -1;
+    const nx = -tangent.y * side;
+    const ny = tangent.x * side;
+    const centerEasting = start.easting + r * nx;
+    const centerNorthing = start.northing + r * ny;
+    if (Math.hypot(end.easting - centerEasting, end.northing - centerNorthing) < 1e-9) return null;
+
+    const a0 = Math.atan2(start.northing - centerNorthing, start.easting - centerEasting);
+    const a1 = Math.atan2(end.northing - centerNorthing, end.easting - centerEasting);
+    const tau = 2 * Math.PI;
+    const rawSweep = left ? a1 - a0 : a0 - a1;
+    const sweep = ((rawSweep % tau) + tau) % tau;
+    if (sweep < 1e-9 || tau - sweep < 1e-9) return null;
+
+    const signedSweep = left ? sweep : -sweep;
+    const endAngle = a0 + signedSweep;
+    const endEasting = centerEasting + r * Math.cos(endAngle);
+    const endNorthing = centerNorthing + r * Math.sin(endAngle);
+    const chordX = endEasting - start.easting;
+    const chordY = endNorthing - start.northing;
+    const cosS = Math.cos(signedSweep);
+    const sinS = Math.sin(signedSweep);
+    const normalizeBearing = (a: number) => { let n = a % tau; if (n < 0) n += tau; return n; };
+
+    return {
+        centerEasting,
+        centerNorthing,
+        radius: r,
+        arcLength: r * sweep,
+        sweep,
+        direction: left ? 'left' : 'right',
+        tangentBearing: formatBearing(normalizeBearing(Math.atan2(tangent.x, tangent.y))),
+        chordBearing: formatBearing(normalizeBearing(Math.atan2(chordX, chordY))),
+        end: { easting: endEasting, northing: endNorthing },
         endTangent: {
             x: tangent.x * cosS - tangent.y * sinS,
             y: tangent.x * sinS + tangent.y * cosS,
@@ -198,7 +282,7 @@ export interface DrawingCanvasHandles {
   /** Enter canvas entity-selection mode for an agent-driven operation. */
   beginSelectionMode?: () => void;
   /** Arms the Orientation Tuple pivot-origin picker from the toolbar instrument. */
-  beginOtOriginPick: () => void;
+  beginOtOriginPick?: () => void;
   /** Arms the Orientation Tuple align-to-line picker from the toolbar instrument. */
   beginOtLineAlign: () => void;
   /** Start interactive Hatch mode on the canvas (pick-area or select-object). */
@@ -211,6 +295,10 @@ export interface DrawingCanvasHandles {
     color?: string;
     layer?: string;
   }) => void;
+  /** Arm the in-canvas TEXT tool; the next click opens the in-place editor. */
+  startTextPlacement?: (options?: { styleName?: string }) => void;
+  /** Open the in-place editor for an existing canvas text entity. */
+  startTextEdit?: (id: string) => void;
 }
 
 import { CanvasTerminal, type TerminalTone } from './CanvasTerminal';
@@ -225,6 +313,7 @@ import { CommandPromptHud } from './CommandPromptHud';
 import { PropertiesDialog } from './PropertiesDialog';
 import { HatchPropertiesDialog } from './HatchPropertiesDialog.tsx';
 import { findHatchAtWorldPoint } from '../utils/hatchHitTest.ts';
+import { collectGenerationEntityIds } from '../utils/generationBlocks.ts';
 import { getHatchesBounds, getHatchWorldPoints, transformHatch } from '../utils/hatchGeometry.ts';
 import { explodeHatchToLines } from '../utils/hatchExplode.ts';
 import { parseCanvasCommand, executeCanvasCommand, parseCoordinateToken, MAX_RECTANGULAR_ARRAY_ITEMS, type CommandContext, type CommandPromptSpec } from '../utils/canvasCommands';
@@ -313,6 +402,15 @@ interface DrawingCanvasProps {
     lineThickness: number;
     setLineThickness: React.Dispatch<React.SetStateAction<number>>;
     contourLabelScale: number;
+    /** When set, the canvas accepts a strike line to place or erase contour labels. */
+    contourLabelTool?: 'place' | 'erase' | null;
+    onContourLabelStrike?: (
+        start: { x: number; y: number },
+        end: { x: number; y: number },
+        mode: 'place' | 'erase',
+        toleranceWorld: number,
+    ) => void;
+    onCancelContourLabelTool?: () => void;
     onLayerColorChange: (layer: 'pointNumber' | 'description' | 'elevation', color: string) => void;
     activeAgent: AgentType;
     settings: Settings;
@@ -432,6 +530,8 @@ interface DrawingCanvasProps {
     onUpdateHatch?: (id: string, patch: Partial<CanvasHatch>) => void;
     onDeleteHatch?: (id: string) => void;
     onOpenHatchManager?: () => void;
+    /** Double-click on generated linework opens its source generation tool. */
+    onOpenGeneration?: (generationId: string) => void;
     onAddPoint?: (point: SurveyPoint) => void;
     /** Open the A2UI point-entry dialog from the canvas Point command. */
     onOpenPointDialog?: () => void;
@@ -443,9 +543,22 @@ interface DrawingCanvasProps {
     customAnnotations?: AnnotationRule[];
     annotationScale?: number;
     setAnnotationScale?: React.Dispatch<React.SetStateAction<number>>;
+    /** Standalone text entities: manual notes and generated point labels. */
+    textAnnotations?: CanvasTextAnnotation[];
+    /** Named text-style catalog shared with the Annotation Manager. */
+    annotationTextStyles?: AnnotationTextStyle[];
+    /** Style applied to newly placed text. */
+    activeTextStyleName?: string;
+    onAddTextAnnotation?: (annotation: CanvasTextAnnotation) => void;
+    onUpdateTextAnnotation?: (id: string, patch: Partial<CanvasTextAnnotation>) => void;
+    onDeleteTextAnnotation?: (id: string) => void;
     /** Parcel centroid annotation labels (v26.05.19.15). */
     parcelLabels?: import('../types.ts').ParcelLabel[];
     mapAreaLabels?: import('../types.ts').MapAreaLabel[];
+    /** Full parcel records, used to inspect metadata on selected parcel linework. */
+    parcelSummaries?: ParcelFeatureSummary[];
+    /** Live GIS features, used to inspect full attributes on selected GIS linework. */
+    gisFeatures?: GisFeature[];
     /** Parcel label field include/exclude and prefix controls. */
     parcelLabelFormatter?: ParcelLabelFormatter;
     /** CAD Manager text style catalog used when parcel styleSource='cad-manager'. */
@@ -576,6 +689,8 @@ interface DrawingCanvasProps {
     onCommandBarHeightChange?: (height: number) => void;
     /** Pixels the command bar extends right, underneath the open agent tool shelf. */
     commandBarRightExtension?: number;
+    /** Flash the command bar's Tools tab after the first-run shelf tour. */
+    commandBarIntroPulse?: boolean;
 }
 
 type OsnapMode = 'endpoint' | 'midpoint' | 'intersection' | 'center' | 'nearest' | 'perpendicular' | 'tangent';
@@ -939,6 +1054,125 @@ function zoomForBboxWgs84(bboxWgs84: [number, number, number, number]): number {
     return Math.max(12, Math.min(20, zoom));
 }
 
+interface ContourLabelStrikeOverlayProps {
+    mode: 'place' | 'erase';
+    worldPerPixel: number;
+    screenToWorld: (screenX: number, screenY: number) => { easting: number; northing: number };
+    onStrike: (
+        start: { x: number; y: number },
+        end: { x: number; y: number },
+        mode: 'place' | 'erase',
+        toleranceWorld: number,
+    ) => void;
+    onCancel?: () => void;
+}
+
+const ContourLabelStrikeOverlay: React.FC<ContourLabelStrikeOverlayProps> = ({
+    mode,
+    worldPerPixel,
+    screenToWorld,
+    onStrike,
+    onCancel,
+}) => {
+    const [start, setStart] = useState<{ x: number; y: number } | null>(null);
+    const [current, setCurrent] = useState<{ x: number; y: number } | null>(null);
+
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') onCancel?.();
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [onCancel]);
+
+    const pointFromEvent = (event: React.PointerEvent<HTMLDivElement>) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    };
+
+    const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        const point = pointFromEvent(event);
+        setStart(point);
+        setCurrent(point);
+    };
+
+    const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+        if (!start) return;
+        setCurrent(pointFromEvent(event));
+    };
+
+    const finishStrike = (event: React.PointerEvent<HTMLDivElement>) => {
+        if (!start) return;
+        const end = pointFromEvent(event);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        if (Math.hypot(end.x - start.x, end.y - start.y) >= 4) {
+            const worldStart = screenToWorld(start.x, start.y);
+            const worldEnd = screenToWorld(end.x, end.y);
+            onStrike(
+                { x: worldStart.easting, y: worldStart.northing },
+                { x: worldEnd.easting, y: worldEnd.northing },
+                mode,
+                18 * worldPerPixel,
+            );
+        }
+        setStart(null);
+        setCurrent(null);
+    };
+
+    const cancelStrike = () => {
+        setStart(null);
+        setCurrent(null);
+    };
+
+    return (
+        <div
+            className="absolute inset-0 z-20 cursor-crosshair select-none touch-none"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={finishStrike}
+            onPointerCancel={cancelStrike}
+        >
+            {start && current && (
+                <svg className="pointer-events-none absolute inset-0 h-full w-full">
+                    <line
+                        x1={start.x}
+                        y1={start.y}
+                        x2={current.x}
+                        y2={current.y}
+                        stroke={mode === 'place' ? '#fbbf24' : '#fb7185'}
+                        strokeWidth={2}
+                        strokeDasharray="8 5"
+                    />
+                    <circle cx={start.x} cy={start.y} r={3} fill={mode === 'place' ? '#fbbf24' : '#fb7185'} />
+                </svg>
+            )}
+            <div
+                className="pointer-events-auto absolute left-1/2 top-4 z-10 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-gray-600 bg-gray-900/95 px-3 py-2 shadow-xl"
+                onPointerDown={event => event.stopPropagation()}
+            >
+                <span className={`text-xs font-semibold ${mode === 'place' ? 'text-amber-300' : 'text-rose-300'}`}>
+                    {mode === 'place' ? 'Place contour labels' : 'Erase contour labels'}
+                </span>
+                <span className="text-[11px] text-gray-400">
+                    {mode === 'place' ? 'Drag across contour lines' : 'Drag through labels'} · Esc to finish
+                </span>
+                <button
+                    type="button"
+                    onClick={onCancel}
+                    className="rounded border border-gray-600 px-2 py-0.5 text-[11px] font-medium text-gray-300 hover:border-gray-400 hover:text-white"
+                >
+                    Done
+                </button>
+            </div>
+        </div>
+    );
+};
+
 export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps>((props, ref) => {
     useDocumentScrollLock(true);
 
@@ -952,8 +1186,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         linesVisible, onSetLinesVisible, centerlinesVisible, onSetCenterlinesVisible, pointLists, onTogglePointListVisibility, deedMetadata, onToolStateChange, onShowSettings,
         isC3DConnected, isGridVisible, tinShading, agentDrawMode, onCycleAgentDrawMode, agentAnnotMode, onCycleAgentAnnotMode, onAddBoundaryCall, onConvertSelectionToBoundary, onComputeCurrentClosure,
         dimensions, onAddDimension, onUpdateDimension, onDeleteDimension, onClearDimensions, onAddPoint, nextAvailablePointNumber, dimensionScale, setDimensionScale, symbolScale, setSymbolScale,
-        hatches = [], onAddHatch, onUpdateHatch, onDeleteHatch, onOpenHatchManager,
+        hatches = [], onAddHatch, onUpdateHatch, onDeleteHatch, onOpenHatchManager, onOpenGeneration,
         customAnnotations = [], annotationScale = 1, setAnnotationScale,
+        textAnnotations = [], annotationTextStyles, activeTextStyleName,
         parcelLabels, mapAreaLabels, annotationCategories,
         tinSurfaces = [],
         boundaryFiles,
@@ -1166,6 +1401,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     // Unit tangent (world frame) leaving the current polyline anchor — the arc
     // submode locks to this so chained segments stay tangent-continuous.
     const lastSegmentTangentRef = useRef<{ x: number; y: number } | null>(null);
+    // LINE-command switches: R enters a fixed arc radius, T forces the next
+    // straight segment to leave along the previous curve's end tangent.
+    const [polylineFixedRadius, setPolylineFixedRadius] = useState<number | null>(null);
+    const [polylineRadiusInput, setPolylineRadiusInput] = useState('');
+    const [polylineRadiusPrompt, setPolylineRadiusPrompt] = useState(false);
+    const [polylineTangentExit, setPolylineTangentExit] = useState(false);
     const [isMultiSegmentMode, setIsMultiSegmentMode] = useState(false); // For continuous polyline drawing
     const [isDeletingLines, setIsDeletingLines] = useState(false);
     const [isTrimmingLines, setIsTrimmingLines] = useState(false);
@@ -1384,6 +1625,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [drawMenuAnchor, setDrawMenuAnchor] = useState<{ left: number; top: number } | null>(null);
     const [isSelectionMode, setIsSelectionMode] = useState(false);
     const [isBoxSelectMode, setIsBoxSelectMode] = useState(false);
+    /** Z arms a one-shot window zoom; the next drag frames the view. */
+    const [isZoomBoxMode, setIsZoomBoxMode] = useState(false);
+    const [zoomBox, setZoomBox] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
     
     // Toolbar orientation: default vertical, flippable to horizontal
     const [toolbarOrientation, setToolbarOrientation] = useState<'vertical' | 'horizontal'>(() => {
@@ -1530,6 +1774,64 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [selectedHatchId, setSelectedHatchId] = useState<string | null>(null);
     /** Multi-select set used by the shared move/delete/explode command paths. */
     const [selectedHatchIds, setSelectedHatchIds] = useState<Set<string>>(new Set());
+    /** Selected standalone text entity. */
+    const [selectedTextAnnotationId, setSelectedTextAnnotationId] = useState<string | null>(null);
+    // Boundary B&D labels share the boundary category size. The existing
+    // lineLabelScale slider remains a multiplier, so an explicit L-size in
+    // Properties is still a single source of truth for the family.
+    const boundaryCategory = annotationCategories?.find(category => category.id === 'boundary') ?? null;
+    const boundaryFontFamily = boundaryCategory?.fontFamily || 'Arial';
+    const boundaryAnnotationHeightPx = (
+        boundaryCategory?.heightPx
+            ? categoryEffectiveHeightPx(boundaryCategory)
+            : bearingDistanceAnnotationHeight(1)
+    ) * (Number.isFinite(lineLabelScale) && lineLabelScale > 0 ? lineLabelScale : 1);
+    /** Armed TEXT tool: the next canvas click sets the insertion point. */
+    const [isPlacingText, setIsPlacingText] = useState(false);
+    /** In-place editor draft. id=null means a new text entity. */
+    const [editingText, setEditingText] = useState<{
+        id: string | null;
+        screenX: number;
+        screenY: number;
+        easting: number;
+        northing: number;
+        value: string;
+        styleName?: string;
+    } | null>(null);
+    /** Screen-space hit boxes refreshed every draw frame for text picking. */
+    const textHitBoxesRef = useRef<Map<string, { x: number; y: number; w: number; h: number }>>(new Map());
+    /** Style chosen for the armed TEXT tool (manager can pass one). */
+    const [pendingTextStyleName, setPendingTextStyleName] = useState<string | undefined>(undefined);
+    // Refs keep the pointer/keyboard handlers stable while still reading the
+    // latest text list and TEXT-tool state.
+    const textAnnotationsRef = useRef(textAnnotations);
+    textAnnotationsRef.current = textAnnotations;
+    const isPlacingTextRef = useRef(isPlacingText);
+    isPlacingTextRef.current = isPlacingText;
+    const pendingTextStyleNameRef = useRef(pendingTextStyleName);
+    pendingTextStyleNameRef.current = pendingTextStyleName;
+    const activeTextStyleNameRef = useRef(activeTextStyleName);
+    activeTextStyleNameRef.current = activeTextStyleName;
+    /** Late-bound finishDrawing so startTextPlacement can cancel active tools. */
+    const finishDrawingRef = useRef<() => void>(() => {});
+
+    /** Topmost text whose current screen-space box contains the point. */
+    const findTextAnnotationAtScreenPoint = useCallback((screenX: number, screenY: number): CanvasTextAnnotation | null => {
+        const annotations = textAnnotationsRef.current;
+        for (let index = annotations.length - 1; index >= 0; index -= 1) {
+            const annotation = annotations[index];
+            if (annotation.hidden) continue;
+            const box = textHitBoxesRef.current.get(annotation.id);
+            if (!box) continue;
+            if (
+                screenX >= box.x && screenX <= box.x + box.w
+                && screenY >= box.y && screenY <= box.y + box.h
+            ) {
+                return annotation;
+            }
+        }
+        return null;
+    }, []);
     // Custom PAT definitions live on the active CAD standard; commands defined
     // below need them before the symbol-rendering section declares its locals.
     const cadManager = useCadManager();
@@ -1635,7 +1937,6 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [googleOverlayDiagnostic, setGoogleOverlayDiagnostic] = useState<{ tone: 'info' | 'error'; message: string } | null>(null);
     const googleOverlaySeqRef = useRef(0);
     const overlayTilesRef = useRef<{ image: HTMLImageElement; bbox: [number, number, number, number]; quad?: WorldQuad; source: 'user-maps' | 'user-gemini' | 'proxy' | 'naip-proxy' }[]>([]);
-    const naipMercatorEpsgRef = useRef<Set<number>>(new Set());
     const [pendingTiles, setPendingTiles] = useState(0);
     const lastOverlayDiagnosticNotificationRef = useRef<string | null>(null);
 
@@ -1792,6 +2093,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setDrawingMode(mode);
         setPolylinePoints([]);
         setPolylineArcMode(false);
+        setPolylineFixedRadius(null);
+        setPolylineRadiusInput('');
+        setPolylineRadiusPrompt(false);
+        setPolylineTangentExit(false);
         lastSegmentTangentRef.current = null;
         setTypedSegmentLength('');
         setIsTrimmingLines(false);
@@ -5678,6 +5983,85 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setTransform({ scale, offsetX, offsetY });
     }, []);
 
+    const openTextEditorForAnnotation = useCallback((annotation: CanvasTextAnnotation) => {
+        const screen = worldToScreen(annotation.x, annotation.y);
+        setEditingText({
+            id: annotation.id,
+            screenX: screen.x,
+            screenY: screen.y,
+            easting: annotation.x,
+            northing: annotation.y,
+            value: annotation.text,
+            styleName: annotation.styleName,
+        });
+        setSelectedTextAnnotationId(annotation.id);
+        setIsPlacingText(false);
+    }, [worldToScreen]);
+
+    /** Arms the TEXT tool; the next canvas click opens the in-place editor. */
+    const startTextPlacement = useCallback((options?: { styleName?: string }) => {
+        // TEXT owns the next canvas click. Cancel any prompt or active tool that
+        // could swallow that pick before arming the insertion point.
+        setActiveCommandPrompt(null);
+        setPendingSelectionCommand(null);
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        finishDrawingRef.current();
+        setEditingText(null);
+        setSelectedTextAnnotationId(null);
+        setPendingTextStyleName(options?.styleName);
+        setIsPlacingText(true);
+        setTerminalIncoming({
+            text: 'TEXT: Click the insertion point, type the note, then Ctrl+Enter to finish [Esc cancels]',
+            tone: 'info',
+        });
+        // Leave focus on the canvas. Refocusing the CAD line here can steal it
+        // back from the in-place editor immediately after the insertion pick.
+        requestAnimationFrame(() => drawRef.current?.());
+    }, []);
+
+    /** Opens the in-place editor for an existing text entity (manager + double-click). */
+    const startTextEdit = useCallback((id: string) => {
+        const annotation = textAnnotations.find(entity => entity.id === id);
+        if (!annotation) return;
+        openTextEditorForAnnotation(annotation);
+    }, [textAnnotations, openTextEditorForAnnotation]);
+
+    const commitTextEdit = useCallback((value: string) => {
+        if (!editingText) return;
+        const text = value.replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').trim();
+        if (!text) {
+            if (editingText.id) props.onDeleteTextAnnotation?.(editingText.id);
+            setEditingText(null);
+            setSelectedTextAnnotationId(null);
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
+        if (editingText.id) {
+            props.onUpdateTextAnnotation?.(editingText.id, { text });
+            setSelectedTextAnnotationId(editingText.id);
+        } else {
+            props.onAddTextAnnotation?.(createCanvasTextAnnotation({
+                text,
+                x: editingText.easting,
+                y: editingText.northing,
+                styleName: editingText.styleName ?? activeTextStyleName,
+                categoryId: 'manual-text',
+                convention: 'proposed',
+            }));
+            setSelectedTextAnnotationId(null);
+        }
+        setEditingText(null);
+        setTerminalIncoming({ text: 'TEXT: Saved', tone: 'ok' });
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [editingText, activeTextStyleName, props]);
+
+    const cancelTextEdit = useCallback(() => {
+        setEditingText(null);
+        setIsPlacingText(false);
+        requestAnimationFrame(() => drawRef.current?.());
+    }, []);
+
     const redraw = useCallback(() => {
         // This is a dummy function to trigger a re-render if needed, but the main draw effect depends on props.
         // We can force a re-render by updating a dummy state if necessary, but it's usually not.
@@ -5688,6 +6072,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         zoomExtents,
         zoomToBbox,
         redraw,
+        startTextPlacement,
+        startTextEdit,
         finishDrawing,
         toggleDrawingToolsMenu: () => {
             if (isDrawingToolsMenuOpen) {
@@ -5913,7 +6299,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         const dpr = Math.min(2, window.devicePixelRatio || 1);
-        const tiles = planMapTiles(viewBboxArray, width * dpr);
+        const tiles = planMapTiles(viewBboxArray, width * dpr, { maxTiles: 24 });
 
         type WmsTileJob = { layer: ActiveWmsLayer; service: WmsService; crs: string; url: string; key: string; bbox: [number, number, number, number]; quad?: WorldQuad };
         const jobs: WmsTileJob[] = [];
@@ -5995,7 +6381,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
         }
 
-        const loaded = await mapWithConcurrency(jobs, 3, async job => {
+        const loaded = await mapWithConcurrency(jobs, 6, async job => {
             if (seq !== wmsSeqRef.current) return null;
             try {
                 const bitmap = await getCachedBitmap(job.key, () => fetchImageBlobViaProxy(job.url));
@@ -6008,7 +6394,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
         if (seq !== wmsSeqRef.current) return;
         setWmsImages(loaded.filter((t): t is Exclude<(typeof loaded)[number], null> => t !== null));
-    }, 500), []);
+    }, 300), []);
 
 
     useEffect(() => {
@@ -6115,7 +6501,6 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const naipPxWidth = Math.min(canvasElement.width, (canvasElement.clientWidth || canvasElement.width) * 2);
             const naipTiles = planMapTiles([minEView, minNView, maxEView, maxNView], naipPxWidth, { tilePx: 1024, maxTiles: 16 });
             const naipOpacity = gm.opacity ?? 1.0;
-            const naipEpsg = currentSettings.projection.epsg;
             type NaipTile = { image: HTMLImageElement; bbox: [number, number, number, number]; quad?: WorldQuad; source: 'user-maps' | 'user-gemini' | 'proxy' | 'naip-proxy' };
 
             const loadNaipTile = async (
@@ -6158,36 +6543,24 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 return { image, bbox: drawBbox, quad, source: staticMap.source };
             };
 
-            // Many local/State-Plane EPSGs are rejected by the USGS ImageServer;
-            // Web Mercator always works, so remember which EPSGs need it.
+            // The USGS ImageServer rejects several State Plane WKIDs (including
+            // 27048/27049) with "imageSR parameter is invalid". Request Web
+            // Mercator, which it supports for every project, then reproject the
+            // returned extent back into project coordinates for drawing.
             const fetchNaipTile = async (tile: PlannedTile): Promise<NaipTile> => {
-                const viaMercator = async (): Promise<NaipTile> => {
-                    const [x0, y0, x1, y1] = tile.bbox;
-                    const c = [
-                        proj4(projectCrs, 'EPSG:3857', [x0, y0]) as [number, number],
-                        proj4(projectCrs, 'EPSG:3857', [x1, y0]) as [number, number],
-                        proj4(projectCrs, 'EPSG:3857', [x1, y1]) as [number, number],
-                        proj4(projectCrs, 'EPSG:3857', [x0, y1]) as [number, number],
-                    ];
-                    if (c.some(([x, y]) => !Number.isFinite(x) || !Number.isFinite(y))) {
-                        throw new Error('Web Mercator reprojection produced non-finite coordinates');
-                    }
-                    const xs = c.map(p => p[0]);
-                    const ys = c.map(p => p[1]);
-                    return loadNaipTile([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], 3857, true);
-                };
-                if (naipMercatorEpsgRef.current.has(naipEpsg)) return viaMercator();
-                try {
-                    return await loadNaipTile(tile.bbox, naipEpsg, false);
-                } catch (firstErr) {
-                    try {
-                        const result = await viaMercator();
-                        naipMercatorEpsgRef.current.add(naipEpsg);
-                        return result;
-                    } catch {
-                        throw firstErr;
-                    }
+                const [x0, y0, x1, y1] = tile.bbox;
+                const c = [
+                    proj4(projectCrs, 'EPSG:3857', [x0, y0]) as [number, number],
+                    proj4(projectCrs, 'EPSG:3857', [x1, y0]) as [number, number],
+                    proj4(projectCrs, 'EPSG:3857', [x1, y1]) as [number, number],
+                    proj4(projectCrs, 'EPSG:3857', [x0, y1]) as [number, number],
+                ];
+                if (c.some(([x, y]) => !Number.isFinite(x) || !Number.isFinite(y))) {
+                    throw new Error('Web Mercator reprojection produced non-finite coordinates');
                 }
+                const xs = c.map(p => p[0]);
+                const ys = c.map(p => p[1]);
+                return loadNaipTile([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], 3857, true);
             };
 
             const arrived: NaipTile[] = [];
@@ -6435,12 +6808,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             // height into world units before drawing text. Point attributes stay
             // locked to a crisp screen size separately for large point sets.
             const lineAnnotationWorldTextHeight = (multiplier: number = 1) => {
-                // One shared height for silhouette calls, drafted deed calls, and
-                // hand-drawn boundary lines. The slider multiplies the same base.
-                return screenTextHeightToWorld(
-                    bearingDistanceAnnotationHeight(lineLabelScale) * multiplier,
-                    transform.scale,
-                );
+                // One shared model-space height for silhouette calls, drafted
+                // deed calls, and hand-drawn boundary lines. The slider is a
+                // multiplier; zooming the drawing scales the labels with it.
+                return boundaryAnnotationHeightPx * multiplier;
             };
         // Minimum 1 CSS pixel — anything below produces sub-pixel alpha-blended
         // strokes that disappear at certain zooms, especially with transparent
@@ -7896,24 +8267,46 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const showGeometryLabels = clStationing?.showGeometryLabels !== false;
             if (showStationLabels || showGeometryLabels) {
                 const labelScale = Math.max(0.25, Number(clStationing?.labelScale) || 1);
-                const textHeight = screenTextHeightToWorld(10 * labelScale, transform.scale);
+                // Station labels are model-space text, so they grow when the
+                // drawing is zoomed in just like the other annotation families.
+                const textHeight = 10 * labelScale;
                 const rawLabelOffset = Number(clStationing?.labelOffsetPx);
                 const labelOffsetPx = Math.max(-48, Math.min(48, Number.isFinite(rawLabelOffset) ? rawLabelOffset : 8));
-                const labelOffset = labelOffsetPx * inverseScale;
-                const drawLabel = (text: string, easting: number, northing: number) => {
+                const labelColor = isLightTheme ? '#0E7490' : '#A5F3FC';
+                const drawLabel = (
+                    text: string,
+                    easting: number,
+                    northing: number,
+                    options: {
+                        rotation?: number;
+                        alongBaselinePx?: number;
+                        upPx?: number;
+                        align?: CanvasTextAlign;
+                    } = {},
+                ) => {
+                    const rotation = options.rotation ?? 0;
+                    const alongBaseline = (options.alongBaselinePx ?? 0) * inverseScale;
+                    const up = (options.upPx ?? labelOffsetPx) * inverseScale;
                     ctx.save();
-                    ctx.translate(easting, northing + labelOffset);
+                    ctx.translate(easting, northing);
                     ctx.scale(1, -1);
+                    if (rotation) ctx.rotate(rotation);
+                    ctx.translate(alongBaseline, -up);
                     ctx.font = `600 ${textHeight}px Arial`;
-                    ctx.textAlign = 'center';
+                    ctx.textAlign = options.align ?? 'center';
                     ctx.textBaseline = 'middle';
                     const width = ctx.measureText(text).width;
                     if (clStationing?.showLabelBackground !== false) {
                         const pad = textHeight * 0.22;
+                        const left = ctx.textAlign === 'center'
+                            ? -width / 2 - pad
+                            : ctx.textAlign === 'right'
+                                ? -width - pad
+                                : -pad;
                         ctx.fillStyle = isLightTheme ? 'rgba(255,255,255,0.88)' : 'rgba(8,15,26,0.8)';
-                        ctx.fillRect(-width / 2 - pad, -textHeight * 0.75 - pad * 0.2, width + pad * 2, textHeight * 1.5);
+                        ctx.fillRect(left, -textHeight * 0.75 - pad * 0.2, width + pad * 2, textHeight * 1.5);
                     }
-                    ctx.fillStyle = isLightTheme ? '#0E7490' : '#A5F3FC';
+                    ctx.fillStyle = labelColor;
                     ctx.fillText(text, 0, 0);
                     ctx.restore();
                 };
@@ -7923,19 +8316,56 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         1,
                         Number(clStationing?.labelInterval) || Number(clStationing?.pointInterval) || 100,
                     );
-                    let station = Math.ceil(cl.beginStation / labelInterval) * labelInterval;
-                    if (station <= cl.beginStation + 1e-6) station += labelInterval;
-                    for (; station < endStation - 1e-6; station += labelInterval) {
+                    const annotationStations = getStationAnnotationStations(
+                        cl.beginStation,
+                        endStation,
+                        labelInterval,
+                        Math.min(50, labelInterval),
+                    );
+
+                    // Station ticks run perpendicular to the alignment. Major
+                    // ticks land on labeled stations; 50 ft intermediates are
+                    // shorter so the annotation stays unobtrusive.
+                    ctx.save();
+                    ctx.strokeStyle = isLightTheme ? 'rgba(14,116,144,0.82)' : 'rgba(165,243,252,0.86)';
+                    ctx.lineCap = 'butt';
+                    ctx.lineWidth = Math.max(1e-6, 1.1 * inverseScale);
+                    for (const tick of annotationStations.ticks) {
+                        const coords = calculatePointFromStationOffset(cl, tick.station, 0);
+                        const bearing = calculateCenterlineTangentBearing(cl, tick.station);
+                        if (!coords || bearing === null) continue;
+                        const halfLength = (tick.isMajor ? 9 : 4.5) * inverseScale * 0.5;
+                        const normalEasting = Math.cos(bearing);
+                        const normalNorthing = -Math.sin(bearing);
+                        ctx.beginPath();
+                        ctx.moveTo(
+                            coords.easting - normalEasting * halfLength,
+                            coords.northing - normalNorthing * halfLength,
+                        );
+                        ctx.lineTo(
+                            coords.easting + normalEasting * halfLength,
+                            coords.northing + normalNorthing * halfLength,
+                        );
+                        ctx.stroke();
+                    }
+                    ctx.restore();
+
+                    for (const station of annotationStations.labels) {
                         const coords = calculatePointFromStationOffset(cl, station, 0);
-                        if (coords) {
-                            drawLabel(formatStationLabel(station, {
-                                prefix: clStationing?.stationPrefix,
-                                showPrefix: clStationing?.showStationPrefix,
-                                suffix: clStationing?.stationSuffix,
-                                format: clStationing?.stationLabelFormat,
-                                precision: clStationing?.stationPrecision,
-                            }), coords.easting, coords.northing);
-                        }
+                        if (!coords) continue;
+                        const bearing = calculateCenterlineTangentBearing(cl, station);
+                        drawLabel(formatStationLabel(station, {
+                            prefix: clStationing?.stationPrefix,
+                            showPrefix: clStationing?.showStationPrefix,
+                            suffix: clStationing?.stationSuffix,
+                            format: clStationing?.stationLabelFormat,
+                            precision: clStationing?.stationPrecision,
+                        }), coords.easting, coords.northing, {
+                            rotation: bearing === null ? 0 : normalizeStationLabelRotation(bearing),
+                            alongBaselinePx: labelOffsetPx,
+                            upPx: 0,
+                            align: 'left',
+                        });
                     }
                 }
                 if (showGeometryLabels) {
@@ -8015,6 +8445,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const cursorPos = cursorWorldPosRef.current;
                 let targetX = cursorPos.x;
                 let targetY = cursorPos.y;
+                const previewTangent = lastSegmentTangentRef.current;
                 if (typedSegmentLength.trim().length > 0) {
                     const num = Number(typedSegmentLength);
                     if (Number.isFinite(num) && num > 0) {
@@ -8023,21 +8454,39 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         const dx = cursorPos.x - lastPolyPoint.easting;
                         const dy = cursorPos.y - lastPolyPoint.northing;
                         const mag = Math.hypot(dx, dy);
-                        if (mag > 1e-9) {
-                            targetX = lastPolyPoint.easting + (dx / mag) * worldLength;
-                            targetY = lastPolyPoint.northing + (dy / mag) * worldLength;
-                        }
+                        const dirX = polylineTangentExit && previewTangent ? previewTangent.x : (mag > 1e-9 ? dx / mag : 1);
+                        const dirY = polylineTangentExit && previewTangent ? previewTangent.y : (mag > 1e-9 ? dy / mag : 0);
+                        targetX = lastPolyPoint.easting + dirX * worldLength;
+                        targetY = lastPolyPoint.northing + dirY * worldLength;
+                    }
+                }
+                // TANGENT switch preview: project the cursor onto the previous
+                // segment's end tangent before drawing the rubber band.
+                if (polylineTangentExit && previewTangent) {
+                    const along =
+                        (targetX - lastPolyPoint.easting) * previewTangent.x +
+                        (targetY - lastPolyPoint.northing) * previewTangent.y;
+                    if (along > 1e-9) {
+                        targetX = lastPolyPoint.easting + previewTangent.x * along;
+                        targetY = lastPolyPoint.northing + previewTangent.y * along;
                     }
                 }
                 // Arc submode preview: arc leaving the anchor tangent to the
-                // previous segment, through the cursor. Falls back to the
-                // straight rubber band when the cursor sits on the tangent line.
-                const previewArc = polylineArcMode && lastSegmentTangentRef.current
-                    ? computeTangentArc(
-                        { easting: lastPolyPoint.easting, northing: lastPolyPoint.northing },
-                        lastSegmentTangentRef.current,
-                        { easting: targetX, northing: targetY })
+                // previous segment. A fixed radius keeps R exact and previews
+                // the actual endpoint on that circle.
+                const previewArc = polylineArcMode && previewTangent
+                    ? polylineFixedRadius !== null
+                        ? computeFixedRadiusTangentArc(
+                            { easting: lastPolyPoint.easting, northing: lastPolyPoint.northing },
+                            previewTangent,
+                            polylineFixedRadius,
+                            { easting: targetX, northing: targetY })
+                        : computeTangentArc(
+                            { easting: lastPolyPoint.easting, northing: lastPolyPoint.northing },
+                            previewTangent,
+                            { easting: targetX, northing: targetY })
                     : null;
+                const previewEnd = previewArc?.end ?? { easting: targetX, northing: targetY };
                 ctx.beginPath();
                 ctx.moveTo(lastPolyPoint.easting, lastPolyPoint.northing);
                 if (previewArc) {
@@ -8045,9 +8494,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     const startAngle = Math.atan2(lastPolyPoint.northing - previewArc.centerNorthing, lastPolyPoint.easting - previewArc.centerEasting);
                     const endAngle = previewArc.direction === 'left' ? startAngle + previewArc.sweep : startAngle - previewArc.sweep;
                     ctx.arc(previewArc.centerEasting, previewArc.centerNorthing, previewArc.radius, startAngle, endAngle, previewArc.direction !== 'left');
-                    ctx.lineTo(targetX, targetY);
+                    ctx.lineTo(previewEnd.easting, previewEnd.northing);
                 } else {
-                    ctx.lineTo(targetX, targetY);
+                    ctx.lineTo(previewEnd.easting, previewEnd.northing);
                 }
                 // Color based on mode
                 const colors: Record<string, string> = {
@@ -8399,7 +8848,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ctx.rotate(angle + rotationRadians);
                     ctx.scale(1, -1); // Counter-act the main canvas y-flip to draw text upright.
                     
-                    ctx.font = `italic 600 ${worldTextHeight}px Arial`;
+                    ctx.font = `italic 600 ${worldTextHeight}px ${boundaryFontFamily}`;
                     const textWidth = ctx.measureText(text).width;
 
                     // Clear a background for the text for readability.
@@ -8471,7 +8920,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ctx.translate(centerEasting + offsetX, centerNorthing + offsetY);
                     ctx.scale(1, -1); // Counter-act the main canvas y-flip
                     
-                    ctx.font = `italic 600 ${worldTextHeight}px Arial`;
+                    ctx.font = `italic 600 ${worldTextHeight}px ${boundaryFontFamily}`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     
@@ -9600,16 +10049,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     if (bfCentroid) {
                         langle = boundaryReadingAngle(langle, { x: lmx, y: lmy }, bfCentroid);
                     }
-                    const worldTextHeight = screenTextHeightToWorld(
-                        bearingDistanceAnnotationHeight(lineLabelScale),
-                        transform.scale,
-                    );
+                    const worldTextHeight = boundaryAnnotationHeightPx;
                     ctx.save();
                     ctx.translate(lmx, lmy);
                     const callLabelRot = (call.labelRotation || 0) * Math.PI / 180;
                     ctx.rotate(langle + callLabelRot);
                     ctx.scale(1, -1);
-                    ctx.font = `italic 600 ${worldTextHeight}px Arial`;
+                    ctx.font = `italic 600 ${worldTextHeight}px ${boundaryFontFamily}`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     ctx.fillStyle = isActiveBf
@@ -9644,7 +10090,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ctx.save();
                     ctx.translate(cE, cN);
                     ctx.scale(1, -1);
-                    ctx.font = `italic 600 ${annTextHeight}px Arial`;
+                    ctx.font = `italic 600 ${annTextHeight}px ${boundaryFontFamily}`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     const maxW = Math.max(...bfTextLines.map(l => ctx.measureText(l).width));
@@ -9758,8 +10204,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const clStyle = resolveAnnotationCategoryTextStyle(clCat, props.parcelCadTextStyles);
             const clColor = clCat?.color ?? (isLightTheme ? 'rgba(50,50,50,0.9)' : 'rgba(200,200,200,0.9)');
             if (clStyle.visible) {
-                const contourBaseSize = 10 * attributeScale * contourLabelScale * clStyle.scale * 0.8;
-                const screenTextSize = resolveAnnotationTextSize(contourBaseSize, 'screen', transform.scale);
+                const contourBaseSize = clStyle.heightPx
+                    ? Math.max(5, clStyle.heightPx * clStyle.scale * contourLabelScale)
+                    : 10 * attributeScale * contourLabelScale * clStyle.scale * 0.8;
+                const screenTextSize = Math.max(0.5, contourBaseSize * transform.scale);
                 ctx.font = `${clStyle.fontItalic ? 'italic ' : ''}${clStyle.fontBold ? 'bold ' : ''}${screenTextSize}px ${clStyle.fontFamily}`;
                 ctx.fillStyle = clColor;
 
@@ -9794,8 +10242,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const rdStyle = resolveAnnotationCategoryTextStyle(rdCat, props.parcelCadTextStyles);
             const rdColor = rdCat?.color ?? (isLightTheme ? 'rgba(30,80,160,0.92)' : 'rgba(100,180,255,0.92)');
             if (rdStyle.visible) {
-                const streetBaseSize = Math.max(8, 11 * attributeScale * rdStyle.scale);
-                const streetTextSize = resolveAnnotationTextSize(streetBaseSize, 'screen', transform.scale);
+                const streetBaseSize = rdStyle.heightPx
+                    ? Math.max(6, rdStyle.heightPx * rdStyle.scale * annotationScale)
+                    : Math.max(8, 11 * attributeScale * rdStyle.scale);
+                const streetTextSize = Math.max(0.5, streetBaseSize * transform.scale);
                 ctx.font = `${rdStyle.fontItalic ? 'italic ' : ''}${rdStyle.fontBold ? 'bold ' : ''}${streetTextSize}px ${rdStyle.fontFamily}`;
                 ctx.fillStyle = rdColor;
 
@@ -9838,9 +10288,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const poBold = poUsesCadCategory ? poCategoryStyle.fontBold : parcelTextStyle.fontBold;
             const poLineSpacing = poUsesCadCategory ? poCategoryStyle.lineSpacing : parcelTextStyle.lineSpacing;
             const poTextCase = poUsesCadCategory ? poCategoryStyle.textCase : parcelTextStyle.textCase;
-            const poCatScale = poCategoryStyle.scale || 0.8;
-            const parcelBaseFontSize = Math.max(7, 10 * attributeScale * annotationScale * poCatScale);
-            const poFontSize = resolveAnnotationTextSize(parcelBaseFontSize, 'screen', transform.scale);
+            const poCatScale = poCategoryStyle.scale || 1;
+            const parcelBaseFontSize = poCategoryStyle.heightPx
+                ? Math.max(5, poCategoryStyle.heightPx * poCatScale * annotationScale)
+                : Math.max(7, 10 * attributeScale * annotationScale * poCatScale);
+            const poFontSize = Math.max(0.5, parcelBaseFontSize * transform.scale);
             const poFontStr = `${poItalic ? 'italic ' : ''}${poBold ? 'bold ' : ''}${poFontSize}px ${poFamily}`;
             if (poVisible) {
                 ctx.font = poFontStr;
@@ -9873,11 +10325,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     const lineCount = lines.length;
                     const yOffset = -((lineCount - 1) * lineHeight) / 2;
 
-                    // Background clear for readability
+                    // Adjustable wipeout behind property-owner labels.
                     ctx.font = poFontStr;
                     const maxW = Math.max(...lines.map(line => ctx.measureText(line).width));
                     const totalH = lineHeight * lineCount;
-                    ctx.clearRect(-maxW / 2 - 2, yOffset - lineHeight / 2 - 1, maxW + 4, totalH + 2);
+                    const poMask = resolveAnnotationMask({}, poCat);
+                    if (poMask.enabled) {
+                        ctx.save();
+                        ctx.globalAlpha = poMask.opacity;
+                        ctx.fillStyle = poMask.color ?? (isLightTheme ? '#f8fafc' : '#0b1220');
+                        ctx.fillRect(-maxW / 2 - poMask.padding, yOffset - lineHeight / 2 - poMask.padding, maxW + poMask.padding * 2, totalH + poMask.padding * 2);
+                        ctx.restore();
+                    } else {
+                        ctx.clearRect(-maxW / 2 - 2, yOffset - lineHeight / 2 - 1, maxW + 4, totalH + 2);
+                    }
 
                     lines.forEach((line, index) => {
                         ctx.fillText(line, 0, yOffset + (index * lineHeight));
@@ -9905,11 +10366,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     return;
                 }
 
-                // Area labels are painted in screen space. Multiplying their font
-                // size by the viewport zoom made the whole soil sheet collapse
-                // into unreadable specks as soon as the user zoomed out.
-                const baseFontSize = Math.max(10, 12 * attributeScale * annotationScale * (catStyle.scale || 0.9));
-                const fontSize = resolveAnnotationTextSize(baseFontSize, 'screen', transform.scale);
+                // Area labels are painted in screen space. Category height is the
+                // fixed default (leroy reference), and annotationScale remains a
+                // user multiplier. Never multiply by the viewport zoom.
+                const baseFontSize = catStyle.heightPx
+                    ? Math.max(5, catStyle.heightPx * catStyle.scale * annotationScale)
+                    : Math.max(10, 12 * attributeScale * annotationScale * (catStyle.scale || 0.9));
+                const fontSize = Math.max(0.5, baseFontSize * transform.scale);
                 const fontStr = `${catStyle.fontItalic ? 'italic ' : ''}${catStyle.fontBold ? 'bold ' : ''}${fontSize}px ${catStyle.fontFamily}`;
                 const lines = label.lines
                     .map(line => applyAnnotationTextCase(line, catStyle.textCase))
@@ -9927,7 +10390,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const lineHeight = fontSize * (catStyle.lineSpacing || 1.2);
                 const yOffset = -((lines.length - 1) * lineHeight) / 2;
                 const maxW = Math.max(...lines.map(line => ctx.measureText(line).width));
-                ctx.clearRect(-maxW / 2 - 2, yOffset - lineHeight / 2 - 1, maxW + 4, lineHeight * lines.length + 2);
+                const areaMask = resolveAnnotationMask({}, cat);
+                if (areaMask.enabled) {
+                    ctx.save();
+                    ctx.globalAlpha = areaMask.opacity;
+                    ctx.fillStyle = areaMask.color ?? (isLightTheme ? '#f8fafc' : '#0b1220');
+                    ctx.fillRect(-maxW / 2 - areaMask.padding, yOffset - lineHeight / 2 - areaMask.padding, maxW + areaMask.padding * 2, lineHeight * lines.length + areaMask.padding * 2);
+                    ctx.restore();
+                } else {
+                    ctx.clearRect(-maxW / 2 - 2, yOffset - lineHeight / 2 - 1, maxW + 4, lineHeight * lines.length + 2);
+                }
                 lines.forEach((line, index) => {
                     ctx.fillText(line, 0, yOffset + index * lineHeight);
                 });
@@ -9940,7 +10412,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         {
             const bfeLabels = lines.filter(l => l.type === 'bfe' && l.labelText && !l.hidden);
             if (bfeLabels.length > 0) {
-                const fontSize = resolveAnnotationTextSize(10 * attributeScale, 'screen', transform.scale);
+                const fontSize = Math.max(0.5, 10 * attributeScale * transform.scale);
                 if (fontSize >= 6) {
                     ctx.save();
                     ctx.font = `600 ${fontSize}px Arial`;
@@ -10354,16 +10826,30 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             if (annotRule) {
                 const noteText = renderAnnotationTemplate(annotRule.template, p);
                 const annCat = calloutCategory;
-                const annStyle = calloutStyle;
-                const noteLines = noteText.split('\n').map(line => applyAnnotationTextCase(line, annStyle.textCase));
-                // Apply category-driven existing overrides (v26.05.19.15)
-                const isExisting = annotRule.category === 'existing';
-                const existingItalic = annCat ? annCat.existingItalic : true;
-                const existingScaleMult = annCat ? annCat.existingScale : 0.25;
-                const ruleScaleMult = isExisting ? existingScaleMult : 1;
-                const combinedScale = (annotRule.scale || 1) * (annotationScale || 1) * ruleScaleMult;
-                const applyItalic = (isExisting && existingItalic) || annStyle.fontItalic;
-                const noteFontSize = resolveAnnotationTextSize(11 * combinedScale, 'screen', transform.scale);
+                // Rule notes share the same named text styles as manual text, so
+                // a style change restyles leader notes too. The style's category
+                // contribution carries the existing/proposed overrides.
+                const noteTextStyle = resolveCanvasTextStyle({
+                    annotation: {
+                        id: annotRule.id,
+                        text: noteText,
+                        x: 0,
+                        y: 0,
+                        angle: 0,
+                        styleName: annotRule.textStyleName,
+                        categoryId: 'callout',
+                        convention: annotRule.category,
+                    },
+                    category: calloutCategory,
+                    styles: annotationTextStyles && annotationTextStyles.length > 0
+                        ? annotationTextStyles
+                        : DEFAULT_ANNOTATION_TEXT_STYLES,
+                    fallbackStyleName: activeTextStyleName,
+                });
+                const noteLines = noteText.split('\n').map(line => applyAnnotationTextCase(line, noteTextStyle.textCase));
+                const combinedScale = (annotRule.scale || 1) * (annotationScale || 1) * noteTextStyle.scale;
+                const applyItalic = noteTextStyle.italic;
+                const noteFontSize = Math.max(5, noteTextStyle.height * combinedScale);
                 // Per-point override (Ctrl+drag / Shift+click mirror) takes
                 // precedence over the rule's default leaderOffset.
                 const effDx = p.annotationOffset ? p.annotationOffset.dx : annotRule.leaderOffset.dx;
@@ -10374,11 +10860,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const bendY = screenY - effDy * transform.scale;
                 // Horizontal underline length sized to widest line; on the
                 // mirrored side, underline extends to the LEFT of the bend.
-                ctx.font = `${applyItalic ? 'italic ' : ''}${annStyle.fontBold ? 'bold ' : ''}${noteFontSize}px ${annStyle.fontFamily}`;
+                ctx.font = `${applyItalic ? 'italic ' : ''}${noteTextStyle.bold ? 'bold ' : ''}${noteFontSize}px ${noteTextStyle.fontFamily}`;
                 const widest = Math.max(...noteLines.map(l => ctx.measureText(l).width));
-                const underlineLen = widest + 6 * combinedScale;
+                const underlineLen = widest * noteTextStyle.widthFactor + 6 * combinedScale;
                 const underlineEndX = mirrored ? bendX - underlineLen : bendX + underlineLen;
-                const color = annotRule.color || annStyle.color || (annotRule.category === 'proposed' ? '#f472b6' : '#22d3ee');
+                const color = annotRule.color || noteTextStyle.color || (annotRule.category === 'proposed' ? '#f472b6' : '#22d3ee');
                 // Leader: point → bend → end of underline
                 ctx.beginPath();
                 ctx.moveTo(screenX, screenY);
@@ -10402,14 +10888,17 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 // mirrored side so the underline reads naturally toward the bend.
                 ctx.fillStyle = color;
                 ctx.textBaseline = 'alphabetic';
-                const prevAlign = ctx.textAlign;
-                ctx.textAlign = mirrored ? 'right' : 'left';
                 const textX = mirrored ? bendX - 3 * combinedScale : bendX + 3 * combinedScale;
                 noteLines.forEach((ln, i) => {
-                    const ty = bendY - 3 * combinedScale - (noteLines.length - 1 - i) * (noteFontSize * annStyle.lineSpacing);
-                    ctx.fillText(ln, textX, ty);
+                    const ty = bendY - 3 * combinedScale - (noteLines.length - 1 - i) * (noteFontSize * noteTextStyle.lineSpacing);
+                    ctx.save();
+                    ctx.translate(textX, ty);
+                    ctx.scale(noteTextStyle.widthFactor, 1);
+                    ctx.transform(1, 0, Math.tan((noteTextStyle.oblique * Math.PI) / 180), 1, 0, 0);
+                    ctx.textAlign = mirrored ? 'right' : 'left';
+                    ctx.fillText(ln, 0, 0);
+                    ctx.restore();
                 });
-                ctx.textAlign = prevAlign;
                 // Record screen-space hit box for Ctrl/Shift click handlers.
                 const totalH = noteLines.length * noteFontSize * 1.15 + 4 * combinedScale;
                 const boxX = mirrored ? bendX - underlineLen : bendX;
@@ -10423,7 +10912,127 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
             }
         }
-        
+
+        // -----------------------------------------------------------------
+        // Standalone canvas text (manual notes + generated point labels).
+        // Text follows the annotation scaling rules: style height × text scale
+        // × category scale × global annotation scale. Width factor and oblique
+        // are applied as affine transforms; selection/hit boxes are refreshed
+        // every frame for in-place editing and picking.
+        // -----------------------------------------------------------------
+        textHitBoxesRef.current.clear();
+        if (textAnnotations.length > 0) {
+            const textCatalog = annotationTextStyles && annotationTextStyles.length > 0
+                ? annotationTextStyles
+                : DEFAULT_ANNOTATION_TEXT_STYLES;
+            for (const ann of textAnnotations) {
+                if (ann.hidden) continue;
+                if (editingText?.id === ann.id) continue;
+                const textCategory = annotationCategories?.find(
+                    category => category.id === (ann.categoryId ?? 'manual-text'),
+                ) ?? null;
+                const textStyle = resolveCanvasTextStyle({
+                    annotation: ann,
+                    category: textCategory,
+                    styles: textCatalog,
+                    fallbackStyleName: activeTextStyleName,
+                });
+                if (!textStyle.visible) continue;
+
+                // Text is model-fixed: zooming the drawing also enlarges the
+                // text instead of pinning it to a constant screen height.
+                const fontPx = Math.max(5, textStyle.height * textStyle.scale * (annotationScale || 1)) * transform.scale;
+                const lines = ann.text.split('\n').map(line => applyAnnotationTextCase(line, textStyle.textCase));
+                const lineHeight = fontPx * textStyle.lineSpacing;
+                const anchor = worldToScreen(ann.x, ann.y);
+                const color = textStyle.color || '#e2e8f0';
+                const angleRad = -(ann.angle * Math.PI) / 180;
+                const cos = Math.cos(angleRad);
+                const sin = Math.sin(angleRad);
+
+                // Leader line back to the annotated point/feature.
+                if (ann.leaderTo) {
+                    const target = worldToScreen(ann.leaderTo.easting, ann.leaderTo.northing);
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.moveTo(target.x, target.y);
+                    ctx.lineTo(anchor.x, anchor.y);
+                    ctx.strokeStyle = color;
+                    ctx.globalAlpha = 0.65;
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([3, 2]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.beginPath();
+                    ctx.arc(target.x, target.y, 2.5, 0, 2 * Math.PI);
+                    ctx.fillStyle = color;
+                    ctx.fill();
+                    ctx.restore();
+                }
+
+                ctx.save();
+                ctx.translate(anchor.x, anchor.y);
+                ctx.rotate(-(ann.angle * Math.PI) / 180);
+                ctx.font = `${textStyle.italic ? 'italic ' : ''}${textStyle.bold ? 'bold ' : ''}${fontPx}px ${textStyle.fontFamily}`;
+                const widths = lines.map(line => ctx.measureText(line).width);
+                const textWidth = Math.max(1, ...widths) * textStyle.widthFactor;
+                const blockHeight = (lines.length - 1) * lineHeight + fontPx * 1.2;
+                const mask = resolveAnnotationMask(ann, textCategory);
+                if (mask.enabled) {
+                    ctx.save();
+                    ctx.globalAlpha = mask.opacity;
+                    ctx.fillStyle = mask.color ?? (isLightTheme ? '#f8fafc' : '#0b1220');
+                    ctx.fillRect(
+                        -mask.padding,
+                        -fontPx - mask.padding,
+                        textWidth + mask.padding * 2,
+                        (lines.length - 1) * lineHeight + fontPx * 1.25 + mask.padding * 2,
+                    );
+                    ctx.restore();
+                }
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'alphabetic';
+                ctx.fillStyle = color;
+                // WIDTH factor + OBLIQUE, matching CAD text-style behaviour.
+                ctx.transform(textStyle.widthFactor, 0, Math.tan((textStyle.oblique * Math.PI) / 180), 1, 0, 0);
+                lines.forEach((line, index) => {
+                    ctx.fillText(line, 0, index * lineHeight);
+                });
+                ctx.restore();
+
+                const corners = [
+                    { x: 0, y: -fontPx },
+                    { x: textWidth, y: -fontPx },
+                    { x: textWidth, y: blockHeight - fontPx },
+                    { x: 0, y: blockHeight - fontPx },
+                ].map(corner => ({
+                    x: anchor.x + corner.x * cos - corner.y * sin,
+                    y: anchor.y + corner.x * sin + corner.y * cos,
+                }));
+                const minX = Math.min(...corners.map(corner => corner.x)) - 4;
+                const maxX = Math.max(...corners.map(corner => corner.x)) + 4;
+                const minY = Math.min(...corners.map(corner => corner.y)) - 4;
+                const maxY = Math.max(...corners.map(corner => corner.y)) + 4;
+                textHitBoxesRef.current.set(ann.id, {
+                    x: minX,
+                    y: minY,
+                    w: maxX - minX,
+                    h: maxY - minY,
+                });
+
+                if (selectedTextAnnotationId === ann.id) {
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.rect(minX, minY, maxX - minX, maxY - minY);
+                    ctx.strokeStyle = '#22d3ee';
+                    ctx.lineWidth = 1.5;
+                    ctx.setLineDash([4, 2]);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            }
+        }
+
         // Draw current GPS position
         if (projectedPosition) {
             const pt = worldToScreen(projectedPosition.easting, projectedPosition.northing);
@@ -10673,7 +11282,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         ctx.restore(); // --- End screen-space pass ---
-    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard]);
+    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id]);
 
     // Throttled draw using requestAnimationFrame to prevent flickering during rapid updates
     const scheduleDraw = useCallback(() => {
@@ -10928,10 +11537,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const offsetX = line.labelOffset?.x || 0;
         const offsetY = line.labelOffset?.y || 0;
         
-        const worldTextHeight = screenTextHeightToWorld(
-            bearingDistanceAnnotationHeight(lineLabelScale),
-            transform.scale,
-        );
+        const worldTextHeight = boundaryAnnotationHeightPx * transform.scale;
         const text = `${line.bearing} / ${line.distance}`;
         
         const canvas = canvasRef.current;
@@ -10939,7 +11545,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const ctx = canvas.getContext('2d');
         if (!ctx) return false;
         
-        ctx.font = `600 ${worldTextHeight}px Arial`;
+        ctx.font = `600 ${worldTextHeight}px ${boundaryFontFamily}`;
         const textWidth = ctx.measureText(text).width;
         const padding = worldTextHeight * 0.2;
         
@@ -10961,7 +11567,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             mouseY >= screenY - screenHeight / 2 - PADDING_SCREEN &&
             mouseY <= screenY + screenHeight / 2 + PADDING_SCREEN
         );
-    }, [transform, lineLabelScale, pointMap, worldToScreen, resolveLineEndpoints]);
+    }, [transform, lineLabelScale, boundaryAnnotationHeightPx, pointMap, worldToScreen, resolveLineEndpoints]);
 
     const isOverCurveLabelArea = useCallback((mouseX: number, mouseY: number, line: SurveyLine): boolean => {
         if (!line.isCurve) return false;
@@ -10990,10 +11596,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const dText = call.arcLength ? `L=${call.arcLength.toFixed(2)}'` : call.distance;
         if (!bText && !dText) return false;
         const labelText = [bText, dText].filter(Boolean).join(' / ');
-        const worldTextHeight = screenTextHeightToWorld(
-            bearingDistanceAnnotationHeight(lineLabelScale),
-            transform.scale,
-        );
+        const worldTextHeight = boundaryAnnotationHeightPx * transform.scale;
         const canvas = canvasRef.current;
         if (!canvas) return false;
         const ctx = canvas.getContext('2d');
@@ -11015,7 +11618,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             mouseY >= screenY - screenHeight / 2 - PAD &&
             mouseY <= screenY + screenHeight / 2 + PAD
         );
-    }, [transform, lineLabelScale, pointMap, worldToScreen]);
+    }, [transform, lineLabelScale, boundaryAnnotationHeightPx, pointMap, worldToScreen]);
 
     const isOverDeedMetadataArea = useCallback((mouseX: number, mouseY: number): boolean => {
         if (!deedMetadata || points.length === 0 || activeAgent !== AgentType.DEED_READER) return false;
@@ -11062,10 +11665,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         
         if (textLines.length === 0) return false;
         
-        const worldTextHeight = screenTextHeightToWorld(
-            bearingDistanceAnnotationHeight(lineLabelScale),
-            transform.scale,
-        );
+        const worldTextHeight = boundaryAnnotationHeightPx * transform.scale;
         const lineHeight = worldTextHeight * 1.4;
         
         const canvas = canvasRef.current;
@@ -11097,7 +11697,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             mouseY >= screenY - screenHeight / 2 - PADDING_SCREEN &&
             mouseY <= screenY + screenHeight / 2 + PADDING_SCREEN
         );
-    }, [deedMetadata, points, activeAgent, boundaryFiles, props.deedMetadataOffset, lineLabelScale, transform, worldToScreen]);
+    }, [deedMetadata, points, activeAgent, boundaryFiles, props.deedMetadataOffset, lineLabelScale, boundaryAnnotationHeightPx, transform, worldToScreen]);
 
     const isOverOwnerNameArea = useCallback((mouseX: number, mouseY: number): boolean => {
         if (!deedMetadata || points.length === 0 || activeAgent !== AgentType.DEED_READER) return false;
@@ -11144,10 +11744,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         
         if (textLines.length === 0) return false;
         
-        const worldTextHeight = screenTextHeightToWorld(
-            bearingDistanceAnnotationHeight(lineLabelScale),
-            transform.scale,
-        );
+        const worldTextHeight = boundaryAnnotationHeightPx * transform.scale;
         const lineHeight = worldTextHeight * 1.4;
         
         const canvas = canvasRef.current;
@@ -11176,7 +11773,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             mouseY >= screenY - screenHeight / 2 &&
             mouseY <= screenY + screenHeight / 2
         );
-    }, [deedMetadata, points, activeAgent, boundaryFiles, props.ownerNameOffset, lineLabelScale, transform, worldToScreen]);
+    }, [deedMetadata, points, activeAgent, boundaryFiles, props.ownerNameOffset, lineLabelScale, boundaryAnnotationHeightPx, transform, worldToScreen]);
 
     /** Rotate the movable boundary 180° during the align-slide phase by
      *  swapping which movable-line endpoint snaps to which target-line
@@ -11469,6 +12066,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setIsBoxSelectMode(false);
         setSelectedLineIds(new Set());
         setPolylineArcMode(false);
+        setPolylineFixedRadius(null);
+        setPolylineRadiusInput('');
+        setPolylineRadiusPrompt(false);
+        setPolylineTangentExit(false);
+        lastSegmentTangentRef.current = null;
         baselineDraftRef.current = null;
         baselinePiCounterRef.current = 0;
         setActiveOsnapPoint(null);
@@ -11479,6 +12081,50 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setCommandFocusRequest(n => n + 1);
         requestAnimationFrame(() => drawRef.current?.());
     }, [agentDrawMode, settings.stationing?.pointInterval]);
+
+    /** Z enters a box-zoom command: drag a window, release to frame it. */
+    const startBoxZoom = useCallback(() => {
+        cancelTextEdit();
+        stopInteractiveTransforms();
+        finishDrawingRef.current();
+        setActiveCommandPrompt(null);
+        setPendingSelectionCommand(null);
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        setIsCopyingSelection(false);
+        setCopyBasePoint(null);
+        setIsOffsetMode(false);
+        setOffsetDistance(null);
+        setOffsetTargetId(null);
+        setOffsetPickStart(null);
+        offsetPreviewSegmentsRef.current = null;
+        setShiftBoxSelect(null);
+        setIsDeletingLines(false);
+        setIsPickingPolarCenter(false);
+        setIsPickingOtOrigin(false);
+        setIsPickingOtLineAlign(false);
+        setActiveOsnapPoint(null);
+        setInlineOsnapOverride(null);
+        setInlineOsnapMenuPos(null);
+        setDimContextMenu(null);
+        setIsAttributeFlyoutOpen(false);
+        setIsZoomExtentsOpen(false);
+        setIsZoomToPointOpen(false);
+        setIsFindPointsOpen(false);
+        setIsDrawingToolsMenuOpen(false);
+        setIsDimFlyoutOpen(false);
+        setIsDimSettingsOpen(false);
+        setIsOtPopupOpen(false);
+        setIsPropertiesOpen(false);
+        setZoomBox(null);
+        setIsZoomBoxMode(true);
+        setTerminalIncoming({
+            text: 'Command: Z (ZOOM) — Box zoom: drag a window around the area to frame [Esc cancels]',
+            tone: 'ok',
+        });
+        setCommandFocusRequest(n => n + 1);
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [cancelTextEdit, stopInteractiveTransforms]);
 
     const handleKeyDown = useCallback((e: KeyboardEvent) => {
         const target = e.target as HTMLElement | null;
@@ -11518,6 +12164,25 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 setZoomToPointNumber('');
                 return;
             }
+        }
+        if (e.key === 'Escape' && !isTextInput && isPlacingTextRef.current) {
+            e.preventDefault();
+            setIsPlacingText(false);
+            setTerminalIncoming({ text: 'TEXT: Cancelled', tone: 'info' });
+            return;
+        }
+        if (e.key === 'Escape' && !isTextInput && isZoomBoxMode) {
+            e.preventDefault();
+            setZoomBox(null);
+            setIsZoomBoxMode(false);
+            setTerminalIncoming({ text: 'ZOOM: Cancelled', tone: 'info' });
+            return;
+        }
+        if (e.key === 'Escape' && !isTextInput && selectedTextAnnotationId) {
+            e.preventDefault();
+            setSelectedTextAnnotationId(null);
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
         }
         // While a multi-value prompt is open, its boxes and the command line are
         // the only input surfaces; don't let canvas shortcuts edit the drawing.
@@ -11659,24 +12324,97 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTerminalIncoming({ text: 'OFFSET: Exited', tone: 'info' });
             return;
         }
+        // LINE-command switches. R accepts a fixed arc radius; T forces the
+        // next straight segment to leave along the previous end tangent.
+        if (!isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey && isLinearDrawingMode(drawingMode)) {
+            if (e.key === 'r' || e.key === 'R') {
+                e.preventDefault();
+                if (polylinePoints.length === 0) {
+                    setTerminalIncoming({ text: 'LINE: pick a start point before entering a fixed radius', tone: 'info' });
+                    return;
+                }
+                setPolylineRadiusPrompt(true);
+                setPolylineRadiusInput('');
+                setPolylineArcMode(true);
+                setPolylineTangentExit(false);
+                setTerminalIncoming({
+                    text: `ARC RADIUS: type a fixed radius in ${getLinearUnitAbbreviation(settings.linearUnits)} and press Enter [Esc to cancel]`,
+                    tone: 'info',
+                });
+                return;
+            }
+            if (e.key === 't' || e.key === 'T') {
+                e.preventDefault();
+                if (polylineTangentExit) {
+                    setPolylineTangentExit(false);
+                    setTerminalIncoming({ text: 'TANGENT: OFF — next segment is free', tone: 'info' });
+                    return;
+                }
+                if (!lastSegmentTangentRef.current) {
+                    setTerminalIncoming({ text: 'TANGENT: draw a line or arc segment first', tone: 'error' });
+                    return;
+                }
+                setPolylineRadiusPrompt(false);
+                setPolylineRadiusInput('');
+                setPolylineArcMode(false);
+                setPolylineTangentExit(true);
+                setTerminalIncoming({ text: 'TANGENT: ON — next LINE segment locks to the previous end tangent [click or type length]', tone: 'ok' });
+                return;
+            }
+        }
         if (!isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey && isLinearDrawingMode(drawingMode) && polylinePoints.length > 0) {
             if (/^[0-9.]$/.test(e.key)) {
                 e.preventDefault();
-                setTypedSegmentLength(prev => {
-                    if (e.key === '.' && prev.includes('.')) return prev;
-                    return `${prev}${e.key}`;
-                });
+                if (polylineRadiusPrompt) {
+                    setPolylineRadiusInput(prev => {
+                        if (e.key === '.' && prev.includes('.')) return prev;
+                        return `${prev}${e.key}`;
+                    });
+                } else {
+                    setTypedSegmentLength(prev => {
+                        if (e.key === '.' && prev.includes('.')) return prev;
+                        return `${prev}${e.key}`;
+                    });
+                }
                 if (drawRef.current) {
                     requestAnimationFrame(() => drawRef.current?.());
                 }
                 return;
             }
-            if (e.key === 'Backspace' && typedSegmentLength.length > 0) {
+            if (e.key === 'Backspace' && (polylineRadiusPrompt ? polylineRadiusInput.length > 0 : typedSegmentLength.length > 0)) {
                 e.preventDefault();
-                setTypedSegmentLength(prev => prev.slice(0, -1));
+                if (polylineRadiusPrompt) setPolylineRadiusInput(prev => prev.slice(0, -1));
+                else setTypedSegmentLength(prev => prev.slice(0, -1));
                 if (drawRef.current) {
                     requestAnimationFrame(() => drawRef.current?.());
                 }
+                return;
+            }
+            if (e.key === 'Enter' && polylineRadiusPrompt) {
+                e.preventDefault();
+                const typedRadius = Number(polylineRadiusInput);
+                if (polylineRadiusInput.trim().length === 0) {
+                    setPolylineRadiusPrompt(false);
+                    setTerminalIncoming({ text: 'ARC RADIUS: no change', tone: 'info' });
+                    return;
+                }
+                if (typedRadius === 0) {
+                    setPolylineFixedRadius(null);
+                    setPolylineRadiusPrompt(false);
+                    setTerminalIncoming({ text: 'ARC RADIUS: cleared', tone: 'info' });
+                    return;
+                }
+                if (!Number.isFinite(typedRadius) || typedRadius < 0) {
+                    setTerminalIncoming({ text: 'ARC RADIUS: enter a positive radius, or 0 to clear', tone: 'error' });
+                    return;
+                }
+                const worldRadius = convertLinearUnits(typedRadius, settings.linearUnits || 'usSurveyFoot', 'foot');
+                setPolylineFixedRadius(worldRadius);
+                setPolylineRadiusPrompt(false);
+                setPolylineArcMode(true);
+                setPolylineTangentExit(false);
+                setTerminalIncoming({ text: `ARC RADIUS: ${typedRadius.toFixed(2)} ${getLinearUnitAbbreviation(settings.linearUnits)} fixed — click direction for the next arc`, tone: 'ok' });
+                requestAnimationFrame(() => drawRef.current?.());
                 return;
             }
             if (e.key === 'Enter' && drawingMode === 'baseline' && typedSegmentLength.length === 0) {
@@ -11707,7 +12445,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     let dx = target.easting - anchor.easting;
                     let dy = target.northing - anchor.northing;
                     const mag = Math.hypot(dx, dy);
-                    if (mag < 1e-9) {
+                    const tangentExit = polylineTangentExit ? lastSegmentTangentRef.current : null;
+                    if (tangentExit) {
+                        dx = tangentExit.x;
+                        dy = tangentExit.y;
+                    } else if (mag < 1e-9) {
                         dx = 1;
                         dy = 0;
                     } else {
@@ -11924,6 +12666,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setCommandFocusRequest(n => n + 1);
             return;
         }
+        if ((e.key === 'z' || e.key === 'Z') && !isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+            e.preventDefault();
+            startBoxZoom();
+            return;
+        }
         if (e.key === 's' || e.key === 'S') {
                 e.preventDefault();
                 setTerminalIncoming({ text: 'Command: S (SELECT) — click lines or chain [Esc to clear]', tone: 'ok' });
@@ -11958,24 +12705,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 }
                 return;
             }
-            if (e.key === 't' || e.key === 'T') {
-                e.preventDefault();
-                setTerminalIncoming({ text: 'Command: T (TRIM) — click line segment to cut at intersection', tone: 'ok' });
-                if (isTrimmingLines) {
-                    setIsTrimmingLines(false);
-                    setTrimPoint(null);
-                } else {
-                    finishDrawing();
-                    setIsTrimmingLines(true);
-                    setIsExtendingLines(false);
-                    setIsDeletingLines(false);
-                    setTrimPoint(null);
-                    setExtendFromLine(null);
-                    setIsSelectionMode(false);
-                    setSelectedLineIds(new Set());
-                }
-                return;
-            }
+            // T / TT are handled by useDoubleTapShortcuts below so a single tap
+            // still toggles TRIM and a double tap starts TEXT.
             if (e.key === 'f' || e.key === 'F') {
                 e.preventDefault();
                 if (selectedLineIds.size !== 2) {
@@ -12044,11 +12775,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
             if (e.key === 'l' || e.key === 'L') {
                 e.preventDefault();
-                setTerminalIncoming({ text: 'Command: L (LINE) — pick start point or type length [A for Arc]', tone: 'ok' });
+                setTerminalIncoming({ text: 'Command: L (LINE) — pick start point or type length [A for Arc · R fixed radius · T tangent]', tone: 'ok' });
                 // Mid-polyline: L switches back to straight segments (CAD
                 // polyline Line submode) instead of restarting the polyline.
                 if (isLinearDrawingMode(drawingMode) && polylinePoints.length > 0) {
                     setPolylineArcMode(false);
+                    setPolylineTangentExit(false);
                     return;
                 }
                 startChainLineMode('polylines');
@@ -12061,6 +12793,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     e.preventDefault();
                     setTerminalIncoming({ text: 'Polyline Submode: ARC (tangent to previous segment)', tone: 'info' });
                     setPolylineArcMode(true);
+                    setPolylineTangentExit(false);
                     return;
                 }
             }
@@ -12071,7 +12804,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
             if (e.key === 'p' || e.key === 'P') {
                 e.preventDefault();
-                setTerminalIncoming({ text: 'Command: P (ADD POINT) — click canvas to drop point [Esc to finish]', tone: 'ok' });
+                setTerminalIncoming({ text: 'Command: P (ADD POINT) — pick directly on the canvas [Esc to finish]', tone: 'ok' });
                 if (drawingMode === 'add-point') {
                     finishDrawing();
                 } else {
@@ -12079,7 +12812,6 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     const cacpNext = queryCacpNextPointNumber();
                     setAddPointNumber(cacpNext);
                     setDrawingMode('add-point');
-                    props.onOpenPointDialog?.();
                 }
                 return;
             }
@@ -12153,6 +12885,15 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 rotateAlign180();
                 return;
             }
+        }
+        if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'x' || e.key === 'X') && selectedTextAnnotationId) {
+            if (isTextInput) return;
+            e.preventDefault();
+            props.onDeleteTextAnnotation?.(selectedTextAnnotationId);
+            setSelectedTextAnnotationId(null);
+            setTerminalIncoming({ text: 'Deleted text', tone: 'info' });
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
         }
         if ((e.key === 'Delete' || e.key === 'Backspace' || e.key === 'x' || e.key === 'X') && selectedDimensionId) {
             if (isTextInput) return;
@@ -12247,6 +12988,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setInlineOsnapMenuPos(null);
             return;
         }
+        if (e.key === 'Escape' && polylineRadiusPrompt) {
+            if (isTextInput) return;
+            e.preventDefault();
+            setPolylineRadiusPrompt(false);
+            setPolylineRadiusInput('');
+            setTerminalIncoming({ text: 'ARC RADIUS: cancelled', tone: 'info' });
+            return;
+        }
         if (e.key === 'Escape' && typedSegmentLength.length > 0) {
             if (isTextInput) return;
             e.preventDefault();
@@ -12298,7 +13047,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTtrEntity2(null);
             setTtrHoverEntity(null);
         }
-    }, [startBaselineMode, selectedLineIds, selectedHatchIds, selectedEntityCount, selectedPointNumbers, selectedCenterlineIds, isPickingMirrorLine, onDeletePoints, onDeleteCenterline, onDeleteHatch, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, filletSelectionCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
+    }, [startBoxZoom, isZoomBoxMode, startBaselineMode, selectedTextAnnotationId, props, selectedLineIds, selectedHatchIds, selectedEntityCount, selectedPointNumbers, selectedCenterlineIds, isPickingMirrorLine, onDeletePoints, onDeleteCenterline, onDeleteHatch, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, polylineFixedRadius, polylineRadiusInput, polylineRadiusPrompt, polylineTangentExit, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, filletSelectionCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
 
     const handleKeyUp = useCallback((e: KeyboardEvent) => {
         if (e.key === 'Control' || e.key === 'Meta') {
@@ -12326,6 +13075,15 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setSelectedLineIds(new Set());
         }
     }, [isSelectionMode, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines]);
+
+    // Selecting or drawing with another tool leaves box zoom.
+    useEffect(() => {
+        if (!isZoomBoxMode) return;
+        if (drawingMode !== 'none' || isSelectionMode || isBoxSelectMode || isPlacingText || isTrimmingLines || isExtendingLines || isDeletingLines || isCopyingSelection || isOffsetMode) {
+            setIsZoomBoxMode(false);
+            setZoomBox(null);
+        }
+    }, [isZoomBoxMode, drawingMode, isSelectionMode, isBoxSelectMode, isPlacingText, isTrimmingLines, isExtendingLines, isDeletingLines, isCopyingSelection, isOffsetMode]);
 
     // A drawing/command mode taking over ends any pending pick-for-command state.
     useEffect(() => {
@@ -13091,6 +13849,19 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
 
+        // ZOOM box: the next left drag defines the view window.
+        if (isZoomBoxMode) {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const startX = e.clientX - rect.left;
+            const startY = e.clientY - rect.top;
+            setZoomBox({ startX, startY, endX: startX, endY: startY });
+            return;
+        }
+
         // POLARARRAY center pick is the one canvas click a prompt allows.
         if (activeCommandPrompt?.id === 'polar_array' && isPickingPolarCenter) {
             if (e.button !== 0) return;
@@ -13153,6 +13924,33 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         if (e.button !== 0) return;
+
+        // TEXT tool — the next click sets the insertion point and opens the
+        // in-place editor. Nothing is added to the drawing until it commits.
+        if (isPlacingTextRef.current) {
+            // The browser's default mousedown focus can land after React mounts
+            // the in-place editor, blurring an empty transparent overlay and
+            // making the TEXT click appear to do nothing.
+            e.preventDefault();
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const world = resolveSnappedWorld(clickX, clickY, currentSnap);
+            setEditingText({
+                id: null,
+                screenX: clickX,
+                screenY: clickY,
+                easting: world.easting,
+                northing: world.northing,
+                value: '',
+                styleName: pendingTextStyleNameRef.current ?? activeTextStyleNameRef.current,
+            });
+            setIsPlacingText(false);
+            setSelectedTextAnnotationId(null);
+            return;
+        }
 
         // COPY command — first click sets the base point, later clicks place
         // copies at that displacement and keep the base point for repeat copies.
@@ -13851,6 +14649,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const clickX = e.clientX - rect.left;
             const clickY = e.clientY - rect.top;
 
+            // Standalone text is picked before dimensions/lines so a note that
+            // sits over geometry is still selectable and deletable.
+            const clickedTextAnnotation = findTextAnnotationAtScreenPoint(clickX, clickY);
+            if (clickedTextAnnotation && !isBoxSelectMode) {
+                setSelectedTextAnnotationId(prev => (
+                    prev === clickedTextAnnotation.id ? null : clickedTextAnnotation.id
+                ));
+                setSelectedLineIds(new Set());
+                setSelectedPointNumbers(new Set());
+                setSelectedCenterlineIds(new Set());
+                setSelectedDimensionId(null);
+                return;
+            }
+
             const clickedDim = findDimensionNearClick(clickX, clickY, 18);
             if (clickedDim && !isBoxSelectMode) {
                 setSelectedDimensionId(prev => (prev === clickedDim.id ? null : clickedDim.id));
@@ -14337,8 +15149,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     let dx = target.easting - anchor.easting;
                     let dy = target.northing - anchor.northing;
                     const mag = Math.hypot(dx, dy);
-                    const dirX = mag > 1e-9 ? dx / mag : 1;
-                    const dirY = mag > 1e-9 ? dy / mag : 0;
+                    const tangentExit = polylineTangentExit ? lastSegmentTangentRef.current : null;
+                    const dirX = tangentExit ? tangentExit.x : (mag > 1e-9 ? dx / mag : 1);
+                    const dirY = tangentExit ? tangentExit.y : (mag > 1e-9 ? dy / mag : 0);
                     nextPoint = makeTempWorldPoint(anchor.easting + dirX * worldLength, anchor.northing + dirY * worldLength);
                 }
             }
@@ -14879,9 +15692,19 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         document.body.classList.add('panning');
         setIsPanning(true);
         lastMousePos.current = { x: e.clientX, y: e.clientY };
-    }, [drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, hatches, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter]);
+    }, [isZoomBoxMode, drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, hatches, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, polylineTangentExit, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
+        if (zoomBox) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            setZoomBox(prev => prev ? { ...prev, endX: mx, endY: my } : prev);
+            return;
+        }
+
         if (shiftBoxSelect) {
             const canvas = canvasRef.current;
             if (!canvas) return;
@@ -15295,9 +16118,46 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 shiftHoverAnchorRef.current = null;
             }
         }
-    }, [isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview, inlineOsnapOverride, runningOsnaps, findNearestSurveyPoint, resolveOsnapAtScreen]);
+    }, [zoomBox, isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview, inlineOsnapOverride, runningOsnaps, findNearestSurveyPoint, resolveOsnapAtScreen]);
 
     const handleMouseUp = useCallback((e: React.MouseEvent) => {
+        if (zoomBox) {
+            const canvas = canvasRef.current;
+            if (!canvas) {
+                setZoomBox(null);
+                setIsZoomBoxMode(false);
+                return;
+            }
+            const rect = canvas.getBoundingClientRect();
+            const endX = e.clientX - rect.left;
+            const endY = e.clientY - rect.top;
+            const dx = Math.abs(endX - zoomBox.startX);
+            const dy = Math.abs(endY - zoomBox.startY);
+            if (dx > 3 || dy > 3) {
+                const minX = Math.min(zoomBox.startX, endX);
+                const maxX = Math.max(zoomBox.startX, endX);
+                const minY = Math.min(zoomBox.startY, endY);
+                const maxY = Math.max(zoomBox.startY, endY);
+                const first = screenToWorld(minX, minY);
+                const second = screenToWorld(maxX, maxY);
+                const minE = Math.min(first.easting, second.easting);
+                const maxE = Math.max(first.easting, second.easting);
+                const minN = Math.min(first.northing, second.northing);
+                const maxN = Math.max(first.northing, second.northing);
+                zoomToBbox(minE, maxE, minN, maxN, 0.02);
+                setTerminalIncoming({
+                    text: `ZOOM: Box applied — E ${minE.toFixed(2)} to ${maxE.toFixed(2)}, N ${minN.toFixed(2)} to ${maxN.toFixed(2)}.`,
+                    tone: 'ok',
+                });
+                setZoomBox(null);
+                setIsZoomBoxMode(false);
+            } else {
+                // A click without a drag leaves the command armed for another try.
+                setZoomBox(null);
+            }
+            return;
+        }
+
         if (shiftBoxSelect) {
             const minX = Math.min(shiftBoxSelect.startX, shiftBoxSelect.endX);
             const maxX = Math.max(shiftBoxSelect.startX, shiftBoxSelect.endX);
@@ -15513,7 +16373,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             document.body.classList.remove('panning');
             setIsPanning(false);
         }
-    }, [isLabelDragging, isPanning, shiftBoxSelect, lines, pointMap, transform, activeGrip, isBoxSelectMode, selectedLineIds, selectedHatchIds, selectedEntityCount, hatches, commitActiveGrip, screenToWorld, activeOsnapPoint, isOffsetMode, offsetDistance, offsetTargetId, updateOffsetPreview, clearOffsetPreview]);
+    }, [zoomBox, isZoomBoxMode, isLabelDragging, isPanning, shiftBoxSelect, lines, pointMap, transform, activeGrip, isBoxSelectMode, selectedLineIds, selectedHatchIds, selectedEntityCount, hatches, commitActiveGrip, screenToWorld, activeOsnapPoint, isOffsetMode, offsetDistance, offsetTargetId, updateOffsetPreview, clearOffsetPreview, zoomToBbox]);
     
     const handleTouchStart = useCallback((e: React.TouchEvent) => {
         if (drawingMode !== 'none') return;
@@ -15654,7 +16514,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             draft = {
                 id: `baseline-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
                 name: `BASELINE-${index}`,
-                beginStation: 0,
+                beginStation: resolveBeginStation(undefined, p1.description),
                 pis: [],
             };
         }
@@ -15696,18 +16556,43 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         // One chained segment path for L, boundary, breakline, inclusion, and
         // exclusion. BASELINE differs only in where the segment is accumulated.
         const p1 = polylinePoints[0];
-        const p2 = polylinePoints[1];
+        const rawP2 = polylinePoints[1];
         const p1Line = buildLineEndpoint(p1);
-        const p2Line = buildLineEndpoint(p2);
         const incomingTangent = lastSegmentTangentRef.current;
+        let p2 = rawP2;
+        // TANGENT switch: force the next straight segment onto the previous
+        // segment's end-tangent ray. Typed or clicked distance only controls
+        // how far along that ray the new point sits.
+        if (polylineTangentExit && incomingTangent) {
+            const along =
+                (rawP2.easting - p1.easting) * incomingTangent.x +
+                (rawP2.northing - p1.northing) * incomingTangent.y;
+            if (along > 1e-9) {
+                p2 = makeTempWorldPoint(
+                    p1.easting + incomingTangent.x * along,
+                    p1.northing + incomingTangent.y * along,
+                );
+            }
+        }
         // Arc submode: unique arc leaving p1 tangent to the previous segment
-        // and passing through p2. Degenerate geometry falls back to straight.
+        // and passing through p2. A fixed radius keeps R exact and moves the
+        // endpoint onto that circle; degenerate geometry falls back to straight.
         const arc = polylineArcMode && incomingTangent
-            ? computeTangentArc(
-                { easting: p1.easting, northing: p1.northing },
-                incomingTangent,
-                { easting: p2.easting, northing: p2.northing })
+            ? polylineFixedRadius !== null
+                ? computeFixedRadiusTangentArc(
+                    { easting: p1.easting, northing: p1.northing },
+                    incomingTangent,
+                    polylineFixedRadius,
+                    { easting: p2.easting, northing: p2.northing })
+                : computeTangentArc(
+                    { easting: p1.easting, northing: p1.northing },
+                    incomingTangent,
+                    { easting: p2.easting, northing: p2.northing })
             : null;
+        // For a fixed-radius arc the clicked point is only a direction; continue
+        // from the actual arc endpoint.
+        if (arc) p2 = makeTempWorldPoint(arc.end.easting, arc.end.northing);
+        const p2Line = buildLineEndpoint(p2);
 
         if (drawingMode === 'baseline') {
             if (Math.hypot(p2.easting - p1.easting, p2.northing - p1.northing) > 1e-9) {
@@ -15740,13 +16625,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
         // Keep last point as start for next segment (continuous drawing)
         setPolylinePoints([p2]);
-    }, [polylinePoints, onAddLine, drawingMode, draw, buildLineEndpoint, activeDrawingLayer, polylineArcMode, appendBaselineSegment]);
+        if (polylineTangentExit) setPolylineTangentExit(false);
+    }, [polylinePoints, onAddLine, drawingMode, draw, buildLineEndpoint, activeDrawingLayer, polylineArcMode, polylineFixedRadius, polylineTangentExit, appendBaselineSegment, makeTempWorldPoint]);
     
     const finishDrawing = () => {
         setDrawingMode('none');
         setPolylinePoints([]);
         baselineDraftRef.current = null;
         setTypedSegmentLength('');
+        setPolylineFixedRadius(null);
+        setPolylineRadiusInput('');
+        setPolylineRadiusPrompt(false);
+        setPolylineTangentExit(false);
         setCircleCenter(null);
         setTypedCircleValue('');
         setPolygonCenter(null);
@@ -15769,6 +16659,36 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             props.onBoundaryCornerAlignRequestHandled?.();
         }
     };
+
+    finishDrawingRef.current = finishDrawing;
+
+    // Canvas double-tap shortcuts. T stays the familiar TRIM toggle on a single
+    // tap; two quick taps start TEXT. More double-tap commands can be added here.
+    useDoubleTapShortcuts(
+        [{
+            key: 't',
+            onDoubleTap: startTextPlacement,
+            onSingleTap: () => {
+                setTerminalIncoming({ text: 'Command: T (TRIM) — click line segment to cut at intersection', tone: 'ok' });
+                if (isTrimmingLines) {
+                    setIsTrimmingLines(false);
+                    setTrimPoint(null);
+                } else {
+                    finishDrawing();
+                    setIsTrimmingLines(true);
+                    setIsExtendingLines(false);
+                    setIsDeletingLines(false);
+                    setTrimPoint(null);
+                    setExtendFromLine(null);
+                    setIsSelectionMode(false);
+                    setSelectedLineIds(new Set());
+                }
+            },
+        }],
+        // CIRCLE owns T for TTR and LINE owns T for tangent exit; prompts and
+        // editors own their own keyboard input.
+        { enabled: drawingMode !== 'circle' && !isPlacingText && !activeCommandPrompt && !(isLinearDrawingMode(drawingMode) && polylinePoints.length > 0) },
+    );
 
     const startPolygonMode = useCallback((sides?: number, center?: { easting: number; northing: number }) => {
         finishDrawing();
@@ -16111,10 +17031,39 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const clickX = e.clientX - rect.left;
         const clickY = e.clientY - rect.top;
 
+        // Double-click text to edit it in place, before line/hatch picking.
+        const clickedText = findTextAnnotationAtScreenPoint(clickX, clickY);
+        if (clickedText) {
+            openTextEditorForAnnotation(clickedText);
+            return;
+        }
+
         const clickedLine = findLineNearClick(clickX, clickY, 8);
+        const selectGeneration = (generationId: string) => {
+            const { lineIds, hatchIds } = collectGenerationEntityIds(lines, hatches, generationId);
+            setSelectedLineIds(lineIds);
+            setSelectedHatchIds(hatchIds);
+            setSelectedHatchId(null);
+            setIsPropertiesOpen(false);
+            setIsSelectionMode(true);
+            onOpenGeneration?.(generationId);
+            requestAnimationFrame(() => drawRef.current?.());
+        };
+        const clickedLineGenerationId = clickedLine
+            ? (clickedLine.contourGenId || clickedLine.generationId)
+            : undefined;
+        if (clickedLineGenerationId) {
+            selectGeneration(clickedLineGenerationId);
+            return;
+        }
+
         if (!clickedLine) {
             const clickedHatch = findHatchAtScreenPoint(clickX, clickY);
             if (!clickedHatch) return;
+            if (clickedHatch.generationId) {
+                selectGeneration(clickedHatch.generationId);
+                return;
+            }
             setSelectedHatchId(clickedHatch.id);
             setSelectedHatchIds(new Set([clickedHatch.id]));
             setSelectedLineIds(new Set());
@@ -16185,7 +17134,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setSelectedLineIds(matchingIds);
         setIsSelectionMode(true);
         requestAnimationFrame(() => drawRef.current?.());
-    }, [findLineNearClick, findHatchAtScreenPoint, lines, pointMap, isCopyingSelection, isOffsetMode]);
+    }, [findLineNearClick, findHatchAtScreenPoint, findTextAnnotationAtScreenPoint, openTextEditorForAnnotation, lines, hatches, pointMap, isCopyingSelection, isOffsetMode, onOpenGeneration]);
 
     // Live rotation angle for the ROTATE prompt (base point already picked).
     const rotateAnglePreview = (() => {
@@ -16238,7 +17187,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     shiftHoverAnchorRef.current = null;
                 }
             }}
-            style={{ cursor: isPanning ? 'grabbing' : (isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default'))))))), overflow: 'visible', isolation: 'isolate' }}
+            style={{ cursor: isPanning ? 'grabbing' : (isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (isZoomBoxMode || drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default'))))))), overflow: 'visible', isolation: 'isolate' }}
         >
             <CanvasFlashLayer />
             <canvas
@@ -16259,6 +17208,61 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
             />
+
+            {props.contourLabelTool && props.onContourLabelStrike && (
+                <ContourLabelStrikeOverlay
+                    mode={props.contourLabelTool}
+                    worldPerPixel={1 / Math.max(1e-9, transform.scale)}
+                    screenToWorld={screenToWorld}
+                    onStrike={props.onContourLabelStrike}
+                    onCancel={props.onCancelContourLabelTool}
+                />
+            )}
+
+            {editingText && (() => {
+                const textCatalog = annotationTextStyles && annotationTextStyles.length > 0
+                    ? annotationTextStyles
+                    : DEFAULT_ANNOTATION_TEXT_STYLES;
+                const editedAnnotation = editingText.id
+                    ? textAnnotations.find(annotation => annotation.id === editingText.id) ?? null
+                    : null;
+                const draftAnnotation: CanvasTextAnnotation = editedAnnotation ?? {
+                    id: 'draft-text',
+                    text: editingText.value,
+                    x: editingText.easting,
+                    y: editingText.northing,
+                    angle: 0,
+                    styleName: editingText.styleName ?? activeTextStyleName,
+                    categoryId: 'manual-text',
+                };
+                const textCategory = annotationCategories?.find(
+                    category => category.id === (draftAnnotation.categoryId ?? 'manual-text'),
+                ) ?? null;
+                const textStyle = resolveCanvasTextStyle({
+                    annotation: draftAnnotation,
+                    category: textCategory,
+                    styles: textCatalog,
+                    fallbackStyleName: editingText.styleName ?? activeTextStyleName,
+                });
+                const fontPx = Math.max(6, textStyle.height * textStyle.scale * (annotationScale || 1)) * transform.scale;
+                return (
+                    <InCanvasTextEditor
+                        key={editingText.id ?? 'new-text'}
+                        value={editingText.value}
+                        left={editingText.screenX}
+                        top={editingText.screenY}
+                        fontSize={fontPx}
+                        fontFamily={textStyle.fontFamily}
+                        bold={textStyle.bold}
+                        italic={textStyle.italic}
+                        color={textStyle.color || '#e2e8f0'}
+                        lineHeight={textStyle.lineSpacing}
+                        isNew={editingText.id === null}
+                        onCommit={commitTextEdit}
+                        onCancel={cancelTextEdit}
+                    />
+                );
+            })()}
 
             {inlineOsnapMenuPos && (
                 <div
@@ -16414,6 +17418,31 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         </svg>
                         <span>{`IMAGERY: ${mapTypeLabel} | SOURCE: ${sourceLabel}`}</span>
                     </button>
+                );
+            })()}
+
+            {zoomBox && (() => {
+                const left = Math.min(zoomBox.startX, zoomBox.endX);
+                const top = Math.min(zoomBox.startY, zoomBox.endY);
+                const width = Math.abs(zoomBox.endX - zoomBox.startX);
+                const height = Math.abs(zoomBox.endY - zoomBox.startY);
+                return (
+                    <div
+                        data-testid="box-zoom-overlay"
+                        className="absolute pointer-events-none z-40"
+                        style={{
+                            left,
+                            top,
+                            width,
+                            height,
+                            border: '1.5px dashed rgba(34,211,238,0.95)',
+                            background: 'rgba(34,211,238,0.12)',
+                        }}
+                    >
+                        <span className="absolute -top-5 left-0 rounded border border-cyan-400/40 bg-slate-950/80 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-cyan-200">
+                            BOX ZOOM
+                        </span>
+                    </div>
                 );
             })()}
 
@@ -16645,8 +17674,19 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         const inv = inverse(anchor, { easting: currentP.x, northing: currentP.y });
                         const bearingStr = formatBearing(inv.bearing);
                         const displayDist = typedSegmentLength.length > 0 ? typedSegmentLength : liveDist.toFixed(2);
+                        const radiusDisplay = polylineFixedRadius !== null
+                            ? convertLinearUnits(polylineFixedRadius, 'foot', settings.linearUnits || 'usSurveyFoot').toFixed(2)
+                            : null;
 
-                        primaryInput = (
+                        primaryInput = polylineRadiusPrompt ? (
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-gray-300 text-[11px] font-semibold">Arc radius:</span>
+                                <div className="px-1.5 py-0.5 rounded bg-gray-900 border border-cyan-400 text-cyan-300 font-mono font-bold text-xs flex items-center gap-1 shadow-inner">
+                                    <span>{polylineRadiusInput || '_'}</span>
+                                    <span className="text-[10px] text-cyan-500 font-normal">{unitAbbrev}</span>
+                                </div>
+                            </div>
+                        ) : (
                             <div className="flex items-center gap-1.5">
                                 <span className="text-gray-300 text-[11px] font-semibold">Length:</span>
                                 <div className="px-1.5 py-0.5 rounded bg-gray-900 border border-yellow-400 text-yellow-300 font-mono font-bold text-xs flex items-center gap-1 shadow-inner">
@@ -16657,8 +17697,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         );
                         secondaryText = (
                             <div className="flex flex-col gap-0.5">
-                                <span className="text-cyan-300 font-mono text-[11px] font-medium">{bearingStr}</span>
-                                <span className="text-[10px] text-gray-400"><span className="text-gray-300 font-semibold">[A]</span> Arc · <span className="text-gray-300 font-semibold">[L]</span> Line · <span className="text-gray-300 font-semibold">[Enter]</span> Finish · <span className="text-gray-300 font-semibold">[O]</span> Ortho {isOrthoEnabled ? 'ON' : 'OFF'}</span>
+                                {polylineRadiusPrompt ? (
+                                    <span className="text-[10px] text-gray-400">Type a fixed radius · <span className="text-cyan-300 font-semibold">[Enter]</span> Apply · <span className="text-gray-300 font-semibold">[Esc]</span> Cancel</span>
+                                ) : (
+                                    <span className="text-[10px] text-gray-400"><span className="text-gray-300 font-semibold">[A]</span> Arc · <span className="text-gray-300 font-semibold">[L]</span> Line · <span className="text-gray-300 font-semibold">[R]</span> Radius{radiusDisplay ? ` ${radiusDisplay}` : ''} · <span className="text-gray-300 font-semibold">[T]</span> Tangent{polylineTangentExit ? ' ✓' : ''} · <span className="text-gray-300 font-semibold">[Enter]</span> Finish · <span className="text-gray-300 font-semibold">[O]</span> Ortho {isOrthoEnabled ? 'ON' : 'OFF'}</span>
+                                )}
                             </div>
                         );
                     }
@@ -17055,7 +18098,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onClose={() => setIsPropertiesOpen(false)}
                 selectedIds={Array.from(selectedLineIds)}
                 lines={lines}
+                selectedTextIds={selectedTextAnnotationId ? [selectedTextAnnotationId] : []}
+                textAnnotations={textAnnotations}
+                textStyles={annotationTextStyles ?? DEFAULT_ANNOTATION_TEXT_STYLES}
+                annotationCategories={annotationCategories}
                 availableLayers={props.availableLayers}
+                onUpdateTextAnnotations={(ids, patch) => {
+                    ids.forEach(id => props.onUpdateTextAnnotation?.(id, patch));
+                    requestAnimationFrame(() => drawRef.current?.());
+                }}
+                onDeleteTextAnnotations={(ids) => {
+                    ids.forEach(id => props.onDeleteTextAnnotation?.(id));
+                    if (selectedTextAnnotationId && ids.includes(selectedTextAnnotationId)) setSelectedTextAnnotationId(null);
+                    requestAnimationFrame(() => drawRef.current?.());
+                }}
                 availableLinetypes={standardLinetypes?.map(linetype => linetype.name) ?? []}
                 layerColors={layerColors}
                 layerLinetypes={layerLinetypeMap}
@@ -17067,6 +18123,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 }}
                 onSelectAll={() => { selectAllEntitiesCommand(); }}
                 onClearSelection={deselectAllCommand}
+                gisFeatures={props.gisFeatures}
+                parcelSummaries={props.parcelSummaries}
                 onConvertToBoundary={onConvertSelectionToBoundary
                     ? (sel) => {
                         onConvertSelectionToBoundary(sel);
@@ -17619,6 +18677,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             {isZoomExtentsOpen && (
                                 <div className={`absolute ${flyoutPlacementClass} rounded-xl p-1.5 animate-fade-in-up z-30 ${FLYOUT_SHELL}`}>
                                     <div className="space-y-1">
+                                        <button onClick={() => { setIsZoomExtentsOpen(false); startBoxZoom(); }} className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-[13px] text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white" title="Box Zoom (Z) — drag a window"><ToolbarZoomIcon className="w-5 h-5"/> Box Zoom</button>
                                         <button onClick={() => { zoomExtents(); setIsZoomExtentsOpen(false); }} className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-[13px] text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white" title="Zoom Extents"><ZoomExtentsIcon className="w-5 h-5"/> Zoom Extents</button>
                                         <button onClick={() => {
                                             setIsZoomExtentsOpen(false);
@@ -18748,7 +19807,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             {/* Interactive CAD Command Terminal */}
             <CanvasTerminal
                 onOpenProperties={() => setIsPropertiesOpen(true)}
-                propertiesSelectionCount={selectedLineIds.size}
+                propertiesSelectionCount={selectedLineIds.size + (selectedTextAnnotationId ? 1 : 0)}
                 onOpenTextEditor={props.onOpenTextEditor}
                 activePrompt={
                     activeCommandPrompt
@@ -18792,9 +19851,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         : drawingMode === 'baseline'
                         ? polylinePoints.length === 0
                             ? 'BASELINE: Pick start point [Esc to cancel]'
-                            : `BASELINE ${polylineArcMode ? 'ARC' : 'LINE'}: Pick next point [A arc · L line · Enter finish · Esc cancel]`
+                            : `BASELINE ${polylineArcMode ? 'ARC' : 'LINE'}: Pick next point [A arc · L line · R radius · T tangent · Enter finish · Esc cancel]`
                         : drawingMode === 'polylines' && polylinePoints.length > 0
-                        ? `${polylineArcMode ? 'ARC' : 'LINE'} — Length: ${typedSegmentLength || '_'} ${getLinearUnitAbbreviation(settings.linearUnits)} (Enter to commit, A for Arc, L for Line, Esc to finish)`
+                        ? `${polylineArcMode ? 'ARC' : 'LINE'}${polylineFixedRadius !== null ? ` R=${convertLinearUnits(polylineFixedRadius, 'foot', settings.linearUnits || 'usSurveyFoot').toFixed(2)}` : ''}${polylineTangentExit ? ' TANGENT' : ''} — Length: ${typedSegmentLength || '_'} ${getLinearUnitAbbreviation(settings.linearUnits)} (Enter commit · A Arc · L Line · R Radius · T Tangent · Esc finish)`
                         : drawingMode === 'polygon'
                         ? !polygonCenter
                             ? `POLYGON: Pick center — ${polygonSides} sides; scroll or [ ] changes sides [Esc to cancel]`
@@ -18810,7 +19869,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             ? 'CIRCLE: Pick center point or type T for TTR [Esc to cancel]'
                             : `CIRCLE: ${circleSizeParam.toUpperCase()} = ${typedCircleValue || (cursorWorldPosRef.current ? (Math.hypot(cursorWorldPosRef.current.x - circleCenter.easting, cursorWorldPosRef.current.y - circleCenter.northing) * (circleSizeParam === 'diameter' ? 2 : 1)).toFixed(2) : '_')} [D to switch, Enter]`
                         : drawingMode === 'add-point'
-                        ? `ADD POINT: Click canvas to drop PT ${addPointNumber || nextAvailablePointNumber || '1'} [Osnap active] or enter coords in flyout [Esc to finish]`
+                        ? `ADD POINT: Click canvas to drop PT ${addPointNumber || nextAvailablePointNumber || '1'} [Osnap active · Esc to finish]`
                         : drawingMode === 'hatch'
                         ? `HATCH (${hatchPatternName} ×${hatchScale} @${hatchAngleDeg}°): ${hatchSubMode === 'pick-area' ? 'Click inside an enclosed area' : 'Click a closed polyline, circle, or boundary'}${hatchHoverRegion ? ` — Preview: ${hatchHoverRegion.areaSqFt.toFixed(1)} sq ft` : ''} [A area · S select object · Esc to exit]`
                         : drawingMode === 'aligned-dim'
@@ -18849,7 +19908,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         const nextPn = queryCacpNextPointNumber();
                         setAddPointNumber(nextPn);
                         setDrawingMode('add-point');
-                        props.onOpenPointDialog?.();
+                        setTerminalIncoming({ text: 'Command: P (ADD POINT) — pick directly on the canvas [Esc to finish]', tone: 'ok' });
                     },
                     onStartLine: () => startChainLineMode('polylines'),
                     onStartCircle: () => {
@@ -18869,6 +19928,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         setPolylinePoints([]);
                     },
                     onStartAlignedDimension: () => startDimensionMode('aligned-dim'),
+                    onStartText: () => startTextPlacement(),
                     onStartInclusion: () => startChainLineMode('inclusion'),
                     onToggleOrtho: () => {
                         setIsOrthoEnabled(prev => !prev);
@@ -19245,6 +20305,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onCycleAgentDrawMode={onCycleAgentDrawMode}
                 onCycleAgentAnnotMode={onCycleAgentAnnotMode}
                 activeAgent={activeAgent}
+                isWorkspaceEmpty={
+                    points.length === 0 &&
+                    lines.length === 0 &&
+                    centerlines.length === 0 &&
+                    pointLists.every(list => list.points.length === 0) &&
+                    (boundaryFiles?.length ?? 0) === 0
+                }
                 messages={props.agentMessages}
                 onSendMessage={props.onSendAgentMessage}
                 onStopGenerating={props.onStopGenerating}
@@ -19273,6 +20340,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 showStatusBadges={props.settings.commandBar?.showStatusBadges ?? true}
                 onHeightChange={handleCommandBarHeightChange}
                 rightExtension={props.commandBarRightExtension ?? 0}
+                introPulse={props.commandBarIntroPulse}
             />
 
             {/* Operation-anchored arrow pad for multi-value commands */}

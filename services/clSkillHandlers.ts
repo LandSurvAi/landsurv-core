@@ -9,11 +9,14 @@
 import { useEffect } from 'react';
 import { interAgentComm, type AgentMessage, type AgentResponse } from './InterAgentCommunication';
 import { AgentType } from '../types';
-import type { Centerline, CenterlinePI } from '../types';
+import type { Centerline, CenterlinePI, PointList } from '../types';
 import { parseAzimuthFlexible, RAD_PER_DEG } from '../utils/cogoLib';
+import { formatStation, resolveBeginStation } from '../utils/stationing';
 
 export interface UseClSkillsOpts {
   setCenterlines: React.Dispatch<React.SetStateAction<Centerline[]>>;
+  /** Live point database — resolves the first point's description when the caller omits it. */
+  pointListsRef?: React.RefObject<PointList[]>;
   logActionToFieldbook: (msg: string) => void;
 }
 
@@ -144,7 +147,7 @@ function askForInput(
  * Computes PI coordinates from a legs description (tangents + circular curves)
  * and upserts the resulting Centerline into the session.
  */
-export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkillsOpts): void {
+export function useClSkills({ setCenterlines, pointListsRef, logActionToFieldbook }: UseClSkillsOpts): void {
   useEffect(() => {
     const unsubCreate = interAgentComm.onCommand(
       'cl_create_from_description',
@@ -414,6 +417,7 @@ export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkill
           northing: number;
           easting: number;
           elevation?: number;
+          description?: string;
         }
 
         const pts = pointsRaw as PointEntry[];
@@ -434,7 +438,16 @@ export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkill
 
         const name =
           typeof d.name === 'string' && d.name.trim() ? d.name.trim() : 'Baseline-1';
-        const beginStation = typeof d.beginStation === 'number' ? d.beginStation : 0;
+
+        // The first chain point is the POB. Prefer its explicit description, then
+        // look the point up in the live database so a model that only sent
+        // coordinates still picks up a station written on the point itself.
+        const firstPointNumber = String(pts[0].pointNumber);
+        const projectFirstPoint = pointListsRef?.current
+          ?.flatMap((list) => list.points)
+          .find((point) => String(point.pointNumber) === firstPointNumber);
+        const firstPointDescription = pts[0].description?.trim() || projectFirstPoint?.description;
+        const beginStation = resolveBeginStation(d.beginStation, firstPointDescription);
 
         // Build PIs — first point is POB, last is END, intermediate are PI-n
         const pis: CenterlinePI[] = pts.map((p, i) => {
@@ -480,7 +493,8 @@ export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkill
 
         logActionToFieldbook(
           `CL/Baseline created from points: "${name}" — ${pis.length} PIs, ` +
-          `POB (${pts[0].northing.toFixed(2)}, ${pts[0].easting.toFixed(2)}), ≈${totalChordLength.toFixed(0)} ft chord length.`,
+          `POB (${pts[0].northing.toFixed(2)}, ${pts[0].easting.toFixed(2)}) at STA ${formatStation(beginStation)}, ` +
+          `≈${totalChordLength.toFixed(0)} ft chord length.`,
         );
 
         return respond(message, true, {
@@ -492,5 +506,5 @@ export function useClSkills({ setCenterlines, logActionToFieldbook }: UseClSkill
     );
 
     return () => { unsubCreate(); unsubFromPoints(); };
-  }, [setCenterlines, logActionToFieldbook]);
+  }, [setCenterlines, pointListsRef, logActionToFieldbook]);
 }

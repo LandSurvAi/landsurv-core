@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { SoilsIcon } from './icons.tsx';
-import type { AreaHatchSettings, InclusionBoundary, SoilMapUnit } from '../types.ts';
+import type { AreaHatchSettings, GenerationBlock, InclusionBoundary, SoilMapUnit } from '../types.ts';
 import { AreaHatchControls } from './AreaHatchControls.tsx';
-import type { SoilsFetchResult } from '../services/soilsService.ts';
+import { GenerationBlockSummary } from './GenerationBlockSummary.tsx';
+import type { SoilsFetchResult, SoilReportRow } from '../services/soilsService.ts';
+import type { SoilLimitationsReport } from '../services/soilLimitationsReport.ts';
 
 /**
  * SoilsPanel (v26.05.20.1) — controls for the Soils Agent.
@@ -23,11 +25,24 @@ interface SoilsPanelProps {
   isFetching: boolean;
   hasInclusionBoundary: boolean;
   lastResult?: SoilsFetchResult | null;
+  /** Provenance block for the SSURGO linework currently on the canvas. */
+  generation?: GenerationBlock | null;
   onClearSoils?: () => void;
   soilMapUnits: SoilMapUnit[];
   onFetchReport?: () => void;
   isFetchingReport?: boolean;
-  soilReportData?: Record<string, { hydgrpdcd?: string; drclassdcd?: string; taxclname?: string; farmlndcl?: string }> | null;
+  /** Download the tabular SSURGO report as a PDF (fetching it first if needed). */
+  onDownloadReport?: () => void;
+  isDownloadingReport?: boolean;
+  soilReportData?: Record<string, SoilReportRow> | null;
+  /** PA E&S limitations report compiled from Table E.1 and the loaded soils. */
+  soilLimitationsReport?: SoilLimitationsReport | null;
+  onCompileLimitations?: () => void;
+  isCompilingLimitations?: boolean;
+  onDownloadLimitations?: () => void;
+  isDownloadingLimitations?: boolean;
+  /** Place a compact, wrapped limitations block on the active paper-space sheet. */
+  onAddLimitationsToSheet?: () => void;
   inclusionBoundaries?: InclusionBoundary[];
   activeInclusionBoundaryId?: string | null;
   onSelectInclusionBoundary?: (id: string | null) => void;
@@ -56,11 +71,20 @@ export const SoilsPanel: React.FC<SoilsPanelProps> = ({
   isFetching,
   hasInclusionBoundary,
   lastResult,
+  generation = null,
   onClearSoils,
   soilMapUnits,
   onFetchReport,
   isFetchingReport = false,
+  onDownloadReport,
+  isDownloadingReport = false,
   soilReportData,
+  soilLimitationsReport,
+  onCompileLimitations,
+  isCompilingLimitations = false,
+  onDownloadLimitations,
+  isDownloadingLimitations = false,
+  onAddLimitationsToSheet,
   inclusionBoundaries = [],
   activeInclusionBoundaryId = null,
   onSelectInclusionBoundary,
@@ -69,6 +93,19 @@ export const SoilsPanel: React.FC<SoilsPanelProps> = ({
 }) => {
   const [mode, setMode] = useState<'inclusion' | 'description'>('description');
   const [description, setDescription] = useState('');
+
+  useEffect(() => {
+    if (!generation) return;
+    if (generation.query?.mode === 'inclusion') setMode('inclusion');
+    else if (generation.query?.mode) setMode('description');
+    if (generation.query?.description) setDescription(generation.query.description);
+  }, [generation]);
+
+  const fmtAcres = (value: number): string => {
+    if (!Number.isFinite(value)) return '0.00';
+    if (value > 0 && value < 0.01) return '<0.01';
+    return value.toFixed(2);
+  };
 
   const canFetch =
     !isFetching &&
@@ -99,6 +136,8 @@ export const SoilsPanel: React.FC<SoilsPanelProps> = ({
         <SoilsIcon className="w-4 h-4 text-stone-400" />
         <span>Source: USDA NRCS SSURGO / Soil Data Access</span>
       </div>
+
+      <GenerationBlockSummary generation={generation} accent="stone" />
 
       {/* Mode toggle */}
       <div className="grid grid-cols-2 gap-2">
@@ -221,6 +260,16 @@ export const SoilsPanel: React.FC<SoilsPanelProps> = ({
             <span className="text-xs font-bold text-stone-300 uppercase tracking-wide">
               Soil Map Units ({displayUnits.length})
             </span>
+            {onDownloadReport && (
+              <button
+                type="button"
+                onClick={onDownloadReport}
+                disabled={isFetchingReport || isDownloadingReport}
+                className="text-xs px-2 py-1 rounded border border-emerald-600/50 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-800/40 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isDownloadingReport ? 'Preparing…' : 'Download PDF'}
+              </button>
+            )}
             {onFetchReport && (
               <button
                 onClick={onFetchReport}
@@ -268,6 +317,139 @@ export const SoilsPanel: React.FC<SoilsPanelProps> = ({
           )}
         </div>
       )}
+
+      {/* PA E&S limitations report — Table E.1 limitations + resolutions and
+          area of each soil map unit, clipped to the active inclusion boundary. */}
+      <div className="space-y-2 border-t border-stone-700/50 pt-3">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <span className="text-xs font-bold text-stone-300 uppercase tracking-wide">
+              PA E&amp;S Limitations Report
+            </span>
+            <p className="text-[10px] text-gray-500 mt-0.5">
+              Table E.1 · {soilLimitationsReport?.chartCached ? 'cached chart' : 'Scout chart on first run'}
+            </p>
+          </div>
+          {onCompileLimitations && (
+            <button
+              type="button"
+              onClick={onCompileLimitations}
+              disabled={isCompilingLimitations}
+              className="text-xs px-2 py-1 rounded border border-stone-500/60 bg-stone-800/50 text-stone-200 hover:bg-stone-700/60 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+            >
+              {isCompilingLimitations ? 'Compiling…' : 'Compile Report'}
+            </button>
+          )}
+        </div>
+
+        {soilLimitationsReport && (
+          <div className="space-y-2">
+            <div className={`rounded-md border p-2 text-[11px] ${
+              soilLimitationsReport.boundaryPresent
+                ? 'border-emerald-700/40 bg-emerald-950/20 text-emerald-200'
+                : 'border-amber-600/40 bg-amber-950/20 text-amber-200'
+            }`}>
+              {soilLimitationsReport.boundaryPresent ? (
+                <span>
+                  Clipped to <strong>{soilLimitationsReport.areaLabel}</strong>:&nbsp;
+                  {fmtAcres(soilLimitationsReport.soilAcres)} ac of soil across{' '}
+                  {soilLimitationsReport.units.length} map unit{soilLimitationsReport.units.length === 1 ? '' : 's'}.
+                </span>
+              ) : (
+                <span>
+                  No inclusion boundary — areas are for the project AOI. Draw a boundary for exact
+                  within-boundary areas. {fmtAcres(soilLimitationsReport.soilAcres)} ac across{' '}
+                  {soilLimitationsReport.units.length} map unit{soilLimitationsReport.units.length === 1 ? '' : 's'}.
+                </span>
+              )}
+            </div>
+
+            <div className="max-h-72 overflow-y-auto space-y-1 pr-1">
+              {soilLimitationsReport.units.map(unit => (
+                <details
+                  key={`${unit.mukey}-${unit.musym}`}
+                  className="rounded border border-gray-700/70 bg-gray-900/50 text-[11px]"
+                >
+                  <summary className="cursor-pointer px-2 py-1.5 flex items-baseline justify-between gap-2">
+                    <span className="min-w-0">
+                      <span className="font-mono font-bold text-stone-300">{unit.musym || '—'}</span>{' '}
+                      <span className="text-gray-300">{unit.muname || unit.seriesName}</span>
+                    </span>
+                    <span className="text-gray-400 whitespace-nowrap">{fmtAcres(unit.acres)} ac</span>
+                  </summary>
+                  <div className="px-2 pb-2 space-y-1.5 border-t border-gray-800 pt-1.5">
+                    <p className="text-gray-400">
+                      {unit.percent.toFixed(1)}% of area · HSG {unit.hydrologicGroup || '—'} ·{' '}
+                      {unit.drainageClass || 'drainage not reported'} · Hydric {unit.hydric || '—'}
+                    </p>
+                    <p className="text-gray-500">
+                      Depth to seasonal HWT: {unit.depthToWaterTableIn == null ? '—' : `${unit.depthToWaterTableIn}"`}
+                      {' · '}Depth to bedrock: {unit.depthToBedrockIn == null ? '—' : `${unit.depthToBedrockIn}"`}
+                    </p>
+                    {unit.limitations.length === 0 ? (
+                      <p className="text-gray-400 italic">
+                        No Table E.1 limitations marked for this series (absence of an X does not
+                        mean no potential limitation).
+                      </p>
+                    ) : (
+                      <>
+                        <div>
+                          <span className="font-semibold text-amber-300">Limitations: </span>
+                          <span className="text-gray-300">
+                            {unit.limitations
+                              .map(item => item.label + (item.valueLabel ? ` (${item.valueLabel})` : ''))
+                              .join('; ')}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="font-semibold text-emerald-300">Resolutions:</span>
+                          <ol className="list-decimal ml-4 text-gray-300 space-y-0.5 mt-0.5">
+                            {unit.resolutions.map(resolution => (
+                              <li key={resolution}>{resolution}</li>
+                            ))}
+                          </ol>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </details>
+              ))}
+            </div>
+
+            {soilLimitationsReport.unmatched.length > 0 && (
+              <p className="text-[10px] text-amber-300/90">
+                No Table E.1 row matched: {soilLimitationsReport.unmatched.join(', ')}. Verify the
+                series name before relying on the limitation list.
+              </p>
+            )}
+
+            {(onAddLimitationsToSheet || onDownloadLimitations) && (
+              <div className="grid grid-cols-2 gap-2">
+                {onAddLimitationsToSheet && (
+                  <button
+                    type="button"
+                    onClick={onAddLimitationsToSheet}
+                    className="py-2 text-xs font-semibold rounded border border-cyan-600/50 bg-cyan-900/30 text-cyan-200 hover:bg-cyan-800/40"
+                    title="Add a compact limitations/resolutions block to the active paper-space sheet"
+                  >
+                    Add to Sheet
+                  </button>
+                )}
+                {onDownloadLimitations && (
+                  <button
+                    type="button"
+                    onClick={onDownloadLimitations}
+                    disabled={isDownloadingLimitations}
+                    className="py-2 text-xs font-semibold rounded border border-emerald-600/50 bg-emerald-900/30 text-emerald-200 hover:bg-emerald-800/40 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isDownloadingLimitations ? 'Preparing…' : 'Download PDF'}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Live hatch + annotation controls — rebuilds editable CanvasHatch
           entities and centroid labels for already-fetched soil areas. */}

@@ -546,7 +546,7 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
               className="h-4 w-4 accent-cyan-400"
             />
             <span className="text-[11px] font-medium text-slate-200">
-              Point Efficiency Mode — compress crowded points into dots and skip labels until zoomed in
+              Point Efficiency Mode — on by default; compress crowded points into dots and skip labels until zoomed in
             </span>
           </label>
         </div>
@@ -693,8 +693,8 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
               onChange={e => updateGoogleMaps({ mapType: e.target.value as any })}
               className={inputClass}
             >
-              <option value="naip">NAIP (USDA Aerial)</option>
-              <option value="satellite">Satellite</option>
+              <option value="naip">NAIP (USDA Aerial) — default</option>
+              <option value="satellite">Satellite (Google)</option>
               <option value="hybrid">Hybrid (Satellite + Labels)</option>
               <option value="roadmap">Roadmap</option>
               <option value="terrain">Terrain</option>

@@ -480,6 +480,18 @@ const WORKSPACE_TOOL_RULES: readonly WorkspaceToolRule[] = [
     ],
   },
   {
+    tool: 'legend',
+    agent: AgentType.CAD_MANAGER,
+    pattern: /\b(?:open|show|edit|launch|manage|update)\s+(?:the\s+|my\s+)?(?:drawing\s+|sheet\s+|paperspace\s+)?(?:legend|symbol\s+key|key\s+map)\b/i,
+    replyText:
+      'Here is the live <strong>Legend</strong> surface. It is the same legend as the paperspace sheet — label, color, hatch, column, and placement edits write back to the drawing.',
+    suggestedQuestions: [
+      'Open Sheet View',
+      'Open Data Visibility & Layer Manager',
+      'Open Hatch Manager',
+    ],
+  },
+  {
     tool: 'sheet-view',
     agent: AgentType.CAD_MANAGER,
     pattern: /\b(?:sheet\s+view|paperspace\s+(?:layout|view)|24\s*x\s*36\s+(?:sheet|plot|layout)|plot\s+layout\s+view)\b/i,

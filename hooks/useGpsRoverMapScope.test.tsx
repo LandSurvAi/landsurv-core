@@ -7,7 +7,7 @@ import { useGpsRoverMapScope } from './useGpsRoverMapScope';
 
 function makeSettings(
   enabled: boolean,
-  mapType: NonNullable<Settings['googleMaps']>['mapType'] = 'satellite',
+  mapType: NonNullable<Settings['googleMaps']>['mapType'] = 'naip',
 ): Settings {
   return {
     ...DEFAULT_SETTINGS,
@@ -34,8 +34,9 @@ function useHarness(initialAgent: AgentType, initialEnabled: boolean) {
 }
 
 describe('useGpsRoverMapScope', () => {
-  it('keeps map imagery off by default outside GPS Rover', () => {
+  it('keeps map imagery off and defaults to NAIP outside GPS Rover', () => {
     expect(DEFAULT_SETTINGS.googleMaps?.enabled).toBe(false);
+    expect(DEFAULT_SETTINGS.googleMaps?.mapType).toBe('naip');
 
     const { result } = renderHook(() => useHarness(AgentType.LSVZ_AGENT, false));
     expect(result.current.settings.googleMaps?.enabled).toBe(false);
@@ -50,7 +51,7 @@ describe('useGpsRoverMapScope', () => {
 
     act(() => result.current.setActiveAgent(AgentType.POINT_EDITOR));
     expect(result.current.settings.googleMaps?.enabled).toBe(false);
-    expect(result.current.settings.googleMaps?.mapType).toBe('satellite');
+    expect(result.current.settings.googleMaps?.mapType).toBe('naip');
   });
 
   it('keeps a manually enabled map on after leaving GPS Rover', () => {

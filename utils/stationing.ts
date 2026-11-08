@@ -106,6 +106,48 @@ export const parseStation = (stationString: string): number | null => {
   return null;
 };
 
+/**
+ * Pull a station out of a free-form survey point description. Point descriptions
+ * commonly read "STA 138+37.12 PC", "139+06.45 PI", "CL LOCKL @ 0+00", or
+ * "0+55 ROW RT @ PT". The hundreds+feet notation is distinctive enough to
+ * extract even when it is embedded in a longer description; ordinary point
+ * numbers and coordinates without a '+' are left alone.
+ */
+export const parseStationFromDescription = (description?: string): number | null => {
+  if (!description) return null;
+  const match = /(^|[^\d])(-?\d{1,6})\s*\+\s*(\d{1,3}(?:\.\d+)?)(?![\d+])/.exec(description);
+  if (!match) return null;
+
+  const rawHundreds = match[2].trim();
+  const negative = rawHundreds.startsWith('-');
+  const hundreds = Math.abs(Number(rawHundreds));
+  const remainder = Number(match[3]);
+  if (!Number.isFinite(hundreds) || !Number.isFinite(remainder)) return null;
+  return (negative ? -1 : 1) * (hundreds * 100 + remainder);
+};
+
+/**
+ * Resolve an alignment's beginning station. A deliberate non-zero value wins;
+ * otherwise the station written on the first point in the chain wins over the
+ * 0+00 default. This lets a POB described as "138+37.12 PC" start the
+ * baseline at 138+37.12 instead of silently resetting it to 0+00.
+ */
+export const resolveBeginStation = (
+  requestedBeginStation: unknown,
+  firstPointDescription?: string,
+): number => {
+  let requested: number | null = null;
+  if (typeof requestedBeginStation === 'number' && Number.isFinite(requestedBeginStation)) {
+    requested = requestedBeginStation;
+  } else if (typeof requestedBeginStation === 'string' && requestedBeginStation.trim()) {
+    requested = parseStation(requestedBeginStation.trim())
+      ?? parseStationFromDescription(requestedBeginStation);
+  }
+
+  if (requested !== null && Math.abs(requested) > 1e-9) return requested;
+  return parseStationFromDescription(firstPointDescription) ?? requested ?? 0;
+};
+
 const parsePiBasedClFile = (content: string): Centerline | null => {
   const lines = content.trim().split('\n');
   let clData: { name: string; beginStation: number } | null = null;
@@ -492,4 +534,102 @@ export const calculatePointFromStationOffset = (
   }
 
   return null;
+};
+
+export interface StationAnnotationTick {
+  station: number;
+  isMajor: boolean;
+}
+
+export interface StationAnnotationStations {
+  /** Stations that receive a formatted station label. */
+  labels: number[];
+  /** Every tick station, including the labeled stations (majors). */
+  ticks: StationAnnotationTick[];
+}
+
+/**
+ * Builds the station-label and station-tick stations for a centerline.
+ * Labels keep the existing behavior of excluding the begin/end points, while
+ * ticks start on the first tick interval at or after the begin station.
+ */
+export const getStationAnnotationStations = (
+  beginStation: number,
+  endStation: number,
+  labelInterval: number,
+  tickInterval = 50,
+): StationAnnotationStations => {
+  if (!Number.isFinite(beginStation) || !Number.isFinite(endStation) || endStation <= beginStation) {
+    return { labels: [], ticks: [] };
+  }
+
+  const labelStep = Math.max(1, Number(labelInterval) || 100);
+  const tickStep = Math.max(1, Number(tickInterval) || 50);
+  const roundStation = (value: number) => {
+    const rounded = Math.round(value * 1e9) / 1e9;
+    return rounded === 0 ? 0 : rounded;
+  };
+
+  const labels: number[] = [];
+  const firstLabelIndex = Math.ceil(beginStation / labelStep);
+  for (let index = firstLabelIndex; ; index++) {
+    const station = roundStation(index * labelStep);
+    if (station <= beginStation + 1e-6) continue;
+    if (station >= endStation - 1e-6) break;
+    labels.push(station);
+  }
+
+  const ticks: StationAnnotationTick[] = [];
+  const firstTickIndex = Math.ceil(beginStation / tickStep - 1e-9);
+  for (let index = firstTickIndex; ; index++) {
+    const station = roundStation(index * tickStep);
+    if (station > endStation + 1e-6) break;
+    ticks.push({
+      station,
+      isMajor: labels.some(label => Math.abs(label - station) < 1e-6),
+    });
+  }
+
+  return { labels, ticks };
+};
+
+/** Bearing (radians from north) of the centerline tangent at a station. */
+export const calculateCenterlineTangentBearing = (
+  centerline: Centerline,
+  targetStation: number,
+  sampleDistance = 0.5,
+): number | null => {
+  if (!Number.isFinite(targetStation) || centerline.pis.length < 2) return null;
+
+  const length = calculateCenterlineLength(centerline);
+  if (length <= 0) return null;
+  const beginStation = centerline.beginStation;
+  const endStation = beginStation + length;
+  if (targetStation < beginStation - 1e-6 || targetStation > endStation + 1e-6) return null;
+
+  const station = Math.min(endStation, Math.max(beginStation, targetStation));
+  const sample = Math.max(0.01, Math.min(Math.abs(sampleDistance), length / 2));
+  const before = calculatePointFromStationOffset(centerline, Math.max(beginStation, station - sample), 0);
+  const after = calculatePointFromStationOffset(centerline, Math.min(endStation, station + sample), 0);
+  if (!before || !after) return null;
+
+  const deltaEasting = after.easting - before.easting;
+  const deltaNorthing = after.northing - before.northing;
+  if (Math.hypot(deltaEasting, deltaNorthing) < 1e-9) return null;
+
+  return Math.atan2(deltaEasting, deltaNorthing);
+};
+
+/**
+ * Converts a tangent bearing into a readable canvas rotation perpendicular to
+ * the centerline. Vertical text is normalized to read bottom-to-top.
+ */
+export const normalizeStationLabelRotation = (bearing: number): number => {
+  if (!Number.isFinite(bearing)) return 0;
+
+  const fullTurn = Math.PI * 2;
+  let angle = ((bearing % fullTurn) + fullTurn) % fullTurn;
+  if (angle >= Math.PI) angle -= Math.PI;
+  if (angle >= Math.PI / 2) angle -= Math.PI;
+  return angle;
 };

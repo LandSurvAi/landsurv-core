@@ -1318,7 +1318,9 @@ export async function fetchParcelsForBbox(
       let [lx, ly] = ptConvert ? ptConvert([cx, cy]) : [cx, cy];
       labelPoints.push({ x: lx, y: ly, parcelId, owner, deedBook, deedPage, block, unit, deedRef });
     }
+    let ringIndex = 0;
     for (const ring of rings) {
+      const currentRing = ringIndex++;
       for (let i = 0; i < ring.length - 1; i++) {
         let [x1, y1] = ring[i];
         let [x2, y2] = ring[i + 1];
@@ -1327,6 +1329,10 @@ export async function fetchParcelsForBbox(
           [x2, y2] = ptConvert([x2, y2]);
         }
         newLines.push({
+          // Stable IDs make individual parcel edges selectable and let the
+          // Properties panel look up the full parcel record by parcelId.
+          id: `PARCEL-${parcels.length - 1}-${currentRing}-${i}`,
+          parcelId: parcelId ?? undefined,
           from: '',
           to: '',
           fromPt: { x: x1, y: y1, z: 0 },

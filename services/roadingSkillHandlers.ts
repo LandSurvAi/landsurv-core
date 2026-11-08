@@ -42,6 +42,8 @@ import {
   calculateCurveGeometry,
   calculatePointFromStationOffset,
   formatStation,
+  parseStationFromDescription,
+  resolveBeginStation,
 } from '../utils/stationing';
 import { generateProfile } from '../utils/contouring';
 import { isPointRelevantForCorridor, smoothSplinePoints } from '../utils/civilDrafterVision';
@@ -311,6 +313,7 @@ export function buildCenterlineFromVertices(
   coords: Array<{ easting: number; northing: number }>,
   name: string,
   idPrefix = 'cl-road',
+  beginStation = 0,
 ): Centerline {
   // Drop collinear source vertices first — a straight OSM way should stay one offset
   // segment — but keep every genuine break. The old 12-PI index cap skipped whole
@@ -334,7 +337,7 @@ export function buildCenterlineFromVertices(
   return {
     id: `${idPrefix}-${Date.now()}`,
     name,
-    beginStation: 0,
+    beginStation: Number.isFinite(beginStation) ? beginStation : 0,
     pis,
   };
 }
@@ -367,12 +370,14 @@ export function emitChainLines(
 }
 
 export interface SurveyRoadCorridor {
-  centerline: Array<{ easting: number; northing: number; pointNumber?: string; elevation?: number }>;
-  edgeA: Array<{ easting: number; northing: number; pointNumber?: string; elevation?: number }>;
-  edgeB: Array<{ easting: number; northing: number; pointNumber?: string; elevation?: number }>;
+  centerline: Array<{ easting: number; northing: number; pointNumber?: string; elevation?: number; description?: string }>;
+  edgeA: Array<{ easting: number; northing: number; pointNumber?: string; elevation?: number; description?: string }>;
+  edgeB: Array<{ easting: number; northing: number; pointNumber?: string; elevation?: number; description?: string }>;
   widthFt: number;
   shotCount: number;
   lengthFt: number;
+  /** Station written on the first station-labeled shot along the corridor, when present. */
+  beginStation?: number;
 }
 
 const GENERATED_ROAD_POINT = /^(EP|CL|DW|ROAD|POLY|TRIM)-/i;
@@ -380,7 +385,7 @@ const EDGE_SHOT = /\b(EP|EOP|ER|EDGE|ES|EG|EC|ET|CURB|TBC|TC|BC|GUTTER|PAV|PVMT|
 const CENTERLINE_SHOT = /\b(CL|CTR|CENTER|CENTERLINE)\b/i;
 const WIDTH_CODE_RE = /(\d+(?:\.\d+)?)\s*W\b/i;
 
-type RoadCoord = { easting: number; northing: number; pointNumber?: string; elevation?: number };
+type RoadCoord = { easting: number; northing: number; pointNumber?: string; elevation?: number; description?: string };
 
 function roadMedian(values: number[]): number {
   if (values.length === 0) return 0;
@@ -457,6 +462,26 @@ function projectPointToRoadPolyline(
     station += length;
   }
   return best;
+}
+
+/** Starting station written on a shot at the beginning of a corridor. */
+function firstStationOnCorridor(
+  centerline: RoadCoord[],
+  points: SurveyPoint[],
+): number | undefined {
+  const start = centerline[0];
+  let first: { distance: number; station: number } | null = null;
+  for (const point of points) {
+    const station = parseStationFromDescription(point.description);
+    if (station === null) continue;
+    const distance = Math.hypot(point.easting - start.easting, point.northing - start.northing);
+    // Only the POB end of the corridor can define its beginning station.
+    if (distance > 60) continue;
+    if (!first || distance < first.distance) {
+      first = { distance, station };
+    }
+  }
+  return first?.station;
 }
 
 /** Uniform parallel offset. Edges come from one smooth CL, so they cannot swap or loop. */
@@ -781,6 +806,7 @@ export function traceSurveyRoadCorridor(points: SurveyPoint[]): SurveyRoadCorrid
   if (!widthFt || !Number.isFinite(widthFt) || widthFt < 8 || widthFt > 100) return null;
 
   const halfWidth = widthFt / 2;
+  const beginStation = firstStationOnCorridor(centerline, points);
 
   if (!fromWidthCodedCenterline) {
     // 3. The centerline must actually be supported by edge shots on both sides.
@@ -849,6 +875,7 @@ export function traceSurveyRoadCorridor(points: SurveyPoint[]): SurveyRoadCorrid
         widthFt: parseFloat(widthFt.toFixed(1)),
         shotCount: shots.length,
         lengthFt: parseFloat(clLen.toFixed(1)),
+        beginStation,
       };
     }
   }
@@ -860,6 +887,7 @@ export function traceSurveyRoadCorridor(points: SurveyPoint[]): SurveyRoadCorrid
     widthFt: parseFloat(widthFt.toFixed(1)),
     shotCount: shots.length + centerlineShots.length,
     lengthFt: parseFloat(polylineLength(centerline).toFixed(1)),
+    beginStation,
   };
 }
 
@@ -1156,6 +1184,7 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
               northing: p.northing,
               pointNumber: p.pointNumber,
               elevation: p.elevation,
+              description: p.description,
             }));
           geometrySource = 'survey-shots';
           clCoordsList = [orderedClCoords];
@@ -1239,10 +1268,41 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
       // Sync primary centerline to Stationing & CL
       let syncedCenterlineId: string | undefined;
       const primaryCoords = clCoordsList[0];
+
+      // Obtain the real street name for the drawn alignment from OSM so a road
+      // drafted from survey shots is labeled automatically. Name lookup is
+      // best-effort: offline projects still draw the corridor.
+      let fetchedStreetLabels: StreetLabel[] = [];
+      if (useOsmWays && deps.setStreetLabels && primaryCoords && primaryCoords.length >= 2) {
+        try {
+          const { fetchRoadLabelsAlongAlignment } = await import('./streetNameService.ts');
+          fetchedStreetLabels = await fetchRoadLabelsAlongAlignment(
+            primaryCoords.map((coord) => ({ x: coord.easting, y: coord.northing })),
+            deps.settings.projection?.epsg,
+            {
+              toleranceFt: Math.max(40, effectiveWidthFt * 2),
+              maxLabels: 1,
+              existingLabels: deps.streetLabels ?? [],
+            },
+          );
+        } catch {
+          // Keep the locally synthesized name when the streets service is unavailable.
+        }
+      }
+      const fetchedRoadName = fetchedStreetLabels[0]?.text?.trim();
+      if (
+        fetchedRoadName &&
+        !roadNames.some((existingName) => existingName.trim().toLowerCase() === fetchedRoadName.toLowerCase())
+      ) {
+        roadNames.unshift(fetchedRoadName);
+      }
+
       let primaryCl: Centerline | undefined;
       if (primaryCoords && primaryCoords.length >= 2) {
         const clName = roadNames[0] || 'Synthesized Road CL';
-        primaryCl = buildCenterlineFromVertices(primaryCoords, clName);
+        const pointStartStation = surveyCorridor?.beginStation
+          ?? resolveBeginStation(undefined, (primaryCoords[0] as { description?: string } | undefined)?.description);
+        primaryCl = buildCenterlineFromVertices(primaryCoords, clName, 'cl-road', pointStartStation);
         syncedCenterlineId = primaryCl.id;
         if (syncCenterline && deps.setCenterlines) {
           const toSync = primaryCl;
@@ -1257,19 +1317,30 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
           );
         }
 
-        // Place street label if name available
-        if (deps.setStreetLabels && roadNames.length > 0) {
-          const midIdx = Math.floor(primaryCoords.length / 2);
-          const m0 = primaryCoords[Math.max(0, midIdx - 1)];
-          const m1 = primaryCoords[Math.min(primaryCoords.length - 1, midIdx + 1)];
-          const angleDeg = (Math.atan2(m1.northing - m0.northing, m1.easting - m0.easting) * 180) / Math.PI;
-          const newLabel: StreetLabel = {
-            x: primaryCoords[midIdx].easting,
-            y: primaryCoords[midIdx].northing,
-            text: roadNames[0],
-            angle: angleDeg,
-          };
-          deps.setStreetLabels((prev) => [...prev, newLabel]);
+        // Place the OSM-derived label on the drawn alignment. Fall back to the
+        // synthesis name only when no existing road was matched.
+        if (deps.setStreetLabels) {
+          if (fetchedStreetLabels.length > 0) {
+            deps.setStreetLabels((prev) => [...prev, ...fetchedStreetLabels]);
+          } else if (roadNames.length > 0) {
+            const labelText = roadNames[0];
+            const alreadyPlaced = (deps.streetLabels ?? []).some(
+              (label) => label.text.trim().toLowerCase() === labelText.trim().toLowerCase(),
+            );
+            if (!alreadyPlaced) {
+              const midIdx = Math.floor(primaryCoords.length / 2);
+              const m0 = primaryCoords[Math.max(0, midIdx - 1)];
+              const m1 = primaryCoords[Math.min(primaryCoords.length - 1, midIdx + 1)];
+              const angleDeg = (Math.atan2(m1.northing - m0.northing, m1.easting - m0.easting) * 180) / Math.PI;
+              const newLabel: StreetLabel = {
+                x: primaryCoords[midIdx].easting,
+                y: primaryCoords[midIdx].northing,
+                text: labelText,
+                angle: angleDeg,
+              };
+              deps.setStreetLabels((prev) => [...prev, newLabel]);
+            }
+          }
         }
       }
 
@@ -1336,6 +1407,8 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         addedLines: generatedLines.length,
         centerlineId: syncedCenterlineId,
         roadNames,
+        streetNames: fetchedStreetLabels.map((label) => label.text),
+        streetLabelsPlaced: fetchedStreetLabels.length,
         effectiveWidthFt,
         geometrySource,
       });
@@ -1348,7 +1421,8 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
       const deps = getDeps();
       const d = (message.data ?? {}) as Record<string, unknown>;
 
-      const name = typeof d.name === 'string' && d.name.trim() ? d.name.trim() : 'Proposed Road A';
+      const requestedName = typeof d.name === 'string' && d.name.trim() ? d.name.trim() : '';
+      let name = requestedName || 'Proposed Road A';
       // Typical-section inputs are optional. Draw immediately with conventional
       // defaults; the user can refine any value on a later pass.
       const laneCount =
@@ -1395,6 +1469,8 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
           targetCl = buildCenterlineFromVertices(
             matchedPts.map((pt) => ({ easting: pt.easting, northing: pt.northing })),
             name,
+            'cl-road',
+            resolveBeginStation(undefined, matchedPts[0].description),
           );
           deps.setCenterlines?.((prev) => [targetCl!, ...prev]);
         }
@@ -1420,7 +1496,7 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         targetCl = {
           id: `cl-road-${Date.now()}`,
           name,
-          beginStation: 0,
+          beginStation: resolveBeginStation(undefined, (p0 as { description?: string }).description),
           pis: [
             { id: `pi-${Date.now()}-0`, pointNumber: p0.pointNumber || 'POB', northing: p0.northing, easting: p0.easting },
             { id: `pi-${Date.now()}-1`, pointNumber: p1.pointNumber || 'END', northing: p1.northing, easting: p1.easting },
@@ -1494,6 +1570,35 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
       // Stationed template points along CL and pavement edges
       const totalLen = calculateCenterlineLength(targetCl);
       const endSta = targetCl.beginStation + totalLen;
+
+      // Resolve the existing street name along this alignment while the
+      // stationing work runs. The label is placed once the corridor is drawn.
+      const nameSampleStep = Math.max(10, Math.min(stationIntervalFt, 25));
+      const alignmentSamples: Array<{ x: number; y: number }> = [];
+      for (let s = targetCl.beginStation; s <= endSta + 0.01; s += nameSampleStep) {
+        const sample = calculatePointFromStationOffset(targetCl, Math.min(s, endSta), 0);
+        if (sample) alignmentSamples.push({ x: sample.easting, y: sample.northing });
+      }
+      const roadNameLookup: Promise<StreetLabel[]> =
+        deps.setStreetLabels && alignmentSamples.length >= 2
+          ? (async () => {
+              try {
+                const { fetchRoadLabelsAlongAlignment } = await import('./streetNameService.ts');
+                return await fetchRoadLabelsAlongAlignment(
+                  alignmentSamples,
+                  deps.settings.projection?.epsg,
+                  {
+                    toleranceFt: Math.max(40, totalTravelWidth / 2 + 30),
+                    maxLabels: 1,
+                    existingLabels: deps.streetLabels ?? [],
+                  },
+                );
+              } catch {
+                return [];
+              }
+            })()
+          : Promise.resolve([]);
+
       const generatedPts: SurveyPoint[] = [];
       let nextPn = deps.points.length + 1001;
       try {
@@ -1559,6 +1664,25 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         if (sta >= endSta) break;
       }
 
+      deps.setLines((prev) => [...prev, ...newLines]);
+
+      // Place the existing road's name on the drawing, then name the run and
+      // point list from it unless the user supplied an explicit corridor name.
+      const obtainedStreetLabels = await roadNameLookup;
+      if (obtainedStreetLabels.length > 0 && deps.setStreetLabels) {
+        const existingNames = new Set(
+          (deps.streetLabels ?? []).map((label) => label.text.trim().toLowerCase()),
+        );
+        const labelsToAdd = obtainedStreetLabels.filter(
+          (label) => !existingNames.has(label.text.trim().toLowerCase()),
+        );
+        if (labelsToAdd.length > 0) {
+          deps.setStreetLabels((prev) => [...prev, ...labelsToAdd]);
+        }
+      }
+      const resolvedName = requestedName || obtainedStreetLabels[0]?.text?.trim() || name;
+      name = resolvedName;
+
       if (generatedPts.length > 0) {
         deps.setPointLists((prev) => {
           const listId = `road-corridor-${targetCl!.id}`;
@@ -1574,8 +1698,6 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
           ];
         });
       }
-
-      deps.setLines((prev) => [...prev, ...newLines]);
 
       // Coordinate with Profile Agent if autoGenerateProfile is enabled
       let profileGenerated = false;
@@ -1630,6 +1752,7 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         typicalSection,
         drawnPointIds: generatedPts.map((p) => p.pointNumber),
         drawnLineIds: newLines.map((l) => l.id || '').filter(Boolean),
+        roadNames: obtainedStreetLabels.length > 0 ? obtainedStreetLabels.map((label) => label.text) : undefined,
         profileGenerated,
         createdAt: new Date().toISOString(),
       };
@@ -1641,7 +1764,10 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
 
       return respond(message, true, {
         corridorId,
+        corridorName: name,
         centerlineId: targetCl.id,
+        roadNames: obtainedStreetLabels.map((label) => label.text),
+        streetLabelsPlaced: obtainedStreetLabels.length,
         totalWidthFt: totalTravelWidth,
         rowWidthFt,
         addedPoints: generatedPts.length,

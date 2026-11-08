@@ -1,7 +1,7 @@
 {
   "name": "landsurv-core",
   "private": false,
-  "version": "26.11.07.01",
+  "version": "26.11.08.01",
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {
@@ -33,6 +33,7 @@
     "nodemailer": "^7.0.10",
     "pdfjs-dist": "5.4.394",
     "pg": "^8.16.3",
+    "polygon-clipping": "^0.15.7",
     "proj4": "2.11.0",
     "qrcode": "1.5.3",
     "react": "^18.2.0",

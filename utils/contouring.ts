@@ -542,7 +542,7 @@ export function generateContours(
                     ...(lineType ? { lineType } : {}),
                 });
 
-                if (showLabels && isMajor) {
+                if (showLabels) {
                     const segmentLengthSq = (p2.x - p1.x)**2 + (p2.y - p1.y)**2;
                     if (segmentLengthSq < 50**2) continue;
 
@@ -721,7 +721,7 @@ export function generateContoursAsIsoPaths(
                 : [{ elevation: elev, isMajor, vertices: smoothedPath }];
             isoPaths.push(...renderedPaths);
 
-            if (showLabels && isMajor) {
+            if (showLabels) {
                 for (const renderedPath of renderedPaths) {
                     for (let i = 0; i < renderedPath.vertices.length - 1; i++) {
                         const p1 = renderedPath.vertices[i];
@@ -898,7 +898,7 @@ export function generateTinContoursAsIsoPaths(
                 : [{ elevation: elev, isMajor, vertices: smoothedPath }];
             isoPaths.push(...renderedPaths);
 
-            if (showLabels && isMajor) {
+            if (showLabels) {
                 for (const renderedPath of renderedPaths) {
                     for (let i = 0; i < renderedPath.vertices.length - 1; i++) {
                         const p1 = renderedPath.vertices[i];
@@ -965,6 +965,45 @@ export function isoPathsToSurveyLines(
         }
     }
     return lines;
+}
+
+/**
+ * Rebuild IsoPath[] from rendered contour segments. Online contour services
+ * arrive as individual SurveyLine segments; chaining them back into paths by
+ * elevation lets the result be saved as a ContourGeneration and used to build
+ * a TIN surface, just like survey-generated contours.
+ */
+export function surveyLinesToIsoPaths(lines: SurveyLine[]): IsoPath[] {
+    const paths: IsoPath[] = [];
+    const openPathByElevation = new Map<string, IsoPath>();
+
+    for (const line of lines) {
+        if (!line.fromPt || !line.toPt) continue;
+        const elevation = line.fromPt.z ?? line.toPt.z;
+        if (typeof elevation !== 'number' || !Number.isFinite(elevation)) continue;
+        const isMajor = line.type === 'contour-major';
+        const key = `${elevation}|${isMajor ? 'major' : 'minor'}`;
+        const open = openPathByElevation.get(key);
+        if (open) {
+            const last = open.vertices[open.vertices.length - 1];
+            if (pointsClose(last, line.fromPt)) {
+                open.vertices.push({ x: line.toPt.x, y: line.toPt.y });
+                continue;
+            }
+        }
+        const path: IsoPath = {
+            elevation,
+            isMajor,
+            vertices: [
+                { x: line.fromPt.x, y: line.fromPt.y },
+                { x: line.toPt.x, y: line.toPt.y },
+            ],
+        };
+        paths.push(path);
+        openPathByElevation.set(key, path);
+    }
+
+    return paths;
 }
 
 function pointsClose(a: { x: number; y: number }, b: { x: number; y: number }, eps = 1e-6): boolean {

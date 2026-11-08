@@ -24,12 +24,14 @@ import { A2UIHostContext, WORKSPACE_TOOL_LABELS } from './A2UISurface.tsx';
 import { BoundaryDeedIntake } from './BoundaryDeedIntake.tsx';
 import { A2UIBoundarySummary } from './A2UIBoundarySummary.tsx';
 import { DockModeControl } from './DockModeControl.tsx';
+import { LegendQuickActions } from './LegendQuickActions.tsx';
 import type { A2UIQuickThoughtBreakdown } from '../services/a2uiQuickThought.ts';
 import { closeCanvasFlashInput, flashCanvasMessage, openCanvasFlashForInputForm } from '../services/canvasFlashes.ts';
 import { exampleFileContent, exampleFileName } from '../assets/example.raw.ts';
 import { exampleHighwayCl } from '../assets/example.highway.cl.ts';
 import { exampleDeedContent } from '../assets/example.deed.ts';
 import { getBrowserPosition, reverseGeocodeUs } from '../utils/reverseGeocode.ts';
+import { projectLocationZoningSeed, stateNameForZoning } from '../utils/zoningJurisdiction.ts';
 
 interface A2UIQuickThoughtSurfaceProps {
   breakdown: A2UIQuickThoughtBreakdown;
@@ -424,12 +426,64 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
   // GIS URL state
   const [gisLayerUrl, setGisLayerUrl] = useState('');
 
-  // Zoning intake state
-  const [zoningState, setZoningState] = useState(() => host.jobInfo?.siteAddress?.match(/,\s*([A-Za-z ]+?)(?:\s+\d{5})?\s*$/)?.[1]?.trim() ?? '');
-  const [zoningCounty, setZoningCounty] = useState('');
-  const [zoningMuni, setZoningMuni] = useState(() => host.jobInfo?.siteMunicipality ?? '');
+  // Zoning intake state. The live project location is the preferred source;
+  // every prefilled field stays editable and GPS remains an optional fallback.
+  const initialZoningSeed = useMemo(
+    () => projectLocationZoningSeed(host.getProjectLocationSnapshot?.()),
+    // The snapshot is read once when the Quick Thought mounts; later renders
+    // must not overwrite edits the user has already made.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const [zoningState, setZoningState] = useState(() =>
+    initialZoningSeed?.state ??
+    stateNameForZoning(
+      host.jobInfo?.siteAddress?.match(/,\s*([A-Za-z ]+?)(?:\s+\d{5})?\s*$/)?.[1]?.trim() ?? '',
+    ),
+  );
+  const [zoningCounty, setZoningCounty] = useState(() => initialZoningSeed?.county ?? '');
+  const [zoningMuni, setZoningMuni] = useState(
+    () => initialZoningSeed?.municipality ?? host.jobInfo?.siteMunicipality ?? '',
+  );
   const [zoningDistrict, setZoningDistrict] = useState(() => host.jobInfo?.zoningDistrict ?? '');
+  const [zoningAutofillSource, setZoningAutofillSource] = useState<'project-location' | 'gps' | null>(
+    () => (initialZoningSeed ? 'project-location' : null),
+  );
+  const [zoningLookupMessage, setZoningLookupMessage] = useState<string | null>(null);
   const [isLocatingGps, setIsLocatingGps] = useState(false);
+  const zoningAutoFilledRef = useRef(Boolean(initialZoningSeed));
+
+  // The project-location resolver is asynchronous. If the card mounts while it
+  // is still resolving, fill the fields once it lands rather than making the
+  // user reopen the Quick Thought.
+  useEffect(() => {
+    if (zoningAutoFilledRef.current) return;
+    if (zoningState.trim() || zoningCounty.trim() || zoningMuni.trim()) {
+      zoningAutoFilledRef.current = true;
+      return;
+    }
+    const seed = projectLocationZoningSeed(host.getProjectLocationSnapshot?.());
+    if (!seed) return;
+    if (seed.state) setZoningState(seed.state);
+    if (seed.county) setZoningCounty(seed.county);
+    if (seed.municipality) setZoningMuni(seed.municipality);
+    setZoningAutofillSource('project-location');
+    zoningAutoFilledRef.current = true;
+  }, [host, zoningState, zoningCounty, zoningMuni]);
+
+  const applyProjectZoningLocation = () => {
+    const seed = projectLocationZoningSeed(host.getProjectLocationSnapshot?.());
+    if (!seed) {
+      setZoningLookupMessage('No project location yet — add georeferenced points or use GPS.');
+      return;
+    }
+    if (seed.state) setZoningState(seed.state);
+    if (seed.county) setZoningCounty(seed.county);
+    if (seed.municipality) setZoningMuni(seed.municipality);
+    setZoningAutofillSource('project-location');
+    setZoningLookupMessage('Filled from the project location — adjust anything below.');
+    zoningAutoFilledRef.current = true;
+  };
 
   // Standards compliance intake state
   const [complianceSourceMode, setComplianceSourceMode] = useState<ComplianceSourceMode>('ask-each-run');
@@ -1231,21 +1285,41 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
                   className={compactInputClass}
                 />
               </div>
+              {zoningAutofillSource && (
+                <p className="text-[10px] text-cyan-300/80">
+                  {zoningAutofillSource === 'project-location'
+                    ? 'Filled from project location'
+                    : 'Filled from GPS'}{' '}
+                  — edit anything below.
+                </p>
+              )}
               <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  data-no-drag
+                  disabled={isLocatingGps}
+                  onClick={applyProjectZoningLocation}
+                  className={btnClass}
+                >
+                  Use project location
+                </button>
                 <button
                   type="button"
                   data-no-drag
                   disabled={isLocatingGps}
                   onClick={async () => {
                     setIsLocatingGps(true);
+                    setZoningLookupMessage(null);
                     try {
                       const pos = await getBrowserPosition();
                       const rev = await reverseGeocodeUs(pos.coords.latitude, pos.coords.longitude);
-                      if (rev.state) setZoningState(rev.state);
+                      if (rev.state) setZoningState(stateNameForZoning(rev.state));
                       if (rev.county) setZoningCounty(rev.county);
                       if (rev.place) setZoningMuni(rev.place);
+                      setZoningAutofillSource('gps');
+                      zoningAutoFilledRef.current = true;
                     } catch {
-                      /* fallback to manual entry */
+                      setZoningLookupMessage('GPS unavailable — enter the jurisdiction manually.');
                     } finally {
                       setIsLocatingGps(false);
                     }
@@ -1254,15 +1328,18 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
                 >
                   {isLocatingGps ? 'Locating…' : 'Use GPS'}
                 </button>
-                <button
-                  type="submit"
-                  data-no-drag
-                  disabled={!zoningState.trim() || !zoningCounty.trim() || !zoningMuni.trim()}
-                  className={primaryBtnClass}
-                >
-                  Research zoning
-                </button>
               </div>
+              <button
+                type="submit"
+                data-no-drag
+                disabled={!zoningState.trim() || !zoningCounty.trim() || !zoningMuni.trim()}
+                className={`${primaryBtnClass} w-full`}
+              >
+                Research zoning
+              </button>
+              {zoningLookupMessage && (
+                <p className="text-[10px] text-amber-300/80">{zoningLookupMessage}</p>
+              )}
             </form>
             <OpenChatFooter onOpenConversation={onOpenConversation} />
           </div>
@@ -1924,6 +2001,7 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
 
     return (
       <div data-testid="quick-thought-workspace-tool" className="mt-2.5 space-y-1.5">
+        {toolId === 'legend' && <LegendQuickActions showAddAll={false} />}
         <div className="grid grid-cols-2 gap-1.5">
           {(onPopOut || onDock || onChat) && (
             <div className="col-span-2 flex justify-end">
@@ -2021,7 +2099,127 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
     );
   }
 
-  // 11. Large dataset fallback (`standards-explorer` table or > MAX_QUICK_THOUGHT_OPTIONS items)
+  // 11. PA E&S soil limitations report (`a2ui.kind === 'soil-limitations'`)
+  if (breakdown.kind === 'soil-limitations' && breakdown.a2ui?.soilLimitations) {
+    const report = breakdown.a2ui.soilLimitations;
+    const unitCount = report.units.length;
+    const acres =
+      report.soilAcres > 0 && report.soilAcres < 0.01
+        ? '<0.01'
+        : report.soilAcres.toFixed(2);
+    return (
+      <div data-testid="quick-thought-soil-limitations" className="mt-2.5 space-y-1.5">
+        <div className="rounded-md border border-amber-400/25 bg-amber-400/[0.06] px-2 py-1.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[10.5px] font-semibold text-amber-100">
+              PA E&amp;S soil limitations
+            </span>
+            <span className="shrink-0 text-[10px] text-white/60">
+              {unitCount} unit{unitCount === 1 ? '' : 's'}
+            </span>
+          </div>
+          <p className="mt-0.5 text-[10px] text-white/70">
+            {acres} ac · {report.areaLabel}
+            {!report.boundaryPresent ? ' · project AOI' : ''}
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          {report.units.slice(0, 3).map((unit, index) => {
+            const limitationLabels = unit.limitations.map(item =>
+              item.label + (item.valueLabel ? ` (${item.valueLabel})` : ''),
+            );
+            return (
+              <div
+                key={`${unit.mukey}-${unit.musym}-${index}`}
+                className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-1"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 truncate text-[10px] text-white/85">
+                    <span className="font-mono font-semibold text-stone-200">
+                      {unit.musym || '—'}
+                    </span>{' '}
+                    {unit.muname || unit.seriesName}
+                  </span>
+                  <span className="shrink-0 text-[9.5px] text-white/50">
+                    {unit.acres.toFixed(2)} ac
+                  </span>
+                </div>
+                <p
+                  className="mt-0.5 truncate text-[9.5px] text-amber-200/80"
+                  title={
+                    limitationLabels.length > 0
+                      ? limitationLabels.join('; ')
+                      : 'No Table E.1 limitations marked'
+                  }
+                >
+                  {limitationLabels.length > 0
+                    ? limitationLabels.join('; ')
+                    : 'No Table E.1 limitations marked'}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+        {unitCount > 3 && (
+          <p className="text-[9.5px] text-white/45">
+            +{unitCount - 3} more map unit{unitCount - 3 === 1 ? '' : 's'} in the full report
+          </p>
+        )}
+
+        <div className="grid grid-cols-2 gap-1.5">
+          {host.onDownloadSoilLimitations && (
+            <button
+              type="button"
+              data-no-drag
+              onClick={() => host.onDownloadSoilLimitations?.()}
+              disabled={host.isDownloadingSoilLimitations}
+              className={primaryBtnClass}
+            >
+              {host.isDownloadingSoilLimitations ? 'Preparing…' : 'Download PDF'}
+            </button>
+          )}
+          {host.onAddSoilLimitationsToSheet && (
+            <button
+              type="button"
+              data-no-drag
+              onClick={() => host.onAddSoilLimitationsToSheet?.()}
+              className={btnClass}
+            >
+              Add to sheet
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          {host.onOpenFullscreen && (
+            <button
+              type="button"
+              data-no-drag
+              onClick={() => breakdown.a2ui && host.onOpenFullscreen?.(breakdown.a2ui)}
+              className={btnClass}
+            >
+              Fullscreen
+            </button>
+          )}
+          {(onPopOut || onDock || onChat) && (
+            <div className="flex justify-end">
+              <DockModeControl
+                mode="chat"
+                onChange={next => {
+                  if (next === 'floating') onPopOut?.();
+                  else if (next === 'toolshelf') onDock?.();
+                  else onChat?.();
+                }}
+              />
+            </div>
+          )}
+        </div>
+        <OpenChatFooter onOpenConversation={onOpenConversation} />
+      </div>
+    );
+  }
+
+  // 12. Large dataset fallback (`standards-explorer` table or > MAX_QUICK_THOUGHT_OPTIONS items)
   if (breakdown.a2ui?.kind === 'standards-explorer') {
     return (
       <div data-testid="quick-thought-standards-explorer" className="mt-2.5 space-y-1.5">

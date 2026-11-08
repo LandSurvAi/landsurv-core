@@ -10,7 +10,7 @@ import { getHolidayTheme } from './InitialAgentSelection';
 
 export type WelcomeMode = 'main' | 'free-code';
 
-const FOOTER_LINK_CLASS = 'flex min-h-8 items-center whitespace-nowrap border-slate-700/70 px-4 py-2 text-[11px] font-medium tracking-[0.01em] text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white focus-visible:relative focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-cyan-400/70 light-theme:border-gray-200 light-theme:text-gray-600 light-theme:hover:bg-gray-100 light-theme:hover:text-gray-900';
+const FOOTER_LINK_CLASS = 'flex min-h-8 items-center justify-center whitespace-nowrap border-slate-700/70 px-4 py-2 text-center text-[11px] font-medium tracking-[0.01em] text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white focus-visible:relative focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-cyan-400/70 light-theme:border-gray-200 light-theme:text-gray-600 light-theme:hover:bg-gray-100 light-theme:hover:text-gray-900';
 
 const FOOTER_SITE_LINKS = [
   { label: 'Sitemap', href: 'https://sitemap.landsurv.ai' },
@@ -476,7 +476,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         {/* Footer Bar */}
         <footer className="px-4 py-3 sm:px-6 sm:py-3.5 bg-gray-950/40 border-t border-gray-800 shrink-0 light-theme:bg-gray-50 light-theme:border-gray-200">
           {mode === 'main' ? (
-            <div className="mx-auto flex w-full max-w-[38rem] flex-col overflow-hidden rounded-md border border-slate-700/70 bg-slate-950/35 md:flex-row md:items-stretch light-theme:border-gray-300 light-theme:bg-white">
+            <div className="flex w-full flex-col overflow-hidden rounded-md border border-slate-700/70 bg-slate-950/35 md:flex-row md:items-stretch light-theme:border-gray-300 light-theme:bg-white">
               <nav aria-label="Site links" className="grid min-w-0 flex-1 grid-cols-2">
                 {FOOTER_SITE_LINKS.map((link, index) => (
                   <a
@@ -491,8 +491,8 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 ))}
               </nav>
 
-              {/* Community links — fixed center column with crisp rules on both sides */}
-              <div className="flex shrink-0 items-center justify-center gap-4 border-y border-slate-700/70 bg-slate-900/30 px-5 py-2 md:gap-3 md:border-x md:border-y-0 light-theme:border-gray-200 light-theme:bg-gray-50">
+              {/* Community links — equal center column with crisp rules on both sides */}
+              <div className="flex items-center justify-center gap-4 border-y border-slate-700/70 bg-slate-900/30 px-5 py-2 md:flex-1 md:basis-0 md:gap-3 md:border-x md:border-y-0 light-theme:border-gray-200 light-theme:bg-gray-50">
                 <a
                   href="https://www.youtube.com/@LandSurvAI"
                   target="_blank"

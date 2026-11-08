@@ -58,6 +58,11 @@ export function detectProjectLocationIntent(text: string): ProjectLocationIntent
   if (/\bcounty\s+parcels?\s+gis\b/i.test(trimmed)) {
     return null;
   }
+  // Limitations reports are compiled inline by the Soils Agent; "show soil
+  // limitations" must not fetch SSURGO polygons through the location panel.
+  if (/\bsoils?\s+limitations?\b/i.test(trimmed)) {
+    return null;
+  }
 
   const clusterMatch = trimmed.match(CLUSTER_INDEX_RE);
   const clusterIndex = clusterMatch ? Number(clusterMatch[1]) : undefined;

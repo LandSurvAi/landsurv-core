@@ -9,7 +9,7 @@ interface WmsPanelProps {
   onToggleLayer: (serviceUrl: string, layerName: string, isVisible: boolean) => void;
   onUpdateLayer: (serviceUrl: string, layerName: string, updates: Partial<ActiveWmsLayer>) => void;
   onRemoveService: (serviceUrl: string) => void;
-  onDownloadMapArea: (name: string, centerPointNumber: string, radius: number) => Promise<void>;
+  onDownloadMapArea: (name: string, centerPointNumber: string, range: number) => Promise<void>;
   onDeleteOfflineMapArea: (id: string) => void;
   offlineMapAreas: OfflineMapArea[];
   points: SurveyPoint[];
@@ -41,7 +41,10 @@ const WmsPanel: React.FC<WmsPanelProps> = ({
   const [expandedServices, setExpandedServices] = useState<Set<string>>(new Set());
   const [downloadName, setDownloadName] = useState('Offline-Area-1');
   const [downloadCenter, setDownloadCenter] = useState('');
-  const [downloadRadius, setDownloadRadius] = useState(500);
+  const [downloadRange, setDownloadRange] = useState(100);
+
+  const hasFilePoints = points.some(p => Number.isFinite(p.easting) && Number.isFinite(p.northing));
+  const safeRange = Number.isFinite(downloadRange) && downloadRange > 0 ? downloadRange : 0;
 
   const handleConnect = async (url: string) => {
     if (!url) return;
@@ -111,16 +114,21 @@ const WmsPanel: React.FC<WmsPanelProps> = ({
           </div>
           <div>
             <h4 className="font-semibold text-gray-200 mb-2 light-theme:text-gray-800">Download Offline Map Area</h4>
-             <form onSubmit={(e) => { e.preventDefault(); onDownloadMapArea(downloadName, downloadCenter, downloadRadius); }} className="space-y-2">
+             <form onSubmit={(e) => { e.preventDefault(); onDownloadMapArea(downloadName, downloadCenter, downloadRange); }} className="space-y-2">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <input type="text" value={downloadName} onChange={e => setDownloadName(e.target.value)} placeholder="Area Name" required className="p-2 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 light-theme:bg-white light-theme:border-gray-300"/>
-                    <select value={downloadCenter} onChange={e => setDownloadCenter(e.target.value)} required className="p-2 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 light-theme:bg-white light-theme:border-gray-300">
-                        <option value="">Select Center Point</option>
-                        {points.map(p => <option key={p.pointNumber} value={p.pointNumber}>{p.pointNumber} - {p.description}</option>)}
+                    <select value={downloadCenter} onChange={e => setDownloadCenter(e.target.value)} disabled={hasFilePoints} title={hasFilePoints ? 'All file points are used automatically' : 'Optional fallback center'} className="p-2 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60 light-theme:bg-white light-theme:border-gray-300">
+                        <option value="">{hasFilePoints ? 'All file points (auto)' : 'Current map view (auto)'}</option>
+                        {!hasFilePoints && points.map(p => <option key={p.pointNumber} value={p.pointNumber}>{p.pointNumber} - {p.description}</option>)}
                     </select>
-                    <input type="number" value={downloadRadius} onChange={e => setDownloadRadius(parseInt(e.target.value, 10))} placeholder="Radius (ft)" required className="p-2 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 light-theme:bg-white light-theme:border-gray-300"/>
+                    <input type="number" min={0} value={Number.isFinite(downloadRange) ? downloadRange : 0} onChange={e => setDownloadRange(parseInt(e.target.value, 10))} placeholder="Range (ft)" title="Padding around the outermost file points" className="p-2 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 light-theme:bg-white light-theme:border-gray-300"/>
                 </div>
-                <button type="submit" disabled={isLoading || points.length === 0} className="w-full px-4 py-2 text-sm font-semibold text-white bg-green-600 rounded-md hover:bg-green-700 disabled:bg-gray-600">
+                <p className="text-xs text-gray-400">
+                    {hasFilePoints
+                        ? `Downloads only the area around all ${points.length} file point${points.length === 1 ? '' : 's'}, plus ${safeRange} ft of padding.`
+                        : 'No file points yet — downloads the current map view.'}
+                </p>
+                <button type="submit" disabled={isLoading} className="w-full px-4 py-2 text-sm font-semibold text-white bg-green-600 rounded-md hover:bg-green-700 disabled:bg-gray-600">
                     {isLoading ? 'Processing...' : 'Download Visible Layers'}
                 </button>
              </form>

@@ -110,19 +110,22 @@ export const CL_SKILLS: SkillSchema[] = [
       },
       beginStation: {
         type: 'number',
-        description: 'Starting station value in feet (default: 0, meaning 0+00.00).',
+        description:
+          'Starting station value in feet. A non-zero value overrides the point chain; when omitted or 0, ' +
+          'the station written on the first point (e.g. "138+37.12 PC") becomes the beginning station.',
       },
       points: {
         type: 'array',
         required: true,
         description:
           'Ordered array of point objects that define the chain. Each item must include ' +
-          '{ pointNumber: string, northing: number, easting: number }. ' +
+          '{ pointNumber: string, northing: number, easting: number, description?: string }. ' +
           'The points are connected in the order supplied — first point is the POB, ' +
-          'last point is the END. Elevation is optional and ignored for horizontal geometry.',
+          'last point is the END. Include the point descriptions; the first point\'s station label ' +
+          'sets beginStation when no non-zero beginStation is supplied. Elevation is optional and ignored for horizontal geometry.',
         items: {
           type: 'object',
-          description: '{ pointNumber: string, northing: number, easting: number, elevation?: number }',
+          description: '{ pointNumber: string, northing: number, easting: number, description?: string, elevation?: number }',
         },
       },
     },
@@ -146,9 +149,9 @@ export const CL_SKILLS: SkillSchema[] = [
       // user: "Create a centerline using the DYL points connect them in a chain"
       // (agent extracts DYL points from context and orders them by point number)
       'cl_create_from_points({name:"DYL CL", points:[' +
-        '{pointNumber:"1",northing:5000,easting:5000},' +
-        '{pointNumber:"2",northing:5200,easting:5150},' +
-        '{pointNumber:"3",northing:5400,easting:5100}]})',
+        '{pointNumber:"1",northing:5000,easting:5000,description:"STA 138+37.12 PC"},' +
+        '{pointNumber:"2",northing:5200,easting:5150,description:"139+06.45 PI"},' +
+        '{pointNumber:"3",northing:5400,easting:5100,description:"139+75.12 PT"}]})',
     ],
   },
 ];

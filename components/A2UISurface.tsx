@@ -43,6 +43,8 @@ import { A2UISelectionPrompt } from './A2UISelectionPrompt.tsx';
 import { A2UICacpManifestExplorer } from './A2UICacpManifestExplorer.tsx';
 import { A2UICacpReview } from './A2UICacpReview.tsx';
 import { A2UISettingsSurface } from './A2UISettingsSurface.tsx';
+import { A2UIProperties } from './A2UIProperties.tsx';
+import { A2UISoilLimitations } from './A2UISoilLimitations.tsx';
 import { A2UITextEditor } from './A2UITextEditor.tsx';
 import { A2UISpreadsheet } from './A2UISpreadsheet.tsx';
 import { DockModeControl, type DockMode } from './DockModeControl.tsx';
@@ -73,6 +75,7 @@ export const WORKSPACE_TOOL_LABELS: Record<A2UIWorkspaceToolId, string> = {
   'sheet-view': 'Sheet View (24×36 Plot Layout)',
   'roading-panel': 'Roading Studio',
   'tin-surfaces': 'TIN Surfaces',
+  'legend': 'Legend',
 };
 
 export interface A2UIHostContextValue {
@@ -253,6 +256,11 @@ export interface A2UIHostContextValue {
   ) => void;
   /** Re-run the state/county/municipality lookup. */
   onProjectLocationRefresh?: () => void;
+  /** Compile/download the PA E&S limitations report from a chat-hosted report. */
+  onDownloadSoilLimitations?: () => void;
+  /** Place the compiled limitations/resolutions block on the active sheet. */
+  onAddSoilLimitationsToSheet?: () => void;
+  isDownloadingSoilLimitations?: boolean;
   /** Apply the CRS recommended by the georeferenced point clusters. */
   onApplyClusterProjection?: () => Promise<{ projection: ProjectionSetting; label: string } | null>;
   /** WGS84 bbox used to suggest a CRS in the A2UI settings surface. */
@@ -281,6 +289,8 @@ export interface A2UIHostContextValue {
     pointNumber: string,
     description: string
   ) => Promise<{ ok: boolean; message?: string }> | { ok: boolean; message?: string } | void;
+  /** Stop the active live Scout discovery run. */
+  onScoutStop?: () => void;
 }
 
 export const A2UIHostContext = createContext<A2UIHostContextValue>({});
@@ -496,6 +506,38 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
           >
             Expand ▼
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (payload.kind === 'properties' && payload.properties) {
+    const embedded = presentation !== 'inline';
+    return (
+      <div
+        data-testid="a2ui-surface-properties"
+        className={embedded ? 'flex h-full min-h-0 flex-col' : 'mt-3 w-full'}
+      >
+        <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
+          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">
+            <Settings2 className="h-3 w-3" />
+            Object Properties
+          </span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="rounded border border-cyan-400/25 bg-cyan-400/10 px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-wide text-cyan-200">
+              A2UI
+            </span>
+            <SurfaceActions
+              onPopOut={onPopOut}
+              onDock={onDock}
+              onChat={onChat}
+              onFullscreen={onFullscreen}
+              onMinimize={onMinimize}
+            />
+          </div>
+        </div>
+        <div className="overflow-hidden rounded-xl border border-cyan-400/25 bg-[#070e18]/90">
+          <A2UIProperties spec={payload.properties} />
         </div>
       </div>
     );
@@ -940,6 +982,42 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
             onOpenPanel={host.onGpsOpenPanel}
             onSetTarget={host.onGpsSetTarget}
             onCollectPoint={host.onGpsCollectPoint}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (payload.kind === 'soil-limitations' && payload.soilLimitations) {
+    const embedded = presentation !== 'inline';
+    return (
+      <div
+        data-testid="a2ui-surface-soil-limitations"
+        className={embedded ? 'flex h-full min-h-0 flex-col' : 'mt-3 w-full'}
+      >
+        <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
+          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-amber-300">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+            Soil Limitations
+          </span>
+          <SurfaceActions
+            onPopOut={onPopOut}
+            onDock={onDock}
+            onChat={onChat}
+            onFullscreen={onFullscreen}
+            onMinimize={onMinimize}
+          />
+        </div>
+        <div
+          className={`overflow-hidden rounded-xl border border-amber-400/25 bg-[#0b0d10]/80 ${
+            embedded ? 'min-h-0 flex-1 overflow-y-auto' : 'max-h-[min(70vh,640px)] overflow-y-auto'
+          }`}
+        >
+          <A2UISoilLimitations
+            spec={payload.soilLimitations}
+            isDownloading={host.isDownloadingSoilLimitations}
+            onDownload={host.onDownloadSoilLimitations}
+            onAddToSheet={host.onAddSoilLimitationsToSheet}
           />
         </div>
       </div>

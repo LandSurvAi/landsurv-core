@@ -142,7 +142,7 @@ export function getUploadPromptCopy(agent: AgentType, widgetType: A2UIWidgetType
     case 'dxf-upload':
       return 'Drop your <strong>.dxf</strong> file below to render it onto the canvas and inspect its layers and geometry:';
     case 'gis-upload':
-      return 'Here are the GIS intake options — upload a <strong>.geojson</strong> file, pick from the public ArcGIS catalog, browse a REST server, or search lots by owner name:';
+      return 'You can ask me for live public layers any time — county lines, State Plane / SPC zones, school or voting districts, streams, water bodies, watersheds. Here are the GIS intake options for files and services:';
     case 'centerline-upload':
       return 'Drop your <strong>.cl</strong> alignment file below, load the 1.5-mile highway example, or start a blank centerline:';
     case 'image-upload':
@@ -205,7 +205,7 @@ export function buildA2UIIntakeGreeting(
       if (ptCount > 0) {
         detail = `Welcome to the drawing canvas! I see <strong>${ptCount.toLocaleString()} point${ptCount === 1 ? '' : 's'}</strong> already loaded. Would you like to upload additional point files (<strong>.csv</strong> or <strong>.txt</strong>), or work with the points already on the canvas?`;
         questionOptions = [
-          'Yes, upload points',
+          'Upload Points',
           'Work with existing points',
           'Open Point Tools',
         ];
@@ -213,7 +213,7 @@ export function buildA2UIIntakeGreeting(
         detail =
           'Welcome to the drawing canvas! Would you like to upload a point file (<strong>.csv</strong> or <strong>.txt</strong>) or folder right now, or would you prefer to key in points manually?';
         questionOptions = [
-          'Yes, upload points',
+          'Upload Points',
           'Key in points manually',
           'Open Point Tools',
         ];
@@ -232,7 +232,7 @@ export function buildA2UIIntakeGreeting(
 
     case AgentType.GIS_AGENT:
       detail =
-        'Welcome to the drawing canvas! Would you like to import GIS data right now — such as uploading a <strong>.geojson</strong> file, connecting to an ArcGIS REST server, or searching parcels by owner?';
+        'Welcome to the drawing canvas! Ask me to draw a live public layer — county lines, State Plane / SPC zones, school districts, streams, water bodies, watersheds — or import <strong>.geojson</strong> / connect an ArcGIS REST service.';
       questionOptions = [
         'Yes, open GIS upload & server options',
         'Browse public ArcGIS catalog',
@@ -400,9 +400,11 @@ export function getDefaultSuggestedQuestions(agent: AgentType): string[] {
       ];
     case AgentType.GIS_AGENT:
       return [
+        'Show me county lines',
+        'Draw State Plane / SPC zones',
+        'Draw streams and water bodies',
+        'Show watersheds',
         'How many features are in this file?',
-        "List all features with a 'PARCEL_ID' property.",
-        'What is the total area of all polygon features?',
       ];
     case AgentType.CAD_MANAGER:
       return [
@@ -703,6 +705,17 @@ export function classifyA2UIIntakeReply(
     };
   }
 
+  // LSAI's empty-workspace Quick Thought uses "Process a deed" as a direct
+  // intake action; it should open the deed widget even with no prompt loaded.
+  if (/^(?:process|upload|analyze|read)\s+(?:a\s+|the\s+)?deed$/i.test(trimmed)) {
+    return {
+      action: 'show-upload-widget',
+      widgetType: 'deed-upload',
+      agent: AgentType.DEED_READER,
+      replyText: getUploadPromptCopy(AgentType.DEED_READER, 'deed-upload'),
+    };
+  }
+
   // 2. Check affirmative / upload chips when an intake prompt is active
   if (
     isPrompting &&
@@ -768,6 +781,9 @@ export function classifyA2UIIntakeReply(
       widgetType = 'image-upload';
     } else if (/\bstandard/i.test(lower) && activeAgent === AgentType.CAD_MANAGER) {
       widgetType = 'cad-manager-intake';
+    } else if (!widgetType && /\b(?:pdf|plans?|plan\s+sheets?)\b/i.test(lower)) {
+      targetAgent = AgentType.CIVIL_PLAN_EXPERT;
+      widgetType = 'plan-upload';
     } else if (!widgetType) {
       widgetType = 'point-upload';
     }

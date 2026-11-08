@@ -166,6 +166,7 @@ export const DOC_ARTICLES: DocArticle[] = [
         ],
         parameters: [
           { name: 'Pan / Zoom', type: 'Mouse', description: 'Middle mouse button drag to pan; mouse wheel to zoom dynamically.' },
+          { name: 'Z', type: 'Key', description: 'Enter box zoom; drag a window to frame it. Esc cancels.' },
           { name: 'Space', type: 'Key', description: 'Activate the CAD command line. Type HELP to list every command and alias.' },
           { name: 'L / PLINE', type: 'Command', description: 'Draw chained line/arc segments; A toggles tangent Arc and L returns to straight segments.' },
           { name: 'R', type: 'Key', description: 'Start ROTATE from the keyboard — snapped base point, then a clicked point or typed angle. With nothing selected it arms picks; press R again to cancel.' },

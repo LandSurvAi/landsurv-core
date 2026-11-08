@@ -2,6 +2,7 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
@@ -163,6 +164,15 @@ export const A2UISurfaceHost: React.FC<A2UISurfaceHostProps> = ({
   );
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [minimized, setMinimized] = useState<Set<string>>(() => new Set());
+  const [surfaceOffsets, setSurfaceOffsets] = useState<Record<string, { x: number; y: number }>>({});
+  const dragRef = useRef<{
+    key: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
 
   const launchDefinition = useCallback(
     (definition: A2UISurfaceDefinition) => {
@@ -238,6 +248,52 @@ export const A2UISurfaceHost: React.FC<A2UISurfaceHostProps> = ({
   const styles = ACCENT_STYLES[activeSurface?.accent ?? 'cyan'];
   const isMinimized = activeSurface ? minimized.has(activeSurface.key) : false;
   const isFullscreen = activeSurface?.size === 'fullscreen';
+  const surfaceOffset = activeSurface ? surfaceOffsets[activeSurface.key] ?? { x: 0, y: 0 } : { x: 0, y: 0 };
+
+  const handleDragStart = (event: React.PointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || isFullscreen) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button, a, input, select, textarea')) return;
+    const key = activeSurface?.key;
+    if (!key) return;
+    const origin = surfaceOffsets[key] ?? { x: 0, y: 0 };
+    dragRef.current = {
+      key,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: origin.x,
+      originY: origin.y,
+    };
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is unavailable in some test environments.
+    }
+  };
+
+  const handleDragMove = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setSurfaceOffsets(previous => ({
+      ...previous,
+      [drag.key]: {
+        x: drag.originX + event.clientX - drag.startX,
+        y: drag.originY + event.clientY - drag.startY,
+      },
+    }));
+  };
+
+  const handleDragEnd = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is unavailable in some test environments.
+    }
+  };
 
   return (
     <>
@@ -277,13 +333,21 @@ export const A2UISurfaceHost: React.FC<A2UISurfaceHostProps> = ({
             aria-label={activeSurface.title}
             data-testid={`a2ui-hosted-surface-${activeSurface.definitionId ?? activeSurface.key}`}
             data-size={activeSurface.size}
+            style={isFullscreen ? undefined : { transform: `translate(${surfaceOffset.x}px, ${surfaceOffset.y}px)` }}
             className={`pointer-events-auto flex flex-col overflow-hidden rounded-xl border bg-[#070e18]/97 text-slate-200 backdrop-blur-md ${styles.border} ${styles.glow} ${
               isFullscreen
                 ? 'fixed inset-3 z-[10000] h-[calc(100dvh-1.5rem)] max-h-none'
                 : `max-h-[76vh] ${SIZE_CLASSES[activeSurface.size]}`
             }`}
           >
-            <header className="flex shrink-0 items-start justify-between gap-2 border-b border-white/[0.08] bg-white/[0.02] px-3 py-2">
+            <header
+              data-testid="a2ui-hosted-surface-drag-handle"
+              onPointerDown={handleDragStart}
+              onPointerMove={handleDragMove}
+              onPointerUp={handleDragEnd}
+              onPointerCancel={handleDragEnd}
+              className="flex shrink-0 cursor-grab touch-none select-none items-start justify-between gap-2 border-b border-white/[0.08] bg-white/[0.02] px-3 py-2 active:cursor-grabbing"
+            >
               <div className="flex min-w-0 items-start gap-2">
                 <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border font-mono text-[9px] font-bold ${styles.chip}`}>
                   {(activeSurface.definitionId && getDefinitionGlyph(activeSurface.definitionId)) || '◇'}

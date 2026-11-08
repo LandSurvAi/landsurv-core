@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { FloodIcon } from './icons.tsx';
-import type { AreaHatchSettings, InclusionBoundary, MapAreaFeature } from '../types.ts';
+import type { AreaHatchSettings, GenerationBlock, InclusionBoundary, MapAreaFeature } from '../types.ts';
 import { AreaHatchControls } from './AreaHatchControls.tsx';
+import { GenerationBlockSummary } from './GenerationBlockSummary.tsx';
 import { buildFloodSheetNotes, buildFloodZoneReport } from '../services/floodReport.ts';
 
 /**
@@ -35,6 +36,8 @@ interface FloodPanelProps {
   inclusionSegmentCount: number;
   /** Last fetch result summary for display — zone code → polygon count. */
   lastResult?: { zoneCounts: Record<string, number>; featureCount: number } | null;
+  /** Provenance block for the FEMA linework currently on the canvas. */
+  generation?: GenerationBlock | null;
   onClearFloodLines?: () => void;
   /** Known inclusion boundaries — when supplied, a selector is shown. */
   inclusionBoundaries?: InclusionBoundary[];
@@ -80,6 +83,7 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
   hasInclusionBoundary,
   inclusionSegmentCount,
   lastResult,
+  generation = null,
   onClearFloodLines,
   inclusionBoundaries = [],
   activeInclusionBoundaryId = null,
@@ -101,6 +105,14 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
   const [includeBfe, setIncludeBfe] = useState(true);
   const [showReport, setShowReport] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!generation) return;
+    if (generation.query?.mode === 'inclusion') setMode('inclusion');
+    else if (generation.query?.mode) setMode('description');
+    if (generation.query?.description) setDescription(generation.query.description);
+    if (typeof generation.query?.includeBfe === 'boolean') setIncludeBfe(generation.query.includeBfe);
+  }, [generation]);
 
   const canFetch =
     !isFetching &&
@@ -165,6 +177,8 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
         <FloodIcon className="w-4 h-4 text-cyan-400" />
         <span>Source: FEMA National Flood Hazard Layer (NFHL)</span>
       </div>
+
+      <GenerationBlockSummary generation={generation} accent="cyan" />
 
       {/* Mode toggle */}
       <div className="grid grid-cols-2 gap-2">
@@ -291,19 +305,19 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
         {isFetching ? 'Fetching FEMA NFHL…' : includeBfe ? 'Fetch Flood Zones + BFEs' : 'Fetch Flood Zones'}
       </button>
 
-      {/* FIRMETTE row — visible after at least one flood fetch */}
-      {(lastResult || hasFirmette) && (onFetchFirmette || onViewFirmette) && (
+      {/* FIRMETTE PDF — available from fetched flood zones, an inclusion area, or project points */}
+      {(onFetchFirmette || onViewFirmette) && (
         <div className="flex gap-2">
           {onFetchFirmette && (
             <button
-              onClick={onFetchFirmette}
-              disabled={isFetchingFirmette || !lastResult}
+              onClick={() => onFetchFirmette()}
+              disabled={isFetchingFirmette}
               className="flex-1 py-1.5 px-3 text-xs font-semibold rounded-md border transition-colors
                 bg-indigo-900/40 border-indigo-500/50 text-indigo-300 hover:bg-indigo-800/50
                 disabled:bg-gray-800/40 disabled:border-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
-              title="Download and store FEMA FIRMETTE imagery for this area"
+              title="Download the FEMA FIRMETTE flood map as a PDF for this area"
             >
-              {isFetchingFirmette ? 'Fetching FIRMETTE…' : '🗺 Get FIRMETTE'}
+              {isFetchingFirmette ? 'Preparing PDF…' : '📄 Get FIRMETTE PDF'}
             </button>
           )}
           {hasFirmette && onViewFirmette && (
@@ -409,7 +423,7 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
             </button>
           )}
           <p className="text-[10px] text-gray-500 leading-relaxed">
-            I can also label the zones one by one, clip the floodplain to your boundary, or include FIRMETTE imagery.
+            I can also label the zones one by one, clip the floodplain to your boundary, or download the FIRMETTE PDF.
           </p>
         </div>
       )}

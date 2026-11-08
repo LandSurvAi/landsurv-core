@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Check, Eye, EyeOff, Search } from 'lucide-react';
 import type { CadLayerEntry } from './LayerManagerPanel.tsx';
+import { TOOLBAR_DROPDOWN_PANEL_CLASS, useToolbarDropdown } from './toolbarDropdown.ts';
 
 interface CadLayerPickerProps {
   /** All layers from the CAD Manager standard plus any layers already used by geometry. */
@@ -34,37 +35,8 @@ export const CadLayerPicker: React.FC<CadLayerPickerProps> = ({
   onLayerColorChange,
   onLayerLinetypeChange,
 }) => {
-  const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const containerRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-
-  const closePicker = useCallback(() => {
-    setIsOpen(false);
-    setSearch('');
-  }, []);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) closePicker();
-    };
-    // Capture phase so Escape dismisses the strip without also cancelling a
-    // canvas tool that listens for Escape.
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      closePicker();
-      triggerRef.current?.focus();
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      window.removeEventListener('keydown', handleKeyDown, true);
-    };
-  }, [isOpen, closePicker]);
+  const { isOpen, open, close, containerRef, triggerRef } = useToolbarDropdown(() => setSearch(''));
 
   const filteredLayers = useMemo(() => {
     const needle = search.trim().toUpperCase();
@@ -87,7 +59,7 @@ export const CadLayerPicker: React.FC<CadLayerPickerProps> = ({
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => (isOpen ? closePicker() : setIsOpen(true))}
+        onClick={() => (isOpen ? close() : open())}
         className={`p-2 rounded-full transition-colors text-xs font-medium ${isOpen ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
         title="Layers — active drawing layer, show/hide, color and linetype"
         aria-label="Layers"
@@ -100,7 +72,7 @@ export const CadLayerPicker: React.FC<CadLayerPickerProps> = ({
 
       {isOpen && (
         <div
-          className="layer-picker-unroll absolute left-0 top-full z-50 w-[320px] overflow-hidden rounded-b-md border-x border-b border-white/[0.07] bg-[#0a0f16] text-gray-200 shadow-[0_20px_38px_-18px_rgba(0,0,0,0.9)] light-theme:border-gray-300/60 light-theme:bg-white"
+          className={`layer-picker-unroll ${TOOLBAR_DROPDOWN_PANEL_CLASS}`}
           data-testid="cad-layer-picker-panel"
           aria-label="Layers"
         >

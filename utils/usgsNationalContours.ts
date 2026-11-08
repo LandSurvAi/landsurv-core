@@ -25,6 +25,14 @@
 export const USGS_CONTOUR_SERVICE_URL =
   'https://carto.nationalmap.gov/arcgis/rest/services/contours/MapServer';
 
+/**
+ * The same 3DEP large-scale contour lines, published as a FeatureServer. This
+ * is the fallback when the MapServer answers a projected query with zero
+ * features; it carries the same contourelevation/contourunits schema.
+ */
+export const USGS_CONTOUR_WFS_SERVICE_URL =
+  'https://carto-wfs.nationalmap.gov/arcgis/rest/services/contours/FeatureServer/5';
+
 /** Naming prefix for every imported USGS contour layer. */
 export const USGS_CONTOUR_LAYER_PREFIX = 'USGS-CONTOUR';
 
@@ -38,6 +46,11 @@ export interface ContourFetchOptions {
   clearPrefix?: string;
   /** Force a contour class instead of deriving it from the elevation. */
   contourType?: NationalContourType;
+  /**
+   * When false, a zero-feature response is reported as-is. Defaults to true:
+   * PASDA / ArcGIS Online / Scout alternatives are tried automatically.
+   */
+  autoResolve?: boolean;
 }
 
 export interface NationalContourSource {

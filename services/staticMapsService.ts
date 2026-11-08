@@ -11,7 +11,8 @@
  *                      the Static Maps API enabled + billing, the SAME key
  *                      works for maps. We probe once and cache the verdict.
  *   3. `proxy`       — backend `/api/maps/static` proxy signed with the
- *                      app's own server-side key (rate-limited).
+ *                      app's server-side key from GCP Secret Manager
+ *                      (cached, rate-limited).
  *
  * All fetches return a data-URL so the imagery can be attached directly as a
  * Gemini Vision inlineData part.
@@ -62,7 +63,7 @@ export interface StaticMapResult {
 export interface StaticMapKeys {
   /** The user's AI-Studio / Gemini key (settings.userApiKey). */
   geminiKey?: string;
-  /** Explicit Google Maps key (settings.googleMaps?.apiKey). */
+  /** Explicit Google Maps key (legacy power-user override; not required). */
   mapsKey?: string;
 }
 

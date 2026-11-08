@@ -5,6 +5,8 @@ import { loadCountiesForState, loadMunicipalitiesForState, useJurisdictionList, 
 import { knowledgeBase } from '../services/KnowledgeBase';
 import { useAppState } from '../contexts/AppStateContext.tsx';
 import { A2UIEmbeddedContext } from './UploadShell.tsx';
+import { A2UIHostContext } from './A2UISurface.tsx';
+import { projectLocationZoningSeed } from '../utils/zoningJurisdiction.ts';
 
 interface ZoningInputProps {
   onZoningSearch: (searchData: ZoningSearchData) => void;
@@ -46,8 +48,9 @@ const ZoningInput: React.FC<ZoningInputProps> = ({ onZoningSearch, onGoBack, bac
   const [zoningDistrict, setZoningDistrict] = useState('');
   const [desiredUse, setDesiredUse] = useState('');
   const [prefilling, setPrefilling] = useState(false);
-  const [prefillSource, setPrefillSource] = useState<'jobInfo' | 'knowledgeBase' | 'geolocation' | null>(null);
+  const [prefillSource, setPrefillSource] = useState<'projectLocation' | 'jobInfo' | 'knowledgeBase' | 'geolocation' | null>(null);
   const { addNotification } = useAppState();
+  const host = useContext(A2UIHostContext);
 
   const notifyError = (message: string) => {
     addNotification({ kind: 'zoning-input', severity: 'error', title: 'Zoning Agent', message });
@@ -83,23 +86,35 @@ const ZoningInput: React.FC<ZoningInputProps> = ({ onZoningSearch, onGoBack, bac
     return () => window.clearInterval(id);
   }, [countyList.loading, muniList.loading]);
   // --- Auto-prefill on mount from existing project data --------------------
-  // Priority: 1) JobInfo (Job Info dialog) 2) KnowledgeBase parcel.gis facts.
-  // Geolocation is opt-in (button click) since it triggers a browser permission prompt.
+  // Priority: 1) live project-location cluster (reverse geocoded), 2) JobInfo,
+  // 3) KnowledgeBase parcel.gis facts. GPS is opt-in because it prompts.
   useEffect(() => {
     if (state || county || municipality) return; // user already typed something
     let filled = false;
+    let source: 'projectLocation' | 'jobInfo' | 'knowledgeBase' | null = null;
+
+    const projectSeed = projectLocationZoningSeed(host.getProjectLocationSnapshot?.());
+    if (projectSeed) {
+      if (projectSeed.state) { setState(projectSeed.state); filled = true; }
+      if (projectSeed.county) { setCounty(projectSeed.county); filled = true; }
+      if (projectSeed.municipality) { setMunicipality(projectSeed.municipality); filled = true; }
+      if (filled) source = 'projectLocation';
+    }
 
     if (jobInfo) {
-      if (jobInfo.siteMunicipality) { setMunicipality(jobInfo.siteMunicipality); filled = true; }
+      if (!projectSeed?.municipality && jobInfo.siteMunicipality) { setMunicipality(jobInfo.siteMunicipality); filled = true; }
       if (jobInfo.zoningDistrict)   { setZoningDistrict(jobInfo.zoningDistrict); filled = true; }
       if (jobInfo.desiredUse)       { setDesiredUse(jobInfo.desiredUse); filled = true; }
       // siteAddress sometimes contains ", <County> County, <State>" — best-effort parse.
-      if (jobInfo.siteAddress) {
+      if (!projectSeed?.county && jobInfo.siteAddress) {
         const addr = jobInfo.siteAddress;
         const m = addr.match(/,\s*([A-Za-z .'-]+?)\s+County\s*,\s*([A-Za-z ]+?)(?:\s+\d{5})?\s*$/i);
-        if (m) { setCounty(m[1].trim()); setState(stateNameOf(m[2].trim())); filled = true; }
+        if (m) {
+          setCounty(m[1].trim()); filled = true;
+          if (!projectSeed?.state) setState(stateNameOf(m[2].trim()));
+        }
       }
-      if (filled) setPrefillSource('jobInfo');
+      if (filled && !source) source = 'jobInfo';
     }
 
     if (!filled) {
@@ -113,11 +128,25 @@ const ZoningInput: React.FC<ZoningInputProps> = ({ onZoningSearch, onGoBack, bac
         if (m && typeof m.value === 'string') { setMunicipality(m.value); filled = true; }
         if (c && typeof c.value === 'string') { setCounty(c.value); filled = true; }
         if (s && typeof s.value === 'string') { setState(stateNameOf(s.value)); filled = true; }
-        if (filled) setPrefillSource('knowledgeBase');
+        if (filled) source = 'knowledgeBase';
       } catch { /* ignore */ }
     }
+
+    if (source) setPrefillSource(source);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleUseProjectLocation = () => {
+    const seed = projectLocationZoningSeed(host.getProjectLocationSnapshot?.());
+    if (!seed) {
+      notifyError('No project location is available yet. Load georeferenced survey points or use GPS.');
+      return;
+    }
+    if (seed.state) setState(seed.state);
+    if (seed.county) setCounty(seed.county);
+    if (seed.municipality) setMunicipality(seed.municipality);
+    setPrefillSource('projectLocation');
+  };
 
   const handleUseMyLocation = async () => {
     setPrefilling(true);
@@ -177,11 +206,15 @@ const ZoningInput: React.FC<ZoningInputProps> = ({ onZoningSearch, onGoBack, bac
   useEffect(() => {
     if (autoStartedRef.current) return;
     if (!canAutoStart) return;
+    // Project-location autofill is a starting point, not permission to launch
+    // research. Keep the prefilled fields editable and let the user submit;
+    // GPS autofill keeps its existing one-shot convenience behavior.
+    if (prefillSource === 'projectLocation') return;
     if (countyList.loading || muniList.loading || prefilling) return;
     autoStartedRef.current = true;
     handleStart();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canAutoStart, countyList.loading, muniList.loading, prefilling]);
+  }, [canAutoStart, countyList.loading, muniList.loading, prefilling, prefillSource]);
 
   const isEmbedded = useContext(A2UIEmbeddedContext);
 
@@ -216,26 +249,42 @@ const ZoningInput: React.FC<ZoningInputProps> = ({ onZoningSearch, onGoBack, bac
         <div className={isEmbedded ? 'w-full space-y-3.5' : 'mx-auto w-full max-w-3xl space-y-5'}>
 
         {/* Autofill row */}
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleUseMyLocation}
-            disabled={prefilling}
-            className="flex-1 inline-flex items-center justify-center gap-2 bg-emerald-900/30 hover:bg-emerald-900/50 disabled:opacity-60 border border-emerald-700/50 hover:border-emerald-600 text-emerald-200 text-sm font-medium py-2.5 px-4 rounded-lg transition-all"
-          >
-            {prefilling
-              ? <><Loader2 className="w-4 h-4 animate-spin" /> Autofilling from location…</>
-              : <><LocateFixed className="w-4 h-4" /> Use my location to autofill</>}
-          </button>
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={handleUseProjectLocation}
+              disabled={prefilling}
+              className="inline-flex items-center justify-center gap-2 bg-sky-900/30 hover:bg-sky-900/50 disabled:opacity-60 border border-sky-700/50 hover:border-sky-600 text-sky-200 text-sm font-medium py-2.5 px-3 rounded-lg transition-all"
+            >
+              <MapPin className="w-4 h-4" /> Use project location
+            </button>
+            <button
+              type="button"
+              onClick={handleUseMyLocation}
+              disabled={prefilling}
+              className="inline-flex items-center justify-center gap-2 bg-emerald-900/30 hover:bg-emerald-900/50 disabled:opacity-60 border border-emerald-700/50 hover:border-emerald-600 text-emerald-200 text-sm font-medium py-2.5 px-3 rounded-lg transition-all"
+            >
+              {prefilling
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Locating…</>
+                : <><LocateFixed className="w-4 h-4" /> Use GPS</>}
+            </button>
+          </div>
           {prefillSource && !prefilling && (
             <span className="inline-flex items-center gap-1 text-[11px] text-emerald-300 px-2 py-1 rounded bg-emerald-900/30 border border-emerald-700/40">
               <Sparkles className="w-3 h-3" />
-              prefilled from {prefillSource === 'jobInfo' ? 'project info' : prefillSource === 'knowledgeBase' ? 'project data' : 'GPS'}
+              prefilled from {prefillSource === 'projectLocation'
+                ? 'project location'
+                : prefillSource === 'jobInfo'
+                  ? 'project info'
+                  : prefillSource === 'knowledgeBase'
+                    ? 'project data'
+                    : 'GPS'}
             </span>
           )}
         </div>
         <p className="text-[11px] text-gray-500 -mt-3">
-          Free reverse geocoding via the US Census Geocoder. No API key, no tracking. You can also fill the form manually below.
+          Reads the project’s georeferenced location first; GPS is an optional fallback. Every field remains editable below.
         </p>
 
         {/* Jurisdiction — required */}

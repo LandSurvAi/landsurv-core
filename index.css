@@ -376,6 +376,22 @@
     }
   }
 
+  /* First-run tool-shelf tour: pulse the re-open handle after the shelf slides
+     away so the collapsed affordance is easy to find again. Uses outline/filter
+     because the handle carries inline border and box-shadow chrome. */
+  @keyframes tool-shelf-intro-flash {
+    0%, 100% { outline: 0 solid rgba(34, 211, 238, 0); outline-offset: 0; filter: none; }
+    42%      { outline: 3px solid rgba(34, 211, 238, 0.62); outline-offset: 3px; filter: drop-shadow(0 0 10px rgba(34, 211, 238, 0.8)); }
+  }
+  .tool-shelf-intro-flash {
+    animation: tool-shelf-intro-flash 1.1s ease-in-out 3;
+  }
+
+  /* Same pulse for the agent rail's re-open chevron. */
+  .sidebar-intro-flash {
+    animation: tool-shelf-intro-flash 1.1s ease-in-out 3;
+  }
+
   /* Docked agent socket: a recessed plug seated in the bar's accent rail.
      Border, rim and glow key off --socket-accent so the chrome follows the
      active agent. The collar radius is plug radius + rail gap, keeping both
@@ -489,6 +505,121 @@
     will-change: transform;
   }
 
+  /* Scout's live avatar: an endless ridge, a walking surveyor, and a thought
+     bubble. The ridge tiles are exactly 720 wide, matching the SVG viewBox, so
+     translating by -720 loops without a seam. Motion is running-only. */
+  @keyframes scout-ridge-scroll {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-720px); }
+  }
+  @keyframes scout-hiker-bob {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-2.5px); }
+  }
+  @keyframes scout-step-front {
+    0%, 100% { transform: rotate(16deg); }
+    50%      { transform: rotate(-14deg); }
+  }
+  @keyframes scout-step-back {
+    0%, 100% { transform: rotate(-14deg); }
+    50%      { transform: rotate(18deg); }
+  }
+  @keyframes scout-swing-front {
+    0%, 100% { transform: rotate(-6deg); }
+    50%      { transform: rotate(2deg); }
+  }
+  @keyframes scout-swing-back {
+    0%, 100% { transform: rotate(16deg); }
+    50%      { transform: rotate(-18deg); }
+  }
+  @keyframes scout-pole-sway {
+    0%, 100% { transform: rotate(-1.5deg); }
+    50%      { transform: rotate(1.5deg); }
+  }
+  @keyframes scout-thought-dot {
+    0%, 100% { opacity: 0.35; transform: translateY(0); }
+    50%      { opacity: 1; transform: translateY(-1.5px); }
+  }
+  @keyframes scout-twinkle {
+    0%, 100% { opacity: 0.25; }
+    50%      { opacity: 0.95; }
+  }
+  @keyframes scout-trail-dash {
+    from { stroke-dashoffset: 0; }
+    to   { stroke-dashoffset: -36; }
+  }
+  @keyframes scout-speed-line {
+    0%   { opacity: 0; transform: translateX(8px); }
+    30%  { opacity: 0.65; }
+    100% { opacity: 0; transform: translateX(-28px); }
+  }
+
+  .scout-scene {
+    background:
+      radial-gradient(ellipse at 68% 8%, rgba(34, 211, 238, 0.16), transparent 46%),
+      linear-gradient(180deg, #04111f, #071827);
+  }
+  .scout-scene::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(180deg, transparent 58%, rgba(2, 6, 23, 0.42));
+  }
+  .scout-scene svg { display: block; }
+  .scout-terrain-far,
+  .scout-terrain-near { will-change: transform; }
+  .scout-leg,
+  .scout-arm {
+    transform-box: fill-box;
+    transform-origin: 50% 0%;
+  }
+  .scout-leg-back { transform: rotate(-12deg); }
+  .scout-leg-front { transform: rotate(14deg); }
+  .scout-arm-back { transform: rotate(16deg); }
+  .scout-arm-front { transform: rotate(-7deg); }
+  .scout-pole {
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    transform: rotate(-1deg);
+  }
+  .scout-scene-running .scout-terrain-far {
+    animation: scout-ridge-scroll 24s linear infinite;
+  }
+  .scout-scene-running .scout-terrain-near {
+    animation: scout-ridge-scroll 8s linear infinite;
+  }
+  .scout-scene-running .scout-body {
+    animation: scout-hiker-bob 0.95s ease-in-out infinite;
+  }
+  .scout-scene-running .scout-leg-front {
+    animation: scout-step-front 0.95s ease-in-out infinite;
+  }
+  .scout-scene-running .scout-leg-back {
+    animation: scout-step-back 0.95s ease-in-out infinite;
+  }
+  .scout-scene-running .scout-arm-front {
+    animation: scout-swing-front 0.95s ease-in-out infinite;
+  }
+  .scout-scene-running .scout-arm-back {
+    animation: scout-swing-back 0.95s ease-in-out infinite;
+  }
+  .scout-scene-running .scout-pole {
+    animation: scout-pole-sway 1.9s ease-in-out infinite;
+  }
+  .scout-scene-running .scout-thought-dot {
+    animation: scout-thought-dot 1.25s ease-in-out infinite;
+  }
+  .scout-scene-running .scout-star {
+    animation: scout-twinkle 3.2s ease-in-out infinite;
+  }
+  .scout-scene-running .scout-trail {
+    animation: scout-trail-dash 1.2s linear infinite;
+  }
+  .scout-scene-running .scout-speed {
+    animation: scout-speed-line 1.4s ease-out infinite;
+  }
+
   @keyframes command-status-pulse {
     0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.36), 0 0 5px rgba(52, 211, 153, 0.55); opacity: 0.9; }
     50%      { box-shadow: 0 0 0 3px rgba(52, 211, 153, 0), 0 0 7px rgba(52, 211, 153, 0.8); opacity: 1; }
@@ -511,9 +642,22 @@
     .command-status-dot,
     .command-caret,
     .animate-thinking-red-text,
-    .quick-thought-drift {
+    .quick-thought-drift,
+    .scout-scene-running .scout-terrain-far,
+    .scout-scene-running .scout-terrain-near,
+    .scout-scene-running .scout-body,
+    .scout-scene-running .scout-leg-front,
+    .scout-scene-running .scout-leg-back,
+    .scout-scene-running .scout-arm-front,
+    .scout-scene-running .scout-arm-back,
+    .scout-scene-running .scout-pole,
+    .scout-scene-running .scout-thought-dot,
+    .scout-scene-running .scout-star,
+    .scout-scene-running .scout-trail,
+    .scout-scene-running .scout-speed {
       animation: none;
     }
+    .scout-speed { opacity: 0; }
     .command-rail-sheen,
     .command-thinking-sweep {
       opacity: 0;

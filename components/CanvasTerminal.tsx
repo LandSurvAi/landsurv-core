@@ -9,6 +9,8 @@ import { formatChatHtml } from '../utils/chatHtml';
 import SuggestedQuestions from './SuggestedQuestions';
 import { A2UISurface } from './A2UISurface';
 import { A2UIQuickThoughtSurface } from './A2UIQuickThoughtSurface';
+import { AGENT_SIDEBAR_LAYOUT_EVENT } from '../utils/layoutEvents.ts';
+import { A2UIScoutActivity } from './A2UIScoutActivity';
 import { DockModeControl, type DockMode } from './DockModeControl';
 import {
   decomposeMessageForQuickThought,
@@ -16,6 +18,7 @@ import {
 } from '../services/a2uiQuickThought';
 import { rememberCanvasPointer } from '../services/canvasFlashes';
 import { a2uiSurfaceBus } from '../services/a2uiSurfaces';
+import { scoutActivityStore } from '../services/scoutActivityStore';
 import { ChatToolDialogs } from './ChatToolDialogs';
 import type { DockableToolItem } from './AgentToolDock';
 import {
@@ -124,6 +127,8 @@ interface CanvasTerminalProps {
   snapControls?: SnapControls;
   /** Unified Agent Mode props (ported from ChatInterface) */
   activeAgent?: AgentType | null;
+  /** True when no project geometry or files are loaded; drives first-run intake options. */
+  isWorkspaceEmpty?: boolean;
   messages?: ChatMessage[];
   onSendMessage?: (query: string) => void;
   onStopGenerating?: () => void;
@@ -168,6 +173,8 @@ interface CanvasTerminalProps {
   onHeightChange?: (height: number) => void;
   /** Pixels to extend past the right edge, underneath the open agent tool shelf. */
   rightExtension?: number;
+  /** Flash the Tools tab after the first-run tool-shelf tour closes it. */
+  introPulse?: boolean;
   /** Text size multiplier from Settings → Command Bar. Defaults to 1.15. */
   textScale?: number;
   /** Show the Space / Shift+Space prompts on the resting command rows. */
@@ -193,6 +200,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   statusBadges,
   snapControls,
   activeAgent,
+  isWorkspaceEmpty = false,
   messages = [],
   onSendMessage,
   onStopGenerating,
@@ -220,6 +228,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   agentChatOpenSignal,
   onHeightChange,
   rightExtension = 0,
+  introPulse = false,
   textScale = 1.15,
   showShortcutHints = true,
   showStatusBadges = true,
@@ -228,6 +237,11 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     a2uiSurfaceBus.subscribe,
     a2uiSurfaceBus.getSnapshot,
     a2uiSurfaceBus.getSnapshot,
+  );
+  const liveScoutActivity = useSyncExternalStore(
+    scoutActivityStore.subscribe,
+    scoutActivityStore.getSnapshot,
+    scoutActivityStore.getSnapshot,
   );
   // Fullscreen surfaces own the whole viewport. The agent dock is portaled to
   // body at a higher z-index than the surface, so hide the command bar rather
@@ -568,7 +582,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     !baseQuickThoughtBreakdown.hasActionablePrompt &&
     !lastMessage.quickThoughtText &&
     !hasActiveA2UI
-      ? getAgentInitialQuickThoughtOptions(effectiveAgent)
+      ? getAgentInitialQuickThoughtOptions(effectiveAgent, { isWorkspaceEmpty })
       : [];
   const quickThoughtBreakdown = initialQuickThoughtOptions.length > 0
     ? {
@@ -587,11 +601,14 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     hasPendingQuestionOptions ||
     hasActiveA2UI ||
     Boolean(lastMessage?.quickThoughtText) ||
-    quickThoughtBreakdown.hasActionablePrompt;
+    quickThoughtBreakdown.hasActionablePrompt ||
+    Boolean(liveScoutActivity);
   const pendingOptions = lastMessage?.questionOptions ?? quickThoughtBreakdown.options ?? [];
   const thoughtKey = lastMessage
-    ? `${effectiveAgent}:${messages.length}:${lastMessage.role}:${lastMessage.quickThoughtText ?? ''}:${lastMessage.quickThoughtLabel ?? ''}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}:${quickThoughtBreakdown.kind ?? ''}`
-    : null;
+    ? `${effectiveAgent}:${messages.length}:${lastMessage.role}:${lastMessage.quickThoughtText ?? ''}:${lastMessage.quickThoughtLabel ?? ''}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}:${quickThoughtBreakdown.kind ?? ''}:${liveScoutActivity?.id ?? ''}`
+    : liveScoutActivity
+      ? `scout:${liveScoutActivity.id}`
+      : null;
   const quickThoughtLabel = lastMessage?.quickThoughtLabel?.trim() || 'Handoff';
   const isThoughtDismissed = thoughtKey !== null && dismissedThoughtKey === thoughtKey;
 
@@ -1361,6 +1378,18 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     };
   }, [scheduleAgentDockPositionUpdate, updateAgentDockPosition]);
 
+  // The left agent sidebar moves the command bar without resizing it, so the
+  // portaled socket would otherwise keep its old fixed coordinates.
+  useEffect(() => {
+    const remeasure = () => scheduleAgentDockPositionUpdate();
+    window.addEventListener(AGENT_SIDEBAR_LAYOUT_EVENT, remeasure);
+    return () => window.removeEventListener(AGENT_SIDEBAR_LAYOUT_EVENT, remeasure);
+  }, [scheduleAgentDockPositionUpdate]);
+
+  useLayoutEffect(() => {
+    scheduleAgentDockPositionUpdate();
+  }, [isToolDockOpen, rightExtension, scheduleAgentDockPositionUpdate]);
+
   // Report the bar's height (including an expanded feed) so the agent tool
   // drawer can sit with its bottom edge exactly on the top of the command bar.
   useEffect(() => {
@@ -1568,7 +1597,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
         }
         className={`tab-bump group absolute bottom-full right-4 z-50 flex h-[20px] w-auto min-w-[40px] items-center justify-center rounded-[10px] border bg-[#0a111b] px-1.5 transition-all duration-200 hover:brightness-125 active:scale-95 ${
           isCollapsePulsing && isExpanded ? 'animate-pulse ring-2 ring-white/40' : ''
-        }`}
+        } ${introPulse && onToggleToolDock && !isToolDockOpen && !(isCollapsePulsing && isExpanded) ? 'tool-shelf-intro-flash' : ''}`}
         style={{
           borderColor: (onToggleToolDock ? isToolDockOpen : isExpanded) ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.25)',
           color: '#fff',
@@ -1823,7 +1852,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   ? 'Type below to work directly with this agent. Use the arrow on the right to open the tool shelf, or choose another agent from the side menu.'
                   : 'Ask anything about this project. I will handle the work directly or bring in the right specialist for you.'}
               </p>
-              {suggestedQuestions.length > 0 && (
+              {!isSpecialistPluggedIn && suggestedQuestions.length > 0 && (
                 <div className="mt-3 flex flex-wrap justify-center gap-1.5 max-w-2xl">
                   {suggestedQuestions.slice(0, 4).map(question => (
                     <button
@@ -2552,9 +2581,11 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                     className={isThoughtOverflowing ? 'quick-thought-drift' : undefined}
                     style={isThoughtOverflowing ? { animationDuration: `${thoughtDriftSeconds}s` } : undefined}
                   >
-                    {thoughtScrollText || (hasPendingQuestionOptions ? 'I have a suggestion for the next step.' : 'I have a quick panel ready for you.')}
+                    {thoughtScrollText || (liveScoutActivity ? 'Scout is checking live public GIS sources below.' : hasPendingQuestionOptions ? 'I have a suggestion for the next step.' : 'I have a quick panel ready for you.')}
                   </div>
                 </div>
+
+                <A2UIScoutActivity variant="inline" />
 
                 {lastMessage && (
                   <A2UIQuickThoughtSurface

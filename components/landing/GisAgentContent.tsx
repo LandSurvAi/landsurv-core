@@ -41,9 +41,10 @@ export const GisAgentContent: React.FC = () => {
                 </div>
             </div>
             <p>
-                The GIS Agent is designed to work with GeoJSON, a standard format for encoding geographic data structures. By uploading a .geojson or .json file, you can leverage AI to analyze spatial data, query feature properties, and seamlessly convert GIS data into survey-grade points and lines on your project canvas.
+                The GIS Agent works with both GeoJSON and live public map services. Upload a .geojson or .json file, or simply ask for a layer — county lines, State Plane / SPC zones, school districts, voting districts, streams, water bodies, watersheds, parcels, and other public GIS topics. The agent searches PASDA, ArcGIS Online, and LandSurv Scout, verifies the layer against your project footprint, and draws it on its own CAD layer.
             </p>
             <ul className="list-disc list-inside space-y-2 pl-2 text-gray-300">
+                <li><strong className="text-gray-100">Live Map Layers:</strong> Ask in natural language ("show me county lines" or "draw streams and water bodies"). The agent resolves the topic at runtime rather than relying on a fixed list of layers.</li>
                 <li><strong className="text-gray-100">ArcGIS Server Browser:</strong> Paste any public ArcGIS REST endpoint — a whole server, a folder, a service, or a single layer — and drill down through its folders, services, and layers just like a desktop GIS data-source manager. A curated catalog of federal (Census TIGERweb, USGS, FEMA flood zones, BLM PLSS, USFS, NPS) and state/county/city servers is built in.</li>
                 <li><strong className="text-gray-100">GeoJSON Analysis:</strong> Ask the agent to "list all features of type 'Polygon'" or "summarize the properties of the feature named 'Lot-12'".</li>
                 <li><strong className="text-gray-100">Direct Visualization:</strong> Use natural language to plot your data. A simple command like "plot all features" will instruct the AI to return a GeoJSON FeatureCollection that is then automatically rendered on the canvas.</li>

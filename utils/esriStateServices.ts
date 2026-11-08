@@ -198,17 +198,17 @@ export const ESRI_STATE_SERVICES: EsriStateEntry[] = [
     layers: [
       {
         name: 'PAMAP 2ft Contours (South PA)',
-        url: 'https://services.pasda.psu.edu/arcgis/rest/services/PAMAP_Contours/MapServer/2',
+        url: 'https://services.pasda.psu.edu/arcgis/rest/services/PAMAP_Contour_Mosaic_South/MapServer/0',
         intervalFt: 2,
         attribution: 'Pennsylvania Spatial Data Access (PASDA) / PAMAP Program',
-        notes: 'LiDAR-derived 2-foot contours — southern PA mosaic. Use Inclusion mode for parcel-scale queries.',
+        notes: 'LiDAR-derived 2-foot contours — complete southern PA mosaic. Use Inclusion mode for parcel-scale queries.',
       },
       {
         name: 'PAMAP 2ft Contours (North PA)',
-        url: 'https://services.pasda.psu.edu/arcgis/rest/services/PAMAP_Contours/MapServer/1',
+        url: 'https://services.pasda.psu.edu/arcgis/rest/services/PAMAP_Contour_Mosaic_North/MapServer/0',
         intervalFt: 2,
         attribution: 'Pennsylvania Spatial Data Access (PASDA) / PAMAP Program',
-        notes: 'LiDAR-derived 2-foot contours — northern PA mosaic. Use Inclusion mode for parcel-scale queries.',
+        notes: 'LiDAR-derived 2-foot contours — complete northern PA mosaic. Use Inclusion mode for parcel-scale queries.',
       },
     ],
   },

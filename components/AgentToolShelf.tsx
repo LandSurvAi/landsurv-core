@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 
+const TOOL_SHELF_TRANSITION_MS = 740;
+
 interface AgentToolShelfProps {
   /** Whether the drawer should be open. */
   isOpen: boolean;
@@ -40,7 +42,7 @@ export const AgentToolShelf: React.FC<AgentToolShelfProps> = ({
       return () => window.clearTimeout(timer);
     }
     setIsVisible(false);
-    const timer = window.setTimeout(() => setIsMounted(false), 320);
+    const timer = window.setTimeout(() => setIsMounted(false), TOOL_SHELF_TRANSITION_MS);
     return () => window.clearTimeout(timer);
   }, [isOpen]);
 
@@ -64,7 +66,7 @@ export const AgentToolShelf: React.FC<AgentToolShelfProps> = ({
     >
       <div
         data-testid="agent-tool-shelf-panel"
-        className="relative flex h-full w-full flex-col border-l border-white/[0.07] bg-[#0a0f16] transition-transform duration-300 ease-out light-theme:border-gray-300"
+        className="relative flex h-full w-full flex-col border-l border-white/[0.07] bg-[#0a0f16] transition-transform duration-700 ease-in-out light-theme:border-gray-300"
         style={{
           transform: isVisible ? 'none' : 'translateY(100%)',
         }}

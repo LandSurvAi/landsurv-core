@@ -100,6 +100,7 @@ export const agentPrimaryToolKey: Partial<Record<AgentType, string>> = {
   [AgentType.COGO_AGENT]: 'cogo',
   [AgentType.GNSS_AGENT]: 'gnss',
   [AgentType.DRONE_AGENT]: 'drone',
+  [AgentType.GIS_AGENT]: 'streams',
   [AgentType.FLOOD_AGENT]: 'flood',
   [AgentType.STRUCTURES_AGENT]: 'structures',
   [AgentType.SOILS_AGENT]: 'soils',

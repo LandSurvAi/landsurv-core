@@ -239,7 +239,8 @@ export type A2UIWorkspaceToolId =
   | 'legal-writer'
   | 'sheet-view'
   | 'roading-panel'
-  | 'tin-surfaces';
+  | 'tin-surfaces'
+  | 'legend';
 
 export interface A2UIInputField {
   id: string;
@@ -293,6 +294,7 @@ export type A2UIWidgetType =
   | 'hatch-studio'
   | 'gps-rover'
   | 'project-location'
+  | 'soil-limitations'
   | 'zoning-research'
   | 'zoning-sources'
   | 'surface-console'
@@ -303,6 +305,7 @@ export type A2UIWidgetType =
   | 'cacp-manifests'
   | 'cacp-inspector'
   | 'settings'
+  | 'properties'
   | 'help'
   | 'page-guide'
   | A2UIWorkspaceToolId;
@@ -587,6 +590,102 @@ export interface A2UISpreadsheetSpec {
   pageSize?: number;
 }
 
+export type A2UIPropertyFieldType = 'text' | 'number' | 'select' | 'color' | 'boolean';
+
+/** One machine-readable property row shared by the panel and A2UI surfaces. */
+export interface A2UIPropertyField {
+  key: string;
+  label: string;
+  value: string | number | boolean | null;
+  /** Display type used by the property inspector. */
+  type?: A2UIPropertyFieldType;
+  /** Options for select fields. */
+  options?: string[];
+  /** Unit suffix, e.g. px, ft, or L80. */
+  unit?: string;
+  /** True when the current multi-object selection has different values. */
+  mixed?: boolean;
+  /** False for computed/read-only values. Defaults to true. */
+  editable?: boolean;
+  /** Optional grouping heading in the panel. */
+  group?: string;
+}
+
+/** A2UI-compliant live property snapshot for the current object selection. */
+export interface A2UIPropertiesSpec {
+  title?: string;
+  description?: string;
+  objectCount: number;
+  objectTypes: string[];
+  fields: A2UIPropertyField[];
+}
+
+/** One live event from a Scout browser/discovery run. */
+export interface A2UIScoutActivityEvent {
+  id?: number | string;
+  at: number;
+  phase: string;
+  message: string;
+  url?: string;
+  level?: 'info' | 'success' | 'warn' | 'error';
+}
+
+/** Live state rendered by the A2UI Scout surface. */
+export interface A2UIScoutActivitySnapshot {
+  id: string;
+  title: string;
+  subtitle?: string;
+  status: 'running' | 'success' | 'error' | 'cancelled';
+  startedAt: number;
+  finishedAt?: number;
+  events: A2UIScoutActivityEvent[];
+  summary?: string;
+}
+
+/** One Table E.1 limitation shown in the chat-hosted soil limitations surface. */
+export interface A2UISoilLimitationFinding {
+  label: string;
+  value: string;
+  valueLabel: string;
+}
+
+/** Display-ready soil map unit for the soil limitations A2UI surface. */
+export interface A2UISoilLimitationsUnit {
+  mukey: string;
+  musym: string;
+  muname: string;
+  seriesName: string;
+  acres: number;
+  percent: number;
+  hydrologicGroup?: string;
+  drainageClass?: string;
+  hydric?: string;
+  depthToWaterTableIn?: number | null;
+  depthToBedrockIn?: number | null;
+  limitations: A2UISoilLimitationFinding[];
+  resolutions: string[];
+}
+
+/**
+ * Snapshot of a compiled PA E&S Table E.1 report. The chat message owns this
+ * snapshot so the inline surface and Quick Thought stay stable while the user
+ * scrolls or switches presentations.
+ */
+export interface A2UISoilLimitationsSpec {
+  generatedAt: string;
+  projectName?: string;
+  areaLabel: string;
+  boundaryPresent: boolean;
+  boundaryKind: 'inclusion' | 'boundary' | null;
+  boundaryAcres: number;
+  soilAcres: number;
+  units: A2UISoilLimitationsUnit[];
+  unmatched: string[];
+  chartSource: string;
+  chartCached: boolean;
+  boundaryAdvisory?: string;
+}
+
 export interface A2UIPayload {
   /** Surface kind: inquisitive prompt, upload/intake widget, data explorer, or bridge surface. */
   kind:
@@ -600,6 +699,7 @@ export interface A2UIPayload {
     | 'hatch-studio'
     | 'gps-rover'
     | 'project-location'
+    | 'soil-limitations'
     | 'zoning-research'
     | 'zoning-sources'
     | 'cad-manager'
@@ -610,6 +710,7 @@ export interface A2UIPayload {
     | 'cacp-manifests'
     | 'cacp-inspector'
     | 'settings'
+    | 'properties'
     | 'workspace-tool'
     | 'help'
     | 'page-guide';
@@ -637,6 +738,8 @@ export interface A2UIPayload {
   gpsRover?: A2UIGpsRoverSpec;
   /** Optional cluster to emphasise in the LSAI project-location surface. */
   projectLocation?: { initialClusterIndex?: number };
+  /** Compiled PA E&S limitations report bound to the inline report surface. */
+  soilLimitations?: A2UISoilLimitationsSpec;
   /** Jurisdiction bound to a chat-hosted zoning research surface. */
   zoningContext?: A2UIZoningContext;
   /** Citation-to-source ledger for a specific zoning answer. */
@@ -653,6 +756,8 @@ export interface A2UIPayload {
   settingsSummary?: A2UISettingsSummary;
   /** Specific settings section focused inside the interactive settings surface. */
   settingsSection?: A2UISettingsSection;
+  /** Live property snapshot for the current selection. */
+  properties?: A2UIPropertiesSpec;
   /** Specific workspace manager/tool mounted inside the surface. */
   workspaceTool?: A2UIWorkspaceToolId;
   /** Initial manifest selection for an in-chat CACP explorer. */
@@ -746,6 +851,8 @@ export interface SurveyLine {
   labelOffset?: { x: number; y: number }; // Offset for B&D label in world coordinates
   labelRotation?: number; // Rotation angle for B&D label (0 or 180 degrees)
   layer?: string; // CAD layer name for export
+  /** Parcel key for linework fetched from a county parcel layer. */
+  parcelId?: string;
   lineType?: string; // CAD linetype for export (e.g., "CONTINUOUS", "DASHED", "FENCELINE")
   /** Per-entity linetype scale multiplier (AutoCAD CELTSCALE equivalent). 1.0 = no change. */
   lineTypeScale?: number;
@@ -753,6 +860,8 @@ export interface SurveyLine {
   hidden?: boolean; // When true, hidden from canvas/exports
   /** ID of the ContourGeneration that produced this line (survey-generated contours). */
   contourGenId?: string;
+  /** ID of the FEMA/soils generation block that produced this line. */
+  generationId?: string;
   /** Line source — 'esri' for ESRI/State fetched contours, 'survey' for generated contours. */
   source?: 'esri' | 'survey';
   /** Elevation callout drawn along the line (used by FEMA BFE linework). */
@@ -817,6 +926,40 @@ export interface ContourGeneration {
   esriBlendInclusionPolylineId?: string | null;
 }
 
+export type GenerationKind = 'contour' | 'flood' | 'soils';
+
+export interface GenerationParameter {
+  label: string;
+  value: string;
+}
+
+/** Structured inputs retained so a generation can be reopened and rerun. */
+export interface GenerationQuery {
+  mode?: 'inclusion' | 'description' | 'project';
+  description?: string;
+  bbox?: [number, number, number, number];
+  includeBfe?: boolean;
+  clippedToBoundary?: boolean;
+  inclusionBoundaryName?: string;
+}
+
+/**
+ * A non-destructive generated block. The generated lines/hatches/areas carry
+ * this id, so double-clicking any member can reopen the tool and its inputs.
+ */
+export interface GenerationBlock {
+  id: string;
+  kind: GenerationKind;
+  name: string;
+  createdAt: string;
+  parameters: GenerationParameter[];
+  query?: GenerationQuery;
+  lineIds?: string[];
+  hatchIds?: string[];
+  areaIds?: string[];
+  labelIds?: string[];
+}
+
 /**
  * A named inclusion boundary — a group of `SurveyLine` segments with the same
  * `polylineId` and `type === 'inclusion'`. Managed by the Inclusion Boundaries
@@ -836,6 +979,8 @@ export interface ContourLabel {
   y: number;
   text: string;
   angle: number;
+  /** Generation that produced this label. Labels placed manually omit it. */
+  contourGenId?: string;
 }
 
 /**
@@ -864,7 +1009,8 @@ export type AnnotationCategoryId =
     | 'contour-labels'
     | 'property-owners'
     | 'flood-zones'
-    | 'soil-map-units';
+    | 'soil-map-units'
+    | 'manual-text';
 
 /** Per-category rendering style for the canvas annotation system. */
 export interface AnnotationCategoryStyle {
@@ -883,6 +1029,8 @@ export interface AnnotationCategoryStyle {
     styleSource?: 'local' | 'cad-manager';
     /** Shared CAD Manager style name when styleSource='cad-manager'. */
     cadTextStyleName?: string;
+    /** Named annotation text style used by manual/in-canvas text in this category. */
+    textStyleName?: string;
     /** Optional text transform for annotations using this category. */
     textCase?: 'original' | 'uppercase';
     /** Optional line spacing multiplier for multi-line annotations. */
@@ -892,17 +1040,111 @@ export interface AnnotationCategoryStyle {
     existingItalic: boolean;
     /** Scale multiplier applied to 'existing' items (default 0.25). */
     existingScale: number;
+    /** Fixed base height in CSS px at 1× annotation scale. */
+    heightPx?: number;
+    /** Leroy reference size (e.g. 80 for L80); optional, never forced. */
+    leroySize?: number;
+    /** Background wipeout behind this annotation family. */
+    maskEnabled?: boolean;
+    /** Wipeout padding in CSS px. */
+    maskPadding?: number;
+    /** Wipeout fill; defaults to the canvas background. */
+    maskColor?: string;
+    /** Wipeout fill opacity, 0.05–1. */
+    maskOpacity?: number;
 }
 
 export const DEFAULT_ANNOTATION_CATEGORIES: AnnotationCategoryStyle[] = [
-    { id: 'boundary',        label: 'Boundary',        scale: 1.0, color: '#22d3ee', fontFamily: 'Arial', italic: false, bold: false,  styleSource: 'local', textCase: 'original', lineSpacing: 1.2, visible: true, existingItalic: true,  existingScale: 0.25 },
-    { id: 'callout',         label: 'Callout Labels',  scale: 1.0, color: '#f59e0b', fontFamily: 'Arial', italic: false, bold: false,  styleSource: 'local', textCase: 'original', lineSpacing: 1.2, visible: true, existingItalic: true,  existingScale: 0.25 },
-    { id: 'roads',           label: 'Roads',           scale: 1.0, color: '#60a5fa', fontFamily: 'Arial', italic: false, bold: true,   styleSource: 'local', textCase: 'original', lineSpacing: 1.2, visible: true, existingItalic: true,  existingScale: 0.25 },
-    { id: 'contour-labels',  label: 'Contour Labels',  scale: 1.0, color: '#a78bfa', fontFamily: 'Arial', italic: false, bold: false,  styleSource: 'local', textCase: 'original', lineSpacing: 1.2, visible: true, existingItalic: false, existingScale: 1.0  },
-    { id: 'property-owners', label: 'Property Owners', scale: 0.8, color: '#86efac', fontFamily: 'Arial', italic: true,  bold: false,  styleSource: 'local', textCase: 'uppercase', lineSpacing: 1.2, visible: true, existingItalic: true,  existingScale: 0.25 },
-    { id: 'flood-zones',     label: 'Flood Zones',     scale: 0.9, color: '#22d3ee', fontFamily: 'Arial', italic: false, bold: true,   styleSource: 'local', textCase: 'uppercase', lineSpacing: 1.2, visible: true, existingItalic: false, existingScale: 1.0  },
-    { id: 'soil-map-units',  label: 'Soil Map Units',  scale: 0.9, color: '#e7c99a', fontFamily: 'Arial', italic: false, bold: false,  styleSource: 'local', textCase: 'uppercase', lineSpacing: 1.2, visible: true, existingItalic: false, existingScale: 1.0  },
+    { id: 'boundary',        label: 'Boundary',        scale: 1.0, heightPx: 9.6,  leroySize: 80,  color: '#22d3ee', fontFamily: 'Arial', italic: false, bold: false,  styleSource: 'local', textCase: 'original', lineSpacing: 1.2, visible: true, existingItalic: true,  existingScale: 0.25, maskEnabled: false, maskPadding: 2, maskOpacity: 0.88 },
+    { id: 'callout',         label: 'Callout Labels',  scale: 1.0, heightPx: 9.6,  leroySize: 80,  color: '#f59e0b', fontFamily: 'Arial', italic: false, bold: false,  styleSource: 'local', textCase: 'original', lineSpacing: 1.2, visible: true, existingItalic: true,  existingScale: 0.25, maskEnabled: false, maskPadding: 2, maskOpacity: 0.88 },
+    { id: 'roads',           label: 'Roads',           scale: 1.0, heightPx: 12,   leroySize: 100, color: '#60a5fa', fontFamily: 'Arial', italic: false, bold: true,   styleSource: 'local', textCase: 'original', lineSpacing: 1.2, visible: true, existingItalic: true,  existingScale: 0.25, maskEnabled: false, maskPadding: 2, maskOpacity: 0.88 },
+    { id: 'contour-labels',  label: 'Contour Labels',  scale: 1.0, heightPx: 7.2,  leroySize: 60,  color: '#a78bfa', fontFamily: 'Arial', italic: false, bold: false,  styleSource: 'local', textCase: 'original', lineSpacing: 1.2, visible: true, existingItalic: false, existingScale: 1.0,  maskEnabled: false, maskPadding: 2, maskOpacity: 0.88 },
+    { id: 'property-owners', label: 'Property Owners', scale: 1.0, heightPx: 7.2,  leroySize: 60,  color: '#86efac', fontFamily: 'Arial', italic: true,  bold: false,  styleSource: 'local', textCase: 'uppercase', lineSpacing: 1.2, visible: true, existingItalic: true,  existingScale: 0.25, maskEnabled: false, maskPadding: 2, maskOpacity: 0.88 },
+    { id: 'flood-zones',     label: 'Flood Zones',     scale: 1.0, heightPx: 9.6,  leroySize: 80,  color: '#22d3ee', fontFamily: 'Arial', italic: false, bold: true,   styleSource: 'local', textCase: 'uppercase', lineSpacing: 1.2, visible: true, existingItalic: false, existingScale: 1.0,  maskEnabled: false, maskPadding: 2, maskOpacity: 0.88 },
+    { id: 'soil-map-units',  label: 'Soil Map Units',  scale: 1.0, heightPx: 7.2,  leroySize: 60,  color: '#e7c99a', fontFamily: 'Arial', italic: false, bold: false,  styleSource: 'local', textCase: 'uppercase', lineSpacing: 1.2, visible: true, existingItalic: false, existingScale: 1.0,  maskEnabled: false, maskPadding: 2, maskOpacity: 0.88 },
+    { id: 'manual-text',    label: 'Manual Text',    scale: 1.0, heightPx: 9.6,  leroySize: 80,  color: '#e2e8f0', fontFamily: 'Arial', italic: false, bold: false,  styleSource: 'local', textStyleName: 'Annotative Standard', textCase: 'original', lineSpacing: 1.2, visible: true, existingItalic: false, existingScale: 1.0,  maskEnabled: false, maskPadding: 2, maskOpacity: 0.88 },
 ];
+
+/**
+ * Named text style for canvas text and annotation labels. Mirrors the parts of an
+ * AutoCAD text style that change how text looks, so a single style can drive
+ * manual text, point labels, and generated labels from the Annotation Manager.
+ */
+export interface AnnotationTextStyle {
+    id: string;
+    name: string;
+    fontFamily: string;
+    bold: boolean;
+    italic: boolean;
+    /** Base text height in screen pixels at 1× annotation scale. */
+    height: number;
+    /** Horizontal width factor (AutoCAD WIDTH factor). 0.5–2. */
+    widthFactor: number;
+    /** Oblique angle in degrees (AutoCAD OBLIQUE). -45–45. */
+    oblique: number;
+    textCase: 'original' | 'uppercase' | 'lowercase';
+    /** Line spacing multiplier for multi-line text. */
+    lineSpacing: number;
+    /** Optional default color for text using this style. */
+    color?: string;
+    /** Leroy reference size (e.g. 80 for L80); optional, never forced. */
+    leroySize?: number;
+}
+
+export const DEFAULT_ANNOTATION_TEXT_STYLES: [AnnotationTextStyle, ...AnnotationTextStyle[]] = [
+    { id: 'annot-standard', name: 'Annotative Standard', fontFamily: 'Arial',        bold: false, italic: false, height: 9.6, widthFactor: 1,    oblique: 0,  textCase: 'original',  lineSpacing: 1.2, leroySize: 80 },
+    { id: 'annot-label',    name: 'Survey Label',        fontFamily: 'Arial Narrow', bold: false, italic: true,  height: 9.6, widthFactor: 0.9,  oblique: 0,  textCase: 'uppercase', lineSpacing: 1.15, leroySize: 80 },
+    { id: 'annot-note',     name: 'General Note',        fontFamily: 'Calibri',      bold: false, italic: false, height: 9.6, widthFactor: 1,    oblique: 0,  textCase: 'original',  lineSpacing: 1.3, leroySize: 80 },
+    { id: 'annot-title',    name: 'Title Block',         fontFamily: 'Arial',        bold: true,  italic: false, height: 24,  widthFactor: 1.05, oblique: 0,  textCase: 'uppercase', lineSpacing: 1.15, leroySize: 200 },
+];
+
+/**
+ * A first-class standalone text entity on the drawing canvas (AutoCAD TEXT /
+ * MTEXT equivalent). Persisted in `.lsvz` and editable in place on the canvas.
+ */
+export interface CanvasTextAnnotation {
+    id: string;
+    /** Text content. Newlines separate lines. */
+    text: string;
+    /** World easting of the insertion point (left baseline of the first line). */
+    x: number;
+    /** World northing of the insertion point (left baseline of the first line). */
+    y: number;
+    /** Rotation in degrees, counter-clockwise from the east axis. */
+    angle: number;
+    /** Named style from the annotation text-style library. */
+    styleName?: string;
+    /** Annotation category used for color, visibility, and existing overrides. */
+    categoryId?: string;
+    /** Optional per-text base height override (screen px at 1×). */
+    height?: number;
+    /** Leroy reference size (e.g. 80 for L80); optional, never forced. */
+    leroySize?: number;
+    /** Per-text font override; otherwise the named style supplies the font. */
+    fontFamily?: string;
+    /** Per-text scale layered on the style, category, and global annotation scale. */
+    scale?: number;
+    /** Optional color override. */
+    color?: string;
+    /** Optional CAD layer. */
+    layer?: string;
+    /** Optional leader target in world coordinates (annotates a point/feature). */
+    leaderTo?: { easting: number; northing: number } | null;
+    /** Survey point that produced this label, when generated automatically. */
+    sourcePointNumber?: string;
+    /** Existing / proposed drafting convention. */
+    convention?: 'existing' | 'proposed';
+    hidden?: boolean;
+    /** Adjustable background wipeout for this text entity. */
+    maskEnabled?: boolean;
+    /** Wipeout padding in CSS px. */
+    maskPadding?: number;
+    /** Wipeout fill; defaults to the canvas background. */
+    maskColor?: string;
+    /** Wipeout fill opacity, 0.05–1. */
+    maskOpacity?: number;
+    createdAt?: string;
+}
 
 export interface ParcelLabelFormatter {
   includeParcelId: boolean;
@@ -1411,14 +1653,14 @@ export interface Settings {
     pointAttributeScaling: 'screen' | 'world'; // Controls if point labels scale with zoom or stay fixed size
     /** When true, point descriptions may render matching custom/CAD/built-in symbols. Default: false. */
     showPointSymbols?: boolean;
-    /** When true, points compress into screen-space primitives while zoomed out or crowded. Default: false. */
+    /** When true, points compress into screen-space primitives while zoomed out or crowded. Default: true. */
     pointEfficiencyMode?: boolean;
     /** When true, show ephemeral pill notifications for CACP inter-agent traffic. Default: false. */
     showCacpNotifications?: boolean;
     /** When true, include internal CACP handler dispatch phases in activity notifications. */
     showCacpHandlerNotifications?: boolean;
     notion?: NotionIntegration;
-    /** Background map imagery overlay (NAIP + Google Static Maps). */
+    /** Background map imagery overlay (Google Static Maps by default; NAIP optional). */
     googleMaps?: {
         enabled?: boolean;
         apiKey?: string;
@@ -1665,6 +1907,8 @@ export interface AnnotationRule {
     color?: string;
     /** If true, this rule applies when no other rule matches. */
     isDefault?: boolean;
+    /** Named text style applied to generated labels from this rule. */
+    textStyleName?: string;
 }
 
 export interface EsriServiceInfo {
@@ -2031,6 +2275,8 @@ export interface CanvasHatch {
     associativeLineIds?: string[];
     /** Optional BoundaryFile ID when hatched from a deed parcel. */
     boundaryFileId?: string;
+    /** ID of the FEMA/soils generation block that produced this hatch. */
+    generationId?: string;
     /** How this hatch was created. */
     sourceMode?: 'select-object' | 'pick-area' | 'cacp' | 'agent';
     /** Computed area in square feet (outer area minus island holes). */
@@ -2046,6 +2292,8 @@ export type MapAreaLabelCategory = 'flood-zones' | 'soil-map-units';
 /** Closed GIS polygon plus the metadata needed for a hatch and annotation. */
 export interface MapAreaFeature {
     id: string;
+    /** ID of the fetch generation that produced this feature. */
+    generationId?: string;
     source: MapAreaSource;
     /** CAD layer shared by the boundary lines, hatch, and label. */
     layer: string;
@@ -2062,6 +2310,8 @@ export interface MapAreaFeature {
 /** Centroid annotation for a FEMA flood zone or SSURGO soil map unit. */
 export interface MapAreaLabel {
     id: string;
+    /** ID of the fetch generation that produced this annotation. */
+    generationId?: string;
     x: number;
     y: number;
     angle: number;
@@ -2187,6 +2437,8 @@ export interface SessionState {
      *  stores its own IsoPaths (mathematical representation), display settings,
      *  and ESRI-blend state. Multiple generations can coexist on the canvas. */
     contourGenerations?: ContourGeneration[];
+    /** Non-destructive FEMA/soils generation blocks (parameters + member ids). */
+    generationBlocks?: GenerationBlock[];
     /** Saved steep-slope analysis runs keyed to TIN surfaces. */
     steepSlopeRuns?: SteepSlopeRunResult[];
     /** Saved Roading Agent synthesis & corridor design runs. */
@@ -2205,6 +2457,12 @@ export interface SessionState {
     soilAreas?: MapAreaFeature[];
     /** Per-category annotation rendering styles (v26.05.19.15). */
     annotationCategories?: AnnotationCategoryStyle[];
+    /** Named annotation text styles shared by manual text and generated labels. */
+    annotationTextStyles?: AnnotationTextStyle[];
+    /** Style applied to newly placed canvas text. */
+    activeAnnotationTextStyle?: string;
+    /** First-class text entities placed on the drawing canvas. */
+    textAnnotations?: CanvasTextAnnotation[];
     /** Named inclusion-polyline groups (v26.05.17.39). Each entry binds a
      *  user-facing name to a unique `polylineId` carried by every SurveyLine
      *  in that boundary, so the manager can rename / show-hide / re-activate
@@ -2224,6 +2482,10 @@ export interface SessionState {
         fetchedAt: string;
         /** Base64-encoded PNG data URL for offline use (may be large). */
         imageDataUrl?: string;
+        /** Base64-encoded PDF artifact downloaded to the File Manager. */
+        pdfDataUrl?: string;
+        /** File Manager name for the downloaded FIRMETTE PDF. */
+        pdfFileName?: string;
     } | null;
 
     jobInfo: JobInfo;

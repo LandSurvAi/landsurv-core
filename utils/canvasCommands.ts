@@ -82,6 +82,8 @@ export interface CommandContext {
   ) => number;
   /** Start the interactive polygon tool: snapped center, live radius, adjustable sides. */
   onStartPolygon?: (sides?: number, center?: { easting: number; northing: number }) => void;
+  /** Arm the in-canvas text tool (TEXT / MTEXT): the next click places the insertion point. */
+  onStartText?: () => void;
   /** Start interactive Hatch tool (H / HATCH / BHATCH) in pick-area or select-object mode. */
   onStartHatch?: (options?: {
     mode?: 'pick-area' | 'select-object';
@@ -200,6 +202,11 @@ const COMMAND_ALIASES: Record<string, string> = {
   d: 'aligned_dimension',
   dim: 'aligned_dimension',
   dimaligned: 'aligned_dimension',
+  text: 'text',
+  mtext: 'text',
+  dtext: 'text',
+  dt: 'text',
+  tx: 'text',
   f: 'fillet',
   fillet: 'fillet',
   cp: 'copy',
@@ -302,6 +309,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
   deselect: 'Clear the selection',
   distance: 'Measure between two points',
   aligned_dimension: 'Place an aligned dimension between two points',
+  text: 'Place annotation text with the in-canvas editor',
   ortho: 'Toggle orthogonal drawing',
   inclusion: 'Draw an inclusion boundary',
   undo: 'Undo the last change',
@@ -332,6 +340,7 @@ export const HELP_GROUPS: HelpGroup[] = [
       { command: 'C / CIRCLE', description: 'Center + radius, or two tangents (TTR)', note: 'T toggles TTR' },
       { command: 'H / HATCH', description: 'Hatch by clicking inside an enclosed area or selecting a closed object', note: 'S object · A area' },
       { command: 'D / DIMALIGNED', description: 'Aligned dimension — pick two points, then the offset line', note: 'annotation' },
+      { command: 'TEXT / MTEXT', description: 'Place annotation text — click the insertion point, type in place', note: 'double-tap T to start · double-click text to edit' },
       { command: 'REC / RECTANGLE', description: 'Rectangle from two opposite corners', note: 'arrow pad' },
       { command: 'POL / POLYGON', description: 'Regular polygon from a snapped center and drag radius', note: 'scroll / [ ] sides' },
       { command: 'P', description: 'Place a survey point' },
@@ -661,6 +670,13 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
     case 'circle':
       ctx.onStartCircle?.();
       return { status: 'ok', message: 'CIRCLE: Specify center point or [T] for TTR [Esc to cancel]' };
+
+    case 'text':
+      ctx.onStartText?.();
+      return {
+        status: 'ok',
+        message: 'TEXT: Click the insertion point, type the note, then Ctrl+Enter to finish [Esc to cancel]',
+      };
 
     case 'hatch': {
       let mode: 'pick-area' | 'select-object' | undefined;
@@ -1183,8 +1199,8 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
           'MODIFY — S (select), B (box), T (trim), F (fillet — select exactly two straight lines, then type the radius; bare F opens the radius pad), EX (extend), CP (copy), OS (offset [distance]), M (move — bare M picks a snapped base point and destination with a live ghost preview, M dx,dy moves immediately), RO / R (rotate — bare RO or the R key picks a base point with snaps and a live ghost preview, then takes a clicked point or typed angle (Shift snaps to 15°); RO angle [pivot] rotates immediately), SC (scale — bare SC picks a snapped reference point with a live ghost preview, then takes a clicked point or typed factor; SC factor [pivot] scales immediately), MI (mirror — bare MI picks two snapped axis points with a live ghost preview, MI x1,y1 x2,y2 mirrors immediately), J (join), EXPLODE (explode), X / E / DEL (delete).',
           'ARRAYS — AR rows cols rowSpacing colSpacing (rectangular), PA count fillAngle [center] (polar; default selection center). Typing bare AR opens a UCS-style X/Y manipulator: drag a handle for spacing, Shift-drag for quantity, Alt-drag for span, or type any value. The direction ring sets the array angle. The unused axis keeps its preloaded 1 quantity / 0 spacing, so you only enter the axis you need. Typing bare PA opens the compact ring manipulator.',
           'SELECTION — run a modify/array command with nothing selected and it waits for picks: left-click entities, drag a window to box select, MMB pans, Enter applies, Esc cancels.',
-          'SHORTCUTS — B baseline · A/L arc or line submode · Space CAD line · Shift+Space AI agent · Enter finish · Esc cancel · Shift 15° snap · F FILLET · D DIMALIGNED · X delete.',
-          'UTILITY — ZE (zoom extents), U (undo), REDO, ALL (select all), DS (deselect), DI x1,y1 x2,y2 (distance), ORTHO, KEY, CLEAR, HELP / ?, PROP / PROPERTIES (selection properties panel).',
+          'SHORTCUTS — Z box zoom · B baseline · A/L arc or line submode · Space CAD line · Shift+Space AI agent · Enter finish · Esc cancel · Shift 15° snap · F FILLET · D DIMALIGNED · X delete.',
+          'UTILITY — Z (box zoom), ZE (zoom extents), U (undo), REDO, ALL (select all), DS (deselect), DI x1,y1 x2,y2 (distance), ORTHO, KEY, CLEAR, HELP / ?, PROP / PROPERTIES (selection properties panel).',
           'Coords are E,N (feet). Typed distances/radii/spacings use the current linear unit; angles are degrees, counter-clockwise positive.',
           'LINKS — use the buttons after a result to open it in the Text Editor, open the Properties panel, or copy it.',
         ].join('\n'),

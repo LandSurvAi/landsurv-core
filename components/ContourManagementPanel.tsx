@@ -18,7 +18,7 @@
  *   boundary to achieve a smooth hand-off.
  */
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { type ContourGeneration, type InclusionBoundary } from '../types.ts';
 import { ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon } from './icons.tsx';
 import { DockModeControl, type DockMode } from './DockModeControl.tsx';
@@ -37,6 +37,14 @@ interface ContourManagementPanelProps {
   recentlyCreatedTinGenerationId?: string | null;
   onDelete: (id: string) => void;
   onNewGeneration: () => void;
+  /** Contour-label strike tools, shared with the generation panel. */
+  labelCount?: number;
+  labelTool?: 'place' | 'erase' | null;
+  onSetLabelTool?: (tool: 'place' | 'erase' | null) => void;
+  onClearContourLabels?: () => void;
+  onAutoLabelContours?: () => void;
+  /** Re-expand and reveal a generation selected on the canvas. */
+  focusRequest?: { id: string; token: number } | null;
   onClose?: () => void;
   isDocked?: boolean;
   onToggleDock?: () => void;
@@ -69,6 +77,12 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
   recentlyCreatedTinGenerationId,
   onDelete,
   onNewGeneration,
+  labelCount = 0,
+  labelTool = null,
+  onSetLabelTool,
+  onClearContourLabels,
+  onAutoLabelContours,
+  focusRequest,
   onClose,
   isDocked: isDockedProp = false,
   onToggleDock,
@@ -83,6 +97,12 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
   const [editName, setEditName] = useState('');
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+
+  useEffect(() => {
+    if (!focusRequest?.id) return;
+    setCollapsed(false);
+    setExpandedId(focusRequest.id);
+  }, [focusRequest?.id, focusRequest?.token]);
 
   const getDefaultPos = useCallback(() => ({
     x: Math.max(0, window.innerWidth - 380),
@@ -175,6 +195,58 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
 
       {!collapsed && (
         <div className="p-2 space-y-1.5 max-h-[70vh] overflow-y-auto">
+          {(onSetLabelTool || onAutoLabelContours || onClearContourLabels) && (
+            <div className="rounded border border-amber-700/30 bg-amber-950/10 p-2 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-semibold tracking-wide text-amber-300/80">Contour Labels</span>
+                <span className="text-[10px] text-gray-500">{labelCount} on canvas</span>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onSetLabelTool?.(labelTool === 'place' ? null : 'place')}
+                  className={`py-1 rounded border text-[11px] font-medium transition-colors ${
+                    labelTool === 'place'
+                      ? 'border-amber-400 bg-amber-600/30 text-amber-200'
+                      : 'border-gray-600 bg-gray-700/50 text-gray-300 hover:border-amber-500/60 hover:text-amber-200'
+                  }`}
+                >
+                  {labelTool === 'place' ? 'Stop Placing' : 'Place by Strike'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSetLabelTool?.(labelTool === 'erase' ? null : 'erase')}
+                  className={`py-1 rounded border text-[11px] font-medium transition-colors ${
+                    labelTool === 'erase'
+                      ? 'border-rose-400 bg-rose-600/30 text-rose-200'
+                      : 'border-gray-600 bg-gray-700/50 text-gray-300 hover:border-rose-500/60 hover:text-rose-200'
+                  }`}
+                >
+                  {labelTool === 'erase' ? 'Stop Erasing' : 'Erase by Strike'}
+                </button>
+                <button
+                  type="button"
+                  onClick={onAutoLabelContours}
+                  className="py-1 rounded border border-gray-600 bg-gray-700/50 text-[11px] font-medium text-gray-300 hover:border-amber-500/60 hover:text-amber-200 transition-colors"
+                >
+                  Re-label
+                </button>
+                <button
+                  type="button"
+                  onClick={onClearContourLabels}
+                  disabled={labelCount === 0}
+                  className="py-1 rounded border border-gray-600 bg-gray-700/50 text-[11px] font-medium text-gray-300 hover:border-rose-500/60 hover:text-rose-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Clear Labels
+                </button>
+              </div>
+              {labelTool && (
+                <p className="text-[10px] leading-snug text-amber-300/80">
+                  Strike mode active — drag on the canvas. Press Esc to finish.
+                </p>
+              )}
+            </div>
+          )}
           {generations.length === 0 && (
             <div className="py-6 text-center text-xs text-gray-500">
               No contour generations yet.<br />

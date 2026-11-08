@@ -23,6 +23,10 @@ import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import type { SurveyPoint, SurveyLine, ProfilePoint, ProfileInfo, CanvasHatch } from '../types.ts';
 import { explodeHatchToLines } from '../utils/hatchExplode.ts';
 import { getHatchByName, type HatchDefinition } from '../services/hatchLibrary.ts';
+import { LegendBlock } from './LegendBlock.tsx';
+import { openLegendStudioSurface } from './A2UILegendStudio.tsx';
+import { legendStore } from '../services/legendStudio.ts';
+import { legendToSvgMarkup } from '../utils/legendLayout.ts';
 import jsPDF from 'jspdf';
 import { parseDxfForSymbol } from '../utils/dxfParser.ts';
 import { parseBearingToRadians } from '../utils/cogo.ts';
@@ -788,6 +792,16 @@ interface TitleblockFields {
     notes: string;
 }
 
+interface SheetNotesBlock {
+    id: string;
+    title: string;
+    body: string;
+    xIn: number;
+    topIn: number;
+    widthIn: number;
+    fontPt: number;
+}
+
 interface Sheet {
     id: string;
     /** User-visible name in the sheet manager tabs. */
@@ -799,6 +813,8 @@ interface Sheet {
     viewports: Viewport[];
     tbFields: TitleblockFields;
     scaleBar?: SheetScaleBar;
+    /** Compact wrapped notes placed directly on paper space. */
+    notesBlock?: SheetNotesBlock | null;
 }
 
 interface SheetSet {
@@ -965,13 +981,79 @@ interface SheetViewProps {
      */
     onSheetViewCommand?: (cmd: 'add_plan_viewport' | 'add_profile_viewport' | 'set_sheet_style', payload: Record<string, unknown>) => void;
     /**
-     * Flood Agent notes queued for the active sheet titleblock. Append-only;
-     * the id makes the handoff idempotent when React re-runs the effect.
+     * Agent notes queued for the active sheet. The id makes the handoff
+     * idempotent when React re-runs the effect.
      */
-    pendingNotes?: { id: string; text: string } | null;
+    pendingNotes?: {
+        id: string;
+        text: string;
+        mode?: 'titleblock' | 'sheet-notes';
+        title?: string;
+    } | null;
     onPendingNotesConsumed?: () => void;
 }
 
+
+function wrapSheetNoteText(text: string, maxChars: number): string[] {
+    const lines: string[] = [];
+    for (const paragraph of text.split(/\r?\n/)) {
+        const trimmed = paragraph.trim();
+        if (!trimmed) {
+            lines.push('');
+            continue;
+        }
+        let current = '';
+        for (const word of trimmed.split(/\s+/)) {
+            const candidate = current ? `${current} ${word}` : word;
+            if (current && candidate.length > maxChars) {
+                lines.push(current);
+                current = word;
+            } else {
+                current = candidate;
+            }
+        }
+        if (current) lines.push(current);
+    }
+    return lines;
+}
+
+function escapeSheetNoteXml(value: string): string {
+    return value.replace(/[<>&'"]/g, char => ({
+        '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;',
+    } as Record<string, string>)[char]);
+}
+
+/** Build the wrapped SVG notes block used by both the live sheet and PDF plot. */
+function buildSheetNotesBlockSvg(
+    block: SheetNotesBlock,
+    ppi: number,
+): { svg: string; widthPx: number; heightPx: number } {
+    const widthPx = Math.max(120, block.widthIn * ppi);
+    const fontPx = Math.max(3.5, (block.fontPt * ppi) / 72);
+    const titlePx = fontPx * 1.18;
+    const pad = Math.max(3, 0.07 * ppi);
+    const maxChars = Math.max(18, Math.floor((widthPx - pad * 2) / (fontPx * 0.53)));
+    const titleLines = wrapSheetNoteText(block.title, maxChars);
+    const bodyLines = wrapSheetNoteText(block.body, maxChars);
+    const lineHeight = fontPx * 1.22;
+    const titleLineHeight = titlePx * 1.2;
+    const heightPx = pad * 2 + titleLines.length * titleLineHeight + 3 + bodyLines.length * lineHeight;
+
+    const titleSpans = titleLines.map((line, index) => (
+        `<tspan x="${pad.toFixed(2)}" y="${(pad + titlePx + index * titleLineHeight).toFixed(2)}">${escapeSheetNoteXml(line)}</tspan>`
+    )).join('');
+    const bodyY = pad + titleLines.length * titleLineHeight + 3 + fontPx;
+    const bodySpans = bodyLines.map((line, index) => (
+        `<tspan x="${pad.toFixed(2)}" y="${(bodyY + index * lineHeight).toFixed(2)}">${escapeSheetNoteXml(line)}</tspan>`
+    )).join('');
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${widthPx.toFixed(2)}" height="${heightPx.toFixed(2)}" viewBox="0 0 ${widthPx.toFixed(2)} ${heightPx.toFixed(2)}">
+        <rect x="0" y="0" width="${widthPx.toFixed(2)}" height="${heightPx.toFixed(2)}" fill="#ffffff" fill-opacity="0.96" stroke="#111827" stroke-width="0.8" />
+        <text font-family="Arial, Helvetica, sans-serif" font-weight="bold" font-size="${titlePx.toFixed(2)}" fill="#111827">${titleSpans}</text>
+        <text font-family="Arial, Helvetica, sans-serif" font-size="${fontPx.toFixed(2)}" fill="#1f2937">${bodySpans}</text>
+    </svg>`;
+    return { svg, widthPx, heightPx };
+}
 
 function renderScaleBarSvg(
     sb: SheetScaleBar,
@@ -1230,6 +1312,21 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
         if (consumedSheetNoteIdsRef.current.has(pendingNotes.id)) return;
         consumedSheetNoteIdsRef.current.add(pendingNotes.id);
         const incoming = pendingNotes.text.trim();
+        if (pendingNotes.mode === 'sheet-notes') {
+            updateActiveSheet({
+                notesBlock: {
+                    id: pendingNotes.id,
+                    title: pendingNotes.title ?? 'SOIL LIMITATIONS — PA E&S TABLE E.1',
+                    body: incoming.slice(0, 20000),
+                    xIn: 0.75,
+                    topIn: 0.75,
+                    widthIn: 4.75,
+                    fontPt: 5.5,
+                },
+            });
+            onPendingNotesConsumed?.();
+            return;
+        }
         updateActiveSheet(s => {
             const existing = s.tbFields.notes?.trim() ?? '';
             const merged = existing ? `${existing}\n${incoming}` : incoming;
@@ -2231,11 +2328,22 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
             sbBlock = `<g transform="translate(${sbX.toFixed(2)},${sbY.toFixed(2)})">${sbSvg}</g>`;
         }
 
+        // Same shared legend model as the live sheet and the Legend A2UI.
+        const legendBlock = legendToSvgMarkup(legendStore.getSnapshot(), pdfPpi, eW, eH);
+        const notesBlock = sheet.notesBlock
+            ? (() => {
+                const built = buildSheetNotesBlockSvg(sheet.notesBlock, pdfPpi);
+                return `<g transform="translate(${(sheet.notesBlock.xIn * pdfPpi).toFixed(2)},${(sheet.notesBlock.topIn * pdfPpi).toFixed(2)})">${built.svg}</g>`;
+            })()
+            : '';
+
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${sheetPxW}" height="${sheetPxH}" viewBox="0 0 ${sheetPxW} ${sheetPxH}">
             <rect x="0" y="0" width="${sheetPxW}" height="${sheetPxH}" fill="#fff" />
             ${vpGroups}
+            ${notesBlock}
             ${tbBlock}
             ${sbBlock}
+            ${legendBlock}
         </svg>`;
         return { svg, widthPx: sheetPxW, heightPx: sheetPxH };
     }, [set.tbLayout, points, lines, extents, layerColors, buildTbContext, getEffectiveVpRotation, basemapCache, plotHatches, hatchPathData, solidHatchIds]);
@@ -2848,6 +2956,27 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
                             );
                         })}
 
+                        {/* Compact agent notes block — wrapped text placed directly on paper space. */}
+                        {activeSheet.notesBlock && (() => {
+                            const block = activeSheet.notesBlock!;
+                            const { svg, widthPx, heightPx } = buildSheetNotesBlockSvg(block, effectivePpi);
+                            return (
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        left: block.xIn * effectivePpi,
+                                        top: block.topIn * effectivePpi,
+                                        width: widthPx,
+                                        height: heightPx,
+                                        zIndex: 20,
+                                        pointerEvents: 'none',
+                                    }}
+                                    title="Paper-space limitations notes"
+                                    dangerouslySetInnerHTML={{ __html: svg }}
+                                />
+                            );
+                        })()}
+
                         {/* Draggable Graphic Scale Bar on paper */}
                         {activeSheet.scaleBar?.enabled !== false && (() => {
                             const sb = activeSheet.scaleBar ?? makeDefaultScaleBar(activeSheet.viewports[0]?.id ?? '');
@@ -2873,6 +3002,14 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
                                 />
                             );
                         })()}
+
+                        {/* Paperspace legend — the same store the Legend A2UI edits. */}
+                        <LegendBlock
+                            ppi={effectivePpi}
+                            sheetWidthIn={effW}
+                            sheetHeightIn={effH}
+                            onOpenEditor={() => openLegendStudioSurface()}
+                        />
 
                         {/* Titleblock (Vertical along right side or Corner Box) */}
                         {(() => {
@@ -2979,6 +3116,25 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
                                 ⤡ Portrait
                             </button>
                         </div>
+                    </section>
+
+                    {/* Legend — one linked model shared with the drawing. */}
+                    <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                            <h3 className="text-xs font-bold uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
+                                <span aria-hidden="true">▤</span> Legend
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => openLegendStudioSurface()}
+                                className="px-2 py-0.5 text-[10px] font-semibold rounded-md bg-teal-600/30 hover:bg-teal-600 text-teal-200 hover:text-white border border-teal-500/40 transition-colors"
+                            >
+                                Edit legend
+                            </button>
+                        </div>
+                        <p className="text-[10.5px] text-gray-400 leading-relaxed">
+                            The paperspace legend is linked to the Legend A2UI. Changing a label, color, hatch, column count, or placement restyles the drawing and this sheet together.
+                        </p>
                     </section>
 
                     {/* Section 2: Viewports */}

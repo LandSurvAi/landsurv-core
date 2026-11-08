@@ -1,5 +1,8 @@
 import { SurveyLine, SoilMapUnit, MapAreaFeature } from '../types.ts';
 import { buildAreaLoops, areaCentroid, areaSquareUnits, wrapAreaLabelText } from '../utils/areaGeometry.ts';
+import type { SoilReportRow } from './femaReportPdf.ts';
+
+export type { SoilReportRow } from './femaReportPdf.ts';
 
 /**
  * soilsService (v26.05.26.4) — USDA NRCS SSURGO soil survey fetcher.
@@ -288,16 +291,22 @@ INNER JOIN SDA_Get_Mupolygonkey_from_intersection_with_WktWgs84('${bboxWkt}') AS
  */
 export async function fetchSoilReport(
   mukeys: string[],
-): Promise<Record<string, { hydgrpdcd?: string; drclassdcd?: string; taxclname?: string; farmlndcl?: string }>> {
+): Promise<Record<string, SoilReportRow>> {
   if (mukeys.length === 0) return {};
 
   const mkList = mukeys.map(k => `'${k}'`).join(',');
   const query = `
 SELECT
   mu.mukey,
+  c.compname,
+  c.comppct_r,
   c.hydgrpdcd,
   c.drclassdcd,
   c.taxclname,
+  c.hydricrating,
+  c.wtdepannmin,
+  c.brockdepmin,
+  c.slope_r,
   mu.farmlndcl
 FROM
   mapunit mu
@@ -313,17 +322,40 @@ ORDER BY
     if (!resp.ok) throw new Error(`SDA ${resp.status}`);
     const data = await resp.json();
     const table: unknown[][] = data?.Table ?? [];
-    const result: Record<string, { hydgrpdcd?: string; drclassdcd?: string; taxclname?: string; farmlndcl?: string }> = {};
+    const result: Record<string, SoilReportRow> = {};
     for (const row of table) {
-      const [mukey, hydgrpdcd, drclassdcd, taxclname, farmlndcl] = row as string[];
-      if (mukey && !result[mukey]) {
-        result[mukey] = {
-          hydgrpdcd: hydgrpdcd || undefined,
-          drclassdcd: drclassdcd || undefined,
-          taxclname: taxclname || undefined,
-          farmlndcl: farmlndcl || undefined,
-        };
-      }
+      const [
+        mukey,
+        compname,
+        comppctRaw,
+        hydgrpdcd,
+        drclassdcd,
+        taxclname,
+        hydricrating,
+        wtdepRaw,
+        brockdepRaw,
+        slopeRaw,
+        farmlndcl,
+      ] = row as Array<string | number | null>;
+      const key = String(mukey ?? '');
+      if (!key || result[key]) continue;
+      const numeric = (value: string | number | null): number | null => {
+        if (value == null || value === '') return null;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      };
+      result[key] = {
+        compname: compname ? String(compname) : undefined,
+        comppct_r: numeric(comppctRaw),
+        hydgrpdcd: hydgrpdcd ? String(hydgrpdcd) : undefined,
+        drclassdcd: drclassdcd ? String(drclassdcd) : undefined,
+        taxclname: taxclname ? String(taxclname) : undefined,
+        hydricrating: hydricrating ? String(hydricrating) : undefined,
+        wtdepannmin: numeric(wtdepRaw),
+        brockdepmin: numeric(brockdepRaw),
+        slope_r: numeric(slopeRaw),
+        farmlndcl: farmlndcl ? String(farmlndcl) : undefined,
+      };
     }
     return result;
   } catch {
