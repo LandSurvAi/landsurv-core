@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AgentType, JobInfo, useAgent, useUI } from '../types.ts';
+import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnabled.ts';
 import { 
     BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, BookOpenIcon, 
     MapIcon, CutSheetIcon, DownloadIcon, ArrowUpTrayIcon, EraserIcon, XMarkIcon, 
@@ -88,6 +89,8 @@ interface SidebarProps {
     canGoBack?: boolean;
     onGoBack?: () => void;
     onGoHome?: () => void;
+    /** Reports the desktop rail's collapsed state so the canvas header can take over Back/Home. */
+    onCollapsedChange?: (collapsed: boolean) => void;
 }
 
 const SIDEBAR_DEFAULT_WIDTH = 264;
@@ -203,15 +206,17 @@ const hexToRgb = (hex: string): string => {
 // These rows live at module scope on purpose. Declaring them inside Sidebar
 // gives them a new identity on every render, which remounts the whole agent
 // list and can drop a click that spans a re-render.
-const SidebarButton = ({ agent, isDesktop, isActive, isThinking, onSelect }: {
+const SidebarButton = ({ agent, isDesktop, isActive, isThinking, isExperimentalOff = false, onSelect }: {
     agent: AgentType;
     isDesktop: boolean;
     isActive: boolean;
     isThinking: boolean;
+    isExperimentalOff?: boolean;
     onSelect: (agent: AgentType) => void;
 }) => {
     const config = agentConfig[agent];
     if (!config) return null;
+    const isLocked = agent === AgentType.ROADING_AGENT && isExperimentalOff;
 
     const hexColor = agentThemeColors[agent] || '#94a3b8'; // slate-400 fallback
     const rgbColor = hexToRgb(hexColor);
@@ -222,13 +227,14 @@ const SidebarButton = ({ agent, isDesktop, isActive, isThinking, onSelect }: {
             <button
                 type="button"
                 onClick={() => onSelect(agent)}
+                title={isLocked ? `${config.label} — Experimental; enable in Settings` : config.label}
                 className={`group relative flex w-full items-center gap-1.5 rounded-md border px-1.5 py-[6px] text-left transition-colors duration-150 lg:gap-2.5 lg:px-2.5 ${
                     isDesktop ? 'justify-center lg:justify-start' : ''
                 } ${
                     isActive
                         ? 'border-transparent text-white'
                         : 'border-transparent text-slate-400 hover:bg-white/[0.045] hover:text-slate-100 light-theme:text-gray-600 light-theme:hover:bg-black/[0.04] light-theme:hover:text-gray-900'
-                }`}
+                } ${isLocked ? 'opacity-60 hover:opacity-100' : ''}`}
                 style={{
                     ...(isActive ? {
                         background: `linear-gradient(90deg, rgba(${rgbColor},0.16), rgba(${rgbColor},0.03))`,
@@ -246,7 +252,10 @@ const SidebarButton = ({ agent, isDesktop, isActive, isThinking, onSelect }: {
                     className="h-[18px] w-[18px] flex-shrink-0"
                     style={{ color: isActive ? hexColor : `rgba(${rgbColor},0.82)` }}
                 />
-                <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''} ${isThinking ? 'animate-thinking-red-text' : ''}`}>{config.label}</span>
+                <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''} ${isThinking ? 'animate-thinking-red-text' : ''}`}>
+                    {config.label}
+                    {isLocked && <span className="ml-1 text-[9px] font-bold uppercase tracking-wide text-amber-300/80">Off</span>}
+                </span>
                 {isActive && (
                     <span
                         className="ml-auto hidden h-1.5 w-1.5 flex-shrink-0 rounded-full lg:block"
@@ -255,7 +264,7 @@ const SidebarButton = ({ agent, isDesktop, isActive, isThinking, onSelect }: {
                 )}
             </button>
             <div className={`tooltip ${isDesktop ? 'invisible absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-gray-900 text-white text-sm rounded-md shadow-lg opacity-0 transform -translate-x-2 transition-all duration-200 md:inline lg:hidden' : 'hidden'} light-theme:bg-gray-700 light-theme:text-gray-100`}>
-                {config.label}
+                {isLocked ? `${config.label} — Experimental (click to enable in Settings)` : config.label}
             </div>
         </div>
     );
@@ -333,7 +342,16 @@ const C3DConnectionButton = ({ onClick, onDebugClick, isConnected, isDesktop, ha
 export const Sidebar = (props: SidebarProps): React.ReactElement => {
     const { isSessionActive, jobInfo, isLoading } = props;
     const { activeAgent, onAgentChange } = useAgent();
+    const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
     const { activeVisualPanel, showView, showDoc, showTech, showInvestorForm, showReleaseLog, showSettings, showAbout } = useUI();
+
+    const handleAgentSelect = (agent: AgentType) => {
+        if (agent === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) {
+            showSettings();
+            return;
+        }
+        onAgentChange(agent);
+    };
     const [isInfoOpen, setIsInfoOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<'agents' | 'views'>('agents');
     const [isCollapsed, setIsCollapsed] = useState(true);
@@ -372,6 +390,12 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
         if (typeof window === 'undefined') return;
         window.dispatchEvent(new Event(AGENT_SIDEBAR_LAYOUT_EVENT));
     }, [isCollapsed, sidebarWidth, props.isDesktop]);
+
+    // While the agent rail is closed, the workspace Back/Home controls slide
+    // out into the canvas header bar instead of disappearing with the menu.
+    useEffect(() => {
+        props.onCollapsedChange?.(isCollapsed);
+    }, [isCollapsed, props.onCollapsedChange]);
 
     // Keep the expanded content mounted until the width animation finishes, then
     // swap in the compact rail so the close reads as a slide rather than a snap.
@@ -703,7 +727,8 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                                         isDesktop={props.isDesktop}
                                         isActive={agent === activeAgent}
                                         isThinking={agent === activeAgent && props.isLoading}
-                                        onSelect={onAgentChange}
+                                        isExperimentalOff={agent === AgentType.ROADING_AGENT && !experimentalRoadingEnabled}
+                                        onSelect={handleAgentSelect}
                                     />
                                 );
                             });
@@ -912,17 +937,19 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
 
         const collapsedRail = (
             <>
-                <button
-                    type="button"
-                    onClick={() => setIsCollapsedByUser(false)}
-                    className={`flex h-11 w-full flex-shrink-0 items-center justify-center border-b border-white/[0.06] text-slate-300 transition-colors hover:bg-white/[0.07] hover:text-cyan-200 light-theme:border-gray-300 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04] ${
-                        sidebarIntroPulse ? 'sidebar-intro-flash' : ''
-                    }`}
-                    title="Show agent panel"
-                    aria-label="Show agent panel"
-                >
-                    <ChevronDoubleRightIcon className="h-[18px] w-[18px]" />
-                </button>
+                <div className="flex h-14 w-full flex-shrink-0 items-center justify-center border-b border-white/[0.06] light-theme:border-gray-300">
+                    <button
+                        type="button"
+                        onClick={() => setIsCollapsedByUser(false)}
+                        className={`flex h-8 w-8 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-white/[0.07] hover:text-cyan-200 light-theme:text-gray-500 light-theme:hover:bg-black/[0.04] ${
+                            sidebarIntroPulse ? 'sidebar-intro-flash' : ''
+                        }`}
+                        title="Show agent panel"
+                        aria-label="Show agent panel"
+                    >
+                        <ChevronDoubleRightIcon className="h-[18px] w-[18px]" />
+                    </button>
+                </div>
                 <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto scrollbar-hide px-1.5 py-2">
                     {railOrder.map(agentKey => {
                         if (retiredAgents.includes(agentKey)) return null;
@@ -932,22 +959,26 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                         const hexColor = agentThemeColors[agentKey] || '#94a3b8';
                         const rgbColor = hexToRgb(hexColor);
                         const isActive = activeAgent === agentKey;
+                        const isExperimentalOff = agentKey === AgentType.ROADING_AGENT && !experimentalRoadingEnabled;
                         return (
                             <button
                                 key={agentKey}
                                 type="button"
-                                onClick={() => onAgentChange(agentKey)}
-                                title={config.label}
-                                aria-label={config.label}
+                                onClick={() => handleAgentSelect(agentKey)}
+                                title={isExperimentalOff ? `${config.label} — Experimental; click to enable in Settings` : config.label}
+                                aria-label={isExperimentalOff ? `${config.label} — Experimental; enable in Settings` : config.label}
                                 className={`relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md transition-colors ${
                                     isActive ? 'text-white' : 'hover:bg-white/[0.06] light-theme:hover:bg-black/[0.04]'
-                                }`}
+                                } ${isExperimentalOff ? 'opacity-60 hover:opacity-100' : ''}`}
                                 style={isActive ? {
                                     background: `linear-gradient(150deg, rgba(${rgbColor},0.22), rgba(${rgbColor},0.05))`,
                                     boxShadow: `inset 0 0 0 1px rgba(${rgbColor},0.32)`,
                                 } : undefined}
                             >
                                 <Icon className="h-[18px] w-[18px]" style={{ color: isActive ? hexColor : `rgba(${rgbColor},0.8)` }} />
+                                {isExperimentalOff && (
+                                    <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-amber-400" />
+                                )}
                                 {isActive && (
                                     <span
                                         className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full"

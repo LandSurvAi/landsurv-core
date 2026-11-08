@@ -19,6 +19,7 @@
 
 import { AgentType } from '../types.ts';
 import { agentRegistry, type AgentManifest } from './AgentRegistry.ts';
+import { isExperimentalAgentEnabled } from '../utils/experimentalAgents.ts';
 
 export interface IntentMatch {
   agent: AgentType;
@@ -274,7 +275,28 @@ export function routeIntent(request: string, currentAgent?: AgentType): IntentRo
     };
   }
 
-  const manifests = agentRegistry.listCacpEnabled();
+  // Roading is experimental and off by default. While it is disabled, road
+  // drawing belongs to the Civil Drafter rather than falling through to an
+  // unrelated agent or leaving the current agent to improvise.
+  const isRoadDrawingRequest =
+    /\b(?:draw|draft|trace|design|model|synthesi[sz]e|extract|create|build|plot|generate)\w*\b/i.test(request) &&
+    /\b(?:road|roads|roadway|street|corridor|pavement|curb|gutter|sidewalk|right[\s-]?of[\s-]?way|centerline|cul[\s-]?de[\s-]?sac)\b/i.test(request);
+  if (!isExperimentalAgentEnabled(AgentType.ROADING_AGENT) && isRoadDrawingRequest) {
+    return {
+      primary: {
+        agent: AgentType.CIVIL_DRAFTER,
+        displayName: 'Civil Drafter',
+        score: 95,
+        matchedOn: ['road drawing (Roading experimental off)'],
+      },
+      alternates: [],
+      isMismatched: currentAgent !== undefined && currentAgent !== AgentType.CIVIL_DRAFTER,
+      explanation: 'Roading Agent is experimental and disabled; road drawing routed to Civil Drafter.',
+    };
+  }
+
+  const manifests = agentRegistry.listCacpEnabled()
+    .filter(m => isExperimentalAgentEnabled(m.agent));
   const matches = manifests
     .map(m => scoreAgent(request, m))
     .filter(m => m.score > 0)

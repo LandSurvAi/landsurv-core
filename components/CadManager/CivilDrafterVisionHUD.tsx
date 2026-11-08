@@ -13,6 +13,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import type { VisionSurvey, VisionFrame } from '../../utils/civilDrafterVision';
+import type { SynthesisQaReport } from '../../utils/synthesisVerification';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -21,6 +22,8 @@ import type { VisionSurvey, VisionFrame } from '../../utils/civilDrafterVision';
 interface Props {
   isScanning: boolean;
   survey: VisionSurvey | null;
+  /** Latest synthesis verification report (Gimbal Vision pass 2). */
+  qa?: SynthesisQaReport | null;
   /** Called on the × button — parent hides the HUD */
   onDismiss?: () => void;
 }
@@ -248,7 +251,7 @@ function Lightbox({ frame, onClose }: { frame: VisionFrame; onClose: () => void 
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CivilDrafterVisionHUD: React.FC<Props> = ({ isScanning, survey, onDismiss }) => {
+const CivilDrafterVisionHUD: React.FC<Props> = ({ isScanning, survey, qa, onDismiss }) => {
   ensureStyles();
 
   const [collapsed, setCollapsed]         = useState(false);
@@ -397,6 +400,51 @@ const CivilDrafterVisionHUD: React.FC<Props> = ({ isScanning, survey, onDismiss 
         )}
 
         {/* ── Ready state: film strip ─────────────────────────────────────────── */}
+        {/* ── Synthesis QA (Gimbal Vision pass 2) ─────────────────────────── */}
+        {!isScanning && qa && qa.status !== 'unverified' && (
+          <div style={{
+            borderTop: '1px solid rgba(52,211,153,0.20)',
+            background: 'rgba(52,211,153,0.06)',
+            padding: '8px 10px 9px',
+          }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              fontFamily: 'monospace', fontSize: 10,
+            }}>
+              <span style={{ color: '#34D399', fontWeight: 700, letterSpacing: '0.06em' }}>
+                SYNTHESIS QA
+              </span>
+              <span style={{ color: qa.status === 'corrected' ? '#34D399' : 'rgba(255,255,255,0.55)' }}>
+                {qa.scoreBefore}% → {qa.scoreAfter}%
+              </span>
+            </div>
+            <div style={{ marginTop: 3, fontFamily: 'monospace', fontSize: 9.5, color: 'rgba(255,255,255,0.60)' }}>
+              {qa.status === 'corrected'
+                ? `${qa.defectsCorrected} of ${qa.defectsFound} defect${qa.defectsFound === 1 ? '' : 's'} corrected on image evidence`
+                : `Image-truth verified · ${qa.featuresAudited} feature${qa.featuresAudited === 1 ? '' : 's'}`}
+            </div>
+            {qa.repairs.length > 0 && (
+              <ul style={{
+                margin: '5px 0 0', padding: '0 0 0 14px',
+                fontFamily: 'monospace', fontSize: 9,
+                color: 'rgba(255,255,255,0.55)', lineHeight: 1.5,
+              }}>
+                {qa.repairs.slice(0, 3).map((repair, i) => <li key={i}>{repair}</li>)}
+              </ul>
+            )}
+            {qa.overlayDataUrl && (
+              <img
+                src={qa.overlayDataUrl}
+                alt="Synthesis QA — red drafted, green corrected"
+                style={{
+                  display: 'block', width: '100%', marginTop: 7,
+                  borderRadius: 5, border: '1px solid rgba(52,211,153,0.25)',
+                }}
+              />
+            )}
+          </div>
+        )}
+
         {!isScanning && survey && survey.frames.length > 0 && (
           <>
             {/* Film strip */}

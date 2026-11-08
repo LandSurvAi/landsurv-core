@@ -47,8 +47,18 @@ import {
 } from '../utils/stationing';
 import { generateProfile } from '../utils/contouring';
 import { isPointRelevantForCorridor, smoothSplinePoints } from '../utils/civilDrafterVision';
-import { orderPointsAlongFeature } from '../utils/linework';
+import {
+  MAX_SHOT_GAP_FT,
+  longestChainRun,
+  medianShotGap,
+  orderPointsAlongFeature,
+  polylinesCross,
+  polylineSelfIntersects,
+  splitChainsAtGaps,
+} from '../utils/linework';
+import { formatSynthesisQaSummary, verifySynthesizedLinework } from '../utils/synthesisVerification';
 import { knowledgeBase } from './KnowledgeBase';
+import { isExperimentalAgentEnabled } from '../utils/experimentalAgents';
 
 export interface RoadingHandlerDeps {
   points: SurveyPoint[];
@@ -83,6 +93,14 @@ function respond(
     error,
     timestamp: Date.now(),
   };
+}
+
+const ROADING_EXPERIMENTAL_DISABLED_MESSAGE =
+  'Roading Agent is experimental and disabled. Enable it in Settings > Experimental Agents to use its road tools.';
+
+function roadingExperimentalGate(message: AgentMessage): AgentResponse | null {
+  if (isExperimentalAgentEnabled(AgentType.ROADING_AGENT)) return null;
+  return respond(message, false, undefined, ROADING_EXPERIMENTAL_DISABLED_MESSAGE);
 }
 
 /** Render visible background map overlay tiles to an offscreen canvas for optical width calibration. */
@@ -603,11 +621,14 @@ export function traceSurveyRoadCorridor(points: SurveyPoint[]): SurveyRoadCorrid
       .map((p) => Number((p.description || '').match(WIDTH_CODE_RE)?.[1]))
       .filter((w) => Number.isFinite(w) && w >= 8 && w <= 100);
 
-    if (ordered.length >= 3) {
-      const smoothed = smoothRoadPolyline(smoothSplinePoints(ordered, 6, false), 2);
+    // A centreline is a run of observed CL shots. Do not bridge an implausible
+    // gap to one isolated shot just because it happens to carry a CL code.
+    const primaryClRun = longestChainRun(splitChainsAtGaps(ordered));
+    if (primaryClRun.length >= 3) {
+      const smoothed = smoothRoadPolyline(smoothSplinePoints(primaryClRun, 6, false), 2);
       centerline = resampleByArcLength(simplifyCenterlineVertices(smoothed, 0.1), 64);
-    } else if (ordered.length === 2 && codedWidths.length > 0) {
-      centerline = ordered;
+    } else if (primaryClRun.length === 2 && codedWidths.length > 0) {
+      centerline = primaryClRun;
     }
 
     if (centerline) {
@@ -803,6 +824,16 @@ export function traceSurveyRoadCorridor(points: SurveyPoint[]): SurveyRoadCorrid
   }
 
   if (!centerline || centerline.length < 2) return null;
+
+  // PCA/curve builders see every shot, including one isolated far-off shot that
+  // can stretch the alignment through empty ground. Keep the dominant
+  // contiguous centreline run before deriving any offset edges.
+  centerline = longestChainRun(splitChainsAtGaps(
+    centerline,
+    Math.max(MAX_SHOT_GAP_FT, medianShotGap(centerline) * 8),
+  ));
+  if (centerline.length < 2) return null;
+
   if (!widthFt || !Number.isFinite(widthFt) || widthFt < 8 || widthFt > 100) return null;
 
   const halfWidth = widthFt / 2;
@@ -832,14 +863,29 @@ export function traceSurveyRoadCorridor(points: SurveyPoint[]): SurveyRoadCorrid
       .filter((item) => item.offset < 0 && Math.abs(Math.abs(item.offset) - halfWidth) <= bandTol)
       .sort((a, b) => a.station - b.station);
 
-    const dedupeByStation = (items: typeof leftInBand): RoadCoord[] => {
+    type EdgeShot = {
+      easting: number;
+      northing: number;
+      station: number;
+      point: SurveyPoint;
+    };
+    const edgeRun = (items: typeof leftInBand): EdgeShot[] => {
+      const mapped: EdgeShot[] = items.map((item) => ({
+        easting: item.p.easting,
+        northing: item.p.northing,
+        station: item.station,
+        point: item.p,
+      }));
+      return longestChainRun(splitChainsAtGaps(mapped));
+    };
+    const dedupeByStation = (items: EdgeShot[]): RoadCoord[] => {
       const out: RoadCoord[] = [];
       for (const item of items) {
         const coord: RoadCoord = {
-          easting: item.p.easting,
-          northing: item.p.northing,
-          pointNumber: item.p.pointNumber,
-          elevation: item.p.elevation,
+          easting: item.point.easting,
+          northing: item.point.northing,
+          pointNumber: item.point.pointNumber,
+          elevation: item.point.elevation,
         };
         if (out.length === 0) {
           out.push(coord);
@@ -853,20 +899,32 @@ export function traceSurveyRoadCorridor(points: SurveyPoint[]): SurveyRoadCorrid
       return out;
     };
 
-    const leftChain = dedupeByStation(leftInBand);
-    const rightChain = dedupeByStation(rightInBand);
+    // One long gap must not extend an edge through unsupported ground. Keep the
+    // dominant run on each side, then refuse the shot-chain result if the two
+    // edges cross each other or an individual edge doubles back on itself.
+    const leftRun = edgeRun(leftInBand);
+    const rightRun = edgeRun(rightInBand);
+    const leftChain = dedupeByStation(leftRun);
+    const rightChain = dedupeByStation(rightRun);
     const clLen = polylineLength(centerline);
-    const leftSpan =
-      leftInBand.length >= 2 ? leftInBand[leftInBand.length - 1].station - leftInBand[0].station : 0;
-    const rightSpan =
-      rightInBand.length >= 2 ? rightInBand[rightInBand.length - 1].station - rightInBand[0].station : 0;
+    const leftSpan = leftRun.length >= 2
+      ? leftRun[leftRun.length - 1].station - leftRun[0].station
+      : 0;
+    const rightSpan = rightRun.length >= 2
+      ? rightRun[rightRun.length - 1].station - rightRun[0].station
+      : 0;
+    const edgeChainsAreSimple =
+      !polylineSelfIntersects(leftChain) &&
+      !polylineSelfIntersects(rightChain) &&
+      !polylinesCross(leftChain, rightChain);
 
     if (
       leftChain.length >= 3 &&
       rightChain.length >= 3 &&
       clLen > 0 &&
       leftSpan >= clLen * 0.6 &&
-      rightSpan >= clLen * 0.6
+      rightSpan >= clLen * 0.6 &&
+      edgeChainsAreSimple
     ) {
       return {
         centerline,
@@ -1070,6 +1128,8 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
   // ── 1. roading_synthesize_existing ─────────────────────────────────────────
   unsubs.push(
     interAgentComm.onCommand('roading_synthesize_existing', async (message) => {
+      const blocked = roadingExperimentalGate(message);
+      if (blocked) return blocked;
       const deps = getDeps();
       const d = (message.data ?? {}) as Record<string, unknown>;
 
@@ -1186,12 +1246,15 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
               elevation: p.elevation,
               description: p.description,
             }));
+          // Keep only the dominant contiguous CL run; a single far-off CL shot
+          // must not stretch the road through the rest of the lot.
+          const primaryClRun = longestChainRun(splitChainsAtGaps(orderedClCoords));
           geometrySource = 'survey-shots';
-          clCoordsList = [orderedClCoords];
+          clCoordsList = [primaryClRun];
           generatedLines.push(
-            ...emitChainLines(orderedClCoords, clLayer, 'CENTERLINE', 'road-survey-cl'),
-            ...emitChainLines(offsetRoadPolyline(orderedClCoords, defaultRoadWidthFt / 2), edgeLayer, 'CONTINUOUS', 'road-ep-lt'),
-            ...emitChainLines(offsetRoadPolyline(orderedClCoords, -defaultRoadWidthFt / 2), edgeLayer, 'CONTINUOUS', 'road-ep-rt'),
+            ...emitChainLines(primaryClRun, clLayer, 'CENTERLINE', 'road-survey-cl'),
+            ...emitChainLines(offsetRoadPolyline(primaryClRun, defaultRoadWidthFt / 2), edgeLayer, 'CONTINUOUS', 'road-ep-lt'),
+            ...emitChainLines(offsetRoadPolyline(primaryClRun, -defaultRoadWidthFt / 2), edgeLayer, 'CONTINUOUS', 'road-ep-rt'),
           );
           roadNames.push('Surveyed Road Corridor (CL)');
         } else if (singleEdgePoints.length >= 2) {
@@ -1203,15 +1266,17 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
               northing: p.northing,
             })),
           );
-          const nearEdgeCoords = orderedPns
-            .map((pn) => byPn.get(pn)!)
-            .filter(Boolean)
-            .map((p) => ({
-              easting: p.easting,
-              northing: p.northing,
-              pointNumber: p.pointNumber,
-              elevation: p.elevation,
-            }));
+          const nearEdgeCoords = longestChainRun(splitChainsAtGaps(
+            orderedPns
+              .map((pn) => byPn.get(pn)!)
+              .filter(Boolean)
+              .map((p) => ({
+                easting: p.easting,
+                northing: p.northing,
+                pointNumber: p.pointNumber,
+                elevation: p.elevation,
+              })),
+          ));
 
           // Orient streetward offset away from non-road lot interior points when available
           const nonRoadPts = deps.points.filter(
@@ -1344,6 +1409,26 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         }
       }
 
+      // ── GIMBAL VISION · SYNTHESIS QA (PASS 2) ────────────────────────────
+      // Audit the synthesized corridor against the active background imagery
+      // before it reaches the canvas. A centreline that leaves the pavement or
+      // an edge drawn through the road bed is snapped back to image truth; the
+      // pass is evidence-gated and never rewrites a clean synthesis.
+      if (generatedLines.length > 0 && tiles.length > 0) {
+        try {
+          const qa = verifySynthesizedLinework(generatedLines, { bounds, mapTiles: tiles });
+          if (qa.report.status !== 'unverified') {
+            deps.logActionToFieldbook(formatSynthesisQaSummary(qa.report));
+            for (const repair of qa.report.repairs) {
+              deps.logActionToFieldbook(`  • ${repair}`);
+            }
+            if (qa.changed) generatedLines = qa.lines;
+          }
+        } catch (qaErr) {
+          console.warn('[RoadingSynthesisQA] verification pass failed:', qaErr);
+        }
+      }
+
       if (generatedLines.length > 0) {
         // Re-running synthesis replaces only prior roading-generated linework
         // (polyline IDs `road-...`). The old tangled corridor must not remain on
@@ -1418,6 +1503,8 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
   // ── 2. roading_design_corridor ─────────────────────────────────────────────
   unsubs.push(
     interAgentComm.onCommand('roading_design_corridor', async (message) => {
+      const blocked = roadingExperimentalGate(message);
+      if (blocked) return blocked;
       const deps = getDeps();
       const d = (message.data ?? {}) as Record<string, unknown>;
 
@@ -1785,6 +1872,8 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
   // ── 3. roading_generate_profile_and_sections ───────────────────────────────
   unsubs.push(
     interAgentComm.onCommand('roading_generate_profile_and_sections', async (message) => {
+      const blocked = roadingExperimentalGate(message);
+      if (blocked) return blocked;
       const deps = getDeps();
       const d = (message.data ?? {}) as Record<string, unknown>;
 
@@ -1874,6 +1963,8 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
   // ── 4. roading_add_culdesac_or_fillet ──────────────────────────────────────
   unsubs.push(
     interAgentComm.onCommand('roading_add_culdesac_or_fillet', async (message) => {
+      const blocked = roadingExperimentalGate(message);
+      if (blocked) return blocked;
       const deps = getDeps();
       const d = (message.data ?? {}) as Record<string, unknown>;
 
@@ -2066,6 +2157,8 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
   // ── 5. roading_clear ───────────────────────────────────────────────────────
   unsubs.push(
     interAgentComm.onCommand('roading_clear', async (message) => {
+      const blocked = roadingExperimentalGate(message);
+      if (blocked) return blocked;
       const deps = getDeps();
       const d = (message.data ?? {}) as Record<string, unknown>;
       const corridorId = typeof d.corridorId === 'string' ? d.corridorId.trim() : '';

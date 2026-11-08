@@ -14,6 +14,7 @@ import { AnthropicDirectChat } from "./anthropicChat.ts";
 import { getProviderApiKey } from "./providerKeys.ts";
 import { getGemini3Config, buildVertexGenerationConfig } from "./gemini3Config.ts";
 import { agentRegistry } from "./AgentRegistry.ts";
+import { isExperimentalAgentEnabled } from "../utils/experimentalAgents.ts";
 import { interAgentComm } from "./InterAgentCommunication.ts";
 import { knowledgeBase } from "./KnowledgeBase.ts";
 import { ProxyGoogleGenAI, isDemoApiKey } from "./proxyGenAI.ts";
@@ -365,7 +366,9 @@ const baseInstruction = `You are LandSurvAI, a specialized AI assistant for land
 // ---------------------------------------------------------------------------
 export const buildPeerManifestText = (selfAgent: AgentType, settings?: Settings): string => {
     try {
-        const enabled = agentRegistry.listCacpEnabled();
+        const experimentalRoadingEnabled = isExperimentalAgentEnabled(AgentType.ROADING_AGENT);
+        const enabled = agentRegistry.listCacpEnabled()
+            .filter((manifest) => isExperimentalAgentEnabled(manifest.agent));
         if (enabled.length === 0) return '';
 
         const selfManifest = enabled.find(m => m.agent === selfAgent);
@@ -505,7 +508,11 @@ The host application deterministically queries OpenStreetMap building footprints
 9. **ROAD CENTERLINE EXTRACTION (SAM-Road) — NOT A ROAD-DRAWING WORKFLOW.** Use \`geo_extract_roads\` only when the user explicitly asks to extract or trace centerlines / the road network from imagery. Any request to draw, synthesize, or design the road itself belongs to the Roading Agent under rule 10. `}
 ${selfAgent === AgentType.ROADING_AGENT
   ? `10. **ROADS, STREETS, CORRIDORS & ROW — YOU ARE THE ROADING AGENT (CIVIL DRAFTER POINT-DRAFTING ENGINE ENABLED).** When field-collected road survey points (\`EP\`, \`EOP\`, \`ER\`, \`EDGE\`, \`CURB\`, \`TC\`, \`BC\`, \`TBC\`, \`GUTTER\`, \`CL\`, \`CTR\`, \`SHLD\`, \`ROW\`, \`PC\`, \`POC\`, \`PT\`) exist in the \`POINT DATABASE\` and the user asks to draw, draft, trace, or connect the road, street, pavement edges, curbs, or centerline, **draft them directly from the survey points using the Civil Drafter \`chains\` (and \`lines\` for PC–POC–PT curves) output format** so the host deterministically orders each side along the corridor without crossing. Do NOT call \`roading_synthesize_existing\` when road survey points exist unless the user explicitly asks to synthesize from OpenStreetMap/aerial imagery or apply a parametric deeded \`rowWidthFt\` offset. Use \`roading_design_corridor\` for proposed typical-section corridors, \`roading_generate_profile_and_sections\` for profiles/cross-sections, and \`roading_add_culdesac_or_fillet\` for cul-de-sacs/fillets. Never invent a ROW width.`
-  : `10. **ROADS, STREETS, CORRIDORS & ROW — ALWAYS THE ROADING AGENT (NO EXCEPTIONS).** Whenever the user asks to draw, synthesize, trace, design, model, or extract any road, street, roadway, centerline, corridor, typical section, curb & gutter, sidewalk, cul-de-sac, profile, or right-of-way, delegate via CACP to the **Roading Agent** (\`roading_synthesize_existing\` for existing roads, \`roading_design_corridor\` for proposed corridors, \`roading_generate_profile_and_sections\`, or \`roading_add_culdesac_or_fillet\`). Do NOT call \`geo_extract_features\` or \`geo_extract_roads\` for a road request, do NOT draw road or ROW linework yourself, and NEVER invent a ROW width — call the Roading Agent immediately and let it draw without ROW lines when the width is unknown.`}
+  : experimentalRoadingEnabled
+  ? `10. **ROADS, STREETS, CORRIDORS & ROW — ALWAYS THE ROADING AGENT (NO EXCEPTIONS).** Whenever the user asks to draw, synthesize, trace, design, model, or extract any road, street, roadway, centerline, corridor, typical section, curb & gutter, sidewalk, cul-de-sac, profile, or right-of-way, delegate via CACP to the **Roading Agent** (\`roading_synthesize_existing\` for existing roads, \`roading_design_corridor\` for proposed corridors, \`roading_generate_profile_and_sections\`, or \`roading_add_culdesac_or_fillet\`). Do NOT call \`geo_extract_features\` or \`geo_extract_roads\` for a road request, do NOT draw road or ROW linework yourself, and NEVER invent a ROW width — call the Roading Agent immediately and let it draw without ROW lines when the width is unknown.`
+  : `10. **ROADS, STREETS, CORRIDORS & ROW — ROADING AGENT IS EXPERIMENTAL AND DISABLED. YOU DRAW ROADS.** Whenever the user asks to draw, synthesize, trace, design, model, or extract any road, street, roadway, centerline, corridor, pavement edge, curb, gutter, sidewalk, cul-de-sac, profile, or right-of-way, do it yourself using the Civil Drafter point-to-linework chains engine and the field survey points. Do NOT delegate to the Roading Agent, do NOT emit any roading_* skill, and do NOT call geo_extract_features or geo_extract_roads for a road request. Never invent a ROW width. If a proposed design needs a typical section or profile that the shots do not support, ask for the missing dimensions and draft only what the evidence supports.`}
+${!experimentalRoadingEnabled ? `
+**ROADING DISABLED — OVERRIDE:** Ignore any earlier instruction to delegate roads, streets, corridors, or ROW to the Roading Agent. Draw them yourself from the field survey points with the Civil Drafter chains engine, and do not emit roading_* skills.` : ''}
 `;
     } catch (e) {
         // Never let registry errors break agent prompt construction.
@@ -665,7 +672,8 @@ const getAgentSpecificInstruction = (agentType: AgentType, settings?: Settings):
             // the geospatial branch tells the drafter to hand roads to Roading.
             const isGeoAiDrafting = settings?.enableGeoAiDrafting === true
                 && settings?.forceAgent !== AgentType.CIVIL_DRAFTER;
-            const geoAiPromptHeader = isGeoAiDrafting ? `
+            const roadingExperimentalEnabled = isExperimentalAgentEnabled(AgentType.ROADING_AGENT);
+            const geoAiPromptHeader = (isGeoAiDrafting ? `
 **#0 CRITICAL METHODOLOGY RULE — DRIVEWAYS & SITE FEATURES:**
 When the user asks to "draw the driveway", "trace driveway", or draft any site feature, AND has not yet specified a methodology (Points vs Imagery vs Synthesize):
 DO NOT DRAW ANYTHING YET! DO NOT invent fake points or lines!
@@ -706,7 +714,9 @@ The host application queries authoritative OpenStreetMap ways, building footprin
 ` : `
 **DEFAULT DRAFTING MODE (DIRECTLY FROM SURVEY POINTS):**
 By default, draft site linework (roads, driveways, boundaries, alignments, curbs, utilities) directly from the field-collected survey points provided in the project context. Do not ask to use background imagery or prompt for methodology unless experimental Geospatial AI drafting is explicitly enabled in Settings. Connect points matching feature codes (DW, DRV, EP, ER, CL, EDGE, CURB) into clean, non-crossing chains.
-`;
+`) + (!roadingExperimentalEnabled ? `
+**#0 ROADING DISABLED — OVERRIDE:** The Roading Agent is experimental and disabled in this workspace. Ignore any earlier instruction to delegate roads, streets, corridors, or ROW to it. Draw road linework yourself from the field survey points using the Civil Drafter chains engine, and do not emit roading_* skills.
+` : '');
 
             return `You are the Civil Drafter agent, an advanced survey drafting AI specialized in intelligent interpretation of field survey data. You analyze raw data files and create precise CAD-ready line work with deep understanding of civil engineering conventions.
 ${geoAiPromptHeader}

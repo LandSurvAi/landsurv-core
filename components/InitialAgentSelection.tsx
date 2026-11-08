@@ -22,6 +22,7 @@ import { StandardsComplianceContent } from './landing/StandardsComplianceContent
 import { RoadingAgentContent } from './landing/RoadingAgentContent.tsx';
 import { BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, DocumentDuplicateIcon, DxfAnalyzerIcon, LsvzIcon, CurrencyDollarIcon, CrosshairsIcon, CogoIcon, FolderIcon, DocumentTextIcon, ArrowUpTrayIcon, DownloadIcon, ScaleIcon, MapPinIcon, CameraIcon, DroneIcon, ClipboardDocumentListIcon, LogClockIcon, BugAntIcon, CpuChipIcon, GisAgentIcon, ContourIcon, ProfileIcon, SatelliteIcon, ARIcon, ZoningIcon, TitleSearchIcon, PlugIcon, LayersIcon, CadManagerIcon, CivilDrafterIcon, KeyIcon, CogIcon, FloodIcon, HomeIcon, StructuresIcon, SoilsIcon, SlopeIcon, StandardsComplianceIcon, EnvelopeIcon, InfoIcon, LegalScaleIcon, ProjectionGlobeIcon } from './icons.tsx';
 import { getRetiredAgents, type HomepageAgentType } from '../utils/retiredAgents.ts';
+import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnabled.ts';
 import { getGlobalSettings, subscribeGlobalSettings } from '../utils/globalSettings.ts';
 import { CacpBadge } from './CacpBadge.tsx';
 import CacpManifestModal from './CacpManifestModal.tsx';
@@ -353,8 +354,8 @@ export const homepageAgentCards = [
     },
     { 
         type: AgentType.ROADING_AGENT, 
-        title: 'Roading Agent', 
-        description: 'Synthesize existing roads from survey points, background imagery, and OSM ways, or design proposed road corridors, typical sections, profiles, and cross sections.',
+        title: 'Roading Agent (Experimental)',
+        description: 'Experimental — synthesize existing roads from survey points, background imagery, and OSM ways, or design proposed road corridors, typical sections, profiles, and cross sections. Turn it on in Settings → Experimental Agents.',
         icon: RoadIcon,
         color: 'amber',
         actionType: 'agent' as const,
@@ -1275,6 +1276,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
     jobInfo,
     setJobInfo
 }) => {
+  const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
   const [isJobInfoOpen, setIsJobInfoOpen] = useState(false);
   const [activeInfoAgent, setActiveInfoAgent] = useState<AgentType | null>(null);
   const [showCallUsModal, setShowCallUsModal] = useState(false);
@@ -1350,6 +1352,10 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
   // Removed walking highlight effect - titles now pulse continuously with CSS animation
   
   const handleCardClick = (card: Card) => {
+    if (card.type === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) {
+      onShowSettings();
+      return;
+    }
     onSelectAgent(card.type);
   };
 
@@ -2136,7 +2142,13 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
                   key={card.type}
                   card={cardWithRelease}
                   onClick={() => handleCardClick(cardWithRelease)}
-                  onToolOptionClick={onSelectAgentToolOption ? () => onSelectAgentToolOption(cardWithRelease.type) : undefined}
+                  onToolOptionClick={onSelectAgentToolOption ? () => {
+                    if (cardWithRelease.type === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) {
+                      onShowSettings();
+                      return;
+                    }
+                    onSelectAgentToolOption(cardWithRelease.type);
+                  } : undefined}
                   isC3DConnected={isC3DConnected} 
                   onShowReleaseStages={onShowReleaseStages}
                   onInfoClick={agentInfoMap[card.type] ? () => setActiveInfoAgent(card.type) : undefined}

@@ -23,7 +23,13 @@ export function isChainLineMode(mode: string): mode is ChainLineMode {
   return CHAIN_LINE_MODES.includes(mode);
 }
 
-/** SurveyLine type committed by a chain mode. Normal and boundary stay untyped. */
+/**
+ * SurveyLine type committed by a chain mode.
+ *
+ * Boundary lines use the same `parcel` type as deed-drafted boundary linework,
+ * which is what gives them the amber boundary color on the canvas. Normal
+ * lines stay untyped.
+ */
 export function chainLineSurveyType(mode: ChainLineMode): SurveyLine['type'] {
   switch (mode) {
     case 'breaklines':
@@ -32,6 +38,8 @@ export function chainLineSurveyType(mode: ChainLineMode): SurveyLine['type'] {
       return 'inclusion';
     case 'exclusion':
       return 'exclusion';
+    case 'boundary-line':
+      return 'parcel';
     default:
       return undefined;
   }
@@ -63,9 +71,11 @@ export function buildChainLine(args: {
   fromPoint: ChainLinePoint;
   toPoint: ChainLinePoint;
   layer?: string;
+  /** Shared id for one boundary chain, so its calls label like a drafted tract. */
+  polylineId?: string;
   arc?: ChainLineArc | null;
 }): SurveyLine {
-  const { mode, from, to, fromPoint, toPoint, layer, arc } = args;
+  const { mode, from, to, fromPoint, toPoint, layer, polylineId, arc } = args;
   const inv = inverse(
     { easting: fromPoint.easting, northing: fromPoint.northing },
     { easting: toPoint.easting, northing: toPoint.northing },
@@ -79,6 +89,7 @@ export function buildChainLine(args: {
     from,
     to,
     type: chainLineSurveyType(mode),
+    polylineId,
     layer,
     fromPt,
     toPt,

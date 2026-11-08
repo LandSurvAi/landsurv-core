@@ -62,6 +62,12 @@ import {
   type VisionSurvey,
   type VisionAerialImage,
 } from './utils/civilDrafterVision.ts';
+import {
+  boundsFromLines,
+  formatSynthesisQaSummary,
+  verifySynthesizedLinework,
+  type SynthesisQaReport,
+} from './utils/synthesisVerification.ts';
 import { type ZoningContext, type AutoDraftImage } from './utils/autoDraftOrchestrator.ts';
 import { getStaticMap, clearStaticMapsCache } from './services/staticMapsService.ts';
 import { clearMapCache, getCachedBitmap, mapWithConcurrency } from './utils/mapTileCache.ts';
@@ -103,6 +109,8 @@ import { buildPointLabelAnnotations, describeLabelAllResult } from './services/a
 import { APP_VERSION as APP_VERSION_CONST } from './utils/appVersion.ts';
 import { buildCadManagerSessionState, createSessionZip, generateSessionFileName, toAliasRecord } from './utils/sessionZip.ts';
 import { isOssBuild } from './utils/ossMode.ts';
+import { useExperimentalAgentEnabled } from './hooks/useExperimentalAgentEnabled.ts';
+import { isExperimentalAgentEnabled } from './utils/experimentalAgents.ts';
 // Defer non-critical page components for faster initial load
 const TechnologiesPage = lazy(() => import('./components/TechnologiesPage.tsx'));
 const SettingsPage = lazy(() => import('./components/SettingsPage.tsx'));
@@ -1515,6 +1523,7 @@ const AppContent = () => {
   const [isRoadingPanelVisible, setIsRoadingPanelVisible] = useState(false);
   const [isRoadingWorking, setIsRoadingWorking] = useState(false);
   const [roadCorridors, setRoadCorridors] = useState<import('./types.ts').RoadCorridorRun[]>([]);
+  const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
 
   // PROFILE_AGENT � direct UI panel (no AI round-trip; client-side generateProfile).
   const [isProfileGenPanelVisible, setIsProfileGenPanelVisible] = useState(false);
@@ -1930,6 +1939,12 @@ const AppContent = () => {
   // messages until the point set changes significantly (>5% delta).
   const [civilDrafterVisionSurvey, setCivilDrafterVisionSurvey] = useState<VisionSurvey | null>(null);
   const civilDrafterVisionSurveyRef = useRef<VisionSurvey | null>(null);
+  // Synthesis QA (Gimbal Vision pass 2) — last post-draft verification report.
+  const [synthesisQa, setSynthesisQa] = useState<SynthesisQaReport | null>(null);
+  // Desktop agent rail collapse state. When the menu is closed, the workspace
+  // Back/Home controls slide out into the canvas header bar.
+  const [isAgentSidebarCollapsed, setIsAgentSidebarCollapsed] = useState(true);
+  const headerWorkspaceNavVisible = !isDesktop || isAgentSidebarCollapsed;
   const [isVisionScanning, setIsVisionScanning] = useState(false);
   // Gimbal Vision HUD: defaults to closed/shaded. Auto-opens when a new
   // file is loaded (App.tsx ~2247) or when a Civil Drafter scan begins
@@ -2905,7 +2920,7 @@ const AppContent = () => {
     resetChatSession(previous);
     resetChatSession(next);
 
-    if (next) {
+    if (next && (next !== AgentType.ROADING_AGENT || isExperimentalAgentEnabled(AgentType.ROADING_AGENT))) {
       setInitializedAgents(prev => new Set(prev).add(next));
       setActiveAgent(next);
     }
@@ -2917,6 +2932,7 @@ const AppContent = () => {
   // requesting agent becomes active again when results/control return.
   useEffect(() => {
     return interAgentComm.onAgentFocusChange(focus => {
+      if (focus.agent === AgentType.ROADING_AGENT && !isExperimentalAgentEnabled(AgentType.ROADING_AGENT)) return;
       setInitializedAgents(prev => (prev.has(focus.agent) ? prev : new Set(prev).add(focus.agent)));
       setActiveAgent(focus.agent);
     });
@@ -17692,9 +17708,51 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               // are still drawn as regular SurveyLines.
               // Until the user clicks "Draw Boundary" in the editor, no CAD-Manager-
               // styled linework exists on the canvas for deed traverses.
-              const linesToPlot = agent === AgentType.DEED_READER
+              let linesToPlot = agent === AgentType.DEED_READER
                 ? enrichedLinesFiltered.filter(l => !!l.type)
                 : enrichedLinesFiltered;
+              // ── GIMBAL VISION · SYNTHESIS QA (PASS 2) ────────────────────────
+              // The model has committed pavement linework. Before it reaches the
+              // canvas, re-examine it against the actual background pixels: a
+              // line drawn through the road bed is snapped onto the visible
+              // pavement edge/medial axis, sawtooths are re-ordered onto one
+              // corridor side, and duplicates/spikes are removed. The pass is
+              // evidence-gated — it only rewrites geometry when the image score
+              // improves, so it can never make a clean draft worse.
+              if (
+                (agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT)
+                && isDrawIntent(query)
+                && linesToPlot.length > 0
+              ) {
+                try {
+                  const evidenceTiles = canvas2dRef.current?.getMapOverlayTiles?.() ?? [];
+                  const overviewBounds = civilDrafterVisionSurveyRef.current?.frames?.[0]?.bounds
+                    || civilDrafterVisionSurvey?.frames?.[0]?.bounds;
+                  const qaBounds = overviewBounds ?? boundsFromLines(linesToPlot, 0.15);
+                  if (evidenceTiles.length > 0 && qaBounds) {
+                    const qa = verifySynthesizedLinework(linesToPlot, {
+                      bounds: qaBounds,
+                      mapTiles: evidenceTiles,
+                    });
+                    if (qa.report.status === 'unverified') {
+                      setSynthesisQa(null);
+                    } else {
+                      setSynthesisQa(qa.report);
+                      logActionToFieldbook(formatSynthesisQaSummary(qa.report));
+                      for (const repair of qa.report.repairs) {
+                        logActionToFieldbook(`  • ${repair}`);
+                      }
+                      if (qa.changed) {
+                        linesToPlot = qa.lines;
+                        setShowVisionHUD(true);
+                      }
+                    }
+                  }
+                } catch (qaErr) {
+                  console.warn('[SynthesisQA] verification pass failed:', qaErr);
+                }
+              }
+
               if (linesToPlot.length > 0) {
                 setLines(prevLines => [...prevLines, ...linesToPlot]);
               }
@@ -19408,6 +19466,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       return;
     }
 
+    // Experimental Roading is opt-in. A stale session, CACP focus, force-agent
+    // setting, or deep link must not activate it without the warning.
+    if (agent === AgentType.ROADING_AGENT && !isExperimentalAgentEnabled(AgentType.ROADING_AGENT)) {
+      setError('Roading Agent is experimental and disabled. Enable it in Settings > Experimental Agents to use it.');
+      return;
+    }
+
     // Push current state to navigation history before changing
     if (isSessionActive && !isInitialScreen) {
       pushNavigation(activeAgent, activeVisualPanel);
@@ -19519,6 +19584,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, [handleOpenBoundaryGis]);
 
   handleAgentChangeRef.current = handleAgentChange;
+
+  // If Roading is disabled while active (or a saved session restores it), move
+  // the workspace to Civil Drafter instead of leaving an experimental road
+  // agent in control.
+  useEffect(() => {
+    if (activeAgent !== AgentType.ROADING_AGENT || experimentalRoadingEnabled) return;
+    setError('Roading Agent is experimental and disabled. Switched to Civil Drafter; enable Roading in Settings > Experimental Agents to use it.');
+    handleAgentChange(AgentType.CIVIL_DRAFTER);
+  }, [activeAgent, experimentalRoadingEnabled, handleAgentChange]);
   
   const handleModelChange = useCallback((model: string) => {
     const normalizedModel = normalizeSelectedModel(model);
@@ -24757,18 +24831,61 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
 
   
-  const buildHeaderControls = (includeCacpBadge: boolean) => (
+  const buildHeaderControls = (includeCacpBadge: boolean) => {
+    const forcedAgentLabel = settings.forceAgent
+      ? (agentConfig[settings.forceAgent]?.label ?? settings.forceAgent)
+      : null;
+    const activeAgentLabel = agentConfig[activeAgent]?.label ?? activeAgent;
+    const isActiveAgentForced = !!settings.forceAgent && settings.forceAgent === activeAgent;
+    // The per-chat toggle belongs to the agent's own header. It pins interactive
+    // turns to this agent, which makes App skip the CACP intent gate.
+    const showForceAgentToggle = includeCacpBadge && agentRegistry.isCacpEnabled(activeAgent);
+
+    return (
     <>
-      {settings.forceAgent && (
+      {settings.forceAgent && (!includeCacpBadge || !isActiveAgentForced) && (
         <span
           className="inline-flex h-6 items-center gap-1 rounded border border-sky-400/40 bg-sky-500/15 px-2 text-[10px] font-semibold text-sky-200"
-          title={`Force Agent test mode: interactive chat requests go to ${agentConfig[settings.forceAgent]?.label ?? settings.forceAgent}. CACP handoff and peer delegation are disabled for those turns.`}
+          title={`Force Agent test mode: interactive chat requests go to ${forcedAgentLabel}. CACP handoff and peer delegation are disabled for those turns.`}
         >
-          🔒 <span className="hidden sm:inline">{agentConfig[settings.forceAgent]?.label ?? settings.forceAgent} forced</span>
+          🔒 <span className="hidden sm:inline">{forcedAgentLabel} forced</span>
         </span>
       )}
       {includeCacpBadge && (
-        <CacpBadge agent={activeAgent} onClick={(a) => setCacpManifestAgent(a)} />
+        <CacpBadge
+          agent={activeAgent}
+          onClick={(a) => setCacpManifestAgent(a)}
+          className={settings.forceAgent ? 'opacity-50 saturate-0' : ''}
+          title={settings.forceAgent
+            ? `CACP interactive routing is paused while Force Agent is on${forcedAgentLabel ? ` (${forcedAgentLabel})` : ''}. Click to inspect this agent's manifest.`
+            : undefined}
+        />
+      )}
+      {showForceAgentToggle && (
+        <label
+          className={`inline-flex h-6 cursor-pointer select-none items-center gap-1.5 rounded border px-2 text-[10px] font-semibold transition-colors duration-150 ${
+            isActiveAgentForced
+              ? 'border-amber-400/50 bg-amber-500/15 text-amber-200 light-theme:border-amber-400 light-theme:bg-amber-100 light-theme:text-amber-800'
+              : 'border-white/[0.08] bg-white/[0.03] text-slate-300 hover:border-white/[0.14] hover:bg-white/[0.06] hover:text-white light-theme:border-gray-300 light-theme:bg-gray-100 light-theme:text-gray-700 light-theme:hover:bg-gray-200'
+          }`}
+          title={
+            isActiveAgentForced
+              ? `${activeAgentLabel} is forced. CACP hand-off, peer delegation and peer assist are disabled for its interactive turns. Uncheck to restore normal CACP routing.`
+              : `Force ${activeAgentLabel} to handle interactive turns itself. Checking this disables CACP hand-off, peer delegation and peer assist for this agent.`
+          }
+        >
+          <input
+            type="checkbox"
+            checked={isActiveAgentForced}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setSettings(prev => ({ ...prev, forceAgent: checked ? activeAgent : undefined }));
+            }}
+            className="h-3 w-3 cursor-pointer accent-amber-400"
+            aria-label={`Force ${activeAgentLabel} and disable CACP routing`}
+          />
+          <span className="whitespace-nowrap">Force Agent</span>
+        </label>
       )}
       {activeAgent === AgentType.CIVIL_DRAFTER && isCurrentAgentInitialized && (
         <button
@@ -24809,7 +24926,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         </button>
       )}
     </>
-  );
+    );
+  };
 
   const chatHeaderControls = buildHeaderControls(true);
   const toolShelfHeaderControls = buildHeaderControls(false);
@@ -26311,6 +26429,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             canGoBack={canGoBack}
             onGoBack={handleNavigateBack}
             onGoHome={handleGoBackToInitialScreen}
+            onCollapsedChange={setIsAgentSidebarCollapsed}
             jobInfo={jobInfo}
             setJobInfo={setJobInfo}
             isLoading={isLoading}
@@ -26534,20 +26653,38 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             className="relative z-40 overflow-visible flex-shrink-0 flex items-center gap-1.5 px-2 h-14 bg-[#0a0f16] border-b border-white/[0.06] light-theme:bg-white/60 light-theme:border-gray-300/40"
                         >
                             <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 md:hidden"><Bars3Icon className="h-[18px] w-[18px]"/></button>
-                            {!isDesktop && canGoBack && (
-                                <button 
-                                    onClick={handleNavigateBack} 
-                                    className="p-2 rounded-full hover:bg-gray-700 text-cyan-400 transition-colors animate-pulse" 
-                                    title="Go Back"
+                            {/* Workspace Back/Home live in the agent rail while it is open.
+                                When the rail closes they slide out into this header bar so
+                                navigation never disappears with the menu. */}
+                            <div
+                                className={`flex items-center gap-0.5 overflow-hidden transition-[max-width,opacity,transform] duration-500 ease-out ${
+                                    headerWorkspaceNavVisible
+                                        ? 'max-w-[84px] translate-x-0 opacity-100'
+                                        : 'pointer-events-none max-w-0 -translate-x-2 opacity-0'
+                                }`}
+                                aria-hidden={!headerWorkspaceNavVisible}
+                            >
+                                {canGoBack && (
+                                    <button
+                                        onClick={handleNavigateBack}
+                                        className="p-2 rounded-full hover:bg-gray-700 text-cyan-400 transition-colors"
+                                        title="Go Back"
+                                        tabIndex={headerWorkspaceNavVisible ? 0 : -1}
+                                    >
+                                        <ChevronLeftIcon className="h-[18px] w-[18px]"/>
+                                    </button>
+                                )}
+                                <button
+                                    onClick={handleGoBackToInitialScreen}
+                                    className="p-2 rounded-full hover:bg-gray-700 text-gray-300 transition-colors"
+                                    title="Go to Home Screen"
+                                    tabIndex={headerWorkspaceNavVisible ? 0 : -1}
                                 >
-                                    <ChevronLeftIcon className="h-[18px] w-[18px]"/>
+                                    <HomeIcon className="h-[18px] w-[18px]"/>
                                 </button>
-                            )}
+                            </div>
                             {activeVisualPanel !== 'canvas' && (
                                 <button onClick={() => showView('canvas')} className="p-2 rounded-full hover:bg-gray-700 transition-colors animate-pulse" title="Return to Canvas"><MonitorIcon className="h-[18px] w-[18px] text-cyan-400"/></button>
-                            )}
-                            {!isDesktop && (
-                                <button onClick={handleGoBackToInitialScreen} className="p-2 rounded-full hover:bg-gray-700 text-gray-300 transition-colors" title="Go to Home Screen"><HomeIcon className="h-[18px] w-[18px]"/></button>
                             )}
                             <button 
                                 onClick={() => showView(activeVisualPanel === 'sheetview' ? 'canvas' : 'sheetview')} 
@@ -27078,9 +27215,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         }
                                     />
                                     {/* Civil Drafter Gimbal Vision HUD � debug-only (Settings ? Developer/Testing) */}
-                                    {activeAgent === AgentType.CIVIL_DRAFTER && showVisionHUD && !!settings.debugGimbalHud && (
+                                    {activeAgent === AgentType.CIVIL_DRAFTER && showVisionHUD && (!!settings.debugGimbalHud || synthesisQa?.status === 'corrected') && (
                                         <CivilDrafterVisionHUD
                                             isScanning={isVisionScanning}
+                                            qa={synthesisQa}
                                             survey={civilDrafterVisionSurvey}
                                             onDismiss={() => setShowVisionHUD(false)}
                                         />

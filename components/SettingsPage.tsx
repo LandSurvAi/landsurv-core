@@ -9,6 +9,8 @@ import { useErrorReporter } from '../contexts/AppStateContext';
 import { PROVIDER_KEY_URLS, type ByokProvider } from '../services/providerKeys.ts';
 import { WebGpuBasemap, isWebGpuEnabled, getGpuPowerPreference, probeWebGpuAdapter, WEBGPU_ENABLED_KEY, WEBGPU_POWER_KEY, WEBGPU_PREF_EVENT, type GpuPowerPreference, type WebGpuProbeResult } from '../utils/webgpuBasemap.ts';
 import GlobalCrsPicker from './GlobalCrsPicker.tsx';
+import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnabled.ts';
+import { EXPERIMENTAL_ROADING_WARNING, setExperimentalAgentEnabled } from '../utils/experimentalAgents.ts';
 import { detectProjectionFromBrowser } from '../utils/autoProjection.ts';
 
 const FORCE_AGENT_OPTIONS: AgentType[] = [
@@ -36,6 +38,9 @@ const FORCE_AGENT_OPTIONS: AgentType[] = [
     AgentType.STRUCTURES_AGENT,
     AgentType.SOILS_AGENT,
     AgentType.LSVZ_AGENT,
+    AgentType.VOICE_AGENT,
+    AgentType.AR_AGENT,
+    AgentType.FLOOD_AGENT,
 ].sort((a, b) => (agentConfig[a]?.label ?? a).localeCompare(agentConfig[b]?.label ?? b));
 
 const AUTO_SELECTOR_OPTION = 'auto';
@@ -92,6 +97,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     , onTriggerHostCostReminder
     , projectBboxWgs84, gpsPosition
 }) => {
+    const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
     const [isConfirmingReset, setIsConfirmingReset] = useState(false);
     const [showScrollIndicator, setShowScrollIndicator] = useState(true);
     const [inputApiKey, setInputApiKey] = useState(settings.userApiKey || '');
@@ -421,6 +427,24 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                     </div>
                 </div>
             </div>
+            {/* Experimental Agents */}
+            <div>
+                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Experimental Agents</h3>
+                <div className="bg-amber-500/10 p-4 rounded-lg border border-amber-500/30 space-y-3 light-theme:bg-amber-50 light-theme:border-amber-300">
+                    <label className="flex items-center gap-3 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={experimentalRoadingEnabled}
+                            onChange={e => setExperimentalAgentEnabled(AgentType.ROADING_AGENT, e.target.checked)}
+                            className={`w-4 h-4 ${themeAccent}`}
+                        />
+                        <span className="text-sm font-medium text-amber-200 light-theme:text-amber-800">Enable Roading Agent (Experimental)</span>
+                    </label>
+                    <p className="text-xs text-amber-200/80 light-theme:text-amber-800">{EXPERIMENTAL_ROADING_WARNING}</p>
+                    <p className="text-xs text-gray-400 light-theme:text-gray-600">Off by default. While off, Roading is listed as Experimental / Off, CACP ignores it, and road requests stay with Civil Drafter.</p>
+                </div>
+            </div>
+
             {/* Developer & Testing Section */}
             <div>
                 <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Developer / Testing</h3>
@@ -477,11 +501,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
                         >
                             <option value="">Off — normal CACP routing</option>
-                            {FORCE_AGENT_OPTIONS.map(agent => (
+                            {FORCE_AGENT_OPTIONS.filter(agent => agent !== AgentType.ROADING_AGENT || experimentalRoadingEnabled).map(agent => (
                                 <option key={agent} value={agent}>{agentConfig[agent]?.label ?? agent}</option>
                             ))}
                         </select>
-                        <p className="text-xs text-gray-500 mt-1">Pins interactive chat requests to this agent, bypasses the CACP intent handoff, and disables peer delegation for the turn. Use Civil Drafter to test road or drafting prompts without the Roading Agent taking over. Explicit CACP/internal targets are unaffected. A “forced” badge appears in the chat header while active.</p>
+                        <p className="text-xs text-gray-500 mt-1">Pins interactive chat requests to this agent, bypasses the CACP intent handoff, and disables peer delegation for the turn. Use Civil Drafter to test road or drafting prompts without the Roading Agent taking over. Explicit CACP/internal targets are unaffected. The Force Agent checkbox in each CACP agent&apos;s chat header controls this same switch.</p>
                     </div>
 
                     <div>

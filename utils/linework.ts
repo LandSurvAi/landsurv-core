@@ -130,6 +130,181 @@ export function orderPointsAlongFeature(points: OrderablePoint[]): string[] {
   return ordered.map(p => p.pointNumber);
 }
 
+/** Survey shots on one bound should be close enough to connect into one line. */
+export const MAX_SHOT_GAP_FT = 150;
+const MIN_SHOT_GAP_FT = 75;
+
+type Point2D = { easting: number; northing: number };
+
+/** Median straight-line distance between consecutive points in an ordered chain. */
+export function medianShotGap(points: ReadonlyArray<Point2D>): number {
+  if (points.length < 2) return 0;
+  const gaps: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const gap = Math.hypot(
+      points[i].easting - points[i - 1].easting,
+      points[i].northing - points[i - 1].northing,
+    );
+    if (Number.isFinite(gap) && gap > 0.25) gaps.push(gap);
+  }
+  if (gaps.length === 0) return 0;
+  gaps.sort((a, b) => a - b);
+  return gaps[Math.floor(gaps.length / 2)];
+}
+
+/**
+ * Adaptive observation-spacing limit. A shot 3x farther than the typical
+ * spacing on the same bound, or more than 150 ft from its neighbour, is not a
+ * bound connection a surveyor would have observed in one line. Never return
+ * less than 75 ft so a sparse but plausible chain still draws.
+ */
+export function shotGapLimit(points: ReadonlyArray<Point2D>): number {
+  const median = medianShotGap(points);
+  if (median <= 0) return MAX_SHOT_GAP_FT;
+  return Math.min(MAX_SHOT_GAP_FT, Math.max(MIN_SHOT_GAP_FT, median * 3));
+}
+
+/** Split an ordered shot chain at gaps no surveyor would connect in one bound. */
+export function splitChainsAtGaps<T extends Point2D>(
+  points: T[],
+  maxGapFt?: number,
+): T[][] {
+  if (points.length === 0) return [];
+  if (points.length === 1) return [points.slice()];
+  const limit = maxGapFt ?? shotGapLimit(points);
+  const runs: T[][] = [];
+  let current: T[] = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    const gap = Math.hypot(
+      points[i].easting - points[i - 1].easting,
+      points[i].northing - points[i - 1].northing,
+    );
+    if (gap > limit) {
+      runs.push(current);
+      current = [points[i]];
+    } else {
+      current.push(points[i]);
+    }
+  }
+  runs.push(current);
+  return runs;
+}
+
+/** Sum of the straight-line steps in a chain. */
+export function chainRunLength(points: ReadonlyArray<Point2D>): number {
+  let length = 0;
+  for (let i = 1; i < points.length; i++) {
+    length += Math.hypot(
+      points[i].easting - points[i - 1].easting,
+      points[i].northing - points[i - 1].northing,
+    );
+  }
+  return length;
+}
+
+/** The dominant contiguous run from a set of gap-split runs. */
+export function longestChainRun<T extends Point2D>(runs: T[][]): T[] {
+  let best: T[] = [];
+  let bestLength = -1;
+  for (const run of runs) {
+    const length = chainRunLength(run);
+    if (
+      length > bestLength + 1e-9 ||
+      (Math.abs(length - bestLength) <= 1e-9 && run.length > best.length)
+    ) {
+      best = run;
+      bestLength = length;
+    }
+  }
+  return best;
+}
+
+function orientation(a: Point2D, b: Point2D, c: Point2D): number {
+  return (b.easting - a.easting) * (c.northing - a.northing)
+    - (b.northing - a.northing) * (c.easting - a.easting);
+}
+
+function segmentsProperlyIntersect(
+  a: Point2D,
+  b: Point2D,
+  c: Point2D,
+  d: Point2D,
+): boolean {
+  const o1 = orientation(a, b, c);
+  const o2 = orientation(a, b, d);
+  const o3 = orientation(c, d, a);
+  const o4 = orientation(c, d, b);
+  return (o1 > 0) !== (o2 > 0) && (o3 > 0) !== (o4 > 0);
+}
+
+/** True when two polylines properly cross (shared endpoints do not count). */
+export function polylinesCross(
+  a: ReadonlyArray<Point2D>,
+  b: ReadonlyArray<Point2D>,
+): boolean {
+  for (let i = 0; i < a.length - 1; i++) {
+    for (let j = 0; j < b.length - 1; j++) {
+      if (segmentsProperlyIntersect(a[i], a[i + 1], b[j], b[j + 1])) return true;
+    }
+  }
+  return false;
+}
+
+/** True when a polyline crosses itself. */
+export function polylineSelfIntersects(
+  points: ReadonlyArray<Point2D>,
+  isClosed = false,
+): boolean {
+  const n = points.length;
+  if (n < 4) return false;
+  const segmentCount = isClosed ? n : n - 1;
+  for (let i = 0; i < segmentCount; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % n];
+    for (let j = i + 1; j < segmentCount; j++) {
+      if (j === i + 1) continue;
+      if (isClosed && i === 0 && j === segmentCount - 1) continue;
+      const c = points[j];
+      const d = points[(j + 1) % n];
+      if (segmentsProperlyIntersect(a, b, c, d)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Split an ordered chain wherever the next segment would cross an earlier
+ * segment. The crossing segment is omitted rather than drawn, so each returned
+ * run is a simple, non-self-intersecting bound.
+ */
+export function splitChainsAtCrossings<T extends Point2D>(points: T[]): T[][] {
+  if (points.length < 4) return points.length ? [points] : [];
+  const runs: T[][] = [];
+  let current: T[] = [points[0]];
+  const emitted: Array<[T, T]> = [];
+  for (let i = 1; i < points.length; i++) {
+    const next = points[i];
+    const previous = current[current.length - 1];
+    const gap = Math.hypot(
+      next.easting - previous.easting,
+      next.northing - previous.northing,
+    );
+    if (gap < 0.25) continue;
+    const crosses = emitted.some(([a, b]) =>
+      segmentsProperlyIntersect(a, b, previous, next),
+    );
+    if (crosses) {
+      if (current.length >= 2) runs.push(current);
+      current = [next];
+      continue;
+    }
+    current.push(next);
+    emitted.push([previous, next]);
+  }
+  if (current.length >= 2) runs.push(current);
+  return runs;
+}
+
 export interface DrafterChain {
   polylineId?: string;
   layer?: string;
@@ -553,28 +728,52 @@ export function expandChainsToLines(
     if (resolved.length < 2) continue;
 
     const orderedPns = orderPointsAlongFeature(resolved);
-    for (let i = 0; i < orderedPns.length - 1; i++) {
-      out.push({
-        from: orderedPns[i],
-        to: orderedPns[i + 1],
-        layer: chain.layer,
-        lineType: chain.lineType,
-        polylineId: chain.polylineId,
-      });
-    }
-    // Close the ring if requested and it isn't already closed.
-    if (chain.isClosed && orderedPns.length > 2) {
-      const first = orderedPns[0];
-      const last = orderedPns[orderedPns.length - 1];
-      if (first !== last) {
+    const resolvedByPn = new Map(resolved.map(p => [p.pointNumber, p]));
+    const orderedPoints = orderedPns
+      .map(pn => resolvedByPn.get(pn))
+      .filter((p): p is OrderablePoint => Boolean(p));
+
+    // A bound is a run of shots the crew actually observed. Gaps larger than
+    // the feature's own spacing break the run instead of drawing a long line
+    // across ground nobody shot. Crossings are broken for the same reason: two
+    // ends of one bound must not weave through each other.
+    const gapRuns = splitChainsAtGaps(orderedPoints);
+    const runs = gapRuns.flatMap(run => splitChainsAtCrossings(run));
+    const canClose = chain.isClosed
+      && gapRuns.length === 1
+      && runs.length === 1
+      && !polylineSelfIntersects(orderedPoints, true);
+
+    let runIndex = 0;
+    for (const run of runs) {
+      if (run.length < 2) continue;
+      const runPolylineId = runIndex === 0
+        ? chain.polylineId
+        : `${chain.polylineId || 'chain'}-run-${runIndex + 1}`;
+      for (let i = 0; i < run.length - 1; i++) {
         out.push({
-          from: last,
-          to: first,
+          from: run[i].pointNumber,
+          to: run[i + 1].pointNumber,
           layer: chain.layer,
           lineType: chain.lineType,
-          polylineId: chain.polylineId,
+          polylineId: runPolylineId,
         });
       }
+      // Close the ring only when the whole feature survived as one clean run.
+      if (canClose && run.length > 2) {
+        const first = run[0];
+        const last = run[run.length - 1];
+        if (first.pointNumber !== last.pointNumber) {
+          out.push({
+            from: last.pointNumber,
+            to: first.pointNumber,
+            layer: chain.layer,
+            lineType: chain.lineType,
+            polylineId: runPolylineId,
+          });
+        }
+      }
+      runIndex++;
     }
   }
   return out;

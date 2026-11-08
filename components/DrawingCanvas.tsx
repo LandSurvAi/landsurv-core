@@ -65,7 +65,7 @@ import { solveRigidCornerAlign } from '../utils/cornerAlign.ts';
 import { buildSymbolMatchers, resolveSymbol } from '../utils/symbolResolver.ts';
 import { findMatchingSymbol, libraryToSymbolDefinition } from '../data/surveySymbolLibrary.ts';
 import { buildAnnotationMatchers, resolveAnnotation, renderAnnotationTemplate } from '../utils/annotationResolver.ts';
-import { perBoundaryAnnotationLines, shouldRenderGlobalDeedAnnotation, bearingDistanceAnnotationHeight, boundaryReadingAngle, isBoundaryAnnotationLine } from '../utils/boundaryAnnotations.ts';
+import { perBoundaryAnnotationLines, shouldRenderGlobalDeedAnnotation, bearingDistanceAnnotationHeight, boundaryReadingAngle, isBoundaryAnnotationLine, isManualBoundaryLine, createManualBoundaryPolylineId } from '../utils/boundaryAnnotations.ts';
 import { fetchImageBlobViaProxy } from '../utils/corsProxy.ts';
 import { getCachedBitmap, planMapTiles, mapWithConcurrency, decodeImageCached, trackTileLoad, subscribeTileActivity, getPendingTileCount, type PlannedTile } from '../utils/mapTileCache.ts';
 import { WebGpuBasemap, GpuLineBatch, parseCssColor, isWebGpuEnabled, WEBGPU_PREF_EVENT, type BasemapLayer, type BasemapSource, type WorldQuad } from '../utils/webgpuBasemap.ts';
@@ -1602,6 +1602,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [drawnBoundaryCalls, setDrawnBoundaryCalls] = useState<Array<{ from: string; to: string; bearing: string; distance: string; isCurve?: boolean; curveRadius?: number; arcLength?: number; curveDirection?: 'left' | 'right'; tangentBearing?: string; chordBearing?: string }>>([]);
     const [boundaryClosureResult, setBoundaryClosureResult] = useState<{ precision: string; area: number; misclosureDistance: number; misclosureBearing: string } | null>(null);
     const [boundaryClosureError, setBoundaryClosureError] = useState('');
+    // One polyline id per hand-drawn boundary chain. Sharing it across every
+    // call gives the chain a parcel centroid, so its B&D labels read from
+    // inside exactly like a drafted boundary's do.
+    const boundaryLinePolylineIdRef = useRef<string | null>(null);
     // Annotation mode: controls what is shown on line labels and boundary overlay labels.
     // Lifted to App.tsx (see props) so the toggle button can live in the app header.
 
@@ -2085,6 +2089,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
     /** The single entry point for L, boundary, breakline, inclusion, and exclusion. */
     const startChainLineMode = useCallback((mode: Exclude<ChainLineMode, 'baseline'>) => {
+        boundaryLinePolylineIdRef.current = mode === 'boundary-line'
+            ? createManualBoundaryPolylineId()
+            : null;
         const label = mode === 'boundary-line' ? 'BOUNDARY LINE'
             : mode === 'breaklines' ? 'BREAKLINE'
             : mode === 'inclusion' ? 'INCLUSION'
@@ -8857,7 +8864,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
-                    ctx.fillStyle = isLightTheme ? '#374151' : '#D1D5DB';
+                    // Hand-drawn boundary calls use the same amber as the
+                    // drafted-boundary overlay labels so the two paths read
+                    // identically; everything else keeps its neutral label.
+                    ctx.fillStyle = isManualBoundaryLine(line)
+                        ? 'rgba(255, 180, 50, 0.95)'
+                        : (isLightTheme ? '#374151' : '#D1D5DB');
                     ctx.fillText(text, 0, 0);
 
                     ctx.restore();
@@ -12687,22 +12699,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 }
                 return;
             }
-            if (e.key === 'b' || e.key === 'B') {
+            if ((e.key === 'b' || e.key === 'B') && !isTextInput) {
+                // Action is owned by useDoubleTapShortcuts below so `bb` can be
+                // distinguished from a single B; keep the browser default off.
                 e.preventDefault();
-                // Preserve box-select while a selection is active; otherwise B
-                // launches the survey baseline tool.
-                if (isSelectionMode) {
-                    setTerminalIncoming({ text: 'Command: B (BOX SELECT) — drag window across entities', tone: 'ok' });
-                    setIsBoxSelectMode(prev => !prev);
-                    return;
-                }
-                if (drawingMode === 'baseline') {
-                    finishDrawing();
-                    setTerminalIncoming({ text: 'Command: B (BASELINE) exited', tone: 'info' });
-                } else {
-                    finishDrawing();
-                    startBaselineMode();
-                }
                 return;
             }
             // T / TT are handled by useDoubleTapShortcuts below so a single tap
@@ -16606,6 +16606,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 fromPoint: p1,
                 toPoint: p2,
                 layer: activeDrawingLayer || undefined,
+                // Hand-drawn boundary calls carry the same `bf-draw-` annotation
+                // contract as deed-drafted boundaries, one id per chain.
+                polylineId: drawingMode === 'boundary-line'
+                    ? (boundaryLinePolylineIdRef.current ??= createManualBoundaryPolylineId())
+                    : undefined,
                 arc,
             }));
         }
@@ -16652,6 +16657,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setIsExtendingLines(false);
         setExtendFromLine(null);
         setIsMultiSegmentMode(false);
+        boundaryLinePolylineIdRef.current = null;
         resetBoundaryLineMode();
         resetDimMode();
         if (cornerAlignBfId) {
@@ -16663,7 +16669,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     finishDrawingRef.current = finishDrawing;
 
     // Canvas double-tap shortcuts. T stays the familiar TRIM toggle on a single
-    // tap; two quick taps start TEXT. More double-tap commands can be added here.
+    // tap; two quick taps start TEXT. B keeps the BASELINE/BOX-SELECT toggle on
+    // a single tap; BB arms the boundary-line tool.
     useDoubleTapShortcuts(
         [{
             key: 't',
@@ -16682,6 +16689,28 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     setExtendFromLine(null);
                     setIsSelectionMode(false);
                     setSelectedLineIds(new Set());
+                }
+            },
+        }, {
+            key: 'b',
+            onDoubleTap: () => {
+                finishDrawing();
+                startChainLineMode('boundary-line');
+            },
+            onSingleTap: () => {
+                // Preserve box-select while a selection is active; otherwise B
+                // launches the survey baseline tool.
+                if (isSelectionMode) {
+                    setTerminalIncoming({ text: 'Command: B (BOX SELECT) — drag window across entities', tone: 'ok' });
+                    setIsBoxSelectMode(prev => !prev);
+                    return;
+                }
+                if (drawingMode === 'baseline') {
+                    finishDrawing();
+                    setTerminalIncoming({ text: 'Command: B (BASELINE) exited', tone: 'info' });
+                } else {
+                    finishDrawing();
+                    startBaselineMode();
                 }
             },
         }],

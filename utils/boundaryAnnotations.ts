@@ -27,6 +27,24 @@ export function isBoundaryAnnotationLine(line: { type?: string; polylineId?: str
 }
 
 /**
+ * Polyline ids for boundary calls drawn by hand with the boundary-line tool.
+ *
+ * Living under the same `bf-draw-` contract as drafted calls means every
+ * consumer (canvas, sheet, DXF) treats hand-drawn boundary linework exactly
+ * like a generated boundary instead of a generic white line. The suffix keeps
+ * the manual chains distinguishable when they need their own label styling.
+ */
+export const MANUAL_BOUNDARY_POLYLINE_PREFIX = 'bf-draw-manual-';
+
+export function createManualBoundaryPolylineId(): string {
+  return `${MANUAL_BOUNDARY_POLYLINE_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function isManualBoundaryLine(line: { polylineId?: string } | null | undefined): boolean {
+  return line?.polylineId?.startsWith(MANUAL_BOUNDARY_POLYLINE_PREFIX) === true;
+}
+
+/**
  * Reading direction for a boundary call, resolved from inside the parcel.
  *
  * The label's up vector is its edge angle + 90°. When that points toward the
