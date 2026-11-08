@@ -7,8 +7,9 @@ import { LINEAR_UNIT_OPTIONS, getLinearUnitAbbreviation, type LinearUnit } from 
 import { setHolidayThemeOverride } from './InitialAgentSelection.tsx';
 import { useErrorReporter } from '../contexts/AppStateContext';
 import { PROVIDER_KEY_URLS, type ByokProvider } from '../services/providerKeys.ts';
-import { WebGpuBasemap, isWebGpuEnabled, getGpuPowerPreference, WEBGPU_ENABLED_KEY, WEBGPU_POWER_KEY, WEBGPU_PREF_EVENT, type GpuPowerPreference } from '../utils/webgpuBasemap.ts';
+import { WebGpuBasemap, isWebGpuEnabled, getGpuPowerPreference, probeWebGpuAdapter, WEBGPU_ENABLED_KEY, WEBGPU_POWER_KEY, WEBGPU_PREF_EVENT, type GpuPowerPreference, type WebGpuProbeResult } from '../utils/webgpuBasemap.ts';
 import GlobalCrsPicker from './GlobalCrsPicker.tsx';
+import { detectProjectionFromBrowser } from '../utils/autoProjection.ts';
 
 const FORCE_AGENT_OPTIONS: AgentType[] = [
     AgentType.CIVIL_DRAFTER,
@@ -105,6 +106,25 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     const [webgpuEnabled, setWebgpuEnabled] = useState(() => isWebGpuEnabled());
     const [gpuPower, setGpuPower] = useState<GpuPowerPreference>(() => getGpuPowerPreference());
     const webgpuSupported = WebGpuBasemap.isSupported();
+    const [gpuProbe, setGpuProbe] = useState<WebGpuProbeResult | null>(null);
+
+    useEffect(() => {
+        if (!webgpuEnabled || !webgpuSupported) {
+            setGpuProbe(null);
+            return;
+        }
+        let cancelled = false;
+        setGpuProbe(null);
+        probeWebGpuAdapter().then(result => {
+            if (!cancelled) setGpuProbe(result);
+        });
+        return () => { cancelled = true; };
+    }, [webgpuEnabled, webgpuSupported, gpuPower]);
+
+    const gpuReady = webgpuEnabled && gpuProbe?.adapterAvailable === true;
+    const gpuProbeFailed = webgpuEnabled && gpuProbe !== null && !gpuProbe.adapterAvailable;
+    const [isDetectingProjection, setIsDetectingProjection] = useState(false);
+    const [projectionGpsError, setProjectionGpsError] = useState<string | null>(null);
 
     const handleWebgpuEnabledChange = (enabled: boolean) => {
         setWebgpuEnabled(enabled);
@@ -288,6 +308,29 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             epsg: selectedZone ? selectedZone.epsg : null,
         }
     }));
+  };
+
+  const handleDetectProjectionFromGps = async () => {
+    setIsDetectingProjection(true);
+    setProjectionGpsError(null);
+    try {
+      const detected = await detectProjectionFromBrowser();
+      onSettingsChange(prev => ({
+        ...prev,
+        projection: detected.projection,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/denied|permission/i.test(message)) {
+        setProjectionGpsError('Location permission denied. Allow location access or choose a zone manually.');
+      } else if (/timed?\s*out/i.test(message)) {
+        setProjectionGpsError('Location lookup timed out. Try again or choose a zone manually.');
+      } else {
+        setProjectionGpsError(`Could not detect a projection: ${message}`);
+      }
+    } finally {
+      setIsDetectingProjection(false);
+    }
   };
 
 
@@ -567,6 +610,22 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         <label className="flex items-start gap-3 cursor-pointer">
                             <input
                                 type="checkbox"
+                                checked={settings.pointEfficiencyMode === true}
+                                onChange={e => handleSettingChange('pointEfficiencyMode', e.target.checked)}
+                                className={`mt-0.5 h-4 w-4 rounded border-gray-500 bg-gray-700 ${themeAccent} focus:ring-2 ${themeFocusRing}`}
+                            />
+                            <span>
+                                <span className="block text-sm font-medium text-gray-300 light-theme:text-gray-700">Point Efficiency Mode</span>
+                                <span className="block text-xs text-gray-500 mt-0.5 light-theme:text-gray-600">
+                                    Draws points as a compressed dot cloud and skips their labels, symbols, and callouts when zoomed out or when the view holds a lot of points. Full detail returns as you zoom in. Off by default.
+                                </span>
+                            </span>
+                        </label>
+                    </div>
+                    <div>
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
                                 checked={!!settings.showCacpNotifications}
                                 onChange={e => handleSettingChange('showCacpNotifications', e.target.checked)}
                                 className={`mt-0.5 h-4 w-4 rounded border-gray-500 bg-gray-700 ${themeAccent} focus:ring-2 ${themeFocusRing}`}
@@ -678,7 +737,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             <span>
                                 <span className="block text-sm font-medium text-gray-200 light-theme:text-gray-800">Enable WebGPU Hardware Acceleration</span>
                                 <span className="block text-xs text-gray-400 mt-0.5 light-theme:text-gray-600">
-                                    Renders basemap imagery and anti-aliased linework on the GPU. Turn it off to force the Canvas2D fallback, which helps on machines with unstable graphics drivers.
+                                    Renders basemap imagery, anti-aliased linework, and compressed point clouds on the GPU. Turn it off to force the Canvas2D fallback, which helps on machines with unstable graphics drivers.
                                 </span>
                             </span>
                         </label>
@@ -700,13 +759,17 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         </p>
                     </div>
                     <div className="flex items-start gap-2 pt-1 border-t border-gray-600/50">
-                        <span className={`mt-1 h-2 w-2 rounded-full shrink-0 ${!webgpuSupported ? 'bg-red-500' : webgpuEnabled ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                        <span className={`mt-1 h-2 w-2 rounded-full shrink-0 ${!webgpuSupported || gpuProbeFailed ? 'bg-red-500' : gpuReady ? 'bg-emerald-500' : 'bg-amber-500'}`} />
                         <span className="text-xs text-gray-400 light-theme:text-gray-600">
                             {!webgpuSupported
                                 ? 'This browser does not expose WebGPU, so the Canvas2D fallback is always used.'
-                                : webgpuEnabled
-                                    ? 'WebGPU is available in this browser and hardware acceleration is on.'
-                                    : 'WebGPU is available but turned off — the Canvas2D fallback is in use.'}
+                                : !webgpuEnabled
+                                    ? 'WebGPU is available but turned off — the Canvas2D fallback is in use.'
+                                    : !gpuProbe
+                                        ? 'Checking for a compatible GPU adapter…'
+                                        : !gpuProbe.adapterAvailable
+                                            ? `WebGPU is enabled but no GPU adapter initialized${gpuProbe.error ? ` (${gpuProbe.error})` : ''}. Using Canvas2D.`
+                                            : `WebGPU adapter ready${gpuProbe.adapterLabel ? ` — ${gpuProbe.adapterLabel}` : ''}. Basemap, linework, and compressed points use the GPU.`}
                         </span>
                     </div>
                 </div>
@@ -738,7 +801,23 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             <div className={pulseProjection ? 'animate-pulse' : ''}>
                 <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Coordinate System</h3>
                 <div className={`bg-gray-700/50 p-4 rounded-lg border space-y-3 light-theme:bg-gray-100 ${pulseProjection ? 'border-cyan-500 shadow-lg shadow-cyan-500/50' : 'border-gray-600 light-theme:border-gray-300'}`}>
-                    <p className="text-xs text-gray-400">Select a State Plane zone to enable GPS functionality and GIS data plotting.</p>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0">
+                            <p className="text-xs text-gray-400">Select a State Plane zone to enable GPS functionality and GIS data plotting.</p>
+                            <p className="mt-0.5 text-[11px] text-gray-500">Or auto-pick the local zone and projection from your GPS fix.</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => void handleDetectProjectionFromGps()}
+                            disabled={isDetectingProjection}
+                            className="shrink-0 rounded-md border border-teal-500/40 bg-teal-600/15 px-2.5 py-1.5 text-[11px] font-semibold text-teal-300 transition-colors hover:bg-teal-600/25 disabled:cursor-not-allowed disabled:opacity-50 light-theme:border-teal-600 light-theme:text-teal-700"
+                        >
+                            {isDetectingProjection ? 'Locating…' : 'Use my GPS location'}
+                        </button>
+                    </div>
+                    {projectionGpsError && (
+                        <p role="alert" className="text-[11px] text-red-400">{projectionGpsError}</p>
+                    )}
                      <div className="flex items-center gap-4">
                         <div className="flex-1">
                         <label htmlFor="state-select" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">State</label>
@@ -1158,7 +1237,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             
             {/* A2UI behavior — surfaces are constructed on demand in chat. */}
             <div>
-                <h3 className="text-lg font-semibold text-cyan-400 mb-2">A2UI &amp; Agent Surfaces</h3>
+                <h3 className="text-lg font-semibold text-cyan-400 mb-2">Agent Surfaces</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-3">
                     <p className="text-sm text-gray-400">
                         Surfaces are built by the agents when a request calls for one — there is no separate
@@ -1169,7 +1248,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         <div>
                             <h4 className="font-semibold text-gray-200">Auto-open CACP review</h4>
                             <p className="text-sm text-gray-400 mt-0.5">
-                                Raise an A2UI review surface when inter-agent traffic is blocked by policy, errors out,
+                                Raise a CACP review surface when inter-agent traffic is blocked by policy, errors out,
                                 or needs a routing decision. Re-dispatch always runs through the CACP policy gate.
                             </p>
                         </div>
@@ -1199,7 +1278,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                 ...prev,
                                 a2ui: { ...prev.a2ui, defaultSize: event.target.value as 'compact' | 'standard' | 'wide' | 'fullscreen' },
                             }))}
-                            aria-label="Default A2UI surface size"
+                            aria-label="Default surface size"
                             className="rounded-md border border-gray-600 bg-gray-800 px-2 py-1.5 text-sm text-gray-200 outline-none focus:border-cyan-400/60"
                         >
                             <option value="compact">Compact</option>

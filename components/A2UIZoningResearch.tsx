@@ -322,7 +322,7 @@ export const A2UIZoningResearch: React.FC<Props> = ({
               Zoning research
             </span>
             <span className="rounded border border-emerald-400/30 bg-emerald-500/10 px-1 py-px font-mono text-[8px] font-bold uppercase tracking-[0.12em] text-emerald-300">
-              A2UI
+              AI
             </span>
             {districtLabel && (
               <span className="rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-px text-[9px] font-semibold text-amber-200">

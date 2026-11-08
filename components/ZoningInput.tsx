@@ -199,7 +199,7 @@ const ZoningInput: React.FC<ZoningInputProps> = ({ onZoningSearch, onGoBack, bac
           <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-900/40 text-emerald-400 border border-emerald-700/40 uppercase tracking-wider">CACP</span>
           {isEmbedded && (
             <span className="px-1.5 py-0.5 rounded text-[8.5px] font-mono font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-400/35 uppercase tracking-[0.14em]">
-              A2UI
+              AI
             </span>
           )}
         </div>

@@ -27,6 +27,7 @@ import { CacpBadge } from './CacpBadge.tsx';
 import CacpManifestModal from './CacpManifestModal.tsx';
 import { agentRegistry } from '../services/AgentRegistry';
 import { projectionStates, projectionZones } from '../utils/projections.ts';
+import { detectProjectionForCoordinates, detectProjectionFromBrowser } from '../utils/autoProjection.ts';
 import { ensureCrsRegistered, searchCrs } from '../utils/crs/registry.ts';
 import { getBundledCrs } from '../utils/crs/globalCatalog.ts';
 import type { CrsDefinition } from '../utils/crs/types.ts';
@@ -942,8 +943,9 @@ const POPULAR_GLOBAL_CRS = POPULAR_GLOBAL_CODES
  */
 const ProjectionMenuButton: React.FC<{
   currentEpsg?: number | null;
+  currentPosition?: GeolocationPosition | null;
   onSelect?: (state: string, zoneName: string, epsg: number, proj4def: string, epoch?: number | null) => void;
-}> = ({ currentEpsg, onSelect }) => {
+}> = ({ currentEpsg, currentPosition, onSelect }) => {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<'us' | 'global'>('us');
   const [stateCode, setStateCode] = useState<string | null>(null);
@@ -951,6 +953,8 @@ const ProjectionMenuButton: React.FC<{
   const [globalResults, setGlobalResults] = useState<CrsDefinition[]>([]);
   const [globalLoading, setGlobalLoading] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [locateError, setLocateError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   // Click outside to close
@@ -962,6 +966,7 @@ const ProjectionMenuButton: React.FC<{
         setStateCode(null);
         setQuery('');
         setGlobalError(null);
+        setLocateError(null);
       }
     };
     document.addEventListener('mousedown', handler);
@@ -1014,6 +1019,44 @@ const ProjectionMenuButton: React.FC<{
     }
   };
 
+  const selectProjectionFromGps = async () => {
+    setIsLocating(true);
+    setLocateError(null);
+    try {
+      const detected = currentPosition
+        ? await detectProjectionForCoordinates(
+            currentPosition.coords.latitude,
+            currentPosition.coords.longitude,
+          )
+        : await detectProjectionFromBrowser();
+      const epsg = detected.projection.epsg;
+      if (!epsg || !detected.proj4def) {
+        throw new Error('The detected projection is missing an EPSG code or proj4 definition.');
+      }
+      onSelect?.(
+        detected.projection.state || 'International',
+        detected.projection.zoneName || detected.label,
+        epsg,
+        detected.proj4def,
+        detected.projection.epoch ?? null,
+      );
+      setOpen(false);
+      setStateCode(null);
+      setQuery('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/denied|permission/i.test(message)) {
+        setLocateError('Location permission denied. Allow location access or pick a zone manually.');
+      } else if (/timed?\s*out/i.test(message)) {
+        setLocateError('Location lookup timed out. Try again or pick a zone manually.');
+      } else {
+        setLocateError(`Could not detect a projection: ${message}`);
+      }
+    } finally {
+      setIsLocating(false);
+    }
+  };
+
   const label = currentEpsg
     ? `EPSG:${currentEpsg}`
     : null;
@@ -1024,7 +1067,7 @@ const ProjectionMenuButton: React.FC<{
   return (
     <div ref={ref} className="relative flex-1 min-w-[calc(20%-0.5rem)]">
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={() => { setOpen(o => !o); setLocateError(null); }}
         className="group w-full h-full py-2.5 px-3 welcome-chrome-btn rounded-lg backdrop-blur-md border border-dashed transition-all duration-300 flex items-center justify-center gap-2.5 text-sm font-semibold tracking-tight bg-slate-950/75 hover:bg-slate-900/85 border-slate-400/25 hover:border-emerald-400/50 text-gray-200 hover:text-emerald-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] hover:shadow-lg hover:shadow-emerald-950/30 active:translate-y-0"
         type="button"
         title="Select Coordinate System (US State Plane or Worldwide EPSG)"
@@ -1034,6 +1077,20 @@ const ProjectionMenuButton: React.FC<{
       </button>
       {open && (
         <div className="absolute right-0 mt-1 w-80 max-h-96 overflow-y-auto rounded-lg bg-gray-900/95 border border-gray-700 shadow-2xl backdrop-blur-md z-50">
+          <div className="p-2 border-b border-gray-700/60">
+            <button
+              type="button"
+              onClick={() => void selectProjectionFromGps()}
+              disabled={isLocating}
+              className="flex w-full items-center justify-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-600/15 px-2 py-2 text-xs font-semibold text-emerald-300 transition-colors hover:bg-emerald-600/25 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <CrosshairsIcon className="h-4 w-4" />
+              <span>{isLocating ? 'Locating…' : 'Use my GPS location'}</span>
+            </button>
+            {locateError && (
+              <p role="alert" className="mt-1.5 text-[10px] leading-snug text-red-400">{locateError}</p>
+            )}
+          </div>
           <div className="flex border-b border-gray-700/60 sticky top-0 bg-gray-900/95 z-10">
             <button
               type="button"
@@ -2021,7 +2078,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
               <span>Job Info</span>
             </button>
             <div className="flex">
-              <ProjectionMenuButton currentEpsg={currentProjectionEpsg ?? null} onSelect={onProjectionSelect} />
+              <ProjectionMenuButton currentEpsg={currentProjectionEpsg ?? null} currentPosition={currentPosition} onSelect={onProjectionSelect} />
             </div>
             <button
               onClick={onShowSettings}

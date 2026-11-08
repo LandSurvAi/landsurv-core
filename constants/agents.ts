@@ -81,6 +81,32 @@ export const agentConfig: { [key in AgentType]?: AgentConfig } = {
 };
 
 // ============================================================================
+// Tool Shelf Activation
+// ============================================================================
+
+/**
+ * Dockable tool key that should be surfaced the first time an agent is opened.
+ * Keys match the ids built in App.tsx's `dockableToolItems`.
+ */
+export const agentPrimaryToolKey: Partial<Record<AgentType, string>> = {
+  [AgentType.CIVIL_DRAFTER]: 'autoDraft',
+  [AgentType.DEED_READER]: 'boundary-deed',
+  [AgentType.CENTERLINE_STATIONING]: 'stationing',
+  [AgentType.POINT_EDITOR]: 'pointEditor',
+  [AgentType.GPS_STAKEOUT]: 'gpsStakeout',
+  [AgentType.CONTOURING_AGENT]: 'contourGen',
+  [AgentType.STEEP_SLOPE_AGENT]: 'steepSlope',
+  [AgentType.PROFILE_AGENT]: 'profileGen',
+  [AgentType.COGO_AGENT]: 'cogo',
+  [AgentType.GNSS_AGENT]: 'gnss',
+  [AgentType.DRONE_AGENT]: 'drone',
+  [AgentType.FLOOD_AGENT]: 'flood',
+  [AgentType.STRUCTURES_AGENT]: 'structures',
+  [AgentType.SOILS_AGENT]: 'soils',
+  [AgentType.ROADING_AGENT]: 'roading',
+};
+
+// ============================================================================
 // Theme Colors (Hex Values)
 // ============================================================================
 
@@ -200,7 +226,7 @@ export const agentGradientClasses: { [key in AgentType]?: string } = {
 export const addDataButtonLabels: { [key in AgentType]?: string } = {
   [AgentType.RAW_CRAWLER]: 'Replace RAW File...',
   [AgentType.CIVIL_DRAFTER]: 'Replace Point/PDF File...',
-  [AgentType.DEED_READER]: 'Replace Deed File...',
+  [AgentType.DEED_READER]: 'Upload Deed',
   [AgentType.CIVIL_PLAN_EXPERT]: 'Add Plan Sheets...',
   [AgentType.DXF_ANALYZER]: 'Replace DXF File...',
   [AgentType.GIS_AGENT]: 'Replace GeoJSON File...',

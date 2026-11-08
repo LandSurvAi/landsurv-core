@@ -29,7 +29,7 @@ export const AGENT_WELCOME_PROFILES: Partial<Record<AgentType, AgentWelcomeProfi
   [AgentType.LSVZ_AGENT]: {
     name: 'LSAI',
     summary:
-      'I keep your project moving across the full LandSurv.ai agent suite. Ask a question in plain language and I will handle the work or bring in the right specialist, with no hand-offs for you to manage.',
+      'I keep your project moving across the full LandSurv.ai agent suite. Ask a question in plain language and I will handle the work or bring in the right specialist, with no hand-offs for you to manage. I also own project location: every uploaded point cluster is resolved to its state, county, and municipality and shared with every agent over CACP.',
   },
   [AgentType.RAW_CRAWLER]: {
     name: 'RAW Crawler',
@@ -59,7 +59,7 @@ export const AGENT_WELCOME_PROFILES: Partial<Record<AgentType, AgentWelcomeProfi
   [AgentType.CENTERLINE_STATIONING]: {
     name: 'Stationing & CL',
     summary:
-      'I define horizontal alignments from points of intersection or <strong>.cl</strong> files and compute stations, offsets, and curve data.',
+      'I define horizontal alignments from points of intersection, <strong>.cl</strong> files, or a drawn BASELINE, and compute stations, offsets, and curve data. Auto station points follow the canvas P/L switch; point intervals, station prefix/notation, label spacing, and PI/PC/PT/BOP/EOP tag visibility live in Stationing Controls.',
   },
   [AgentType.POINT_EDITOR]: {
     name: 'Point Editor',
@@ -139,7 +139,7 @@ export const AGENT_WELCOME_PROFILES: Partial<Record<AgentType, AgentWelcomeProfi
   [AgentType.FLOOD_AGENT]: {
     name: 'Flood Zone',
     summary:
-      'I retrieve FEMA NFHL flood-hazard linework and render it as a project layer for review and exhibit work.',
+      'I retrieve FEMA NFHL flood-hazard linework, including optional Base Flood Elevation lines, and label the zones for review and exhibit work. Tell me what you need and I will ask about the rest: BFE lines, zone callouts, a written flood-zone report, or notes on the paperspace plan sheet.',
   },
   [AgentType.STRUCTURES_AGENT]: {
     name: 'Structures',

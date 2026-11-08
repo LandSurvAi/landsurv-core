@@ -55,6 +55,21 @@ async function proxyHeaders(apiKey: string): Promise<Record<string, string>> {
   };
 }
 
+/**
+ * The proxy's "no server key" error is a configuration problem, not model
+ * output. Translate it into something the user can act on; every other proxy
+ * failure keeps the raw status and body for diagnostics.
+ */
+function describeProxyError(status: number, errText: string): string {
+  if (status === 502 && /GOOGLE_API_KEY|GEMINI_API_KEY/i.test(errText)) {
+    return (
+      'The AI proxy has no server key configured. Add GEMINI_API_KEY (or GOOGLE_API_KEY) ' +
+      'to the backend environment, or add your own Gemini key in Settings → AI Provider Keys.'
+    );
+  }
+  return `Demo Gemini proxy error (${status}): ${errText}`;
+}
+
 async function postProxy(url: string, apiKey: string, body: unknown): Promise<Response> {
   let response = await fetch(url, {
     method: 'POST',
@@ -106,7 +121,7 @@ export class ProxyChat {
 
     if (!resp.ok || !resp.body) {
       const errText = await resp.text().catch(() => `${resp.status} ${resp.statusText}`);
-      throw new Error(`Demo Gemini proxy error (${resp.status}): ${errText}`);
+      throw new Error(describeProxyError(resp.status, errText));
     }
 
     const reader = resp.body.getReader();
@@ -166,7 +181,7 @@ class ProxyModels {
     const resp = await postProxy(GEN_ENDPOINT, this.apiKey, args);
     if (!resp.ok) {
       const errText = await resp.text().catch(() => `${resp.status} ${resp.statusText}`);
-      throw new Error(`Demo Gemini proxy error (${resp.status}): ${errText}`);
+      throw new Error(describeProxyError(resp.status, errText));
     }
     const data = await resp.json();
     return { text: typeof data?.text === 'string' ? data.text : '' };

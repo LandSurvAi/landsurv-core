@@ -6,6 +6,7 @@ import {
   type HatchDefinition,
 } from '../services/hatchLibrary.ts';
 import { HatchPreviewCanvas } from './CadManager/HatchManagerPanel.tsx';
+import { DecimalInput } from './DecimalInput.tsx';
 
 export interface HatchPropertiesDialogProps {
   isOpen: boolean;
@@ -143,20 +144,14 @@ export const HatchPropertiesDialog: React.FC<HatchPropertiesDialogProps> = ({
         <div className="grid grid-cols-2 gap-2">
           <label className="block">
             <span className={labelClass}>Scale</span>
-            <input
+            <DecimalInput
               data-testid="hatch-property-scale"
-              type="number"
               min={0.05}
-              step={0.1}
               value={hatch.scale}
               disabled={disabled}
-              onChange={event => {
-                const value = Number(event.target.value);
-                if (Number.isFinite(value) && value > 0) {
-                  update({ scale: Math.max(0.05, value) });
-                }
-              }}
+              onValueChange={scale => update({ scale })}
               className={`mt-1 ${fieldClass}`}
+              aria-label="Hatch scale"
             />
           </label>
           <label className="block">

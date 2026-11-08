@@ -1293,7 +1293,7 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
               <div className="flex items-center gap-2">
                 <h1 className="truncate text-[13.5px] font-semibold tracking-tight text-white">CAD Manager</h1>
                 <span className="rounded border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.16em] text-cyan-300/80">
-                  A2UI
+                  AI
                 </span>
               </div>
               <p className="truncate text-[10.5px] text-slate-500">Standards workspace · codes, layers, and Civil 3D export</p>

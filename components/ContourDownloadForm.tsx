@@ -1,8 +1,10 @@
 import React from 'react';
 
+export type ContourAoiMode = 'project' | 'inclusion' | 'description';
+
 export interface ContourDownloadFormProps {
-  mode: 'inclusion' | 'description';
-  onModeChange: (mode: 'inclusion' | 'description') => void;
+  mode: ContourAoiMode;
+  onModeChange: (mode: ContourAoiMode) => void;
   description: string;
   onDescriptionChange: (value: string) => void;
   hasInclusionBoundary: boolean;
@@ -13,9 +15,11 @@ export interface ContourDownloadFormProps {
    * check because it does not render the projection warning.
    */
   hasProjectProjection?: boolean;
+  /** True when loaded, georeferenced points can define the project extent. */
+  hasProjectExtent?: boolean;
   isFetching: boolean;
-  /** Called with the chosen mode; description is undefined in inclusion mode. */
-  onDownload: (mode: 'inclusion' | 'description', description?: string) => void;
+  /** Called with the chosen mode; description is undefined outside description mode. */
+  onDownload: (mode: ContourAoiMode, description?: string) => void;
 }
 
 /** Shared area-of-interest + download controls for contour services. */
@@ -27,10 +31,12 @@ export const ContourDownloadForm: React.FC<ContourDownloadFormProps> = ({
   hasInclusionBoundary,
   inclusionSegmentCount,
   hasProjectProjection,
+  hasProjectExtent,
   isFetching,
   onDownload,
 }) => {
   const inclusionReady = hasInclusionBoundary && hasProjectProjection !== false;
+  const projectReady = hasProjectExtent === true;
   const inclusionWarning = !hasInclusionBoundary
     ? '⚠ No inclusion line drawn — use the canvas toolbar to draw an inclusion boundary first'
     : hasProjectProjection === false
@@ -40,7 +46,18 @@ export const ContourDownloadForm: React.FC<ContourDownloadFormProps> = ({
   return (
     <div className="border-t border-gray-600/50 px-3 py-2.5 space-y-2.5 bg-gray-800/50">
       {/* Mode selector */}
-      <div className="flex gap-2">
+      <div className="flex gap-1.5">
+        <button
+          type="button"
+          onClick={() => onModeChange('project')}
+          className={`flex-1 text-[10px] py-1 rounded border transition-colors ${
+            mode === 'project'
+              ? 'bg-teal-700/40 border-teal-500/50 text-teal-200'
+              : 'bg-gray-700/40 border-gray-600/40 text-gray-400 hover:text-gray-200'
+          }`}
+        >
+          Project Extent
+        </button>
         <button
           type="button"
           onClick={() => onModeChange('inclusion')}
@@ -64,6 +81,19 @@ export const ContourDownloadForm: React.FC<ContourDownloadFormProps> = ({
           Describe Area
         </button>
       </div>
+
+      {/* Project extent info */}
+      {mode === 'project' && (
+        <div className={`text-[10px] rounded px-2 py-1.5 border ${
+          projectReady
+            ? 'bg-teal-900/20 border-teal-700/40 text-teal-300'
+            : 'bg-yellow-900/20 border-yellow-700/40 text-yellow-400'
+        }`}>
+          {projectReady
+            ? '✓ Using the extent of the loaded survey points (with a small buffer) — no inclusion boundary needed'
+            : '⚠ Load georeferenced survey points and set the project EPSG to use the project extent — or choose Inclusion Boundary / Describe Area.'}
+        </div>
+      )}
 
       {/* Inclusion mode info */}
       {mode === 'inclusion' && (
@@ -103,6 +133,8 @@ export const ContourDownloadForm: React.FC<ContourDownloadFormProps> = ({
         onClick={() => {
           if (mode === 'inclusion') {
             onDownload('inclusion');
+          } else if (mode === 'project') {
+            onDownload('project');
           } else {
             onDownload('description', description.trim());
           }
@@ -110,6 +142,7 @@ export const ContourDownloadForm: React.FC<ContourDownloadFormProps> = ({
         disabled={
           isFetching ||
           (mode === 'inclusion' && !inclusionReady) ||
+          (mode === 'project' && !projectReady) ||
           (mode === 'description' && !description.trim())
         }
         className="w-full py-1.5 text-xs font-semibold rounded border bg-teal-700/50 hover:bg-teal-600/60 text-teal-100 border-teal-600/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"

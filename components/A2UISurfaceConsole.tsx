@@ -98,7 +98,7 @@ export const A2UISurfaceConsole: React.FC<A2UISurfaceConsoleProps> = ({
             value={query}
             onChange={event => setQuery(event.target.value)}
             placeholder="Search surfaces, agents, skills…"
-            aria-label="Search A2UI surfaces"
+            aria-label="Search surfaces"
             className="w-full rounded-md border border-white/[0.09] bg-white/[0.03] py-1.5 pl-8 pr-2.5 text-[11.5px] text-slate-100 placeholder:text-slate-500 outline-none transition-colors focus:border-cyan-400/50 focus:ring-1 focus:ring-cyan-400/15"
           />
         </div>

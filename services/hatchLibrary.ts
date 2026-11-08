@@ -969,15 +969,18 @@ export function getCanvasHatchPatternMetrics(
   const userScale = Math.max(0.05, options.scale ?? 1);
   const zoom = Math.max(0.02, options.zoomScale ?? 1);
   const zoomBucket = Math.max(0.25, Math.min(8, Math.round(zoom * 4) / 4));
+  const worldTileSize = CANVAS_HATCH_WORLD_TILE_UNITS * userScale;
+  // The tile must carry enough pixels for the pattern's world footprint. When
+  // this ignored userScale, a 100× soil hatch mapped a 64-pixel tile onto
+  // thousands of feet, turning fine stipple lines into huge tan bands.
   const pixelSize = Math.max(
     64,
-    Math.min(512, Math.round(CANVAS_HATCH_WORLD_TILE_UNITS * zoomBucket)),
+    Math.min(1024, Math.round(worldTileSize * zoomBucket)),
   );
-  const worldTileSize = CANVAS_HATCH_WORLD_TILE_UNITS * userScale;
-  const lineWidthPx = Math.max(
-    0.85,
-    Math.min(4, (1.15 * pixelSize) / (CANVAS_HATCH_WORLD_TILE_UNITS * zoom)),
-  );
+  // Keep the stroke near one screen pixel. A tile pixel is not a screen pixel
+  // once the tile is mapped back into world units and the viewport zoom applied.
+  const screenPxPerTilePx = Math.max(0.0001, (worldTileSize / pixelSize) * zoom);
+  const lineWidthPx = Math.max(0.35, Math.min(4, 1.15 / screenPxPerTilePx));
 
   return {
     userScale,
@@ -1139,6 +1142,9 @@ export function createCanvasHatchPattern(
     backgroundColor?: string;
     opacity?: number;
     zoomScale?: number;
+    /** Floating world origin used to shift the rendered path. */
+    originX?: number;
+    originY?: number;
   } = {},
 ): CanvasPattern | null {
   const metrics = getCanvasHatchPatternMetrics({
@@ -1160,13 +1166,22 @@ export function createCanvasHatchPattern(
   if (!pattern) return null;
 
   if (typeof DOMMatrix !== 'undefined') {
+    // CanvasPattern coordinates are user-space coordinates. The drawing path
+    // is shifted by the floating origin, which follows the view center —
+    // without this phase correction the hatch tile would stay anchored to the
+    // screen and the shape would pan across a stationary sheet of hatching.
+    // Anchor it to world (0,0) modulo one repeating tile so the translation
+    // stays small even at survey coordinates.
+    const tileWorld = metrics.worldTileSize;
+    const phaseX = tileWorld > 0 ? (((options.originX ?? 0) % tileWorld) + tileWorld) % tileWorld : 0;
+    const phaseY = tileWorld > 0 ? (((options.originY ?? 0) % tileWorld) + tileWorld) % tileWorld : 0;
     pattern.setTransform(new DOMMatrix([
       metrics.scaleToWorld,
       0,
       0,
       metrics.scaleToWorld,
-      0,
-      0,
+      -phaseX,
+      -phaseY,
     ]));
   }
 

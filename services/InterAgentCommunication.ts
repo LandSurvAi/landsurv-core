@@ -49,6 +49,45 @@ export interface CacpActivityEvent {
 type ActivityHandler = (event: CacpActivityEvent) => void;
 
 /**
+ * Agent-focus lifecycle managed by CACP.
+ *
+ * CACP owns the delegation stack behind the UI: the agent a request is
+ * delegated to becomes the visible/active agent, and focus returns to the
+ * requesting agent when the result (or control) comes back.
+ * - 'delegation': a peer was brought in and now owns the screen.
+ * - 'return': a peer handed results/control back to its requester.
+ * - 'transfer': control changed hands for good (e.g. an LSAI specialist hand-off).
+ */
+export type CacpAgentFocusKind = 'delegation' | 'transfer' | 'return';
+
+export interface CacpAgentFocus {
+  /** Agent that should be visible/active right now. */
+  agent: AgentType;
+  /** Agent that handed over control (the requester for a 'return'). */
+  from: AgentType | null;
+  kind: CacpAgentFocusKind;
+  /** Skill id or hand-off reason that caused the focus change. */
+  reason?: string;
+  traceId?: string;
+  /** Delegation depth at the moment of the event (0 = the requester/base). */
+  depth: number;
+  timestamp: number;
+}
+
+interface CacpAgentFocusFrame {
+  token: string;
+  requester: AgentType;
+  agent: AgentType;
+  reason?: string;
+  traceId?: string;
+  startedAt: number;
+}
+
+type AgentFocusHandler = (focus: CacpAgentFocus) => void;
+
+const FOCUS_HISTORY_MAX = 100;
+
+/**
  * One entry in the persistent CACP activity log. Captures every notable phase
  * of a message lifecycle (send / handler-invoked / response / error) plus the
  * raw payload (clipped) so the DevOps console + CLI can replay traffic later.
@@ -174,6 +213,11 @@ export class InterAgentCommunicationService {
   private handlers: Map<string, MessageHandler[]> = new Map();
   private errorHandlers: ErrorHandler[] = [];
   private activityHandlers: ActivityHandler[] = [];
+  private agentFocusHandlers: AgentFocusHandler[] = [];
+  private agentFocusStack: CacpAgentFocusFrame[] = [];
+  private agentFocusHistory: CacpAgentFocus[] = [];
+  private agentFocusTokenCounter = 0;
+  private lastFocusedAgent: AgentType | null = null;
   private messageQueue: AgentMessage[] = [];
   private messageIdCounter = 0;
   private responseCallbacks: Map<string, (response: AgentResponse) => void> = new Map();
@@ -690,6 +734,136 @@ export class InterAgentCommunicationService {
     };
   }
 
+  // --- Agent focus (delegation stack) --------------------------------------
+
+  /**
+   * Subscribe to visible-agent focus changes. The host UI uses this to keep the
+   * active workspace in step with whoever currently owns the turn.
+   */
+  public onAgentFocusChange(handler: AgentFocusHandler): () => void {
+    this.agentFocusHandlers.push(handler);
+    return () => {
+      const index = this.agentFocusHandlers.indexOf(handler);
+      if (index > -1) this.agentFocusHandlers.splice(index, 1);
+    };
+  }
+
+  /**
+   * Record that `from` is bringing `to` in to do work. Returns a token that
+   * must be passed to `endAgentFocus` when the peer returns its result/control.
+   */
+  public beginAgentFocus(params: {
+    from: AgentType;
+    to: AgentType;
+    reason?: string;
+    traceId?: string;
+  }): string {
+    const token = `focus-${++this.agentFocusTokenCounter}-${Date.now()}`;
+    if (this.lastFocusedAgent === null) {
+      this.lastFocusedAgent = params.from;
+    }
+    this.agentFocusStack.push({
+      token,
+      requester: params.from,
+      agent: params.to,
+      reason: params.reason,
+      traceId: params.traceId,
+      startedAt: Date.now(),
+    });
+    if (params.to !== this.lastFocusedAgent) {
+      this.emitAgentFocus('delegation', params.to, params.from, params.reason, params.traceId);
+    }
+    return token;
+  }
+
+  /**
+   * Close a delegation frame. Focus returns to the requesting agent (or to the
+   * next peer below it when delegations are nested). Safe to call twice.
+   */
+  public endAgentFocus(token?: string | null): void {
+    if (!token) return;
+    const index = this.agentFocusStack.findIndex(frame => frame.token === token);
+    if (index === -1) return;
+    const wasTop = index === this.agentFocusStack.length - 1;
+    const [frame] = this.agentFocusStack.splice(index, 1);
+
+    // Only the newest delegation owns the screen. An older frame finishing
+    // out of order leaves the visible agent untouched.
+    if (!wasTop) return;
+
+    // A parallel peer request may still be running below this frame, so the
+    // next visible agent is the new top of the stack (or the requester when
+    // nothing is left).
+    const top = this.agentFocusStack[this.agentFocusStack.length - 1];
+    const visibleAgent = top?.agent ?? frame.requester;
+    if (visibleAgent !== this.lastFocusedAgent) {
+      this.emitAgentFocus('return', visibleAgent, frame.agent, frame.reason, frame.traceId);
+    }
+  }
+
+  /**
+   * Hand control to another agent without expecting it back (e.g. the LSAI
+   * Agent delegating a whole turn to a specialist). Clears any borrowed frames.
+   */
+  public transferAgentFocus(
+    to: AgentType,
+    params: { from?: AgentType | null; reason?: string; traceId?: string } = {},
+  ): void {
+    this.agentFocusStack = [];
+    const from = params.from ?? this.lastFocusedAgent;
+    if (to === this.lastFocusedAgent) return;
+    this.emitAgentFocus('transfer', to, from ?? null, params.reason, params.traceId);
+  }
+
+  /** Agent that should currently be visible, or null before the first focus event. */
+  public getActiveAgent(): AgentType | null {
+    const top = this.agentFocusStack[this.agentFocusStack.length - 1];
+    return top?.agent ?? this.lastFocusedAgent;
+  }
+
+  /** Most recent focus event (for consoles, diagnostics and tests). */
+  public getAgentFocus(): CacpAgentFocus | null {
+    return this.agentFocusHistory[this.agentFocusHistory.length - 1] ?? null;
+  }
+
+  /** Full bounded focus history, oldest first. */
+  public getAgentFocusHistory(): CacpAgentFocus[] {
+    return this.agentFocusHistory.slice();
+  }
+
+  /** Clear the delegation stack (new session, sign-out, tests). */
+  public resetAgentFocus(agent: AgentType | null = null): void {
+    this.agentFocusStack = [];
+    this.agentFocusHistory = [];
+    this.lastFocusedAgent = agent;
+  }
+
+  private emitAgentFocus(
+    kind: CacpAgentFocusKind,
+    agent: AgentType,
+    from: AgentType | null,
+    reason?: string,
+    traceId?: string,
+  ): void {
+    this.lastFocusedAgent = agent;
+    const focus: CacpAgentFocus = {
+      agent,
+      from,
+      kind,
+      reason,
+      traceId,
+      depth: this.agentFocusStack.length,
+      timestamp: Date.now(),
+    };
+    this.agentFocusHistory.push(focus);
+    if (this.agentFocusHistory.length > FOCUS_HISTORY_MAX) {
+      this.agentFocusHistory = this.agentFocusHistory.slice(-FOCUS_HISTORY_MAX);
+    }
+    for (const handler of this.agentFocusHandlers) {
+      try { handler(focus); } catch { /* UI subscribers must never break CACP */ }
+    }
+  }
+
   /**
    * Send a message to another agent or broadcast to all agents
    */
@@ -1049,14 +1223,24 @@ export class InterAgentCommunicationService {
         };
       }
     }
-    const response = await this.request(from, owner.agent, skillId, payload, timeoutMs, {
-      traceId,
-      parentMessageId,
-    });
-    if (cacheEnabled && response?.success && response.data) {
-      this.cacheResult(skillId, payload, response.data, response.from, cacheTtlMs);
+    // CACP focus: bringing a peer in makes that peer the visible agent while
+    // it works; closing the frame returns focus to the requesting agent when
+    // the result/control comes back. Self-calls never change the visible agent.
+    const focusToken = owner.agent === from
+      ? null
+      : this.beginAgentFocus({ from, to: owner.agent, reason: skillId, traceId });
+    try {
+      const response = await this.request(from, owner.agent, skillId, payload, timeoutMs, {
+        traceId,
+        parentMessageId,
+      });
+      if (cacheEnabled && response?.success && response.data) {
+        this.cacheResult(skillId, payload, response.data, response.from, cacheTtlMs);
+      }
+      return response;
+    } finally {
+      this.endAgentFocus(focusToken);
     }
-    return response;
   }
 
 
@@ -1079,6 +1263,8 @@ export class InterAgentCommunicationService {
         handlerCount: h.length,
       })),
       policyMode: this.policyMode,
+      activeAgentFocus: this.getActiveAgent(),
+      agentFocusDepth: this.agentFocusStack.length,
       cooperativeYieldMs: this.cooperativeYieldMs,
       pendingBroadcasts: Array.from(this.pendingBroadcasts.entries()).reduce((acc, [cmd, queue]) => {
         acc[cmd] = queue.length;
@@ -1219,6 +1405,17 @@ if (typeof window !== 'undefined') {
         for (const e of fresh) console.log(`[CACP ${e.phase}] ${e.from} → ${e.to}: ${e.command}`, e.data ?? e.preview);
       });
       return 'watching — call __cacp.watch() again to stop';
+    },
+    /** Read or move the visible agent focus (CACP delegation stack). */
+    focus: (agent?: AgentType) => {
+      if (agent) {
+        interAgentComm.transferAgentFocus(agent, { reason: 'devtools' });
+      }
+      return {
+        active: interAgentComm.getActiveAgent(),
+        depth: interAgentComm.getStats().agentFocusDepth,
+        last: interAgentComm.getAgentFocus(),
+      };
     },
     /** Raw access to the service instance (advanced). */
     service: interAgentComm,

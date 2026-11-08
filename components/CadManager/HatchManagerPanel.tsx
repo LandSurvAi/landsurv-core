@@ -26,6 +26,7 @@ import {
   getHatchByName,
 } from '../../services/hatchLibrary';
 import type { CanvasHatch } from '../../types';
+import { DecimalInput } from '../DecimalInput.tsx';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -465,14 +466,13 @@ export function HatchManagerPanel({
             <div className="mt-2.5 grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-white/[0.07]">
               <div>
                 <label className="block text-[9.5px] uppercase tracking-wider text-slate-400 mb-0.5">Scale</label>
-                <input
-                  type="number"
-                  step="0.25"
-                  min="0.05"
-                  max="100"
+                <DecimalInput
+                  min={0.05}
+                  max={100}
                   value={hatchScale}
-                  onChange={e => setHatchScale(Math.max(0.05, parseFloat(e.target.value) || 1))}
+                  onValueChange={setHatchScale}
                   className="w-full rounded border border-white/10 bg-[#070d16] px-2 py-1 font-mono text-xs text-slate-100"
+                  aria-label="Hatch scale"
                 />
               </div>
               <div>
@@ -992,13 +992,12 @@ export function HatchManagerPanel({
                           </label>
                           <label className="inline-flex items-center gap-1">
                             Scale:
-                            <input
-                              type="number"
-                              step="0.25"
-                              min="0.05"
+                            <DecimalInput
+                              min={0.05}
                               value={ch.scale}
-                              onChange={e => onUpdateCanvasHatch?.(ch.id, { scale: Math.max(0.05, parseFloat(e.target.value) || 1) })}
+                              onValueChange={scale => onUpdateCanvasHatch?.(ch.id, { scale })}
                               className="w-14 rounded border border-white/10 bg-[#070d16] px-1 py-0.5 font-mono text-[10px] text-slate-200"
+                              aria-label={`Scale for ${ch.patternName} hatch`}
                             />
                           </label>
                           <label className="inline-flex items-center gap-1">

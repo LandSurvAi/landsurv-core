@@ -7,6 +7,7 @@ interface ContourGenerationPanelProps {
   onSettingsChange: (settings: ContourSettings) => void;
   onGenerate: () => void;
   onImportTin?: () => void;
+  onExportTin?: () => void;
   onCreateTinFromContours?: () => void;
   canCreateTinFromContours?: boolean;
   isGenerating: boolean;
@@ -45,6 +46,7 @@ export const ContourGenerationPanel: React.FC<ContourGenerationPanelProps> = ({
   onSettingsChange,
   onGenerate,
   onImportTin,
+  onExportTin,
   onCreateTinFromContours,
   canCreateTinFromContours = false,
   isGenerating,
@@ -411,6 +413,14 @@ export const ContourGenerationPanel: React.FC<ContourGenerationPanelProps> = ({
           title="Import a .tin, .xml, or .landxml surface and load its vertices into project points"
         >
           {isImportingTin ? 'Importing TIN…' : 'Import .TIN / LandXML'}
+        </button>
+        <button
+          onClick={onExportTin}
+          disabled={!onExportTin || tinSurfaces.length === 0}
+          className="w-full mb-2 py-2 bg-slate-600 text-white font-semibold rounded-md hover:bg-slate-500 transition-colors text-sm disabled:bg-gray-600 disabled:cursor-not-allowed"
+          title="Export the most recent TIN surface as LandXML"
+        >
+          Export TIN (LandXML)
         </button>
         {isImportingTin && (
           <div className="mb-3 rounded border border-cyan-700/30 bg-gray-800/70 p-2.5">

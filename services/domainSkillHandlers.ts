@@ -24,6 +24,9 @@ import { useEffect, useRef } from 'react';
 import { interAgentComm, type AgentMessage, type AgentResponse } from './InterAgentCommunication';
 import {
   AgentType,
+  type A2UISpreadsheetColumn,
+  type A2UISpreadsheetRow,
+  type A2UISpreadsheetSpec,
   type Centerline,
   type ContourGeneration,
   type ContourSettings,
@@ -45,12 +48,12 @@ import {
 } from '../types';
 import { rectifyBuildings, type RectifyStats } from './buildingRectifier';
 import { registerRoadingSkillHandlers } from './roadingSkillHandlers';
-import { runSteepSlopeAnalysis, steepSlopeRunToSurveyLines } from './SteepSlopeService';
-import {
+import { runSteepSlopeAnalysis, steepSlopeRunToSurveyLines } from './SteepSlopeService';import {
   generateContoursAsIsoPaths,
   isoPathsToSurveyLines,
   generateProfile,
 } from '../utils/contouring';
+import { resolveContourLineLayersViaCacp } from './contourLayerResolver';
 import {
   calculatePointFromStationOffset,
   calculateCenterlineLength,
@@ -67,6 +70,8 @@ import { knowledgeBase } from './KnowledgeBase';
 import type { StructuresFetchResult } from './structuresService';
 import type { BuildingFootprint } from './osmBuildingsService';
 import type { SoilReportRow } from './soilsService';
+import { ESRI_STATE_SERVICES } from '../utils/esriStateServices';
+import { USGS_NATIONAL_CONTOUR_SOURCES } from '../utils/usgsNationalContours';
 
 export interface DomainSkillHandlersOpts {
   points: SurveyPoint[];
@@ -97,7 +102,11 @@ export interface DomainSkillHandlersOpts {
   soilMapUnits: SoilMapUnit[];
   soilReportData: Record<string, SoilReportRow> | null;
   setSoilReportData: React.Dispatch<React.SetStateAction<Record<string, SoilReportRow> | null>>;
-  handleFetchSoils: (mode: 'inclusion' | 'description', descriptionText?: string) => Promise<void>;
+  handleFetchSoils: (
+    mode: 'inclusion' | 'description' | 'project',
+    descriptionText?: string,
+    bboxOverride?: [number, number, number, number] | null,
+  ) => Promise<unknown>;
   handleClearSoilsLines: () => void;
   // Contours & TIN
   contourSettings: ContourSettings;
@@ -106,11 +115,30 @@ export interface DomainSkillHandlersOpts {
   tinSurfaces: TinSurface[];
   steepSlopeTinSurfaces: TinSurface[];
   handleGenerateContours: () => void;
+  /** Build and register a TIN from a contour generation (latest when omitted). */
+  handleCreateTinFromContours?: (generationId?: string) => Promise<TinSurface | null> | TinSurface | null;
+  /** Parse, register, and persist an imported TIN/LandXML session file. */
+  handleImportTinSurface?: (file: SessionFile) => Promise<TinSurface> | TinSurface;
+  /** Export a TIN to File Manager and return the generated session file. */
+  handleExportTinSurface?: (
+    sourceTinId: string | undefined,
+    format: 'landxml' | 'native',
+  ) => Promise<SessionFile | null> | SessionFile | null;
+  /** Raise the A2UI TIN Surfaces surface from a CACP request. */
+  openTinSurfaceStudio?: () => void;
+  /** Raise the shared A2UI spreadsheet from a CACP request. */
+  openSpreadsheetSurface?: (spec: A2UISpreadsheetSpec) => void;
   handleFetchEsriContours: (
     serviceUrl: string,
-    mode: 'inclusion' | 'description',
+    mode: 'project' | 'inclusion' | 'description',
     descriptionText?: string,
-  ) => Promise<void>;
+  ) => Promise<{
+    ok: boolean;
+    featureCount: number;
+    segmentCount: number;
+    layerName: string;
+    message: string;
+  }>;
   handleDiscoverPublicContourServices: (searchTerm: string) => Promise<void>;
   // Steep Slope
   steepSlopeRuns: SteepSlopeRunResult[];
@@ -161,6 +189,68 @@ const DEFAULT_STEEP_SLOPE_BANDS: SteepSlopeBand[] = [
   { id: 'ss-15-25', minPercent: 15, maxPercent: 25, color: '#f59e0b', layerName: 'SS_15_25' },
   { id: 'ss-25-plus', minPercent: 25, maxPercent: Number.POSITIVE_INFINITY, color: '#ef4444', layerName: 'SS_25_PLUS' },
 ];
+
+function normalizeSpreadsheetColumns(raw: unknown): A2UISpreadsheetColumn[] {
+  if (!Array.isArray(raw)) return [];
+  const usedKeys = new Set<string>();
+  const columns: A2UISpreadsheetColumn[] = [];
+  raw.forEach((entry, index) => {
+    if (typeof entry === 'string') {
+      const label = entry.trim() || `Column ${index + 1}`;
+      let key = label;
+      while (usedKeys.has(key)) key = `${key}_${index + 1}`;
+      usedKeys.add(key);
+      columns.push({ key, label });
+      return;
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+    const value = entry as Record<string, unknown>;
+    const label =
+      typeof value.label === 'string' && value.label.trim()
+        ? value.label.trim()
+        : typeof value.key === 'string' && value.key.trim()
+          ? value.key.trim()
+          : `Column ${index + 1}`;
+    let key = typeof value.key === 'string' && value.key.trim() ? value.key.trim() : label;
+    while (usedKeys.has(key)) key = `${key}_${index + 1}`;
+    usedKeys.add(key);
+    const align =
+      value.align === 'right' || value.align === 'center' || value.align === 'left'
+        ? value.align
+        : undefined;
+    const width = typeof value.width === 'number' && Number.isFinite(value.width)
+      ? Math.min(600, Math.max(48, value.width))
+      : undefined;
+    columns.push({ key, label, align, width });
+  });
+  return columns;
+}
+
+function normalizeSpreadsheetRows(
+  raw: unknown,
+  columns: A2UISpreadsheetColumn[],
+): A2UISpreadsheetRow[] {
+  if (!Array.isArray(raw)) return [];
+  const rows: A2UISpreadsheetRow[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const source = entry as Record<string, unknown>;
+    const row: A2UISpreadsheetRow = {};
+    columns.forEach((column, index) => {
+      const value = source[column.key] ?? source[column.label] ?? (Array.isArray(entry) ? entry[index] : undefined);
+      if (
+        value === null ||
+        typeof value === 'string' ||
+        typeof value === 'number' ||
+        typeof value === 'boolean'
+      ) {
+        row[column.key] = value;
+      }
+    });
+    rows.push(row);
+  }
+  return rows;
+}
 
 export function registerDomainSkillHandlers(
   getOpts: () => DomainSkillHandlersOpts,
@@ -528,7 +618,8 @@ export function registerDomainSkillHandlers(
           exclusionLines,
         );
         const genId = `gen-${Date.now()}`;
-        const contourLines = isoPathsToSurveyLines(isoPaths, genId);
+        const contourLayers = await resolveContourLineLayersViaCacp();
+        const contourLines = isoPathsToSurveyLines(isoPaths, genId, contourLayers);
         const now = new Date().toISOString();
         const newGen: ContourGeneration = {
           id: genId,
@@ -554,7 +645,7 @@ export function registerDomainSkillHandlers(
           ...contourLines,
         ]);
         opts.logActionToFieldbook(
-          `CACP generate_contours — generated ${isoPaths.length} contour paths (${contourLines.length} segments) at ${interval}' interval.`,
+          `CACP generate_contours — generated ${isoPaths.length} contour paths (${contourLines.length} segments) at ${interval}' interval on ${contourLayers.minorLayer} / ${contourLayers.majorLayer}.`,
         );
         return respond(message, AgentType.CONTOURING_AGENT, true, {
           generationId: genId,
@@ -619,10 +710,11 @@ export function registerDomainSkillHandlers(
           [],
         );
         const genId = `tin-gen-${Date.now()}`;
-        const contourLines = isoPathsToSurveyLines(isoPaths, genId);
+        const contourLayers = await resolveContourLineLayersViaCacp();
+        const contourLines = isoPathsToSurveyLines(isoPaths, genId, contourLayers);
         opts.setLines((prev) => [...prev, ...contourLines]);
         opts.logActionToFieldbook(
-          `CACP generate_loaded_tin_contours — generated ${contourLines.length} contour segments from TIN "${tin.name}".`,
+          `CACP generate_loaded_tin_contours — generated ${contourLines.length} contour segments from TIN "${tin.name}" on ${contourLayers.minorLayer} / ${contourLayers.majorLayer}.`,
         );
         return respond(message, AgentType.CONTOURING_AGENT, true, {
           count: contourLines.length,
@@ -641,6 +733,216 @@ export function registerDomainSkillHandlers(
   );
 
   unsubs.push(
+    interAgentComm.onCommand('create_tin_from_contours', async (message) => {
+      const opts = getOpts();
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      if (!opts.handleCreateTinFromContours) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          'TIN creation is not available on this host.',
+        );
+      }
+      const generationId =
+        typeof d.generationId === 'string' && d.generationId.trim()
+          ? d.generationId.trim()
+          : undefined;
+      try {
+        const tin = await opts.handleCreateTinFromContours(generationId);
+        if (!tin) {
+          return respond(
+            message,
+            AgentType.CONTOURING_AGENT,
+            false,
+            undefined,
+            'No contour generation is available to build a TIN from.',
+          );
+        }
+        return respond(message, AgentType.CONTOURING_AGENT, true, {
+          tinId: tin.id,
+          name: tin.name,
+          vertexCount: tin.vertices.length,
+          triangleCount: tin.triangles.length,
+          sourceGenerationId: generationId ?? null,
+        });
+      } catch (e) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('import_tin_surface', async (message) => {
+      const opts = getOpts();
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      if (!opts.handleImportTinSurface) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          'TIN import is not available on this host.',
+        );
+      }
+      const content = typeof d.content === 'string' ? d.content : '';
+      const fileData = typeof d.fileData === 'string' ? d.fileData : undefined;
+      if (!content && !fileData) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          'content or fileData is required to import a TIN surface.',
+        );
+      }
+      const rawName = typeof d.name === 'string' && d.name.trim() ? d.name.trim() : 'imported-surface';
+      const name = /\.(tin|xml|landxml)$/i.test(rawName)
+        ? rawName
+        : `${rawName}${content.includes('<LandXML') ? '.xml' : '.tin'}`;
+      try {
+        const tin = await opts.handleImportTinSurface({ name, content, fileData });
+        return respond(message, AgentType.CONTOURING_AGENT, true, {
+          tinId: tin.id,
+          name: tin.name,
+          vertexCount: tin.vertices.length,
+          triangleCount: tin.triangles.length,
+        });
+      } catch (e) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('export_tin_surface', async (message) => {
+      const opts = getOpts();
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      if (!opts.handleExportTinSurface) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          'TIN export is not available on this host.',
+        );
+      }
+      const sourceTinId =
+        typeof d.sourceTinId === 'string' && d.sourceTinId.trim() ? d.sourceTinId.trim() : undefined;
+      const format = d.format === 'native' ? 'native' : 'landxml';
+      try {
+        const file = await opts.handleExportTinSurface(sourceTinId, format);
+        if (!file) {
+          return respond(
+            message,
+            AgentType.CONTOURING_AGENT,
+            false,
+            undefined,
+            'No TIN surface is loaded to export.',
+          );
+        }
+        const surface =
+          (sourceTinId ? opts.tinSurfaces.find((t) => t.id === sourceTinId) : undefined) ??
+          opts.tinSurfaces[opts.tinSurfaces.length - 1];
+        return respond(message, AgentType.CONTOURING_AGENT, true, {
+          fileName: file.name,
+          format,
+          vertexCount: surface?.vertices.length ?? 0,
+          triangleCount: surface?.triangles.length ?? 0,
+        });
+      } catch (e) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('open_tin_surfaces', async (message) => {
+      const opts = getOpts();
+      if (!opts.openTinSurfaceStudio) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          'The TIN Surfaces surface is not available on this host.',
+        );
+      }
+      opts.openTinSurfaceStudio();
+      return respond(message, AgentType.CONTOURING_AGENT, true, { opened: true });
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('open_spreadsheet', async (message) => {
+      const opts = getOpts();
+      const openSpreadsheet = opts.openSpreadsheetSurface;
+      if (!openSpreadsheet) {
+        return respond(
+          message,
+          AgentType.LSVZ_AGENT,
+          false,
+          undefined,
+          'The A2UI spreadsheet host is not available on this host.',
+        );
+      }
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const columns = normalizeSpreadsheetColumns(d.columns);
+      if (columns.length === 0) {
+        return respond(
+          message,
+          AgentType.LSVZ_AGENT,
+          false,
+          undefined,
+          'columns is required and must contain at least one column key or object.',
+        );
+      }
+      const rows = normalizeSpreadsheetRows(d.rows, columns);
+      const title =
+        typeof d.title === 'string' && d.title.trim() ? d.title.trim() : 'Agent Spreadsheet';
+      openSpreadsheet({
+        title,
+        description: typeof d.description === 'string' ? d.description : undefined,
+        fileName:
+          typeof d.fileName === 'string' && d.fileName.trim()
+            ? d.fileName.trim()
+            : `${title.replace(/[^a-z0-9]+/gi, ' ').trim() || 'spreadsheet'}.csv`,
+        columns,
+        rows,
+        editable: d.editable !== false,
+        pageSize:
+          typeof d.pageSize === 'number' && Number.isFinite(d.pageSize)
+            ? Math.min(1000, Math.max(10, d.pageSize))
+            : undefined,
+      });
+      return respond(message, AgentType.LSVZ_AGENT, true, {
+        opened: true,
+        rowCount: rows.length,
+        columnCount: columns.length,
+      });
+    }),
+  );
+
+  unsubs.push(
     interAgentComm.onCommand('fetch_esri_rest_contours', async (message) => {
       const opts = getOpts();
       const d = (message.data ?? {}) as Record<string, unknown>;
@@ -654,19 +956,28 @@ export function registerDomainSkillHandlers(
           'serviceUrl is required.',
         );
       }
-      const mode = (d.mode === 'description' ? 'description' : 'inclusion') as
+      const mode = (d.mode === 'description' ? 'description' : d.mode === 'project' ? 'project' : 'inclusion') as
+        | 'project'
         | 'inclusion'
         | 'description';
-      const descriptionText = typeof d.descriptionText === 'string' ? d.descriptionText : undefined;
+      const descriptionText =
+        (typeof d.descriptionText === 'string' && d.descriptionText) ||
+        (typeof d.description === 'string' && d.description) ||
+        undefined;
       try {
-        await opts.handleFetchEsriContours(serviceUrl, mode, descriptionText);
+        const result = await opts.handleFetchEsriContours(serviceUrl, mode, descriptionText);
+        if (!result.ok) {
+          return respond(message, AgentType.CONTOURING_AGENT, false, undefined, result.message);
+        }
         const latest = getOpts();
-        const esriLines = latest.lines.filter((l) => (l.layer ?? '').startsWith('ESRI-CONTOUR'));
         return respond(message, AgentType.CONTOURING_AGENT, true, {
-          features: [],
-          count: esriLines.length,
+          featureCount: result.featureCount,
+          // `count` is contour segments added to the drawing, which is what the
+          // agent should report; reading it back from opts.lines was one render
+          // behind and made successful fetches look like "0 features found".
+          count: result.segmentCount,
           sr: { wkid: latest.settings.projection?.epsg ?? 4326 },
-          layerName: 'ESRI-CONTOUR',
+          layerName: result.layerName,
         });
       } catch (e) {
         return respond(
@@ -695,28 +1006,44 @@ export function registerDomainSkillHandlers(
         );
       }
       await opts.handleDiscoverPublicContourServices(searchArea);
+      // Resolve curated layers from the same registry the UI uses. Hand-typed
+      // URLs previously drifted (www.pasda.psu.edu/…/MapServer/0 now 404s and
+      // layer 0 is a counties polygon layer), so every fetch returned 0
+      // features.
+      const normalized = searchArea.toLowerCase();
+      const stateEntry =
+        ESRI_STATE_SERVICES.find((entry) => normalized.includes(entry.state.toLowerCase())) ??
+        ESRI_STATE_SERVICES.find((entry) =>
+          new RegExp(`(^|[^a-z])${entry.abbr.toLowerCase()}([^a-z]|$)`).test(normalized),
+        );
+      const usgsIntermediate =
+        USGS_NATIONAL_CONTOUR_SOURCES.find((source) => source.id === 'intermediate') ??
+        USGS_NATIONAL_CONTOUR_SOURCES[0];
       const curated = [
         {
-          name: 'USGS 3DEP National Map Contours (1-ft / 2-ft / 5-ft)',
-          url: 'https://carto.nationalmap.gov/arcgis/rest/services/contours/MapServer/0',
-          region: searchArea,
+          name: 'USGS 3DEP National Map Contours (Intermediate)',
+          url: usgsIntermediate.url,
+          region: stateEntry?.state ?? searchArea,
           description: 'USGS National Elevation Dataset / 3DEP contour service covering the United States.',
           dataType: (d.dataType as string) || 'contours',
-          resolution: '1ft–10ft',
+          resolution: `${usgsIntermediate.intervalFt}ft`,
         },
-        {
-          name: 'PASDA Pennsylvania PAMAP 2-ft Contours',
-          url: 'https://www.pasda.psu.edu/arcgis/rest/services/pasda/PAMAP_Contours/MapServer/0',
-          region: 'Pennsylvania',
-          description: 'PAMAP LiDAR-derived 2-foot contours via Penn State PASDA.',
+        ...(stateEntry?.layers ?? []).map((layer) => ({
+          name: layer.name,
+          url: layer.url,
+          region: stateEntry?.state ?? searchArea,
+          description: layer.notes ?? layer.attribution,
           dataType: 'contours',
-          resolution: '2ft',
-        },
+          resolution: layer.intervalFt ? `${layer.intervalFt}ft` : 'unknown',
+        })),
       ];
       return respond(message, AgentType.CONTOURING_AGENT, true, {
         services: curated,
         count: curated.length,
-        sources: ['USGS National Map', 'PASDA', 'ArcGIS Online'],
+        sources: [
+          'USGS National Map',
+          ...(stateEntry ? [stateEntry.abbr === 'PA' ? 'PASDA' : `${stateEntry.abbr} state GIS`] : []),
+        ],
       });
     }),
   );

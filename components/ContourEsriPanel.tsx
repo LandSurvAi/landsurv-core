@@ -6,7 +6,7 @@ import {
   nationalContourFetchOptions,
   type ContourFetchOptions,
 } from '../utils/usgsNationalContours.ts';
-import { ContourDownloadForm } from './ContourDownloadForm.tsx';
+import { ContourDownloadForm, type ContourAoiMode } from './ContourDownloadForm.tsx';
 
 interface ContourEsriPanelProps {
   settings: ContourSettings;
@@ -17,10 +17,12 @@ interface ContourEsriPanelProps {
   hasInclusionBoundary?: boolean;
   inclusionSegmentCount?: number;
   hasProjectProjection?: boolean;
+  /** True when loaded, georeferenced points can define the project extent. */
+  hasProjectExtent?: boolean;
   isFetchingEsri?: boolean;
   onFetchEsriContours?: (
     serviceUrl: string,
-    mode: 'inclusion' | 'description',
+    mode: ContourAoiMode,
     descriptionText?: string,
     opts?: ContourFetchOptions,
   ) => void;
@@ -35,7 +37,7 @@ export const ContourEsriPanel: React.FC<ContourEsriPanelProps> = ({
   settings, onSettingsChange,
   onDiscoverPublicServices, isDiscovering = false, discoveredServices = [],
   hasInclusionBoundary = false, inclusionSegmentCount = 0,
-  hasProjectProjection = false,
+  hasProjectProjection = false, hasProjectExtent = false,
   isFetchingEsri = false, onFetchEsriContours,
 }) => {
   const [esriUrlInput, setEsriUrlInput] = useState('');
@@ -43,7 +45,9 @@ export const ContourEsriPanel: React.FC<ContourEsriPanelProps> = ({
   const [selectedStateAbbr, setSelectedStateAbbr] = useState('');
   const selectedStateEntry = ESRI_STATE_SERVICES.find(s => s.abbr === selectedStateAbbr) ?? null;
   const [fetchOpenUrl, setFetchOpenUrl] = useState<string | null>(null);
-  const [fetchMode, setFetchMode] = useState<'inclusion' | 'description'>('inclusion');
+  const [fetchMode, setFetchMode] = useState<ContourAoiMode>(
+    hasProjectExtent ? 'project' : hasInclusionBoundary && hasProjectProjection ? 'inclusion' : 'description',
+  );
   const [fetchDescription, setFetchDescription] = useState('');
   const [browseStatus, setBrowseStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [browsedLayers, setBrowsedLayers] = useState<Array<{ id: number; name: string; type: string }>>([]);
@@ -278,6 +282,7 @@ export const ContourEsriPanel: React.FC<ContourEsriPanelProps> = ({
                     hasInclusionBoundary={hasInclusionBoundary}
                     inclusionSegmentCount={inclusionSegmentCount}
                     hasProjectProjection={hasProjectProjection}
+                    hasProjectExtent={hasProjectExtent}
                     isFetching={isFetchingEsri}
                     onDownload={(mode, desc) =>
                       onFetchEsriContours(source.url, mode, desc, nationalContourFetchOptions(source))
@@ -330,6 +335,7 @@ export const ContourEsriPanel: React.FC<ContourEsriPanelProps> = ({
                     hasInclusionBoundary={hasInclusionBoundary}
                     inclusionSegmentCount={inclusionSegmentCount}
                     hasProjectProjection={hasProjectProjection}
+                    hasProjectExtent={hasProjectExtent}
                     isFetching={isFetchingEsri}
                     onDownload={(mode, desc) => onFetchEsriContours(url, mode, desc)}
                   />

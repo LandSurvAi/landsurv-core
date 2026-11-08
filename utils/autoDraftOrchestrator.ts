@@ -612,18 +612,25 @@ export async function runAutoDraft(opts: AutoDraftOptions): Promise<void> {
   // ── Phase 1: Job Information ──────────────────────────────────────────────────
   start('job_info', 'Reading session job info…');
   const { state, county, place, district } = zoningContext;
+  const locationBlock = [
+    state    ? `State: ${state}`                 : null,
+    county   ? `County: ${county}`               : null,
+    place    ? `Municipality: ${place}`           : null,
+    district ? `Zoning District: ${district}`    : null,
+    projectEpsg ? `Projection: EPSG:${projectEpsg}` : 'Projection: (not set)',
+  ].filter(Boolean).join('\n');
   if (jobInfo.jobName || jobInfo.jobNo) {
     jobBlock = [
       `Job Name:   ${jobInfo.jobName || '(not set)'}`,
       `Job Number: ${jobInfo.jobNo   || '(not set)'}`,
-      state    ? `State: ${state}`                 : null,
-      county   ? `County: ${county}`               : null,
-      place    ? `Municipality: ${place}`           : null,
-      district ? `Zoning District: ${district}`    : null,
+      locationBlock,
     ].filter(Boolean).join('\n');
     done('job_info', jobInfo.jobName || jobInfo.jobNo, 'Loaded from session header.');
   } else {
-    jobBlock = '(No job information set — fill in Job Info in the session header)';
+    jobBlock = [
+      '(No job information set — fill in Job Info in the session header)',
+      locationBlock,
+    ].filter(Boolean).join('\n');
     skip('job_info', 'No job info configured');
   }
 

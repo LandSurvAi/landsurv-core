@@ -7,7 +7,7 @@ import {
   nationalContourFetchOptions,
   type ContourFetchOptions,
 } from '../utils/usgsNationalContours.ts';
-import { ContourDownloadForm } from './ContourDownloadForm.tsx';
+import { ContourDownloadForm, type ContourAoiMode } from './ContourDownloadForm.tsx';
 import { useDocumentScrollLock } from '../hooks/useDocumentScrollLock.ts';
 
 interface ContourPanelProps {
@@ -32,7 +32,7 @@ interface ContourPanelProps {
   /** Fetch contours from a pinned ESRI service (or built-in USGS layer) for a given area */
   onFetchEsriContours?: (
     serviceUrl: string,
-    mode: 'inclusion' | 'description',
+    mode: ContourAoiMode,
     descriptionText?: string,
     opts?: ContourFetchOptions,
   ) => void;
@@ -62,7 +62,7 @@ export const ContourPanel: React.FC<ContourPanelProps> = ({ settings, onSettings
   const selectedStateEntry = ESRI_STATE_SERVICES.find(s => s.abbr === selectedStateAbbr) ?? null;
   // Per-URL download panel state
   const [fetchOpenUrl, setFetchOpenUrl] = useState<string | null>(null);
-  const [fetchMode, setFetchMode] = useState<'inclusion' | 'description'>('inclusion');
+  const [fetchMode, setFetchMode] = useState<ContourAoiMode>(hasInclusionBoundary ? 'inclusion' : 'description');
   const [fetchDescription, setFetchDescription] = useState('');
   // Inline layer browser for the URL input field
   const [browseStatus, setBrowseStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');

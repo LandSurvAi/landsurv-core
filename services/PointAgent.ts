@@ -6,6 +6,7 @@
 //   - reserve_point_numbers      → atomically claims a block of PNs
 //   - release_reservation        → frees a previously reserved block
 //   - query_points               → search by number / description / elevation / spatial
+//   - add_point                  → create from Plus Code, WGS84, or projected N/E
 //   - get_deed_points            → points associated with a deed parcel
 //   - update_point_list          → create / replace / merge a named point list
 //   - deed_loaded                → context-switch listener
@@ -208,7 +209,7 @@ export class PointAgent {
     });
 
     console.log(
-      '[PointAgent] CACP handlers registered: deed_loaded, get_deed_points, query_points, request_next_point_number, reserve_point_numbers, release_reservation, update_point_list'
+      '[PointAgent] CACP handlers registered: deed_loaded, get_deed_points, query_points, request_next_point_number, reserve_point_numbers, release_reservation, update_point_list; add_point is bridged by the App point store'
     );
   }
 

@@ -175,9 +175,25 @@ function buildParams(req: StaticMapRequest, key?: string): URLSearchParams {
 // daily limit. Keyed by the exact request URL so results are always correct.
 const NAIP_CACHE_MAX = 60;
 const naipCache = new Map<string, StaticMapResult>();
+/** Identical tiles requested while one is already in flight share that request. */
+const naipInflight = new Map<string, Promise<StaticMapResult>>();
 
 export function clearStaticMapsCache(): void {
   naipCache.clear();
+}
+
+/**
+ * `StaticMapResult` carries the same image bytes twice (`dataUrl` and
+ * `base64`). Serializing both doubles every IndexedDB write during a pan, so
+ * the persisted copy drops `dataUrl` and rebuilds it on read.
+ */
+function stripStaticMapForStore(result: StaticMapResult): StaticMapResult {
+  return { ...result, dataUrl: '' };
+}
+
+function restoreStoredStaticMap(result: StaticMapResult): StaticMapResult {
+  if (result.dataUrl || !result.base64) return result;
+  return { ...result, dataUrl: `data:${result.mimeType || 'image/png'};base64,${result.base64}` };
 }
 
 function naipCacheGet(key: string): StaticMapResult | undefined {
@@ -278,37 +294,47 @@ export async function getStaticMap(req: StaticMapRequest, keys: StaticMapKeys = 
     const naipUrl = `${NAIP_PROXY}?${buildNaipParams(req)}`;
     const cached = naipCacheGet(naipUrl);
     if (cached) return cached;
-    const persistedNaip = await readPersisted<StaticMapResult>(`naip|${naipUrl}`, NAIP_PERSIST_TTL_MS);
-    if (persistedNaip) {
-      naipCacheSet(naipUrl, persistedNaip);
-      return persistedNaip;
-    }
-    try {
-      const { blob, response } = await fetchImageWithResponse(naipUrl);
-      const base = { ...(await blobToDataUrl(blob)), source: 'naip-proxy' as const };
-      const extentHeader = response.headers.get('X-Naip-Extent');
-      let result: StaticMapResult = base;
-      if (extentHeader) {
-        const parts = extentHeader.split(',').map(Number);
-        if (parts.length === 4 && parts.every(n => Number.isFinite(n))) {
-          result = { ...base, extent: [parts[0], parts[1], parts[2], parts[3]] };
-        }
+
+    const existing = naipInflight.get(naipUrl);
+    if (existing) return existing;
+
+    const task = (async (): Promise<StaticMapResult> => {
+      const persistedNaip = await readPersisted<StaticMapResult>(`naip|${naipUrl}`, NAIP_PERSIST_TTL_MS);
+      if (persistedNaip) {
+        const restored = restoreStoredStaticMap(persistedNaip);
+        naipCacheSet(naipUrl, restored);
+        return restored;
       }
-      naipCacheSet(naipUrl, result);
-      void writePersisted(`naip|${naipUrl}`, result);
-      return result;
-    } catch (e) {
-      errors.push(`naip-proxy: ${e instanceof Error ? e.message : String(e)}`);
-      throw new Error(`NAIP static map fetch failed — ${errors.join(' | ')}`);
-    }
+      try {
+        const { blob, response } = await fetchImageWithResponse(naipUrl);
+        const base = { ...(await blobToDataUrl(blob)), source: 'naip-proxy' as const };
+        const extentHeader = response.headers.get('X-Naip-Extent');
+        let result: StaticMapResult = base;
+        if (extentHeader) {
+          const parts = extentHeader.split(',').map(Number);
+          if (parts.length === 4 && parts.every(n => Number.isFinite(n))) {
+            result = { ...base, extent: [parts[0], parts[1], parts[2], parts[3]] };
+          }
+        }
+        naipCacheSet(naipUrl, result);
+        void writePersisted(`naip|${naipUrl}`, stripStaticMapForStore(result));
+        return result;
+      } catch (e) {
+        errors.push(`naip-proxy: ${e instanceof Error ? e.message : String(e)}`);
+        throw new Error(`NAIP static map fetch failed — ${errors.join(' | ')}`);
+      }
+    })().finally(() => { naipInflight.delete(naipUrl); });
+
+    naipInflight.set(naipUrl, task);
+    return task;
   }
 
   // 1. Explicit user Maps key.
   const staticKey = `static|${buildParams(req).toString()}`;
   const persistedStatic = await readPersisted<StaticMapResult>(staticKey, STATIC_PERSIST_TTL_MS);
-  if (persistedStatic) return persistedStatic;
+  if (persistedStatic) return restoreStoredStaticMap(persistedStatic);
   const remember = (result: StaticMapResult): StaticMapResult => {
-    void writePersisted(staticKey, result);
+    void writePersisted(staticKey, stripStaticMapForStore(result));
     return result;
   };
 

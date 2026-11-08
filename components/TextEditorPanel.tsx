@@ -4,10 +4,12 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  FilePlus2,
   FileText,
   Replace,
   Save,
   Search,
+  Upload,
   WrapText,
   X,
   ZoomIn,
@@ -32,6 +34,10 @@ interface TextEditorPanelProps {
   onContentChange: (newContent: string) => void;
   onSaveChanges: () => void;
   hasUnsavedChanges: boolean;
+  /** Create and open a new .txt or .md file. */
+  onCreateFile?: (fileName: string, content: string) => void;
+  /** Import local .txt / .md files into the project list. */
+  onImportTextFiles?: (files: SessionFile[]) => void;
 }
 
 const LINE_HEIGHT = 22;
@@ -59,6 +65,8 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
   onContentChange,
   onSaveChanges,
   hasUnsavedChanges,
+  onCreateFile,
+  onImportTextFiles,
 }) => {
   const [fontSize, setFontSize] = useState(13);
   const [wordWrap, setWordWrap] = useState(true);
@@ -73,10 +81,14 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
   const [goToLine, setGoToLine] = useState('');
   const [copied, setCopied] = useState(false);
   const [view, setView] = useState<'reference' | 'source'>('source');
+  const [isNewTextOpen, setIsNewTextOpen] = useState(false);
+  const [newTextName, setNewTextName] = useState('');
+  const [newTextFormat, setNewTextFormat] = useState<'.txt' | '.md'>('.md');
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const gutterRef = useRef<HTMLDivElement | null>(null);
   const findInputRef = useRef<HTMLInputElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const fileOptions = [...files.filter((f): f is SessionFile => f !== null), ...generatedFiles];
   const pointListOptions = pointLists.map(list => ({ name: list.name, content: '' }));
@@ -211,6 +223,22 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
     }
   };
 
+  const createTextFile = () => {
+    const base = newTextName.trim() || 'Untitled';
+    const fileName = /\.(?:txt|md|markdown)$/i.test(base) ? base : `${base}${newTextFormat}`;
+    onCreateFile?.(fileName, '');
+    setIsNewTextOpen(false);
+    setNewTextName('');
+  };
+
+  const importTextFiles = async (fileList: FileList | null) => {
+    if (!fileList?.length || !onImportTextFiles) return;
+    const imported = await Promise.all(
+      Array.from(fileList).map(async file => ({ name: file.name, content: await file.text() })),
+    );
+    onImportTextFiles(imported);
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const meta = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
@@ -248,15 +276,23 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
   };
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden rounded-md border border-cyan-500/25 bg-[#080d14] font-mono">
-      <header className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-cyan-500/25 bg-[#080d14] px-3 py-1.5">
+    <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-cyan-400/25 bg-[#070e18]/95 font-mono shadow-[0_18px_60px_-30px_rgba(34,211,238,0.35)]">
+      <header className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] bg-white/[0.02] px-3 py-1.5">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="shrink-0 select-none text-xs font-bold leading-none text-cyan-400">CAD</span>
+          <span className="shrink-0 select-none text-xs font-bold leading-none text-cyan-300">A2UI</span>
           <span className="shrink-0 select-none text-xs font-bold leading-none text-gray-600">::</span>
           <FileText className="h-3.5 w-3.5 shrink-0 text-cyan-400" />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
               <h3 className="text-[10px] font-extrabold uppercase leading-none tracking-[0.18em] text-gray-200">Text Editor</h3>
+              {activeFile && /\.(?:md|markdown)$/i.test(activeFile) && (
+                <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none tracking-[0.1em] text-emerald-300">
+                  MD
+                </span>
+              )}
+              <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none tracking-[0.1em] text-cyan-300">
+                TXT / MD
+              </span>
               {hasUnsavedChanges ? (
                 <span className="flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase leading-none tracking-[0.1em] text-amber-300">
                   <AlertCircle className="h-2.5 w-2.5" /> Unsaved
@@ -368,6 +404,46 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
           >
             {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <FileText className="h-3.5 w-3.5" />}
           </button>
+          {onCreateFile && (
+            <button
+              type="button"
+              onClick={() => setIsNewTextOpen(previous => !previous)}
+              className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors ${
+                isNewTextOpen
+                  ? 'border-cyan-400/60 bg-cyan-400/15 text-cyan-200'
+                  : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:border-cyan-400/50 hover:bg-cyan-500/20'
+              }`}
+              title="Start a new .txt or .md document"
+            >
+              <FilePlus2 className="h-3 w-3" />
+              New text
+            </button>
+          )}
+          {onImportTextFiles && (
+            <>
+              <button
+                type="button"
+                onClick={() => importInputRef.current?.click()}
+                className="inline-flex items-center gap-1 rounded border border-gray-800 bg-[#0b1220] px-2 py-1 text-[9px] font-bold uppercase tracking-[0.1em] text-gray-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
+                title="Import a .txt or .md file"
+              >
+                <Upload className="h-3 w-3" />
+                Import
+              </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                multiple
+                accept=".txt,.md,.markdown,text/plain,text/markdown"
+                className="hidden"
+                aria-label="Import text files"
+                onChange={event => {
+                  void importTextFiles(event.target.files);
+                  event.target.value = '';
+                }}
+              />
+            </>
+          )}
           <button
             type="button"
             onClick={onSaveChanges}
@@ -380,6 +456,51 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
           </button>
         </div>
       </header>
+
+      {isNewTextOpen && (
+        <div className="flex flex-shrink-0 flex-wrap items-center gap-1.5 border-b border-gray-800/80 bg-[#05080d] px-3 py-1.5">
+          <FilePlus2 className="h-3.5 w-3.5 flex-shrink-0 text-cyan-400" />
+          <input
+            value={newTextName}
+            onChange={event => setNewTextName(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                createTextFile();
+              } else if (event.key === 'Escape') {
+                setIsNewTextOpen(false);
+              }
+            }}
+            placeholder="Untitled"
+            aria-label="New text file name"
+            className="min-w-[140px] flex-1 rounded border border-gray-800 bg-[#0b1220] px-1.5 py-0.5 font-mono text-[10px] text-gray-200 outline-none placeholder-gray-600 focus:border-cyan-500/60"
+          />
+          <select
+            aria-label="New text format"
+            value={newTextFormat}
+            onChange={event => setNewTextFormat(event.target.value as '.txt' | '.md')}
+            className="rounded border border-gray-800 bg-[#0b1220] px-1.5 py-0.5 font-mono text-[10px] text-gray-200 outline-none focus:border-cyan-500/60"
+          >
+            <option value=".md">Markdown (.md)</option>
+            <option value=".txt">Plain text (.txt)</option>
+          </select>
+          <button
+            type="button"
+            onClick={createTextFile}
+            className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-cyan-300 hover:border-cyan-400 hover:bg-cyan-500/20"
+          >
+            Create
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsNewTextOpen(false)}
+            className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-cyan-200"
+            aria-label="Cancel new text"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {isFindOpen && (
         <div className="flex flex-shrink-0 flex-col gap-1.5 border-b border-gray-800/80 bg-[#05080d] px-3 py-1.5">
@@ -506,7 +627,7 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
                 </span>
               </span>
             </div>
-            <CommandHelpView groups={reference.groups} notes={reference.notes} />
+            <CommandHelpView groups={reference.groups} notes={reference.notes} textScale={reference.textScale} />
           </div>
         ) : activeFile ? (
           <div className="flex min-h-0 flex-1 bg-[#05080d]">
@@ -555,8 +676,30 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
               </div>
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-gray-300">No file open</p>
               <p className="mt-1 text-[10px] leading-relaxed text-gray-500">
-                Choose a file or point list above, or open one from the File Manager to begin editing.
+                Choose a file above, start a new .txt or .md note, or open one from the File Manager.
               </p>
+              <div className="mt-3 flex flex-wrap justify-center gap-2">
+                {onCreateFile && (
+                  <button
+                    type="button"
+                    onClick={() => setIsNewTextOpen(true)}
+                    className="inline-flex items-center gap-1.5 rounded border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.1em] text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/20"
+                  >
+                    <FilePlus2 className="h-3 w-3" />
+                    New text
+                  </button>
+                )}
+                {onImportTextFiles && (
+                  <button
+                    type="button"
+                    onClick={() => importInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 rounded border border-gray-700 bg-gray-800/40 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.1em] text-gray-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
+                  >
+                    <Upload className="h-3 w-3" />
+                    Import .txt / .md
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}

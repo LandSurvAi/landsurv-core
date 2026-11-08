@@ -25,9 +25,169 @@ import {
   buildA2UIInputFormFromNeedsInput,
   deriveA2UIInputForm,
 } from './a2uiInput.ts';
+import { CONTOUR_AGENT_QUICK_THOUGHTS } from './contourSourceIntent.ts';
 
 export const MAX_QUICK_THOUGHT_OPTIONS = 6;
 export const MAX_QUICK_THOUGHT_FIELDS = 6;
+
+/**
+ * Opening options shown in the Quick Thought card alongside an agent's first
+ * greeting. Every agent gets a set so the compact input surface is useful
+ * before the model has asked for a specific parameter.
+ */
+export const AGENT_INITIAL_QUICK_THOUGHTS: Record<AgentType, string[]> = {
+  [AgentType.RAW_CRAWLER]: [
+    'Upload a .RAW file',
+    'Load the example .RAW survey',
+    'Summarize the loaded observations',
+  ],
+  [AgentType.VOICE_AGENT]: [
+    'What can you do?',
+    'Open the command bar',
+    'Show available voice commands',
+  ],
+  [AgentType.CIVIL_DRAFTER]: [
+    'Set up Auto Draft',
+    'Set up context',
+    'Yes, upload a point or PDF file',
+  ],
+  [AgentType.DEED_READER]: [
+    'Upload or paste a deed',
+    'Show the deed text',
+    'Start a blank manual boundary',
+    'Look up a parcel in County GIS',
+  ],
+  [AgentType.CENTERLINE_STATIONING]: [
+    'Start a blank centerline',
+    'Load the 1.5-mile highway example',
+    'Upload a .CL alignment file',
+  ],
+  [AgentType.POINT_EDITOR]: [
+    'Add a point manually',
+    'Upload a point file',
+    'Open Point Tools',
+  ],
+  [AgentType.GPS_STAKEOUT]: [
+    'Stake out the closest point',
+    'Collect a new point',
+    'Open GPS Rover tools',
+  ],
+  [AgentType.FIELD_BOOK]: [
+    'Open the field book',
+    'Show recent field notes',
+    'Log a new note',
+  ],
+  [AgentType.LSVZ_AGENT]: [
+    'Where is my project?',
+    'Fetch county tax lines for my project',
+    'Fetch flood lines for my project',
+  ],
+  [AgentType.CIVIL_PLAN_EXPERT]: [
+    'Upload PDF plan sheets',
+    'Extract dimensions from the plans',
+    'Plot the storm drain network',
+  ],
+  [AgentType.DXF_ANALYZER]: [
+    'Upload a .DXF file',
+    'Inspect layers and entities',
+    'Measure total polyline length',
+  ],
+  [AgentType.FILE_MANAGER]: [
+    'Open the file manager',
+    'Show loaded project files',
+    'Add a new file',
+  ],
+  [AgentType.TEXT_EDITOR]: [
+    'Open the text editor',
+    'Create a new note',
+    'Show project text files',
+  ],
+  [AgentType.IMAGE_ANALYZER]: [
+    'Upload site photos',
+    'Describe the first image',
+    'Link an image to a point',
+  ],
+  [AgentType.GIS_AGENT]: [
+    'Upload a .geojson file',
+    'Browse the public ArcGIS catalog',
+    'Search parcels by owner',
+  ],
+  [AgentType.CONTOURING_AGENT]: [...CONTOUR_AGENT_QUICK_THOUGHTS],
+  [AgentType.STEEP_SLOPE_AGENT]: [
+    'Run 15%, 30%, 45% slope bands',
+    'Set a minimum vertical span',
+    'Open Steep Slope tools',
+  ],
+  [AgentType.PROFILE_AGENT]: [
+    'Generate a profile along a line',
+    'Create cross sections every 50 ft',
+    'Open Profile Generator',
+  ],
+  [AgentType.COGO_AGENT]: [
+    'Inverse between two points',
+    'Intersect two lines',
+    'Open COGO Tools',
+  ],
+  [AgentType.GNSS_AGENT]: [
+    'Upload a RINEX observation file',
+    'Open RINEX tools',
+    'What RINEX formats are supported?',
+  ],
+  [AgentType.DRONE_AGENT]: [
+    'Open Drone tools',
+    'What image overlap do I need?',
+    'What outputs are produced?',
+  ],
+  [AgentType.AR_AGENT]: [
+    'Show all points in AR',
+    'Which points need stakeout?',
+    'Open AR view',
+  ],
+  [AgentType.ZONING_AGENT]: [
+    'Set jurisdiction and research zoning',
+    'Look up R-1 setbacks',
+    'Open Zoning tools',
+  ],
+  [AgentType.TITLE_SEARCH]: [
+    'Upload or paste a deed',
+    'Open Title Search panel',
+    'Show the chain of title',
+  ],
+  [AgentType.CAD_MANAGER]: [
+    'Upload a CAD standards file',
+    'Open CAD Manager workspace',
+    'Show the standards spreadsheet',
+  ],
+  [AgentType.STANDARDS_COMPLIANCE]: [
+    'Upload PDFs for compliance audit',
+    'Run compliance now',
+    'Open Compliance Summary panel',
+  ],
+  [AgentType.FLOOD_AGENT]: [
+    'Fetch FEMA flood zones',
+    'Use the current inclusion boundary',
+    'Open Flood Zone tools',
+  ],
+  [AgentType.STRUCTURES_AGENT]: [
+    'Fetch FEMA structures',
+    'Rectify building footprints',
+    'Open Structures tools',
+  ],
+  [AgentType.SOILS_AGENT]: [
+    'Fetch soils for this area',
+    'Fetch the soil report',
+    'Open Soils tools',
+  ],
+  [AgentType.ROADING_AGENT]: [
+    'Synthesize an existing road',
+    'Design a new road corridor',
+    'Open Roading Studio',
+  ],
+};
+
+export function getAgentInitialQuickThoughtOptions(agent: AgentType): string[] {
+  return AGENT_INITIAL_QUICK_THOUGHTS[agent] ?? [];
+}
 
 export interface A2UIQuickThoughtCheckboxItem {
   id: string;
@@ -47,6 +207,7 @@ export type A2UIQuickThoughtKind =
   | 'settings'
   | 'hatch-studio'
   | 'workspace-tool'
+  | 'deed-summary'
   | 'cacp-surface'
   | 'large-dataset';
 
@@ -255,6 +416,15 @@ export function decomposeMessageForQuickThought(
           agent: effectiveAgent,
           datasetTooLarge: false,
           widgetType: a2ui.widgetType,
+          a2ui,
+        };
+
+      case 'deed-summary':
+        return {
+          hasActionablePrompt: true,
+          kind: 'deed-summary',
+          agent: effectiveAgent,
+          datasetTooLarge: false,
           a2ui,
         };
 

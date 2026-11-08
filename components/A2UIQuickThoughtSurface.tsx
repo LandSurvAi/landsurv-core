@@ -21,6 +21,9 @@ import {
   type GpuPowerPreference,
 } from '../utils/webgpuBasemap.ts';
 import { A2UIHostContext, WORKSPACE_TOOL_LABELS } from './A2UISurface.tsx';
+import { BoundaryDeedIntake } from './BoundaryDeedIntake.tsx';
+import { A2UIBoundarySummary } from './A2UIBoundarySummary.tsx';
+import { DockModeControl } from './DockModeControl.tsx';
 import type { A2UIQuickThoughtBreakdown } from '../services/a2uiQuickThought.ts';
 import { closeCanvasFlashInput, flashCanvasMessage, openCanvasFlashForInputForm } from '../services/canvasFlashes.ts';
 import { exampleFileContent, exampleFileName } from '../assets/example.raw.ts';
@@ -36,6 +39,7 @@ interface A2UIQuickThoughtSurfaceProps {
   onOpenConversation: () => void;
   onDock?: () => void;
   onPopOut?: () => void;
+  onChat?: () => void;
   boundaryQuickActions?: {
     onUpload: () => void;
     onAuthor: () => void;
@@ -382,6 +386,7 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
   onOpenConversation,
   onDock,
   onPopOut,
+  onChat,
   boundaryQuickActions,
 }) => {
   const host = useContext(A2UIHostContext);
@@ -398,7 +403,6 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
   const gisFileInputRef = useRef<HTMLInputElement>(null);
   const imageFileInputRef = useRef<HTMLInputElement>(null);
   const planFileInputRef = useRef<HTMLInputElement>(null);
-  const deedFileInputRef = useRef<HTMLInputElement>(null);
   const complianceSubjectInputRef = useRef<HTMLInputElement>(null);
 
   const setPointFolderInput = useCallback((el: HTMLInputElement | null) => {
@@ -871,106 +875,36 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
           </div>
         );
 
-      case 'deed-upload': {
-        const actions = boundaryQuickActions
-          ? [
-              {
-                label: 'Upload',
-                onClick: () => {
-                  onOpenConversation();
-                  boundaryQuickActions.onUpload();
-                },
-              },
-              { label: 'Author', onClick: boundaryQuickActions.onAuthor },
-              { label: 'GIS', onClick: boundaryQuickActions.onGis },
-            ]
-          : [
-              {
-                label: 'Upload',
-                onClick: () => {
-                  if (host.onDeedSubmitted) {
-                    deedFileInputRef.current?.click();
-                  } else {
-                    onOpenConversation();
-                  }
-                },
-              },
-              {
-                label: 'Author',
-                onClick: () => {
-                  if (host.onDeedStartFromScratch) host.onDeedStartFromScratch();
-                  else onSendMessage?.('Start a blank manual boundary');
-                },
-              },
-              {
-                label: 'GIS',
-                onClick: () => {
-                  if (host.onOpenBoundaryGis) host.onOpenBoundaryGis();
-                  else onSendMessage?.('Look up parcel in County GIS');
-                },
-              },
-            ];
-
+      case 'deed-upload':
         return (
-          <div className="mt-2.5 space-y-1.5">
-            <input
-              ref={deedFileInputRef}
-              type="file"
-              className="hidden"
-              accept=".txt,.md,text/plain"
-              onChange={async e => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (!file) return;
-                const content = await readFileAsText(file);
-                host.onDeedSubmitted?.({ name: file.name, content });
-              }}
+          <div className="mt-2.5">
+            <BoundaryDeedIntake
+              variant="quick"
+              onDeedSubmitted={host.onDeedSubmitted}
+              onDeedBatchSubmitted={host.onDeedBatchSubmitted}
+              onStartFromScratch={
+                host.onDeedStartFromScratch ??
+                boundaryQuickActions?.onAuthor ??
+                (() => onSendMessage?.('Start a blank manual boundary'))
+              }
+              onOpenGis={
+                host.onOpenBoundaryGis ??
+                boundaryQuickActions?.onGis ??
+                (() => onSendMessage?.('Look up parcel in County GIS'))
+              }
+              onPasteFallback={text => onSendMessage?.(`Draft this legal description:\n\n${text}`)}
+              onUploadFallback={
+                boundaryQuickActions
+                  ? () => {
+                      onOpenConversation();
+                      boundaryQuickActions.onUpload();
+                    }
+                  : onOpenConversation
+              }
+              onOpenConversation={onOpenConversation}
             />
-            <div data-testid="boundary-intake-actions" className="grid grid-cols-3 gap-1">
-              {actions.map(action => (
-                <button
-                  key={action.label}
-                  type="button"
-                  data-no-drag
-                  onClick={action.onClick}
-                  className="flex h-7 items-center justify-center rounded-md border border-white/15 bg-white/[0.03] px-1.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-white/75 transition-colors hover:border-white/30 hover:bg-white/[0.06] hover:text-white"
-                >
-                  {action.label}
-                </button>
-              ))}
-            </div>
-            {host.onDeedSubmitted && (
-              <form
-                onSubmit={e => {
-                  e.preventDefault();
-                  const trimmed = pastedDeedText.trim();
-                  if (!trimmed) return;
-                  host.onDeedSubmitted?.({ name: 'Pasted Deed', content: trimmed });
-                  setPastedDeedText('');
-                }}
-                className="flex items-center gap-1"
-              >
-                <input
-                  type="text"
-                  data-no-drag
-                  value={pastedDeedText}
-                  onChange={e => setPastedDeedText(e.target.value)}
-                  placeholder="Or paste legal description…"
-                  className={compactInputClass}
-                />
-                <button
-                  type="submit"
-                  data-no-drag
-                  disabled={!pastedDeedText.trim()}
-                  className={`${primaryBtnClass} shrink-0`}
-                >
-                  Draft
-                </button>
-              </form>
-            )}
           </div>
         );
-      }
 
       case 'dxf-upload':
         return (
@@ -1498,7 +1432,34 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
     }
   }
 
-  // 5. Selection prompt (`a2ui.kind === 'selection-prompt'`)
+  // 5. Deed summary (`a2ui.kind === 'deed-summary'`)
+  // The uploaded deed's descriptions are usable directly from Quick Thought,
+  // without opening the full agent feed.
+  if (breakdown.kind === 'deed-summary' && breakdown.a2ui) {
+    const summary = breakdown.a2ui.deedSummary ?? host.boundaryDeedSummary;
+    if (summary) {
+      return (
+        <div
+          data-testid="quick-thought-deed-summary"
+          className="mt-2.5 max-h-[min(62vh,540px)] overflow-y-auto pr-0.5"
+        >
+          <A2UIBoundarySummary
+            summary={summary}
+            files={host.boundaryDeedFiles ?? []}
+            computingTractIds={new Set(host.boundaryComputingTractIds ?? [])}
+            activeFileId={host.boundaryActiveFileId}
+            onProcessSelected={(tractIds) => host.onBoundaryProcessTracts?.(tractIds, summary)}
+            onParseFullDeed={() => host.onBoundaryParseFullDeed?.()}
+            onOpenEditor={(fileId) => host.onBoundaryOpenEditor?.(fileId)}
+            onOpenDescription={(tractId, snippet) => host.onBoundaryOpenDescription?.(tractId, snippet)}
+          />
+          <OpenChatFooter onOpenConversation={onOpenConversation} label="Open the full deed conversation" />
+        </div>
+      );
+    }
+  }
+
+  // 6. Selection prompt (`a2ui.kind === 'selection-prompt'`)
   if (breakdown.kind === 'selection-prompt') {
     const prompt = breakdown.selectionPrompt;
     const count = prompt?.pointCount;
@@ -1562,10 +1523,15 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
               Standards sheet
             </button>
           )}
-          {onPopOut && (
-            <button type="button" data-no-drag onClick={onPopOut} className={btnClass}>
-              Pop out
-            </button>
+          {(onPopOut || onDock || onChat) && (
+            <DockModeControl
+              mode="chat"
+              onChange={next => {
+                if (next === 'floating') onPopOut?.();
+                else if (next === 'toolshelf') onDock?.();
+                else onChat?.();
+              }}
+            />
           )}
         </div>
         <OpenChatFooter onOpenConversation={onOpenConversation} />
@@ -1604,18 +1570,16 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
             Permitted uses
           </button>
         </div>
-        {(onPopOut || onDock) && (
-          <div className="grid grid-cols-2 gap-1.5">
-            {onPopOut && (
-              <button type="button" data-no-drag onClick={onPopOut} className={btnClass}>
-                Pop out
-              </button>
-            )}
-            {onDock && (
-              <button type="button" data-no-drag onClick={onDock} className={btnClass}>
-                Dock
-              </button>
-            )}
+        {(onPopOut || onDock || onChat) && (
+          <div className="flex justify-end">
+            <DockModeControl
+              mode="chat"
+              onChange={next => {
+                if (next === 'floating') onPopOut?.();
+                else if (next === 'toolshelf') onDock?.();
+                else onChat?.();
+              }}
+            />
           </div>
         )}
         <OpenChatFooter onOpenConversation={onOpenConversation} />
@@ -1644,7 +1608,8 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
                   const next = e.target.checked;
                   setWebgpuEnabled(next);
                   try {
-                    localStorage.setItem(WEBGPU_ENABLED_KEY, String(next));
+                    if (next) localStorage.removeItem(WEBGPU_ENABLED_KEY);
+                    else localStorage.setItem(WEBGPU_ENABLED_KEY, 'off');
                     window.dispatchEvent(new CustomEvent(WEBGPU_PREF_EVENT));
                   } catch {
                     /* ignore */
@@ -1764,15 +1729,17 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
               Fullscreen
             </button>
           )}
-          {onPopOut && (
-            <button type="button" data-no-drag onClick={onPopOut} className={btnClass}>
-              Pop out
-            </button>
-          )}
-          {onDock && (
-            <button type="button" data-no-drag onClick={onDock} className={btnClass}>
-              Dock
-            </button>
+          {(onPopOut || onDock || onChat) && (
+            <div className="col-span-2 flex justify-end">
+              <DockModeControl
+                mode="chat"
+                onChange={next => {
+                  if (next === 'floating') onPopOut?.();
+                  else if (next === 'toolshelf') onDock?.();
+                  else onChat?.();
+                }}
+              />
+            </div>
           )}
         </div>
         <OpenChatFooter onOpenConversation={onOpenConversation} />
@@ -1938,7 +1905,7 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
         </div>
 
         {hatchSpec?.target === 'circles' && circleCount === 0 && (
-          <p className="text-[10px] leading-snug text-amber-200/80">
+          <p className="text-[10px] leading-snug text-sky-200/80">
             No circles found on this drawing — pick an area or select the objects to hatch.
           </p>
         )}
@@ -1958,15 +1925,17 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
     return (
       <div data-testid="quick-thought-workspace-tool" className="mt-2.5 space-y-1.5">
         <div className="grid grid-cols-2 gap-1.5">
-          {onPopOut && (
-            <button type="button" data-no-drag onClick={onPopOut} className={primaryBtnClass}>
-              Pop out {toolLabel}
-            </button>
-          )}
-          {onDock && (
-            <button type="button" data-no-drag onClick={onDock} className={btnClass}>
-              Dock in shelf
-            </button>
+          {(onPopOut || onDock || onChat) && (
+            <div className="col-span-2 flex justify-end">
+              <DockModeControl
+                mode="chat"
+                onChange={next => {
+                  if (next === 'floating') onPopOut?.();
+                  else if (next === 'toolshelf') onDock?.();
+                  else onChat?.();
+                }}
+              />
+            </div>
           )}
           {host.onOpenFullscreen && (
             <button
@@ -2034,15 +2003,17 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
               Fullscreen
             </button>
           )}
-          {onPopOut && (
-            <button type="button" data-no-drag onClick={onPopOut} className={btnClass}>
-              Pop out
-            </button>
-          )}
-          {onDock && (
-            <button type="button" data-no-drag onClick={onDock} className={btnClass}>
-              Dock
-            </button>
+          {(onPopOut || onDock || onChat) && (
+            <div className="col-span-2 flex justify-end">
+              <DockModeControl
+                mode="chat"
+                onChange={next => {
+                  if (next === 'floating') onPopOut?.();
+                  else if (next === 'toolshelf') onDock?.();
+                  else onChat?.();
+                }}
+              />
+            </div>
           )}
         </div>
         <OpenChatFooter onOpenConversation={onOpenConversation} />
@@ -2075,15 +2046,17 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
               CAD Workspace
             </button>
           )}
-          {onPopOut && (
-            <button type="button" data-no-drag onClick={onPopOut} className={btnClass}>
-              Pop out sheet
-            </button>
-          )}
-          {onDock && (
-            <button type="button" data-no-drag onClick={onDock} className={btnClass}>
-              Dock sheet
-            </button>
+          {(onPopOut || onDock || onChat) && (
+            <div className="col-span-2 flex justify-end">
+              <DockModeControl
+                mode="chat"
+                onChange={next => {
+                  if (next === 'floating') onPopOut?.();
+                  else if (next === 'toolshelf') onDock?.();
+                  else onChat?.();
+                }}
+              />
+            </div>
           )}
         </div>
         <button

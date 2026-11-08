@@ -19,6 +19,7 @@ import { knowledgeBase } from "./KnowledgeBase.ts";
 import { ProxyGoogleGenAI, isDemoApiKey } from "./proxyGenAI.ts";
 import { findCompetingBearingAlternatives, type ClosureBearingAlternative } from "../utils/closureAlternatives.ts";
 import { isOssBuild } from "../utils/ossMode.ts";
+import { bearingDistancePreferenceInstruction } from "./annotationPreferences.ts";
 
 /**
  * Returns true for models that are only available via the Vertex AI backend proxy
@@ -150,6 +151,14 @@ const getAi = (userApiKey?: string): GoogleGenAI => {
       // without asking the user for a key. OSS/local builds have no backend.
       if (isOssBuild()) {
         throw new Error("A Gemini API key is required. Click this warning to add your Google Gemini API key.");
+      }
+      // Local dev usually supplies its key as GEMINI_API_KEY in the root .env,
+      // which vite.config injects as process.env.API_KEY. The local backend may
+      // not have a server key configured, so use the developer's key directly
+      // instead of dead-ending every free-tier call on the demo proxy.
+      const buildTimeKey = String(process.env.API_KEY ?? '').trim();
+      if (isLocalhostRuntime() && buildTimeKey) {
+        return new GoogleGenAI({ apiKey: buildTimeKey });
       }
       return new ProxyGoogleGenAI('') as unknown as GoogleGenAI;
     }
@@ -343,7 +352,7 @@ Distinguish carefully between requests that MODIFY existing geometry in place an
 `;
 
 // FIX: Added base instruction and return statement to complete the function.
-const baseInstruction = `You are LandSurvAI, a specialized AI assistant for land surveyors and civil engineers. Your goal is to provide accurate calculations, data extraction, and visualizations based on the user's files and commands. You must strictly follow all response formatting rules. Never assume or invent missing survey/geometric parameters (coordinates, radii, lengths, bearings, angles, or intervals) — always ask concise follow-up questions using \`question\` + \`options\` or \`question\` + \`fields\` until all required parameters are known.`;
+const baseInstruction = `You are LandSurvAI, a specialized AI assistant for land surveyors and civil engineers. Your goal is to provide accurate calculations, data extraction, and visualizations based on the user's files and commands. You must strictly follow all response formatting rules. Never assume or invent missing survey/geometric parameters (coordinates, radii, lengths, bearings, angles, or intervals) — always ask concise follow-up questions using \`question\` + \`options\` or \`question\` + \`fields\` until all required parameters are known. When only one value is missing, ask with exactly one field and do not add optional fields; the app presents it in Quick Thought and as a compact Canvas Flash beside the cursor. Reserve multi-field forms for values that are all genuinely required.`;
 
 // ---------------------------------------------------------------------------
 // CACP — Cross Agent Communications Protocol
@@ -617,6 +626,34 @@ When generating DXF output, your goal is to produce linework that looks like it 
       : '';
 
     return `${baseInstruction}\n\n${agentInstruction}\n\n${peerManifest}\n\n${trainingInstruction}\n\n${draftingStyleInstruction}\n\n${contextInstruction}\n\n${uncertaintyInstruction}\n\n${layerContextInstruction}\n\n${responseFormattingInstruction}`;
+};
+
+const buildStationingPreferenceInstruction = (settings?: Settings): string => {
+    const stationing = settings?.stationing;
+    const interval = Math.max(1, Number(stationing?.pointInterval) || 100);
+    const labelInterval = Math.max(1, Number(stationing?.labelInterval) || interval);
+    const labels = stationing?.showStationLabels !== false ? 'on' : 'off';
+    const tags = stationing?.showGeometryLabels !== false ? 'on' : 'off';
+    const scale = Number(stationing?.labelScale) || 1;
+    const prefix = stationing?.showStationPrefix === false
+        ? 'none'
+        : `"${(stationing?.stationPrefix ?? 'STA').trim() || 'none'}"`;
+    const suffix = (stationing?.stationSuffix ?? '').trim() || 'none';
+    const format = stationing?.stationLabelFormat === 'decimal' ? 'decimal feet' : 'survey hundreds (1+00.00)';
+    const precision = Math.max(0, Math.min(2, Number(stationing?.stationPrecision ?? 2)));
+    const offset = Number(stationing?.labelOffsetPx ?? 8);
+    const tagParts = [
+        stationing?.showPiLabels !== false ? 'PI' : null,
+        stationing?.showPcPtLabels !== false ? 'PC/PT' : null,
+        stationing?.showEndpointLabels !== false ? 'BOP/EOP' : null,
+    ].filter(Boolean);
+    const pointDescriptions = stationing?.showStationPointLabels !== false ? 'on' : 'off';
+    return `\n\n**CURRENT STATIONING & BASELINE CONTROLS:**\n` +
+        `- Auto station points follow the canvas P/L switch (P/L and P emit; L suppresses). You do not control the switch; tell the user which mode is required.\n` +
+        `- Auto station point interval: ${interval} ft; generated CL STA point descriptions: ${pointDescriptions}.\n` +
+        `- Station labels: ${labels}, every ${labelInterval} ft; prefix: ${prefix}; suffix: ${suffix}; format: ${format}; precision: ${precision} decimal place(s); screen offset: ${offset}px; text scale: ${scale}×; background: ${stationing?.showLabelBackground !== false ? 'on' : 'off'}.\n` +
+        `- Geometry tags: ${tags}; visible tag groups: ${tagParts.length > 0 ? tagParts.join(', ') : 'none'}.\n` +
+        `- The same controls are exposed in the A2UI Stationing Controls surface, reachable from the Annotate Manager and the Stationing & CL tool panel. When you create or describe a baseline, state the current interval and that P/L controls whether auto points appear. Never claim you changed these display preferences yourself; the user controls them in Stationing Controls.`;
 };
 
 const getAgentSpecificInstruction = (agentType: AgentType, settings?: Settings): string => {
@@ -1263,7 +1300,8 @@ Common Boundary-Agent delegation patterns:
             "- If no order is given, sort by point number ascending.\n" +
             "- If the user says 'spatially' or 'along the path', sort by proximity (nearest-neighbor from the first point).\n" +
             "- Always include at least 2 points. A single point cannot form an alignment.\n\n" +
-            "Users will ask to 'calculate points from 10+50 to 12+50 every 50 feet at 25 right' or 'list the curve data for PI-2' (MODE 1), 'draw a centerline from 0,0 north 500 feet, curve right R=300 for 30 degrees, then 200 feet' (MODE 2), or 'create a centerline using the DYL points' (MODE 3).";
+            "Users will ask to 'calculate points from 10+50 to 12+50 every 50 feet at 25 right' or 'list the curve data for PI-2' (MODE 1), 'draw a centerline from 0,0 north 500 feet, curve right R=300 for 30 degrees, then 200 feet' (MODE 2), or 'create a centerline using the DYL points' (MODE 3)." +
+            buildStationingPreferenceInstruction(settings);
         case AgentType.POINT_EDITOR:
             return `You are the Point Editor agent — the canonical owner of the project's point database. You manage points (create, query, update, delete, group into lists) and answer simple coordinate-geometry questions. You will be provided the current point database as context. Users will ask things like "find all points with description TREE", "what is the inverse from 101 to 502", "delete points 12-14", or "draw a 200-ft-diameter circle at (0,0)".
 
@@ -1278,7 +1316,7 @@ When the user asks to **place / add / draw points at the corners, vertices, endp
 5. If the user says "all visible boundary lines", use every visible LINE entity in the block, not just the first one.
 6. If the block is absent while the user insists geometry is on the canvas, say you can only see the point database this turn and ask them to reselect the lines — do NOT invent coordinates.
 
-**DRAWING NEW LINEWORK IS NOT YOURS:** You own points, not geometry authoring. If the user asks you to draw brand-new lines/shapes (rather than place points on existing ones), say so and point them at the Civil Drafter workspace. Never refuse a points-at-corners request — that one is yours.
+**DRAWING NEW LINEWORK IS NOT YOURS:** You own points, not geometry authoring. The dispatcher hands new-linework requests to the Civil Drafter automatically, before they reach you. If one still arrives, do not answer it yourself and do not tell the user to switch workspaces — reply only that you are handing it to the Civil Drafter. Never refuse a points-at-corners request — that one is yours.
 
 **CACP — DELEGATE INSTEAD OF COMPUTING:**
 You are CACP-enabled. Your peer manifest is below. **You MUST delegate to peer agents whenever a task maps to one of their owned skills**, instead of doing math inline or refusing.
@@ -1378,7 +1416,7 @@ Angles in skill payloads are radians unless the schema says otherwise. Bearings 
 **SCOPE BOUNDARY:**
 Anything that depends on the active drawing's alignments, surfaces, or layer state must be delegated to the appropriate peer (Stationing for alignment-aware station/offset, CAD Manager for layer resolution, Civil 3D MCP for drawing-resident operations) — not solved by you in isolation.`;
         case AgentType.GPS_STAKEOUT:
-            return "You are the GPS Stakeout agent. You assist a user in the field. The user will provide their current GPS location with their query. Your job is to provide stakeout information (direction and distance) to a target point, or store a new point based on their location. You must perform all calculations relative to the user's provided location and the project's point database. **CRITICAL: When the user query is an acknowledgement of point storage (e.g., 'Acknowledge storage of point...'), your response MUST be a simple confirmation text. DO NOT return a JSON object in this case.**";
+            return "You are the GPS Stakeout agent. You assist a user in the field. The user will provide their current GPS location with their query. Your job is to provide stakeout information (direction and distance) to a target point, or store a new point based on their location. You must perform all calculations relative to the user's provided location and the project's point database. **QUICK FIELD INPUT:** When a collect fails because the point number is already used, ask for a replacement with exactly ONE `fields` entry (a text point number). Do not bundle an optional description into that quick prompt; keep the existing/default description unless the user asks to change it. The app surfaces the request in Quick Thought and as a compact Canvas Flash beside the cursor. Use a multi-field form only when every value is genuinely required. **CRITICAL: When the user query is an acknowledgement of point storage (e.g., 'Acknowledge storage of point...'), your response MUST be a simple confirmation text. DO NOT return a JSON object in this case.**";
         case AgentType.DRONE_AGENT:
           return "You are the Drone Agent. Help the user plan photogrammetry runs, explain staging and export behavior, and answer technical questions about orthomosaics, meshes, overlap, ground control, and temporary processing storage. Do not claim imagery has been uploaded or processed unless the host confirms it.";
         case AgentType.LSVZ_AGENT:
@@ -1618,11 +1656,24 @@ You are provided with a **SUMMARY** of the GIS features, not the full geometry. 
 - The application will then look up the full geometry and draw it for you.
 - Only use the \`points\` or \`lines\` keys if you are drawing something *new* based on your own calculations, not when retrieving existing GIS data.`;
         case AgentType.CONTOURING_AGENT:
-            return `You are the Contouring Agent. You generate topographic contours from a list of survey points. Your primary role is to understand user requests for contour generation and respond with actionable parameters.
+            return `You are the Contouring Agent. You produce topographic contours from two distinct sources: (1) the project's survey points or TIN, and (2) a public GIS service such as USGS 3DEP National Map, PASDA/PAMAP state LiDAR, or a custom ESRI REST service.
 
-**USER REQUESTS & RESPONSE HANDLING:**
+**SOURCE SELECTION — READ FIRST:**
+- If the user mentions GIS, ESRI, ArcGIS, USGS, 3DEP, National Map, PASDA, PAMAP, LiDAR, REST/MapServer/FeatureServer, "public contours", or "download contours", they want the GIS source. Do NOT emit contourParameters for these requests and never triangulate survey points for them.
+- Use the fetch_esri_rest_contours CACP skill with the matching service URL:
+  • USGS Index (nominally 50 ft): https://carto.nationalmap.gov/arcgis/rest/services/contours/MapServer/25
+  • USGS Intermediate (nominally 10 ft, default): https://carto.nationalmap.gov/arcgis/rest/services/contours/MapServer/26
+  • USGS Supplemental (nominally 5 ft): https://carto.nationalmap.gov/arcgis/rest/services/contours/MapServer/27
+  • PASDA PAMAP South PA (2 ft): https://services.pasda.psu.edu/arcgis/rest/services/PAMAP_Contours/MapServer/2
+  • PASDA PAMAP North PA (2 ft): https://services.pasda.psu.edu/arcgis/rest/services/PAMAP_Contours/MapServer/1
+- If the service is unknown, call discover_public_contour_services first.
+- Set mode to "project" when georeferenced points define the project extent, "inclusion" when an inclusion boundary exists, or "description" with descriptionText for a place name.
+- If the area of interest is missing, ask for it: project extent, inclusion boundary, or a described area. Do not guess coordinates.
+- If the user asks for "contours" without naming a source, ask one Quick Thought question: "From survey points/TIN, or from public GIS (USGS 3DEP)?" Offer those two options. Do not generate anything until they choose.
 
-When a user asks you to "generate contours" or similar, you MUST respond with a JSON object containing a \`contourParameters\` key. This tells the application to generate contours using your specified parameters.
+**POINT / TIN REQUESTS:**
+
+Only when the user wants contours from their own survey points or a TIN, respond with a JSON object containing a \`contourParameters\` key. This tells the application to generate contours using your specified parameters.
 
 **CONTOUR PARAMETER FORMAT:**
 
@@ -1685,7 +1736,7 @@ Your response:
 
 **ALTERNATIVE USES:**
 
-You can also answer questions about contours, suggest appropriate contour intervals based on terrain, and discuss contouring techniques. However, the PRIMARY function is to generate contourParameters JSON when the user requests contour generation.`;
+You can also answer questions about contours, suggest appropriate intervals, and explain the difference between survey-point and GIS contours. For GIS requests, guide the user to the ESRI REST Sources panel and the fetch_esri_rest_contours skill instead of returning contourParameters.`;
 
         case AgentType.STEEP_SLOPE_AGENT:
             return `You are the Steep Slope Agent. You analyze TIN surfaces for slope-percent bands and remove connected steep regions whose vertical span is below a user-defined threshold.
@@ -2275,6 +2326,27 @@ export const getAutoModelForAgent = (
   return AUTO_COMPLEX_AGENTS.has(agentType) ? highModel : AUTO_FAST_MODEL;
 };
 
+/**
+ * The B/D control is a next-draw instruction, not a visibility toggle. Inject
+ * the current preference into every message so an already-created chat session
+ * still honors a mode change made after the chat was built.
+ */
+const withBearingDistancePreference = (chat: Chat): Chat => new Proxy(chat, {
+  get(target, prop, receiver) {
+    if (prop === 'sendMessageStream') {
+      return (args: ChatStreamArgs) => {
+        const instruction = bearingDistancePreferenceInstruction();
+        const message = typeof args.message === 'string'
+          ? `${instruction}\n\n${args.message}`
+          : [{ text: instruction }, ...args.message];
+        return target.sendMessageStream({ ...args, message });
+      };
+    }
+    const value = Reflect.get(target, prop, receiver);
+    return typeof value === 'function' ? value.bind(target) : value;
+  },
+}) as unknown as Chat;
+
 // FIX: Renamed 'startChat' to 'startGeminiChat' to match usage in App.tsx.
 // The optional modelOverride parameter allows users to override the model per-agent from the UI.
 export const startGeminiChat = (agentType: AgentType, fileContext: string | SessionFile | SessionFile[], model: string, settings: Settings, trainingContext?: SessionFile, modelOverride?: string, cadLayerContext?: string, draftingStyleEntries?: DraftingStyleEntry[], autoHighThinkingModel: string = 'gemini-3.7-flash'): Chat => {
@@ -2302,27 +2374,29 @@ export const startGeminiChat = (agentType: AgentType, fileContext: string | Sess
         };
     }
 
-    const systemInstruction = getSystemInstruction(agentType, fileContext, settings, trainingContext, cadLayerContext, draftingStyleEntries);
+    const systemInstruction = `${getSystemInstruction(agentType, fileContext, settings, trainingContext, cadLayerContext, draftingStyleEntries)}
+
+${bearingDistancePreferenceInstruction()}`;
 
     const createNonVertexChat = (targetModel: string): Chat => {
       const ai = getAi(settings.userApiKey);
       if (agentType === AgentType.ZONING_AGENT) {
-        return ai.chats.create({
+        return withBearingDistancePreference(ai.chats.create({
           model: targetModel,
           config: {
             systemInstruction: systemInstruction,
             tools: [{ googleSearch: {} }],
             ...additionalConfig,
           }
-        });
+        }));
       }
-      return ai.chats.create({
+      return withBearingDistancePreference(ai.chats.create({
         model: targetModel,
         config: {
           systemInstruction: systemInstruction,
           ...additionalConfig,
         }
-      });
+      }));
     };
 
     // OpenAI / xAI Grok models are BYOK: the user's own provider key is used
@@ -2337,12 +2411,12 @@ export const startGeminiChat = (agentType: AgentType, fileContext: string | Sess
         if (!byokKey.trim()) {
             throw new Error(`A ${providerLabel} API key is required to use ${modelForAgent}. Add it in Settings → AI Provider Keys.`);
         }
-        return new OpenAICompatibleChat({
+        return withBearingDistancePreference(new OpenAICompatibleChat({
             provider,
             model: modelForAgent,
             apiKey: byokKey,
             systemInstruction,
-        }) as unknown as Chat;
+        }) as unknown as Chat);
     }
 
     // Claude models route through the backend /api/claude/stream proxy — unless
@@ -2351,20 +2425,20 @@ export const startGeminiChat = (agentType: AgentType, fileContext: string | Sess
     if (isClaudeModel(modelForAgent)) {
         const anthropicKey = settings.anthropicApiKey ?? getProviderApiKey('anthropic');
         if (anthropicKey?.trim()) {
-            return new AnthropicDirectChat({
+            return withBearingDistancePreference(new AnthropicDirectChat({
                 model: modelForAgent,
                 apiKey: anthropicKey,
                 systemInstruction,
-            }) as unknown as Chat;
+            }) as unknown as Chat);
         }
         // OSS/local-mode build has no backend to proxy through; BYOK is the only path.
         if (isOssBuild()) {
             throw new Error(`An Anthropic API key is required to use ${modelForAgent} in local mode. Add it in Settings → AI Provider Keys.`);
         }
-        return new ClaudeChat({
+        return withBearingDistancePreference(new ClaudeChat({
             model: modelForAgent,
             systemInstruction,
-        }) as unknown as Chat;
+        }) as unknown as Chat);
     }
 
     // Vertex-only models (Gemini 3.x preview) route through the backend proxy
@@ -2434,10 +2508,10 @@ export const startGeminiChat = (agentType: AgentType, fileContext: string | Sess
             modelForAgent,
             DIRECT_FALLBACK_MODEL,
           );
-          return wrapped as unknown as Chat;
+          return withBearingDistancePreference(wrapped as unknown as Chat);
         }
 
-        return vertexChat as unknown as Chat;
+        return withBearingDistancePreference(vertexChat as unknown as Chat);
     }
 
       return createNonVertexChat(modelForAgent);

@@ -72,17 +72,27 @@ import { normalizeCadLayerColor, normalizeCadLayerLinetype, parseCadLayerChatCom
 import CadLayerPicker from './components/CadLayerPicker.tsx';
 import { SURVEY_SYMBOL_LIBRARY } from './data/surveySymbolLibrary.ts';
 import { parsePointFile, pointListToString } from './utils/pointFile.ts';
-import { buildTinFromPoints } from './services/TinService.ts';
+import {
+  buildTinFromPoints,
+  buildTinFromContours,
+  tinSurfaceToLandXml,
+  tinSurfaceToNativeTin,
+  tinSurfaceFileBaseName,
+} from './services/TinService.ts';
+import { importTinSurfaceFromSessionFileAsync } from './services/tinImportClient.ts';
 import { runSteepSlopeAnalysis, steepSlopeRunToSurveyLines } from './services/SteepSlopeService.ts';
 import { ESRI_STATE_SERVICES } from './utils/esriStateServices.ts';
 import { readContourElevation } from './utils/esriContourAttributes.ts';
-import type { ContourFetchOptions } from './utils/usgsNationalContours.ts';
+import { nationalContourFetchOptions, type ContourFetchOptions } from './utils/usgsNationalContours.ts';
+import { detectContourSourceIntent, CONTOUR_SOURCE_OPTIONS, CONTOUR_AGENT_QUICK_THOUGHTS } from './services/contourSourceIntent.ts';
 import { runClawDirectives, parseClawDirectives } from './utils/clawClient.ts';
 import { sanitizeZoningAnswer, extractZoningJsonBlock } from './utils/zoningRender.ts';
 import { buildZoningSourceLedger } from './utils/zoningCitations.ts';
+import { buildDeedSummaryFromDescriptions, hasParsedBoundaryGeometry, type DescriptionsFoundItem } from './utils/boundaryDescriptions.ts';
 import { setBootstrapStatus } from './utils/zoningBootstrap.ts';
 import { extractStreamingPointsAndLines } from './utils/streamingJsonParser.ts';
 import { isDemoApiKey } from './services/proxyGenAI.ts';
+import { setBearingDistanceMode } from './services/annotationPreferences.ts';
 import { APP_VERSION as APP_VERSION_CONST } from './utils/appVersion.ts';
 import { buildCadManagerSessionState, createSessionZip, generateSessionFileName, toAliasRecord } from './utils/sessionZip.ts';
 import { isOssBuild } from './utils/ossMode.ts';
@@ -173,15 +183,18 @@ import LegalPage from './components/LegalPage.tsx';
 import LegalAgreementGate from './components/LegalAgreementGate.tsx';
 import { hasSignedLegalAgreement, getSignatureRecord } from './components/SignatureForm.tsx';
 import FloatingPanel from './components/FloatingPanel.tsx';
+import { DockModeControl, type DockMode } from './components/DockModeControl.tsx';
 import FloodPanel from './components/FloodPanel.tsx';
 import StructuresPanel from './components/StructuresPanel.tsx';
 import SoilsPanel from './components/SoilsPanel.tsx';
+import { buildAreaHatches, buildAreaLabels } from './services/areaHatchService.ts';
 import RoadingPanel from './components/RoadingPanel.tsx';
 import ShrinkwrapPanel from './components/ShrinkwrapPanel.tsx';
 import InclusionBoundariesPanel from './components/InclusionBoundariesPanel.tsx';
 import { ContourGenerationPanel } from './components/ContourGenerationPanel.tsx';
 import { ContourEsriPanel } from './components/ContourEsriPanel.tsx';
 import ContourManagementPanel from './components/ContourManagementPanel.tsx';
+import { A2UITinSurfaces } from './components/A2UITinSurfaces.tsx';
 import { SteepSlopePanel } from './components/SteepSlopePanel.tsx';
 import SteepSlopeReportPanel from './components/SteepSlopeReportPanel.tsx';
 import ClaudeSettingsPanel from './components/ClaudeSettingsPanel.tsx';
@@ -238,14 +251,17 @@ import {
   updatePointAnnotationOffset,
   updatePointInLists,
   updatePointLabelOffset,
+  toggleLineLabelRotation,
+  swapLineBearingDirection,
 } from './utils/geometryOperations.ts';
 import { parseClFile, calculateCenterlineLength, calculatePointFromStationOffset, formatStation, getCenterlineKeyStations } from './utils/stationing.ts';
 // FIX: Import the new `calculateClosure` function to enable robust, client-side closure calculations.
 import { parseBearingToRadians, parseDistance, inverse, direct, directCurve, calculateChordDistance, calculateClosure, formatBearing, swapBearingDirection, rotateBearing } from './utils/cogo.ts';
 // FIX: Import the new `generateProfile` function to enable client-side profile calculations.
 import { generateContours, generateProfile, generateContoursAsIsoPaths, isoPathsToSurveyLines, suppressEsriContoursInsidePolygon, buildPolygonFromSegments, pointInPolygon, getSegPairs, clipSegmentToPolygon } from './utils/contouring.ts';
+import { DEFAULT_CONTOUR_LINE_LAYERS, resolveContourLineLayersViaCacp, type ContourLineLayerAssignment } from './services/contourLayerResolver.ts';
 // FIX: Import `CustomSymbol`, `ContourSettings` and `ContourLabel` to be used with new features.
-import { type ChatMessage, MessageRole, type SurveyPoint, type SurveyLine, type CutSheetRow, type CutSheetInfo, AgentType, type SessionFile, type SessionState, type Centerline, JobInfo, Settings, PdfHighlight, type PointList, WmsService, ActiveWmsLayer, DxfExportOptions, VisualPanel, type OfflineMapArea, type ChatMessageAction, SettingsContext, AgentContext, UIContext, HighlightContext, Chat, Modality, Part, ProjectionSetting, type CustomSymbol, type AnnotationRule, type ContourSettings, type ContourLabel, type StreetLabel, type ProfilePoint, type ProfileInfo, type ClosureReport, type GisFeature, type DeedMetadata, type TitleSearchData, type BoundaryFile, type BoundaryFileCall, type AnnotationDimension, type CanvasHatch, type EsriServiceInfo, type InclusionBoundary, type DraftingStyleEntry, type ContourGeneration, type IsoPath, type ParcelLabel, type AnnotationCategoryStyle, type DeedSummary, type AppNotification, type TinSurface, type SteepSlopeBand, type SteepSlopeRunResult, DEFAULT_ANNOTATION_CATEGORIES, type ParcelLabelFormatter, type ParcelCadTextStyle, DEFAULT_PARCEL_LABEL_FORMATTER, type StandardsComplianceCheckSelection, type StandardsComplianceReport, type ComplianceSourceMode, type SessionSaveOptions } from './types.ts';
+import { type ChatMessage, MessageRole, type SurveyPoint, type SurveyLine, type CutSheetRow, type CutSheetInfo, AgentType, type SessionFile, type SessionState, type Centerline, JobInfo, Settings, PdfHighlight, type PointList, WmsService, ActiveWmsLayer, DxfExportOptions, VisualPanel, type OfflineMapArea, type ChatMessageAction, SettingsContext, AgentContext, UIContext, HighlightContext, Chat, Modality, Part, ProjectionSetting, type CustomSymbol, type AnnotationRule, type ContourSettings, type ContourLabel, type StreetLabel, type ProfilePoint, type ProfileInfo, type ClosureReport, type GisFeature, type DeedMetadata, type TitleSearchData, type BoundaryFile, type BoundaryFileCall, type AnnotationDimension, type CanvasHatch, type EsriServiceInfo, type InclusionBoundary, type DraftingStyleEntry, type ContourGeneration, type IsoPath, type ParcelLabel, type MapAreaFeature, type MapAreaLabel, type SoilMapUnit, type AnnotationCategoryStyle, type DeedSummary, type AppNotification, type TinSurface, type SteepSlopeBand, type SteepSlopeRunResult, DEFAULT_ANNOTATION_CATEGORIES, type ParcelLabelFormatter, type ParcelCadTextStyle, DEFAULT_PARCEL_LABEL_FORMATTER, type StandardsComplianceCheckSelection, type StandardsComplianceReport, type ComplianceSourceMode, type SessionSaveOptions } from './types.ts';
 import { DEFAULT_PARCEL_CAD_TEXT_STYLES } from './utils/parcelLabelFormatter.ts';
 // FIX: Corrected import of startGeminiChat. Renamed import 'startChat' to 'startGeminiChat' to match export.
 import { startGeminiChat, selectContextSources, getModelForAgent, getAutoModelForAgent, summarizeDeed, investigateDeedClosure, isClaudeModel, isOpenAIModel, isGrokModel, extractZoningDistrictsFromMap, runVisualStandardsComplianceAudit, processAndCorrectCoordinates, AUTO_FAST_MODEL, type DeedClosureReview, type DeedClosureHypothesis } from './services/geminiService.ts';
@@ -260,6 +276,7 @@ import { useGeoSkills } from './services/geoSkillHandlers.ts';
 import { useClSkills } from './services/clSkillHandlers.ts';
 import { useStationingSkills } from './services/stationingSkillHandlers.ts';
 import { useDomainSkillHandlers } from './services/domainSkillHandlers.ts';
+import { useDeedSkillHandlers } from './services/deedSkillHandlers.ts';
 import { knowledgeBase, extractDeedMetadataFacts, extractRowFactsFromLines, extractZoningFacts } from './services/KnowledgeBase.ts';
 import { LsvzPersistence } from './services/LsvzPersistence.ts';
 import { lsvzOrchestrator } from './services/LsvzOrchestrator.ts';
@@ -274,6 +291,7 @@ import {
 } from './services/a2uiIntake.ts';
 import { buildA2UIInputFormFromNeedsInput, deriveA2UIInputForm } from './services/a2uiInput.ts';
 import {
+  canMirrorInputFormAsFlash,
   closeCanvasFlashInput,
   flashCanvasMessage,
   openCanvasFlashForInputForm,
@@ -285,13 +303,27 @@ import {
 } from './services/a2uiQuickThought.ts';
 import { A2UISurface, A2UIHostContext, WORKSPACE_TOOL_LABELS, type A2UIHostContextValue } from './components/A2UISurface.tsx';
 import { A2UISurfaceHost } from './components/A2UISurfaceHost.tsx';
+import { A2UIClosureInvestigation } from './components/A2UIClosureInvestigation.tsx';
+import { A2UIStationingControls } from './components/A2UIStationingControls.tsx';
+import { A2UISpreadsheet } from './components/A2UISpreadsheet.tsx';
 import { A2UIPublicSurfaceLayer } from './components/A2UIPublicSurfaceLayer.tsx';
 import { A2UICacpReview } from './components/A2UICacpReview.tsx';
 import { A2UICacpManifestExplorer } from './components/A2UICacpManifestExplorer.tsx';
-import { openA2UISurface } from './services/a2uiSurfaces.ts';
+import { closeA2UISurface, openA2UISurface } from './services/a2uiSurfaces.ts';
 import { buildCacpReviewContext, isNotableCacpEntry, retryCacpReviewItem, startCacpSurfaceBridge } from './services/cacpSurfaceBridge.ts';
 import { resolveA2UISurfaceIntent } from './services/a2uiSurfaceIntent.ts';
-import type { A2UICacpReviewContext, A2UIPayload, A2UIWorkspaceToolId } from './types.ts';
+import { buildPointListSurfaceData, createBlankSpreadsheetSpec } from './utils/a2uiSpreadsheet.ts';
+import { wgs84ToProjected } from './utils/projectLocation.ts';
+import { buildProjectLocationClusters, clusterSetSignature, describeProjectLocationClusters } from './utils/projectClusters.ts';
+import { projectionSettingForEpsg, recommendProjectionForClusters } from './utils/projectionRecommendation.ts';
+import { detectProjectionFromBrowser } from './utils/autoProjection.ts';
+import { detectProjectLocationIntent, projectLocationIntentLabel, type ProjectLocationIntentKind } from './services/projectLocationIntent.ts';
+import { detectProjectionIntent } from './services/projectionIntent.ts';
+import { resolveProjectClusterLocations, recordProjectLocationFacts } from './services/projectLocationService.ts';
+import type { ProjectLocationAction } from './components/LsaiProjectLocationPanel.tsx';
+import { decodePlusCode } from './utils/plusCode.ts';
+import { isAddPointCommand, parsePointLocation } from './utils/pointLocationInput.ts';
+import type { A2UICacpReviewContext, A2UIGpsRoverSnapshot, A2UIPayload, A2UISpreadsheetSpec, A2UIWorkspaceToolId, CountyGisStatus, CountyParcelAttempt, ProjectLocationCluster, ProjectLocationClusterSet } from './types.ts';
 import { exampleHighwayCl } from './assets/example.highway.cl.ts';
 import { CacpBadge } from './components/CacpBadge.tsx';
 import { hashKey } from './utils/hashKey';
@@ -338,6 +370,7 @@ import { useDesktopEffect } from './hooks/useDesktopEffect.ts';
 import { useVerticalPanelResize } from './hooks/useVerticalPanelResize.ts';
 import { useChatPanelResize } from './hooks/useChatPanelResize.ts';
 import { useGeolocation } from './hooks/useGeolocation.ts';
+import { useGpsRoverMapScope } from './hooks/useGpsRoverMapScope.ts';
 import { useInitialLoader } from './hooks/useInitialLoader.ts';
 import { useSubdomainRouting } from './hooks/useSubdomainRouting.ts';
 import { useUsageTimer } from './hooks/useUsageTimer.ts';
@@ -357,6 +390,7 @@ import {
   agentThemeColors, 
   agentGradientClasses,
   agentIcons,
+  agentPrimaryToolKey,
   addDataButtonLabels,
   hexToRgb,
   getAgentThemeColor 
@@ -366,8 +400,8 @@ import {
 import { DEFAULT_SETTINGS, COMPATIBLE_VERSIONS, isVersionCompatible } from './utils/sessionDefaults.ts';
 import { mergeSettingsWithDefaults, migrateMessage } from './utils/sessionMigration.ts';
 // FIX: Added ProfileIcon to the imports for the new Profile Agent.
-import { HomeIcon, SheetViewIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, FloodIcon, StructuresIcon, SoilsIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, CogIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon, CogoIcon } from './components/icons.tsx';
-import { ToolbarStandardsIcon, ToolbarSurfaceIcon, ToolbarLayersIcon } from './components/toolbarIcons.tsx';
+import { HomeIcon, SheetViewIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, FloodIcon, StructuresIcon, SoilsIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, CogIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon, CogoIcon, CivilDrafterIcon } from './components/icons.tsx';
+import { ToolbarSurfaceIcon, ToolbarLayersIcon } from './components/toolbarIcons.tsx';
 import { suggestedQuestionsText } from './assets/suggested_questions.ts';
 import { userSuggestedQuestionsText } from './assets/user_suggested_questions.ts';
 import { deedSuggestedQuestionsText } from './assets/deed_suggested_questions.ts';
@@ -384,6 +418,7 @@ import ClosureReportPanel from './components/ClosureReportPanel.tsx';
 import LegalWriterPanel from './components/LegalWriterPanel.tsx';
 import LayerManagerPanel, { type CadLayerEntry } from './components/LayerManagerPanel.tsx';
 import BoundaryEditor from './components/BoundaryEditor.tsx';
+import BoundaryAlignmentDialog from './components/BoundaryAlignmentDialog.tsx';
 import StandardsComplianceSummaryPanel from './components/StandardsComplianceSummaryPanel.tsx';
 
 
@@ -488,9 +523,26 @@ const getDynamicLsvzContext = (sessionState: Partial<Omit<SessionState, 'version
     return getLightweightLsvzManifest(sessionState);
 };
 
+function uniqueTextFileName(name: string, taken: Set<string>): string {
+    const fallback = name.trim() || 'Untitled.md';
+    if (!taken.has(fallback.toLowerCase())) return fallback;
+    const dot = fallback.lastIndexOf('.');
+    const base = dot > 0 ? fallback.slice(0, dot) : fallback;
+    const extension = dot > 0 ? fallback.slice(dot) : '';
+    let index = 2;
+    let candidate = `${base} (${index})${extension}`;
+    while (taken.has(candidate.toLowerCase())) {
+        index += 1;
+        candidate = `${base} (${index})${extension}`;
+    }
+    return candidate;
+}
+
 const A2UI_DOCK_TITLES: Record<string, string> = {
+    'point-entry': 'Add Point',
     'point-upload': 'Point Upload',
     'deed-upload': 'Deed Upload',
+    'deed-summary': 'Deed Summary',
     'raw-upload': 'RAW Upload',
     'civil-drafter-upload': 'Civil Drafter Upload',
     'plan-upload': 'Plan Upload',
@@ -508,12 +560,16 @@ const A2UI_DOCK_TITLES: Record<string, string> = {
     'zoning-sources': 'Zoning Sources',
     'input-form': 'Input Form',
     'settings': 'Project Settings',
+    'text-editor': 'Text Editor',
+    'spreadsheet': 'Spreadsheet',
     'cacp-manifests': 'CACP Manifests',
     'cacp-review': 'CACP Traffic Review',
+    'closure-investigation': 'Closure Investigation',
     'symbol-manager': 'Symbol Manager',
     'linetype-manager': 'Linetype Manager',
     'hatch-manager': 'Hatch Manager',
     'annotate-manager': 'Annotate Manager',
+    'stationing-controls': 'Stationing Controls',
     'drafting-style-library': 'Drafting Style Library',
     'layer-manager': 'Data Visibility & Layers',
     'compliance-summary': 'Standards Compliance Audit',
@@ -529,6 +585,8 @@ const A2UI_DOCK_TITLES: Record<string, string> = {
     'roading-intake': 'Roading Intake',
     'roading-designer': 'Roading Designer',
     'roading-panel': 'Roading Studio',
+    'gps-rover': 'GPS Rover',
+    'project-location': 'Project Location',
 };
 
 
@@ -627,6 +685,8 @@ interface DrawingCanvasHandles {
   zoomToBbox: (minE: number, maxE: number, minN: number, maxN: number, padding?: number) => void;
   redraw: () => void;
   finishDrawing: () => void;
+  toggleDrawingToolsMenu: () => void;
+  startPointPlacement: (options: { pointNumber?: string; elevation?: string; description?: string }) => void;
   cancelDeleteMode: () => void;
   confirmDelete: () => void;
   getTransform: () => { scale: number; offsetX: number; offsetY: number };
@@ -824,6 +884,30 @@ const numberToAlpha = (num: number): string => {
 // Hardened: guards against empty/invalid blobs and defers URL revocation so the browser has time to
 // start streaming the download. Revoking synchronously after click() can cancel the download and is a
 // common cause of "save file not working / nothing downloads".
+const bytesToBase64 = (bytes: Uint8Array): string => {
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+};
+
+/** Read a browser File into a SessionFile, preserving binary .tin bytes as base64. */
+const readSessionFileFromBrowserFile = async (file: File): Promise<SessionFile> => {
+    const buffer = new Uint8Array(await file.arrayBuffer());
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(buffer);
+    const looksBinary = text.includes('\u0000') || text.includes('\uFFFD');
+    if (!looksBinary) return { name: file.name, content: text };
+    return { name: file.name, content: '', fileData: bytesToBase64(buffer) };
+};
+
+/** Unique File Manager/download name for a surface export. */
+const uniqueTinExportName = (tin: TinSurface, format: 'landxml' | 'native'): string => {
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    return `${tinSurfaceFileBaseName(tin)}_${stamp}.${format === 'native' ? 'tin' : 'xml'}`;
+};
+
 const triggerDownload = (blob: Blob, fileName: string) => {
     if (!blob || !(blob instanceof Blob)) {
         throw new Error('Download failed: no data was produced.');
@@ -1238,6 +1322,8 @@ const AppContent = () => {
   const [floatingA2UIKey, setFloatingA2UIKey] = useState<string | null>(null);
   const [dockedA2UIFallback, setDockedA2UIFallback] = useState<ChatMessage | null>(null);
   const [floatingA2UIFallback, setFloatingA2UIFallback] = useState<ChatMessage | null>(null);
+  /** Surfaces launched outside the conversation still use the same chat/float/dock card. */
+  const [standaloneA2UIMessage, setStandaloneA2UIMessage] = useState<ChatMessage | null>(null);
   const [isSpreadsheetEditorOpen, setIsSpreadsheetEditorOpen] = useState<boolean>(false);
   const [agentChatOpenSignal, setAgentChatOpenSignal] = useState(0);
   
@@ -1334,6 +1420,12 @@ const AppContent = () => {
   const [isFloodPanelVisible, setIsFloodPanelVisible] = useState(false);
   const [isFetchingFlood, setIsFetchingFlood] = useState(false);
   const [lastFloodResult, setLastFloodResult] = useState<{ zoneCounts: Record<string, number>; featureCount: number } | null>(null);
+  // Optional BFE linework summary from the last fetch.
+  const [lastFloodBfe, setLastFloodBfe] = useState<{ count: number; datum: string | null; error?: string } | null>(null);
+  // Flood Agent → Sheet View notes handoff (id makes consumption idempotent).
+  const [pendingSheetNotes, setPendingSheetNotes] = useState<{ id: string; text: string } | null>(null);
+  // Closed FEMA polygons kept for live hatch + annotation rebuilding.
+  const [lastFloodAreas, setLastFloodAreas] = useState<MapAreaFeature[]>([]);
   // FIRMETTE (v26.05.19.1) � cached FEMA NFHL map image stored in session.
   const [floodFirmetteData, setFloodFirmetteData] = useState<{ url: string; bbox: string; fetchedAt: string; imageDataUrl?: string } | null>(null);
   const [isFetchingFirmette, setIsFetchingFirmette] = useState(false);
@@ -1360,6 +1452,8 @@ const AppContent = () => {
   const [isFetchingSoilReport, setIsFetchingSoilReport] = useState(false);
   const [lastSoilsResult, setLastSoilsResult] = useState<import('./services/soilsService.ts').SoilsFetchResult | null>(null);
   const [soilMapUnits, setSoilMapUnits] = useState<SoilMapUnit[]>([]);
+  // Closed SSURGO polygons kept for live hatch + annotation rebuilding.
+  const [lastSoilAreas, setLastSoilAreas] = useState<MapAreaFeature[]>([]);
   const [soilReportData, setSoilReportData] = useState<Record<string, { hydgrpdcd?: string; drclassdcd?: string; taxclname?: string; farmlndcl?: string }> | null>(null);
 
   const DEFAULT_STANDARDS_CHECKS: StandardsComplianceCheckSelection = {
@@ -1393,6 +1487,12 @@ const AppContent = () => {
 
   // PARCEL LABELS (v26.05.19.15) � GIS parcel centroid annotations with N/F owner.
   const [parcelLabels, setParcelLabels] = useState<ParcelLabel[]>([]);
+  // FEMA flood-zone / SSURGO soil-map-unit centroid annotations.
+  const [areaLabels, setAreaLabels] = useState<MapAreaLabel[]>([]);
+  // One-shot guards so loading a saved session keeps its hatches (including
+  // manual per-hatch edits) instead of immediately rebuilding from areas.
+  const skipFloodAreaRebuildRef = useRef(false);
+  const skipSoilAreaRebuildRef = useRef(false);
 
   // ANNOTATION CATEGORIES (v26.05.19.15) � per-category style overrides.
   const [annotationCategories, setAnnotationCategories] = useState<AnnotationCategoryStyle[]>(DEFAULT_ANNOTATION_CATEGORIES);
@@ -1525,71 +1625,107 @@ const AppContent = () => {
   // undoable even though the points and lines it produces are.
   useHistorySlice('boundaryFiles', boundaryFiles, setBoundaryFiles);
   const [isBoundaryEditorVisible, setIsBoundaryEditorVisible] = useState(false);
-  /** Whether the Boundary Dialog is docked inside the Boundary Agent chat or floating over the canvas. Defaults to true (docked). */
-  const [isBoundaryDialogDocked, setIsBoundaryDialogDocked] = useState<boolean>(true);
+  /** Tri-state placement for the Boundary Dialog. Defaults to the tool shelf. */
+  const [boundaryDockMode, setBoundaryDockMode] = useState<DockMode>('toolshelf');
+  /** The last panel requested from the shelf toolbar (Deed/GIS), applied as a tab selection. */
+  const [toolShelfTabRequest, setToolShelfTabRequest] = useState<{ tabId: string; token: number } | null>(null);
+  const requestToolShelfTab = useCallback((tabId: string) => {
+    setToolShelfTabRequest(prev => ({ tabId, token: (prev?.token ?? 0) + 1 }));
+  }, []);
+  const isBoundaryDialogDocked = boundaryDockMode === 'toolshelf';
+  const setIsBoundaryDialogDocked = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
+    setBoundaryDockMode(prevMode => {
+      const prevDocked = prevMode === 'toolshelf';
+      const target = typeof next === 'function' ? next(prevDocked) : next;
+      return target ? 'toolshelf' : 'floating';
+    });
+  }, []);
   /** Whether the Boundary Dialog is minimized when docked in chat. Defaults to false (visible by default). */
   const [isBoundaryDialogMinimized, setIsBoundaryDialogMinimized] = useState<boolean>(false);
-  /** Unified docking state for all agent-specific tool dialogs. Defaults to docked (true). */
-  const [dockedTools, setDockedTools] = useState<Record<string, boolean>>({
-    cogo: true,
-    shrinkwrap: true,
-    inclusion: true,
-    stationing: true,
-    pointEditor: true,
-    contourGen: true,
-    contourEsri: true,
-    contourMgmt: true,
-    steepSlope: true,
-    profileGen: true,
-    autoDraft: true,
-    flood: true,
-    structures: true,
-    soils: true,
-    roading: true,
-    gpsStakeout: true,
-    gpsCollect: true,
-    gnss: true,
-    drone: true,
+  /** Unified tri-state docking state for agent tool dialogs. Defaults to the tool shelf. */
+  const [toolDockModes, setToolDockModes] = useState<Record<string, DockMode>>({
+    cogo: 'toolshelf',
+    shrinkwrap: 'toolshelf',
+    inclusion: 'toolshelf',
+    stationing: 'toolshelf',
+    pointEditor: 'toolshelf',
+    contourGen: 'toolshelf',
+    contourEsri: 'toolshelf',
+    contourMgmt: 'toolshelf',
+    steepSlope: 'toolshelf',
+    profileGen: 'toolshelf',
+    autoDraft: 'toolshelf',
+    flood: 'toolshelf',
+    structures: 'toolshelf',
+    soils: 'toolshelf',
+    roading: 'toolshelf',
+    gpsStakeout: 'toolshelf',
+    gnss: 'toolshelf',
+    drone: 'toolshelf',
   });
+  const getToolDockMode = useCallback(
+    (key: string): DockMode => toolDockModes[key] ?? 'toolshelf',
+    [toolDockModes],
+  );
+  const dockedTools = useMemo(() => {
+    const next: Record<string, boolean> = {};
+    for (const key of Object.keys(toolDockModes)) next[key] = toolDockModes[key] === 'toolshelf';
+    return next;
+  }, [toolDockModes]);
+  const setToolDockMode = useCallback((key: string, mode: DockMode) => {
+    setToolDockModes(prev => ({ ...prev, [key]: mode }));
+    if (mode === 'toolshelf') setIsToolShelfVisible(true);
+    if (mode === 'chat') setAgentChatOpenSignal(n => n + 1);
+  }, [setIsToolShelfVisible]);
   const toggleToolDock = useCallback((key: string, nextDocked?: boolean) => {
-    setDockedTools(prev => {
-      const target = nextDocked ?? !prev[key];
-      if (target) {
-        setIsToolShelfVisible(true);
-      }
-      return { ...prev, [key]: target };
-    });
+    const current = toolDockModes[key] ?? 'toolshelf';
+    const target: DockMode = nextDocked === undefined
+      ? (current === 'toolshelf' ? 'floating' : 'toolshelf')
+      : (nextDocked ? 'toolshelf' : 'floating');
+    setToolDockModes(prev => ({ ...prev, [key]: target }));
+    if (target === 'toolshelf') setIsToolShelfVisible(true);
+  }, [setIsToolShelfVisible, toolDockModes]);
+  const handleSetA2UIDockMode = useCallback((message: ChatMessage, mode: DockMode) => {
+    const payload = message.a2ui;
+    if (!payload) return;
+    const key = `${payload.agent}:${payload.widgetType}`;
+    if (mode === 'chat') {
+      setDockedA2UIKey(null);
+      setFloatingA2UIKey(null);
+      setDockedA2UIFallback(null);
+      setFloatingA2UIFallback(null);
+      setAgentChatOpenSignal(n => n + 1);
+      return;
+    }
+    if (mode === 'floating') {
+      setFloatingA2UIKey(key);
+      setFloatingA2UIFallback(message);
+      setDockedA2UIKey(current => (current === key ? null : current));
+      setDockedA2UIFallback(current =>
+        current?.a2ui && `${current.a2ui.agent}:${current.a2ui.widgetType}` === key ? null : current
+      );
+      return;
+    }
+    setDockedA2UIKey(key);
+    setDockedA2UIFallback(message);
+    setFloatingA2UIKey(current => (current === key ? null : current));
+    setFloatingA2UIFallback(current =>
+      current?.a2ui && `${current.a2ui.agent}:${current.a2ui.widgetType}` === key ? null : current
+    );
+    setIsToolShelfVisible(true);
   }, [setIsToolShelfVisible]);
   const handleToggleA2UIDock = useCallback((message: ChatMessage) => {
     const payload = message.a2ui;
     if (!payload) return;
     const key = `${payload.agent}:${payload.widgetType}`;
-    const willDock = dockedA2UIKey !== key;
-    setDockedA2UIKey(willDock ? key : null);
-    setDockedA2UIFallback(willDock ? message : null);
-    if (willDock) {
-      setFloatingA2UIKey(current => (current === key ? null : current));
-      setFloatingA2UIFallback(current =>
-        current?.a2ui && `${current.a2ui.agent}:${current.a2ui.widgetType}` === key ? null : current
-      );
-      setIsToolShelfVisible(true);
-    }
-  }, [dockedA2UIKey, setIsToolShelfVisible]);
+    handleSetA2UIDockMode(message, dockedA2UIKey === key ? 'floating' : 'toolshelf');
+  }, [dockedA2UIKey, handleSetA2UIDockMode]);
   const handleToggleA2UIFloat = useCallback((message: ChatMessage) => {
     const payload = message.a2ui;
     if (!payload) return;
     const key = `${payload.agent}:${payload.widgetType}`;
-    const willFloat = floatingA2UIKey !== key;
-    setFloatingA2UIKey(willFloat ? key : null);
-    setFloatingA2UIFallback(willFloat ? message : null);
-    if (willFloat) {
-      setDockedA2UIKey(current => (current === key ? null : current));
-      setDockedA2UIFallback(current =>
-        current?.a2ui && `${current.a2ui.agent}:${current.a2ui.widgetType}` === key ? null : current
-      );
-      setAgentChatOpenSignal(n => n + 1);
-    }
-  }, [floatingA2UIKey]);
+    handleSetA2UIDockMode(message, floatingA2UIKey === key ? 'chat' : 'floating');
+  }, [floatingA2UIKey, handleSetA2UIDockMode]);
   const handleReturnA2UIToChat = useCallback(() => {
     setDockedA2UIKey(null);
     setFloatingA2UIKey(null);
@@ -1612,13 +1748,14 @@ const AppContent = () => {
    *  from BoundaryEditor and only meaningful when the active file has a
    *  non-zero rotationDeg. */
   const [showRotatedBearings, setShowRotatedBearings] = useState<boolean>(false);
-  /** IDs of boundary files in the most-recently-ingested deed batch � shown in the DeedSummaryPanel. */
-  const [deedSummaryFileIds, setDeedSummaryFileIds] = useState<string[]>([]);
   /** Lightweight document-level summary produced immediately after deed upload
    *  by the cheap `summarizeDeed()` pass. Drives the "Pending Tracts" list in
    *  the DeedSummaryPanel � each entry gets a per-tract Compute Preview button
    *  that triggers the heavy DEED_READER parse on demand. */
   const [deedSummary, setDeedSummary] = useState<DeedSummary | null>(null);
+  /** Increments on every deed submission. A slow summary from an earlier
+   *  upload must never replace the summary for the newly loaded deed. */
+  const deedSummaryRequestRef = useRef(0);
   /** Set of summary `tractId`s whose DEED_READER parse is currently in flight,
    *  so the panel can disable the button + show a spinner. */
   const [computingTractIds, setComputingTractIds] = useState<Set<string>>(new Set());
@@ -1626,10 +1763,44 @@ const AppContent = () => {
    *  resulting BoundaryFile(s) with `sourceTractId` so the summary panel can
    *  mark that row as ? computed. Cleared after the next BF batch arrives. */
   const pendingTractIdRef = useRef<string | null>(null);
+  /** Ordered tract ids for a multi-description compute; stamped onto the
+   *  resulting BoundaryFiles so the chat summary stays linked row-for-row. */
+  const pendingTractIdsRef = useRef<string[]>([]);
   /** Optional POB the user typed in for the pending tract being computed.
    *  Stamped onto the resulting BoundaryFile as `pobOverride` so the amber
    *  preview anchors where the user wants (instead of (0,0)). */
   const pendingTractPobRef = useRef<{ easting: number; northing: number } | null>(null);
+
+  /** Publish/refresh the chat-hosted deed summary surface. The message carries
+   *  a summary snapshot for session reload; live tract/file status comes from
+   *  the A2UI host context so the card stays linked to the traverse pipeline. */
+  const publishBoundarySummaryToChat = useCallback((summary: DeedSummary | null) => {
+    setDeedChatHistory(prev => {
+      const existingIndex = prev.findIndex(msg => msg.a2ui?.kind === 'deed-summary');
+      if (!summary) {
+        return existingIndex >= 0 ? prev.filter((_, index) => index !== existingIndex) : prev;
+      }
+      const message: import('./types.ts').ChatMessage = {
+        role: MessageRole.MODEL,
+        text: `Deed summary ready — ${summary.tracts.length} description${summary.tracts.length === 1 ? '' : 's'} detected. Choose which ones to process below.`,
+        quickThoughtLabel: 'Deed summary',
+        quickThoughtText: `${summary.tracts.length} description${summary.tracts.length === 1 ? '' : 's'} detected in ${summary.fileName}. Review and process them when you're ready.`,
+        a2ui: {
+          kind: 'deed-summary',
+          agent: AgentType.DEED_READER,
+          widgetType: 'deed-summary',
+          status: 'expanded',
+          deedSummary: summary,
+        },
+      };
+      if (existingIndex >= 0) {
+        const next = [...prev];
+        next[existingIndex] = message;
+        return next;
+      }
+      return [...prev, message];
+    });
+  }, [setDeedChatHistory]);
 
   // Legal Writer panel state � populated when "Write Legal" is pressed on a
   // boundary file; cleared when user navigates away. The panel itself owns
@@ -1655,10 +1826,15 @@ const AppContent = () => {
     humanReview?: DeedClosureReview;
     reviewError?: string;
   } | null>(null);
+  /** Closure investigation follows the same float/chat/toolshelf contract as the other agent panels. */
+  const [closureDockMode, setClosureDockMode] = useState<DockMode>('floating');
 
   const [isBoundaryEditorButtonPulsing, setIsBoundaryEditorButtonPulsing] = useState(false);
   /** Nudges the user to the Boundary Editor's first action after choosing the manual route. */
   const [isAddCallRowPulsing, setIsAddCallRowPulsing] = useState(false);
+  /** Alignment/POB tools are a separate dialog so the traverse panel stays focused. */
+  const [isBoundaryAlignmentOpen, setIsBoundaryAlignmentOpen] = useState(false);
+  const [boundaryAlignmentDockMode, setBoundaryAlignmentDockMode] = useState<'floating' | 'toolshelf'>('floating');
 
   // Floating Data Visibility panel (canvas toolbar Layers button)
   const [dataVisibilityPos, setDataVisibilityPos] = useState<{ x: number; y: number } | null>(null);
@@ -1783,7 +1959,15 @@ const AppContent = () => {
   const [lastFetchedParcels, setLastFetchedParcels] = useState<import('./services/parcelGisService.ts').ParcelFeatureSummary[]>([]);
   const [lastParcelEnrichment, setLastParcelEnrichment] = useState<import('./services/parcelGisService.ts').ParcelEnrichmentSummary | null>(null);
   const [isParcelPanelVisible, setIsParcelPanelVisible] = useState(false);
-  const [isParcelPanelDocked, setIsParcelPanelDocked] = useState(true);
+  const [parcelDockMode, setParcelDockMode] = useState<DockMode>('toolshelf');
+  const isParcelPanelDocked = parcelDockMode === 'toolshelf';
+  const setIsParcelPanelDocked = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
+    setParcelDockMode(prevMode => {
+      const prevDocked = prevMode === 'toolshelf';
+      const target = typeof next === 'function' ? next(prevDocked) : next;
+      return target ? 'toolshelf' : 'floating';
+    });
+  }, []);
   const [isParcelPanelMinimized, setIsParcelPanelMinimized] = useState(false);
   const [activeBoundaryDockedTab, setActiveBoundaryDockedTab] = useState<'dialog' | 'gis'>('dialog');
 
@@ -1882,12 +2066,16 @@ const AppContent = () => {
     setAgentDrawMode(prev => prev === 'both' ? 'points' : prev === 'points' ? 'lines' : 'both');
   }, []);
 
-  // Annotation mode: controls what is shown on line labels and boundary overlay labels.
-  // Lifted from DrawingCanvas so the toggle button can live in the app header.
+  // Next-draw annotation preference for the AI and CAD exporters. It never
+  // hides existing labels; changing it only affects geometry drawn afterward.
   const [agentAnnotMode, setAgentAnnotMode] = useState<'both' | 'bearing' | 'distance'>('both');
   const cycleAgentAnnotMode = useCallback(() => {
     setAgentAnnotMode(prev => prev === 'both' ? 'bearing' : prev === 'bearing' ? 'distance' : 'both');
   }, []);
+
+  useEffect(() => {
+    setBearingDistanceMode(agentAnnotMode);
+  }, [agentAnnotMode]);
 
   // -- Built-in survey symbol visibility (opt-in, request-scoped) -----------
   // Built-in library symbols (tree, manhole, hydrant, �) default to OFF. They
@@ -2014,9 +2202,10 @@ const AppContent = () => {
   const [autoOpenDeedUpload, setAutoOpenDeedUpload] = useState(false);
   // Triggered by the "Stakeout" / "Collect" CTAs on the GPS Rover home card \u2014 forwarded to the panel as `initialTab`.
   const [gpsInitialTab, setGpsInitialTab] = useState<'stakeout' | 'collect' | 'benchmark' | undefined>(undefined);
+  // Bumped whenever a surface asks the already-mounted Rover dialog to switch tabs.
+  const [gpsPanelRequestId, setGpsPanelRequestId] = useState(0);
   // GPS Rover independent floating panels (v26.05.19.1) � persistent across agent context changes like Point List.
-  const [isGpsStakeoutFloatingVisible, setIsGpsStakeoutFloatingVisible] = useState(false);
-  const [isGpsCollectFloatingVisible, setIsGpsCollectFloatingVisible] = useState(false);
+  const [isGpsRoverPanelVisible, setIsGpsRoverPanelVisible] = useState(false);
   const [contourAutoOpenGis, setContourAutoOpenGis] = useState<boolean>(false);
   // Floating Contour dialogs (v26.05.17.33) � replace the in-chat ContourChat with two draggable panels.
   const [isContourGenPanelVisible, setIsContourGenPanelVisible] = useState<boolean>(false);
@@ -2027,6 +2216,11 @@ const AppContent = () => {
   const [isSteepSlopePanelMinimized, setIsSteepSlopePanelMinimized] = useState<boolean>(false);
   const [tinSurfaces, setTinSurfaces] = useState<TinSurface[]>([]);
   const [isAutoDraftTinHidden, setIsAutoDraftTinHidden] = useState<boolean>(false);
+  const [isImportingTin, setIsImportingTin] = useState(false);
+  const [tinImportProgress, setTinImportProgress] = useState(0);
+  const [tinImportStatus, setTinImportStatus] = useState<string | null>(null);
+  const [creatingTinGenerationId, setCreatingTinGenerationId] = useState<string | null>(null);
+  const [recentlyCreatedTinGenerationId, setRecentlyCreatedTinGenerationId] = useState<string | null>(null);
   // Multi-generation contour objects (v26.05.19.3) � each ContourGeneration stores
   // IsoPaths (mathematical representation) + settings for auto-regen and blend.
   const [contourGenerations, setContourGenerations] = useState<ContourGeneration[]>([]);
@@ -2037,6 +2231,7 @@ const AppContent = () => {
   // CIVIL_DRAFTER message in handleSendMessage as Gemini Vision inlineData parts.
   const pendingAutoDraftImagesRef = useRef<AutoDraftImage[]>([]);
   const contourGenerationsRef = useRef<ContourGeneration[]>([]);
+  const contourLineLayersRef = useRef<ContourLineLayerAssignment | null>(null);
   useEffect(() => { linesRef.current = lines; }, [lines]);
   useEffect(() => { contourGenerationsRef.current = contourGenerations; }, [contourGenerations]);
   // Claude 4.7 Vertex AI settings panel.
@@ -2105,10 +2300,15 @@ const AppContent = () => {
   // Auto-regenerate all ContourGenerations when survey points change (v26.05.19.3).
   // Uses refs to avoid circular deps � only triggered by point set changes.
   useEffect(() => {
-    const currentGens = contourGenerationsRef.current;
-    if (currentGens.length === 0 || points.length < 3) return;
-    const currentLines = linesRef.current;
-    const nonContourLines = currentLines.filter(l => !l.contourGenId);
+    let cancelled = false;
+    void (async () => {
+      const contourLayers = contourLineLayersRef.current ?? await resolveContourLineLayersViaCacp();
+      if (cancelled) return;
+      contourLineLayersRef.current = contourLayers;
+      const currentGens = contourGenerationsRef.current;
+      if (currentGens.length === 0 || points.length < 3) return;
+      const currentLines = linesRef.current;
+      const nonContourLines = currentLines.filter(l => !l.contourGenId);
     const updatedGens: ContourGeneration[] = [];
     const newContourLines: SurveyLine[] = [];
     const newLabels: ContourLabel[] = [];
@@ -2155,16 +2355,17 @@ const AppContent = () => {
         };
         updatedGens.push(updatedGen);
         if (gen.visible) {
-          newContourLines.push(...isoPathsToSurveyLines(isoPaths, gen.id));
+          newContourLines.push(...isoPathsToSurveyLines(isoPaths, gen.id, contourLayers));
           newLabels.push(...labels);
         }
       } catch {
         updatedGens.push(gen);
       }
     }
-    setContourGenerations(updatedGens);
-    setLines([...nonContourLines, ...newContourLines]);
-    setContourLabels(newLabels);
+      setContourGenerations(updatedGens);
+      setLines([...nonContourLines, ...newContourLines]);
+      setContourLabels(newLabels);
+    })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points]); // intentionally only triggered by point changes
 
@@ -2233,7 +2434,6 @@ const AppContent = () => {
   const [showC3DDebugDialog, setShowC3DDebugDialog] = useState(false);
   const [showModelConfigPopup, setShowModelConfigPopup] = useState(false);
   const [showGemini3Panel, setShowGemini3Panel] = useState(false);
-  const [showCivilDrafterContextPanel, setShowCivilDrafterContextPanel] = useState(false);
   const [c3dSessionToken, setC3dSessionToken] = useState<string | null>(null);
   const [hasConfirmedApiKey, setHasConfirmedApiKey] = useState(false);
   const [demoKeyInfo, setDemoKeyInfo] = useState<{
@@ -2592,6 +2792,17 @@ const AppContent = () => {
       setActiveAgent(next);
     }
   }, [settings.forceAgent, setActiveAgent, setInitializedAgents]);
+
+  // ── CACP agent focus ──────────────────────────────────────────────────────
+  // CACP owns the delegation stack for visible agent hand-offs. When an agent
+  // brings a peer in, the peer becomes the active workspace while it works; the
+  // requesting agent becomes active again when results/control return.
+  useEffect(() => {
+    return interAgentComm.onAgentFocusChange(focus => {
+      setInitializedAgents(prev => (prev.has(focus.agent) ? prev : new Set(prev).add(focus.agent)));
+      setActiveAgent(focus.agent);
+    });
+  }, [setActiveAgent, setInitializedAgents]);
 
   // Load C3D session token from localStorage on app startup
   useEffect(() => {
@@ -3235,10 +3446,103 @@ const AppContent = () => {
       return null;
     }
   }, [currentPosition, settings.projection.epsg]);
+
+  // Project location belongs to the LSAI Agent. Uploaded points are split into
+  // spatially distinct clusters; each cluster gets its own footprint, state,
+  // county, and municipality. The same set is published over CACP
+  // (lsvz_project_locations) and in the Project Knowledge Base so every agent
+  // answers "where is this project?" the same way.
+  const projectLocationClusters = useMemo(
+    () => buildProjectLocationClusters({
+      points,
+      lines: visibleLines,
+      centerlines: visibleCenterlines,
+      epsg: settings.projection.epsg,
+      marginProjected: 200,
+    }),
+    [points, visibleLines, visibleCenterlines, settings.projection.epsg]
+  );
+  const projectLocationSignature = useMemo(
+    () => clusterSetSignature(projectLocationClusters),
+    [projectLocationClusters]
+  );
+  const [resolvedProjectLocations, setResolvedProjectLocations] = useState<{
+    signature: string;
+    set: ProjectLocationClusterSet;
+  } | null>(null);
+  const [isResolvingProjectLocation, setIsResolvingProjectLocation] = useState(false);
+  const [projectLocationError, setProjectLocationError] = useState<string | null>(null);
+  const [projectLocationBusy, setProjectLocationBusy] = useState<{
+    clusterId: string;
+    action: ProjectLocationAction;
+  } | null>(null);
+  const [countyGisStatus, setCountyGisStatus] = useState<CountyGisStatus | null>(null);
+  const projectLocationResolveToken = useRef(0);
+
+  const displayedProjectLocationSet = useMemo(
+    () => resolvedProjectLocations?.signature === projectLocationSignature
+      ? resolvedProjectLocations.set
+      : projectLocationClusters,
+    [projectLocationClusters, projectLocationSignature, resolvedProjectLocations]
+  );
+
+  const ensureProjectClusterLocations = useCallback(async (
+    options: { force?: boolean } = {}
+  ): Promise<ProjectLocationClusterSet> => {
+    if (!options.force && resolvedProjectLocations?.signature === projectLocationSignature) {
+      return resolvedProjectLocations.set;
+    }
+    const token = ++projectLocationResolveToken.current;
+    setIsResolvingProjectLocation(true);
+    setProjectLocationError(null);
+    try {
+      const resolved = await resolveProjectClusterLocations(projectLocationClusters, {
+        force: options.force,
+      });
+      if (projectLocationResolveToken.current === token) {
+        setResolvedProjectLocations({ signature: clusterSetSignature(resolved), set: resolved });
+        recordProjectLocationFacts(resolved);
+      }
+      return resolved;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (projectLocationResolveToken.current === token) setProjectLocationError(message);
+      return projectLocationClusters;
+    } finally {
+      if (projectLocationResolveToken.current === token) setIsResolvingProjectLocation(false);
+    }
+  }, [projectLocationClusters, projectLocationSignature, resolvedProjectLocations]);
+
+  // Center the canvas once on the first projected fix after entering GPS Rover.
+  // This makes the map snap to the operator even before any point is stored, and
+  // stops following as soon as the user pans or frames the project.
+  const gpsCenteredOnFixRef = useRef(false);
+  useEffect(() => {
+    if (activeAgent !== AgentType.GPS_STAKEOUT || !isGpsRoverPanelVisible) {
+      gpsCenteredOnFixRef.current = false;
+      return;
+    }
+    if (gpsCenteredOnFixRef.current || !projectedPosition) return;
+    gpsCenteredOnFixRef.current = true;
+    setZoomTarget({
+      pointNumber: 'GPS-ROVER-FIX',
+      northing: projectedPosition.northing,
+      easting: projectedPosition.easting,
+      description: 'Current GPS position',
+    });
+  }, [activeAgent, isGpsRoverPanelVisible, projectedPosition, setZoomTarget]);
+
+  // GPS Rover is the only workspace that turns map imagery on automatically.
+  // Leaving restores the previous map state unless the user changed it.
+  useGpsRoverMapScope({
+    activeAgent,
+    googleMaps: settings.googleMaps,
+    setSettings,
+  });
   
   // REFACTORING: Use custom hook for geolocation tracking (Phase 2)
   // Only enable geolocation when GPS Stakeout agent is active to avoid requesting permission on page load
-  useGeolocation(setCurrentPosition, setGeolocationError, activeAgent === AgentType.GPS_STAKEOUT || isGpsStakeoutFloatingVisible || isGpsCollectFloatingVisible);
+  useGeolocation(setCurrentPosition, setGeolocationError, activeAgent === AgentType.GPS_STAKEOUT || isGpsRoverPanelVisible);
 
   // REFACTORING: Use custom hook for initial loader removal (Phase 2)
   // Skip loader removal for XML sitemap pages to ensure clean crawlability
@@ -3524,7 +3828,7 @@ const AppContent = () => {
       const label = WORKSPACE_TOOL_LABELS[mappedTool.tool] ?? 'Workspace Tool';
       const toolMsg: ChatMessage = {
         role: MessageRole.MODEL,
-        text: `Opened <strong>${label}</strong> as an A2UI surface. You can use it floating over the canvas, dock it into the Agent Tool Shelf, expand it fullscreen, or return it to chat.`,
+        text: `Opened <strong>${label}</strong> as an interactive surface. You can use it floating over the canvas, dock it into the Agent Tool Shelf, expand it fullscreen, or return it to chat.`,
         a2ui: {
           kind: 'workspace-tool',
           agent: mappedTool.agent,
@@ -3552,18 +3856,39 @@ const AppContent = () => {
   ]);
 
   const showView = useCallback((viewToShow: VisualPanel) => {
+      // GPS Rover is a field view: keep the real drawing canvas (and its live
+      // blue position dot) visible, then dock the rover controls beside it
+      // instead of replacing the canvas with the panel.
+      const targetView: VisualPanel = viewToShow === 'gpsstakeout' ? 'canvas' : viewToShow;
+
       // Push current state to history before changing view
-      if (isSessionActive && !isInitialScreen && viewToShow !== activeVisualPanel) {
+      if (isSessionActive && !isInitialScreen && targetView !== activeVisualPanel) {
         pushNavigation(activeAgent, activeVisualPanel);
       }
       
-      setActiveVisualPanel(viewToShow);
+      setActiveVisualPanel(targetView);
       if (isInitialScreen) {
         setIsInitialScreen(false);
       }
       
       if (viewToShow === 'gpsstakeout') {
         setActiveAgent(AgentType.GPS_STAKEOUT);
+        // Map imagery is auto-enabled by useGpsRoverMapScope and restored
+        // when the rover is left.
+        setIsGpsRoverPanelVisible(true);
+        setIsToolShelfVisible(true);
+        toggleToolDock('gpsStakeout', true);
+        // Frame the rover on the live fix so the blue position dot is on
+        // screen, not lost in space.
+        const roverCenter = gpsProjectedPositionRef.current;
+        if (roverCenter) {
+          setZoomTarget({
+            pointNumber: 'GPS-ROVER-VIEW',
+            northing: roverCenter.northing,
+            easting: roverCenter.easting,
+            description: 'GPS Rover view',
+          });
+        }
       } else if (viewToShow === 'imageanalyzer') {
         setActiveAgent(AgentType.IMAGE_ANALYZER);
       } else if (viewToShow === 'profile') {
@@ -3592,7 +3917,7 @@ const AppContent = () => {
 
       if (isPdfViewerFullscreen) setIsPdfViewerFullscreen(false);
       if(!isDesktop) setIsMobileMenuOpen(false);
-  }, [isDesktop, isPdfViewerFullscreen, activeAgent, isSessionActive, isInitialScreen, activeVisualPanel, pushNavigation, cadStandardsLoaded, setInitializedAgents]);
+  }, [isDesktop, isPdfViewerFullscreen, activeAgent, isSessionActive, isInitialScreen, activeVisualPanel, pushNavigation, cadStandardsLoaded, setInitializedAgents, toggleToolDock, setZoomTarget]);
   
   // REFACTORING NOTE: handleFabPointerDown moved to useFabDrag hook (Phase 2)
   // OLD: const handleFabPointerDown = useCallback((e: React.MouseEvent | React.TouchEvent) => { ... }, []);
@@ -3698,8 +4023,19 @@ const AppContent = () => {
     setBoundaryFiles([]);
     setIsBoundaryEditorVisible(false);
     setIsBoundaryEditorButtonPulsing(false);
+    setIsBoundaryAlignmentOpen(false);
+    setBoundaryAlignmentDockMode('floating');
+    deedSummaryRequestRef.current += 1;
+    setDeedSummary(null);
+    setComputingTractIds(new Set());
+    pendingTractIdRef.current = null;
+    pendingTractIdsRef.current = [];
+    pendingTractPobRef.current = null;
     setDimensions([]);
     setHatches([]);
+    setAreaLabels([]);
+    setLastFloodAreas([]);
+    setLastSoilAreas([]);
     setTinSurfaces([]);
     setDraftingStyleLibrary([]);
     setCanvasTransform(null);
@@ -4196,11 +4532,28 @@ const AppContent = () => {
    */
   const applyDeedSubmission = useCallback(async (file: SessionFile) => {
     try {
-      // Clear empty Manual Boundary placeholder so the real deed geometry takes center stage
-      setBoundaryFiles(prev => prev.filter(f => f.name !== 'Manual Boundary' || f.calls.some(c => Boolean(c.bearing && c.distance))));
+      const summaryRequestId = ++deedSummaryRequestRef.current;
+      const previousDeedName = deedFile && deedFile.content && deedFile.name !== 'Manual Entry'
+        ? (deedSummary?.fileName ?? deedFile.name)
+        : undefined;
+      // Clear empty Manual Boundary placeholder so the real deed geometry takes center stage.
+      // Legacy boundary files did not record their source deed; pin them to the
+      // outgoing deed before the new summary arrives so repeated tract ids such
+      // as "Main Parcel" cannot claim the new deed's rows.
+      setBoundaryFiles(prev => prev
+        .filter(f => f.name !== 'Manual Boundary' || f.calls.some(c => Boolean(c.bearing && c.distance)))
+        .map(f => previousDeedName && !f.sourceDeedName
+          ? { ...f, sourceDeedName: previousDeedName }
+          : f));
 
       if (deedFile && deedFile.content && deedFile.name !== 'Manual Entry') {
-            setGeneratedFiles(prev => [...prev, { ...deedFile, name: `(Archived) ${deedFile.name}` }]);
+            const alreadyArchived = deedFile.name.startsWith('(Archived) ');
+            const archivedName = alreadyArchived
+              ? deedFile.name
+              : `(Archived) ${deedFile.name}`;
+            setGeneratedFiles(prev => alreadyArchived && prev.some(f => f.name === archivedName)
+              ? prev
+              : [...prev, { ...deedFile, name: archivedName }]);
             logActionToFieldbook(`Replaced Deed Text with: ${file.name}`);
             try {
               const newChat = startChatWithOverride(AgentType.DEED_READER, file);
@@ -4219,39 +4572,35 @@ const AppContent = () => {
                 }
             ]);
             setIsAddingData(false);
-            setIsBoundaryEditorVisible(true);
+            // The deed summary lives in chat; keep the traverse panel closed until
+            // this upload produces bearing/distance calls.
+            setIsBoundaryEditorVisible(false);
             setIsBoundaryEditorButtonPulsing(false);
+            setIsBoundaryAlignmentOpen(false);
             // Re-run deed summarizer for the replacement file.
-            setDeedSummaryFileIds(['__pending__']);
             setDeedSummary(null);
+            publishBoundarySummaryToChat(null);
             setComputingTractIds(new Set());
             pendingTractIdRef.current = null;
+            pendingTractIdsRef.current = [];
             pendingTractPobRef.current = null;
             void (async () => {
               try {
                 const summary = await summarizeDeed(file, CURRENT_GEMINI_MODEL, settings.userApiKey);
+                if (deedSummaryRequestRef.current !== summaryRequestId) return;
                 setDeedSummary(summary);
+                publishBoundarySummaryToChat(summary);
                 if (summary.tracts.length > 0) {
                   logActionToFieldbook(`Deed summary: detected ${summary.tracts.length} description(s) — ${summary.tracts.map(t => t.tractId).join(', ')}.`);
                 }
-                // When a deed only has one description, auto-extract the boundary calls immediately
-                if (summary.tracts.length <= 1) {
-                  const singleTract = summary.tracts[0];
-                  const tractId = singleTract?.tractId || 'Main Parcel';
-                  pendingTractIdRef.current = tractId;
-                  setComputingTractIds(new Set([tractId]));
-                  const pageHint = singleTract?.sourcePage != null ? ` (source page ${singleTract.sourcePage})` : '';
-                  const nameHint = singleTract?.tractName ? ` ("${singleTract.tractName}")` : '';
-                  logActionToFieldbook(`Single deed description detected (${tractId}) — automatically computing boundary geometry...`);
-                  void handleSendMessageRef.current?.(
-                    `Extract ONLY ${tractId}${nameHint}${pageHint} from this deed. ` +
-                    `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${tractId}", points, lines }]) for this tract only.`,
-                    AgentType.DEED_READER
-                  );
-                }
+                // Summary-first: never auto-extract, even for a single
+                // description. The A2UI deed summary card stays in chat and the
+                // user chooses when to compute calls.
               } catch (err) {
+                if (deedSummaryRequestRef.current !== summaryRequestId) return;
                 console.warn('[handleDeedSubmitted/replace] summarizeDeed threw:', err);
-                void handleSendMessageRef.current?.('Extract all boundary descriptions from this deed.', AgentType.DEED_READER);
+                logActionToFieldbook('Deed summary failed; no extraction was started. Use Parse Deed when ready.');
+                setError('Could not summarize the deed automatically. Use Parse Deed in the Boundary panel to continue.');
               }
             })();
             return;
@@ -4286,45 +4635,36 @@ const AppContent = () => {
       setInitializedAgents(prev => new Set(prev).add(AgentType.DEED_READER));
       showView('canvas');
 
-      // Show the unified Boundary & Deed Dialog immediately
-      setIsBoundaryEditorVisible(true);
+      // The summary lands in chat; the traverse panel opens only after the
+      // selected descriptions produce bearing/distance calls.
+      setIsBoundaryEditorVisible(false);
       setIsBoundaryEditorButtonPulsing(false);
-      if (isBoundaryDialogDocked) {
-        setActiveBoundaryDockedTab('dialog');
-        setIsToolShelfVisible(true);
-      }
+      setIsBoundaryAlignmentOpen(false);
 
-      // Populate summary and auto-compute if single-description deed
-      setDeedSummaryFileIds(['__pending__']);
+      // Populate the chat summary. Extraction is always user-initiated, even
+      // when the deed contains only one description.
       setDeedSummary(null);
+      publishBoundarySummaryToChat(null);
       setComputingTractIds(new Set());
       pendingTractIdRef.current = null;
+      pendingTractIdsRef.current = [];
       pendingTractPobRef.current = null;
       void (async () => {
         try {
           const summary = await summarizeDeed(file, CURRENT_GEMINI_MODEL, settings.userApiKey);
+          if (deedSummaryRequestRef.current !== summaryRequestId) return;
           setDeedSummary(summary);
+          publishBoundarySummaryToChat(summary);
           if (summary.tracts.length > 0) {
             logActionToFieldbook(`Deed summary: detected ${summary.tracts.length} description(s) — ${summary.tracts.map(t => t.tractId).join(', ')}.`);
           }
-          // When a deed only has one description, auto-extract the boundary calls immediately
-          if (summary.tracts.length <= 1) {
-            const singleTract = summary.tracts[0];
-            const tractId = singleTract?.tractId || 'Main Parcel';
-            pendingTractIdRef.current = tractId;
-            setComputingTractIds(new Set([tractId]));
-            const pageHint = singleTract?.sourcePage != null ? ` (source page ${singleTract.sourcePage})` : '';
-            const nameHint = singleTract?.tractName ? ` ("${singleTract.tractName}")` : '';
-            logActionToFieldbook(`Single deed description detected (${tractId}) — automatically computing boundary geometry...`);
-            void handleSendMessageRef.current?.(
-              `Extract ONLY ${tractId}${nameHint}${pageHint} from this deed. ` +
-              `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${tractId}", points, lines }]) for this tract only.`,
-              AgentType.DEED_READER
-            );
-          }
+          // Summary-first: leave the deed summary card in chat and wait for
+          // the user to process the description (no auto-extraction).
         } catch (err) {
+          if (deedSummaryRequestRef.current !== summaryRequestId) return;
           console.warn('[handleDeedSubmitted] summarizeDeed threw:', err);
-          void handleSendMessageRef.current?.('Extract all boundary descriptions from this deed.', AgentType.DEED_READER);
+          logActionToFieldbook('Deed summary failed; no extraction was started. Use Parse Deed when ready.');
+          setError('Could not summarize the deed automatically. Use Parse Deed in the Boundary panel to continue.');
         }
       })();
     } catch (err) {
@@ -4348,13 +4688,14 @@ const AppContent = () => {
   /** Upgrade pitch shown from the deed screens once the 5 free deeds are spent. */
   /** Jump from the deed upload screen to the Boundary Agent GIS parcel panel. */
   const handleOpenParcelGisFromUpload = useCallback(() => {
+    requestToolShelfTab('boundary-gis');
     setActiveBoundaryDockedTab('gis');
     setIsParcelPanelVisible(true);
     setIsParcelPanelDocked(true);
     setIsParcelPanelMinimized(false);
     setIsToolShelfVisible(true);
     showView('canvas');
-  }, [showView, setIsToolShelfVisible]);
+  }, [showView, setIsToolShelfVisible, requestToolShelfTab]);
 
   const openDeedUpgradeDialog = useCallback(() => {
     const limit = deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT;
@@ -4738,11 +5079,12 @@ const AppContent = () => {
    */
   const handleBoundaryAuthorFromQuickThought = useCallback(() => {
     handleDeedStartFromScratch();
+    requestToolShelfTab('boundary-deed');
     setIsBoundaryDialogDocked(true);
     setIsBoundaryDialogMinimized(false);
     setActiveBoundaryDockedTab('dialog');
     setIsToolShelfVisible(true);
-  }, [handleDeedStartFromScratch]);
+  }, [handleDeedStartFromScratch, requestToolShelfTab]);
 
   const handlePlansSubmitted = useCallback((files: SessionFile[]) => {
     try {
@@ -5623,6 +5965,43 @@ const AppContent = () => {
     const padLat = (lat1 - lat0) * 0.05 || 0.001;
     return [lon0 - padLon, lat0 - padLat, lon1 + padLon, lat1 + padLat];
   }, [lines, points, inclusionBoundaries, settings.projection?.epsg]);
+
+  /** Active inclusion boundary exposed as an alternate query area. */
+  const inclusionAreaInfo = useMemo(() => {
+    const active = inclusionBoundaries.find(
+      boundary => boundary.id === activeInclusionBoundaryId,
+    );
+    const ordered = active
+      ? [active, ...inclusionBoundaries.filter(boundary => boundary.id !== active.id)]
+      : inclusionBoundaries;
+    for (const boundary of ordered) {
+      const bboxWgs84 = getInclusionBboxWgs84(boundary.id);
+      if (!bboxWgs84) continue;
+      return {
+        id: boundary.id,
+        name: boundary.name,
+        segmentCount: lines.filter(
+          (line: SurveyLine) => line.type === 'inclusion' && line.polylineId === boundary.polylineId,
+        ).length,
+        bboxWgs84,
+      };
+    }
+    // A polygon drawn with the inclusion tool does not have to be saved as a
+    // named boundary; still offer it as a query area.
+    const rawSegments = lines.filter((line: SurveyLine) => line.type === 'inclusion').length;
+    if (rawSegments > 0) {
+      const bboxWgs84 = getInclusionBboxWgs84(null);
+      if (bboxWgs84) {
+        return {
+          id: 'inclusion-area',
+          name: 'Inclusion area',
+          segmentCount: rawSegments,
+          bboxWgs84,
+        };
+      }
+    }
+    return null;
+  }, [activeInclusionBoundaryId, getInclusionBboxWgs84, inclusionBoundaries, lines]);
 
   const handleImagesSubmitted = useCallback((files: SessionFile[]) => {
     try {
@@ -6569,11 +6948,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 text: buildAgentWelcome(
                   AgentType.CONTOURING_AGENT,
                   hasPoints
-                    ? `Tell me the contour interval you would like and I will generate and label the lines.`
+                    ? `I can contour your survey points/TIN, or fetch public GIS contours (USGS 3DEP or a state service). Which source would you like?`
                     : `Welcome to the drawing canvas! Would you like to upload survey points first so I can generate contours, or pull contours from a public ESRI/GIS service?`
                 ),
-                ...(!hasPoints
+                ...(hasPoints
                   ? {
+                      questionOptions: [...CONTOUR_SOURCE_OPTIONS],
+                    }
+                  : {
                       questionOptions: ['Yes, upload points', 'Continue without uploading'],
                       a2ui: {
                         kind: 'intake-prompt' as const,
@@ -6581,14 +6963,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         widgetType: 'point-upload' as const,
                         status: 'prompting' as const,
                       },
-                    }
-                  : {}),
+                    }),
             }]);
-            setSuggestedQuestions([
-                "Generate contours at a 1-foot interval.",
-                "Create 5-foot contours using only points with 'GROUND' in the description.",
-                "What is the highest and lowest elevation in the project?",
-            ]);
+            setSuggestedQuestions([...CONTOUR_AGENT_QUICK_THOUGHTS]);
             setError(null);
             setInitializedAgents(prev => new Set(prev).add(AgentType.CONTOURING_AGENT));
         }
@@ -6969,6 +7346,24 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     getSetHistoryForAgent,
   ]);
 
+  // First access to an agent: open the tool shelf on its primary workspace
+  // tool. Tabs already docked by other agents stay available.
+  const autoOpenedAgentToolRef = useRef<Set<AgentType>>(new Set());
+  useEffect(() => {
+    if (isInitialScreen || !activeAgent) return;
+    if (autoOpenedAgentToolRef.current.has(activeAgent)) return;
+    const primaryToolKey = agentPrimaryToolKey[activeAgent];
+    if (!primaryToolKey) return;
+    autoOpenedAgentToolRef.current.add(activeAgent);
+    // Civil Drafter opens with an actionable Quick Thought. Auto Draft and the
+    // tool shelf stay closed until the user asks for them.
+    if (activeAgent === AgentType.CIVIL_DRAFTER) return;
+    setIsToolShelfVisible(true);
+    setToolDockModes(prev =>
+      prev[primaryToolKey] === 'toolshelf' ? prev : { ...prev, [primaryToolKey]: 'toolshelf' }
+    );
+  }, [activeAgent, isInitialScreen]);
+
   // When "Add Data" / "Upload ..." is clicked in the chat header or compliance summary,
   // append the A2UI upload widget directly into the active agent's chat feed on the canvas.
   useEffect(() => {
@@ -7115,13 +7510,21 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     if (activeAgent === AgentType.CONTOURING_AGENT && !isInitialScreen) {
       setIsContourGenPanelVisible(true);
       setIsContourGenMinimized(false);
+      // With no survey points, surface the public GIS sources immediately
+      // instead of making the user hunt for the ESRI panel.
+      if (points.length === 0) {
+        setIsContourEsriPanelVisible(true);
+        setIsContourEsriMinimized(false);
+        setIsToolShelfVisible(true);
+        setToolDockMode('contourEsri', 'toolshelf');
+      }
     } else {
       setIsContourGenPanelVisible(false);
       setIsContourEsriPanelVisible(false);
       setIsContourGenMinimized(false);
       setIsContourEsriMinimized(false);
     }
-  }, [activeAgent, isInitialScreen]);
+  }, [activeAgent, isInitialScreen, points.length, setToolDockMode]);
 
   // Steep Slope Agent: auto-show slope tools panel while active.
   useEffect(() => {
@@ -7940,11 +8343,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const gpsPointsRef = useRef<SurveyPoint[]>(points);
   const gpsSettingsRef = useRef<Settings>(settings);
   const gpsTargetRef = useRef<string>(stakeoutTargetPointNumber);
+  const gpsLinesRef = useRef<SurveyLine[]>(visibleLines);
+  const gpsCenterlinesRef = useRef<Centerline[]>(visibleCenterlines);
+  const gpsNextPointRef = useRef<string>(nextAvailablePointNumber);
   useEffect(() => { gpsCurrentPositionRef.current = currentPosition; }, [currentPosition]);
   useEffect(() => { gpsProjectedPositionRef.current = projectedPosition; }, [projectedPosition]);
   useEffect(() => { gpsPointsRef.current = points; }, [points]);
   useEffect(() => { gpsSettingsRef.current = settings; }, [settings]);
   useEffect(() => { gpsTargetRef.current = stakeoutTargetPointNumber; }, [stakeoutTargetPointNumber]);
+  useEffect(() => { gpsLinesRef.current = visibleLines; }, [visibleLines]);
+  useEffect(() => { gpsCenterlinesRef.current = visibleCenterlines; }, [visibleCenterlines]);
+  useEffect(() => { gpsNextPointRef.current = nextAvailablePointNumber; }, [nextAvailablePointNumber]);
   const setStakeoutTargetPointNumberRef = useRef(setStakeoutTargetPointNumber);
   useEffect(() => { setStakeoutTargetPointNumberRef.current = setStakeoutTargetPointNumber; }, [setStakeoutTargetPointNumber]);
 
@@ -8053,8 +8462,152 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
     });
 
-    return () => { unsubPos(); unsubGetTarget(); unsubSetTarget(); unsubList(); unsubReq(); };
-  }, [pointLists, nextAvailablePointNumber]);
+    const unsubGuidance = interAgentComm.onCommand('gps_get_stakeout_guidance', async (message) => {
+      try {
+        const payload = (message.data ?? {}) as { pointNumber?: string };
+        const requested = String(payload.pointNumber ?? gpsTargetRef.current ?? '').trim();
+        const target = requested
+          ? gpsPointsRef.current.find(p => p.pointNumber === requested)
+          : undefined;
+        const fix = gpsCurrentPositionRef.current;
+        const projected = gpsProjectedPositionRef.current;
+        if (!target) {
+          return respond(message, true, {
+            hasFix: Boolean(fix),
+            targetPointNumber: requested,
+            guidance: null,
+            message: requested ? `Point ${requested} was not found.` : 'No stakeout target is set.',
+          });
+        }
+        if (!projected) {
+          return respond(message, true, {
+            hasFix: false,
+            targetPointNumber: target.pointNumber,
+            description: target.description ?? '',
+            guidance: null,
+            message: 'No projected rover fix yet.',
+          });
+        }
+        const deltaNorth = target.northing - projected.northing;
+        const deltaEast = target.easting - projected.easting;
+        const roverElevation = fix?.coords.altitude != null
+          ? fix.coords.altitude * 3.280839895013123
+          : null;
+        return respond(message, true, {
+          hasFix: true,
+          targetPointNumber: target.pointNumber,
+          description: target.description ?? '',
+          bearingDeg: (Math.atan2(deltaEast, deltaNorth) * 180 / Math.PI + 360) % 360,
+          distanceFt: Math.hypot(deltaNorth, deltaEast),
+          deltaNorthFt: deltaNorth,
+          deltaEastFt: deltaEast,
+          cutFillFt: target.elevation != null && roverElevation != null
+            ? target.elevation - roverElevation
+            : null,
+          epsg: gpsSettingsRef.current.projection.epsg ?? null,
+        });
+      } catch (e) {
+        return respond(message, false, undefined, e instanceof Error ? e.message : String(e));
+      }
+    });
+
+    const unsubCollect = interAgentComm.onCommand('gps_collect_point', async (message) => {
+      try {
+        const payload = (message.data ?? {}) as { pointNumber?: string; description?: string };
+        const fix = gpsCurrentPositionRef.current;
+        const activeSettings = gpsSettingsRef.current;
+        if (!fix) {
+          return respond(message, false, undefined, 'No GPS fix is available yet.');
+        }
+        if (!activeSettings.projection.epsg) {
+          return respond(message, false, undefined, 'Select a State Plane / EPSG projection first.');
+        }
+        let pointNumber = String(payload.pointNumber ?? '').trim();
+        if (!pointNumber) {
+          try {
+            const peer = await interAgentComm.askPeer(
+              AgentType.POINT_EDITOR,
+              'request_next_point_number',
+              { count: 1 },
+              { timeoutMs: 3000 }
+            );
+            const numbers = peer?.success && Array.isArray((peer.data as { numbers?: unknown[] } | undefined)?.numbers)
+              ? (peer.data as { numbers: string[] }).numbers
+              : [];
+            pointNumber = String(numbers[0] ?? gpsNextPointRef.current ?? '').trim();
+          } catch {
+            pointNumber = String(gpsNextPointRef.current ?? '').trim();
+          }
+        }
+        if (!pointNumber) {
+          return respond(message, false, undefined, 'Could not determine a point number.');
+        }
+        if (gpsPointsRef.current.some(p => p.pointNumber === pointNumber)) {
+          return respond(message, false, undefined, `Point ${pointNumber} already exists.`);
+        }
+        const projected = wgs84ToProjected(
+          fix.coords.latitude,
+          fix.coords.longitude,
+          activeSettings.projection.epsg
+        );
+        if (!projected) {
+          return respond(message, false, undefined, 'The GPS fix could not be projected into the project coordinate system.');
+        }
+        const point: SurveyPoint = {
+          pointNumber,
+          northing: projected.northing,
+          easting: projected.easting,
+          elevation: fix.coords.altitude ?? 0,
+          description: String(payload.description ?? '').trim() || 'GPS',
+        };
+        setPointLists(prev => {
+          const index = prev.findIndex(list => list.id === 'working');
+          if (index === -1) {
+            return [...prev, { id: 'working', name: 'Unsaved Points', points: [point], isVisible: true }];
+          }
+          const next = [...prev];
+          next[index] = { ...next[index], points: [...next[index].points, point] };
+          return next;
+        });
+        logActionToFieldbook(`Collected GPS point ${pointNumber} via CACP.`);
+        return respond(message, true, {
+          stored: true,
+          pointNumber,
+          northing: projected.northing,
+          easting: projected.easting,
+          elevation: point.elevation,
+          message: `Stored point ${pointNumber}.`,
+        });
+      } catch (e) {
+        return respond(message, false, undefined, e instanceof Error ? e.message : String(e));
+      }
+    });
+
+    const unsubOpenRover = interAgentComm.onCommand('gps_open_rover', async (message) => {
+      try {
+        const payload = (message.data ?? {}) as { mode?: string; dock?: boolean };
+        const mode = payload.mode === 'collect' || payload.mode === 'benchmark'
+          ? payload.mode
+          : 'stakeout';
+        const dock = payload.dock !== false;
+        setActiveAgent(AgentType.GPS_STAKEOUT);
+        setActiveVisualPanel('canvas');
+        setGpsInitialTab(mode);
+        setGpsPanelRequestId(value => value + 1);
+        setIsToolShelfVisible(true);
+        setIsGpsRoverPanelVisible(true);
+        toggleToolDock('gpsStakeout', dock);
+        return respond(message, true, { opened: true, mode, docked: dock });
+      } catch (e) {
+        return respond(message, false, undefined, e instanceof Error ? e.message : String(e));
+      }
+    });
+
+    return () => {
+      unsubPos(); unsubGetTarget(); unsubSetTarget(); unsubList(); unsubReq();
+      unsubGuidance(); unsubCollect(); unsubOpenRover();
+    };
+  }, [pointLists, nextAvailablePointNumber, logActionToFieldbook, toggleToolDock, setActiveVisualPanel]);
 
   const handleOpenShrinkwrapFromCanvas = useCallback(() => {
     const usable = pointLists
@@ -8451,22 +9004,42 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, [initializeGpsStakeoutAgent, showView]);
 
   // FIX: Add handler for generating contours from the new ContourPanel.
-  const handleGenerateContours = useCallback(() => {
+  const handleGenerateContours = useCallback(async () => {
     setIsGeneratingContours(true);
     setError(null);
     try {
+        const contourLayers = await resolveContourLineLayersViaCacp();
+        contourLineLayersRef.current = contourLayers;
         let pointsToContour = points;
-        const ignoredSet = new Set(contourSettings.ignoredPointNumbers ?? []);
-        const ignoredCount = ignoredSet.size > 0 ? points.filter(p => ignoredSet.has(p.pointNumber)).length : 0;
-        if (ignoredSet.size > 0) {
-            pointsToContour = pointsToContour.filter(p => !ignoredSet.has(p.pointNumber));
-        }
-        const filter = contourSettings.pointFilterDescription.trim().toUpperCase();
-        if (filter) {
-            pointsToContour = pointsToContour.filter(p => p.description?.toUpperCase().includes(filter));
-            logActionToFieldbook(`Generating ${contourSettings.contourInterval}' contours with smoothing level ${contourSettings.smoothing}, using ${pointsToContour.length} points matching "${contourSettings.pointFilterDescription}"${ignoredCount > 0 ? ` (${ignoredCount} ignored)` : ''}.`);
+        const sourceTin = contourSettings.sourceType === 'tin'
+            ? (tinSurfaces.find(t => t.id === contourSettings.sourceTinId) ?? tinSurfaces[0] ?? null)
+            : null;
+        let ignoredCount = 0;
+        if (sourceTin) {
+            if (sourceTin.vertices.length < 3) {
+                throw new Error(`TIN "${sourceTin.name}" has fewer than 3 vertices.`);
+            }
+            pointsToContour = sourceTin.vertices.map((v, i) => ({
+                pointNumber: `TIN-${i + 1}`,
+                northing: v.northing,
+                easting: v.easting,
+                elevation: v.elevation,
+                description: `TIN:${sourceTin.name}`,
+            }));
+            logActionToFieldbook(`Generating ${contourSettings.contourInterval}' contours with smoothing level ${contourSettings.smoothing}, using ${pointsToContour.length} vertices from TIN "${sourceTin.name}".`);
         } else {
-            logActionToFieldbook(`Generating ${contourSettings.contourInterval}' contours with smoothing level ${contourSettings.smoothing}, using ${pointsToContour.length} points${ignoredCount > 0 ? ` (${ignoredCount} ignored)` : ''}.`);
+            const ignoredSet = new Set(contourSettings.ignoredPointNumbers ?? []);
+            ignoredCount = ignoredSet.size > 0 ? points.filter(p => ignoredSet.has(p.pointNumber)).length : 0;
+            if (ignoredSet.size > 0) {
+                pointsToContour = pointsToContour.filter(p => !ignoredSet.has(p.pointNumber));
+            }
+            const filter = contourSettings.pointFilterDescription.trim().toUpperCase();
+            if (filter) {
+                pointsToContour = pointsToContour.filter(p => p.description?.toUpperCase().includes(filter));
+                logActionToFieldbook(`Generating ${contourSettings.contourInterval}' contours with smoothing level ${contourSettings.smoothing}, using ${pointsToContour.length} points matching "${contourSettings.pointFilterDescription}"${ignoredCount > 0 ? ` (${ignoredCount} ignored)` : ''}.`);
+            } else {
+                logActionToFieldbook(`Generating ${contourSettings.contourInterval}' contours with smoothing level ${contourSettings.smoothing}, using ${pointsToContour.length} points${ignoredCount > 0 ? ` (${ignoredCount} ignored)` : ''}.`);
+            }
         }
 
         if (pointsToContour.length < 3) {
@@ -8508,7 +9081,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
         const now = new Date().toISOString();
         const existingGens = contourGenerationsRef.current;
-        const genName = `Survey ${contourSettings.contourInterval}ft (Gen ${existingGens.length + 1})`;
+        const genName = sourceTin
+            ? `TIN ${sourceTin.name} ${contourSettings.contourInterval}ft (Gen ${existingGens.length + 1})`
+            : `Survey ${contourSettings.contourInterval}ft (Gen ${existingGens.length + 1})`;
         const genId = `gen-${Date.now()}`;
 
         const newGeneration: ContourGeneration = {
@@ -8529,8 +9104,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             visible: true,
         };
 
-        // Convert IsoPaths to SurveyLine segments tagged with contourGenId.
-        const contourLines = isoPathsToSurveyLines(isoPaths, genId);
+        // Convert IsoPaths to SurveyLine segments tagged with contourGenId and
+        // the CAD layers resolved by the CAD Manager over CACP.
+        const contourLines = isoPathsToSurveyLines(isoPaths, genId, contourLayers);
 
         setLines(prevLines => {
             // Keep non-contour lines and lines from OTHER generations; replace this generation's lines.
@@ -8540,6 +9116,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setContourLabels(newLabels);
         setContourGenerations(prev => [...prev, newGeneration]);
         setIsContourManagementVisible(true);
+        logActionToFieldbook(`CACP contour layers: ${contourLayers.minorLayer} (minor) / ${contourLayers.majorLayer} (major).`);
 
         showView('canvas');
     } catch (err) {
@@ -8549,7 +9126,213 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     } finally {
         setIsGeneratingContours(false);
     }
-  }, [points, lines, contourSettings, logActionToFieldbook, showView]);
+  }, [points, lines, contourSettings, tinSurfaces, logActionToFieldbook, showView]);
+
+  // -- TIN surface creation / import / export (shared by the Contour panel,
+  // the A2UI TIN Surfaces surface, PWA file launches, and CACP peers) --------
+  const handleCreateTinFromContours = useCallback((generationId?: string): TinSurface | null => {
+    const generation = generationId
+      ? contourGenerations.find(g => g.id === generationId)
+      : contourGenerations[contourGenerations.length - 1];
+    if (!generation || generation.isoPaths.length === 0) {
+      setError('Generate contours before creating a TIN surface.');
+      setTimeout(() => setError(null), 4000);
+      return null;
+    }
+    if (generationId) setCreatingTinGenerationId(generationId);
+    try {
+      const built = buildTinFromContours(generation.isoPaths, { name: `${generation.name} TIN` });
+      if (!built) {
+        throw new Error('The contour generation does not contain enough elevation vertices to build a TIN.');
+      }
+      const surface: TinSurface = { ...built, hidden: false };
+      setTinSurfaces(prev => [...prev, surface]);
+      setContourSettings(prev => ({ ...prev, sourceType: 'tin', sourceTinId: surface.id }));
+      const fileName = uniqueTinExportName(surface, 'native');
+      addGeneratedFile({ name: fileName, content: tinSurfaceToNativeTin(surface) });
+      setRecentlyCreatedTinGenerationId(generation.id);
+      setTimeout(() => setRecentlyCreatedTinGenerationId(current => current === generation.id ? null : current), 4000);
+      logActionToFieldbook(
+        `Created TIN "${surface.name}" from ${generation.isoPaths.length} contour paths ` +
+        `(${surface.vertices.length} vertices, ${surface.triangles.length} triangles). Saved ${fileName} to File Manager.`
+      );
+      addNotification({
+        kind: 'points',
+        severity: 'success',
+        title: 'TIN created from contours',
+        message: `${surface.name}: ${surface.triangles.length.toLocaleString()} triangles.`,
+      });
+      setIsContourManagementVisible(true);
+      return surface;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`TIN Creation Error: ${message}`);
+      setTimeout(() => setError(null), 5000);
+      return null;
+    } finally {
+      if (generationId) setCreatingTinGenerationId(null);
+    }
+  }, [contourGenerations, addGeneratedFile, addNotification, logActionToFieldbook]);
+
+  const handleExportTinSurface = useCallback((sourceTinId?: string, format: 'landxml' | 'native' = 'landxml'): SessionFile | null => {
+    const tin = (sourceTinId ? tinSurfaces.find(t => t.id === sourceTinId) : undefined) ?? tinSurfaces[tinSurfaces.length - 1];
+    if (!tin) {
+      setError('No TIN surface is loaded to export.');
+      setTimeout(() => setError(null), 4000);
+      return null;
+    }
+    try {
+      const content = format === 'native' ? tinSurfaceToNativeTin(tin) : tinSurfaceToLandXml(tin);
+      const fileName = uniqueTinExportName(tin, format);
+      const file: SessionFile = { name: fileName, content };
+      addGeneratedFile(file);
+      triggerDownload(
+        new Blob([content], { type: format === 'native' ? 'text/plain;charset=utf-8' : 'application/xml;charset=utf-8' }),
+        fileName
+      );
+      logActionToFieldbook(`Exported TIN "${tin.name}" as ${format === 'native' ? 'native .tin' : 'LandXML'} (${fileName}).`);
+      return file;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`TIN Export Error: ${message}`);
+      setTimeout(() => setError(null), 5000);
+      return null;
+    }
+  }, [tinSurfaces, addGeneratedFile, logActionToFieldbook]);
+
+  const handleImportTinSurface = useCallback(async (sessionFile: SessionFile): Promise<TinSurface> => {
+    setIsImportingTin(true);
+    setTinImportProgress(15);
+    setTinImportStatus(`Parsing ${sessionFile.name}…`);
+    try {
+      const imported = await importTinSurfaceFromSessionFileAsync(sessionFile);
+      setTinImportProgress(85);
+      setTinImportStatus('Registering surface…');
+      const surface: TinSurface = { ...imported, hidden: false };
+      setTinSurfaces(prev => [...prev, surface]);
+      setContourSettings(prev => ({ ...prev, sourceType: 'tin', sourceTinId: surface.id }));
+      addGeneratedFile({
+        name: sessionFile.name,
+        content: sessionFile.content || tinSurfaceToNativeTin(surface),
+        fileData: sessionFile.fileData,
+      });
+
+      // Preserve the original import behavior: TIN vertices become survey points
+      // so point-based tools can use the surface as soon as it is loaded.
+      if (surface.vertices.length > 0) {
+        setPointLists(prevLists => {
+          const existing = new Set(
+            prevLists.flatMap(list => list.points).map(p => String(p.pointNumber).toUpperCase())
+          );
+          let counter = 1;
+          const tinPoints: SurveyPoint[] = surface.vertices.map(v => {
+            let pointNumber = `TIN-${counter}`;
+            while (existing.has(pointNumber.toUpperCase())) {
+              counter += 1;
+              pointNumber = `TIN-${counter}`;
+            }
+            existing.add(pointNumber.toUpperCase());
+            counter += 1;
+            return {
+              pointNumber,
+              northing: v.northing,
+              easting: v.easting,
+              elevation: v.elevation,
+              description: `TIN:${surface.name}`,
+            };
+          });
+          const workingListIndex = prevLists.findIndex(list => list.id === 'working');
+          if (workingListIndex === -1) {
+            return [...prevLists, { id: 'working', name: 'Unsaved Points', points: tinPoints, isVisible: true }];
+          }
+          const nextLists = [...prevLists];
+          nextLists[workingListIndex] = {
+            ...nextLists[workingListIndex],
+            points: [...nextLists[workingListIndex].points, ...tinPoints],
+          };
+          return nextLists;
+        });
+      }
+
+      setTinImportProgress(100);
+      setTinImportStatus('Surface ready');
+      setIsContourGenPanelVisible(true);
+      setIsContourGenMinimized(false);
+      logActionToFieldbook(
+        `Imported TIN surface "${surface.name}" (${surface.vertices.length} vertices, ` +
+        `${surface.triangles.length} triangles) from ${sessionFile.name}.`
+      );
+      addNotification({
+        kind: 'points',
+        severity: 'success',
+        title: 'TIN surface imported',
+        message: `${surface.name}: ${surface.vertices.length.toLocaleString()} vertices, ${surface.triangles.length.toLocaleString()} triangles.`,
+      });
+      setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
+      return surface;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`TIN Import Error: ${message}`);
+      setTimeout(() => setError(null), 5000);
+      throw err;
+    } finally {
+      setIsImportingTin(false);
+      setTimeout(() => {
+        setTinImportProgress(0);
+        setTinImportStatus(null);
+      }, 1200);
+    }
+  }, [addGeneratedFile, addNotification, canvas2dRef, logActionToFieldbook]);
+
+  const handleImportTin = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.tin,.landxml,.xml,text/xml,application/xml';
+    input.onchange = async (event) => {
+      const file = (event.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        await handleImportTinSurface(await readSessionFileFromBrowserFile(file));
+      } catch {
+        // handleImportTinSurface already surfaced the parse error.
+      }
+    };
+    input.click();
+  }, [handleImportTinSurface]);
+
+  const openTinSurfacesSurface = useCallback(() => {
+    openA2UISurface({
+      key: 'workspace-tin-surfaces',
+      definitionId: 'workspace-tin-surfaces',
+      title: 'TIN Surfaces',
+      subtitle: 'Create, import, and export surfaces',
+      category: 'workspace',
+      accent: 'cyan',
+      size: settings.a2ui?.defaultSize ?? 'standard',
+      source: 'workspace:tin-surfaces',
+      content: <A2UITinSurfaces />,
+    });
+  }, [settings.a2ui?.defaultSize]);
+
+  // OS-level .tin/.landxml launches dispatch this event from index.tsx.
+  useEffect(() => {
+    const onLaunchFiles = (event: Event) => {
+      const files = (event as CustomEvent<{ files?: File[] }>).detail?.files ?? [];
+      const tinFiles = files.filter(file => /\.(tin|landxml|xml)$/i.test(file.name));
+      if (tinFiles.length === 0) return;
+      void (async () => {
+        for (const file of tinFiles) {
+          try {
+            await handleImportTinSurface(await readSessionFileFromBrowserFile(file));
+          } catch {
+            // handleImportTinSurface reports the failure in the error banner.
+          }
+        }
+      })();
+    };
+    window.addEventListener('landsurv:pwa-launch-files', onLaunchFiles as EventListener);
+    return () => window.removeEventListener('landsurv:pwa-launch-files', onLaunchFiles as EventListener);
+  }, [handleImportTinSurface]);
 
   // -- ContourGeneration management callbacks (v26.05.19.3) ------------------
   const handleContourGenToggleVisible = useCallback((id: string, visible: boolean) => {
@@ -8560,7 +9343,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setLines(pl => {
         const without = pl.filter(l => l.contourGenId !== id);
         if (!visible) return without;
-        return [...without, ...isoPathsToSurveyLines(g.isoPaths, id)];
+        return [
+          ...without,
+          ...isoPathsToSurveyLines(
+            g.isoPaths,
+            id,
+            contourLineLayersRef.current ?? DEFAULT_CONTOUR_LINE_LAYERS,
+          ),
+        ];
       });
       return updated;
     }));
@@ -8808,7 +9598,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
     opts?: ContourFetchOptions,
-  ) => {
+  ): Promise<{ ok: boolean; featureCount: number; segmentCount: number; layerName: string; message: string }> => {
     // USGS National Map layers arrive pre-classified (index / intermediate /
     // supplemental) and each gets its own CAD layer; custom/state services keep
     // the historical single ESRI-CONTOUR layer and elevation-based split.
@@ -8860,6 +9650,42 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         const ring = inclSegPairs.length >= 3 ? buildPolygonFromSegments(inclSegPairs) : [];
         inclusionPolygon = ring.length >= 3 ? ring : null;
         dbgLog('ESRI', { step: '1-bbox-inclusion', xmin, ymin, xmax, ymax, inSR, polygonVertices: inclusionPolygon?.length ?? 0 });
+      } else if (mode === 'project') {
+        // Project extent: use the loaded, georeferenced survey points with a
+        // 10% buffer. This is what makes the USGS Download button work on a
+        // project that has points but no inclusion boundary.
+        const projectEpsg = settings.projection?.epsg;
+        if (!projectEpsg) {
+          throw new Error('Project extent needs a project projection (EPSG) so the survey points can be georeferenced. Set the projection, or use Describe Area.');
+        }
+        if (points.length === 0) {
+          throw new Error('No survey points are loaded to define the project extent. Draw an inclusion boundary or use Describe Area.');
+        }
+        const projectPoints = points as Array<{ easting: number; northing: number }>;
+        const xs = projectPoints.map(p => p.easting);
+        const ys = projectPoints.map(p => p.northing);
+        const ptXmin = Math.min(...xs), ptXmax = Math.max(...xs);
+        const ptYmin = Math.min(...ys), ptYmax = Math.max(...ys);
+        if (![ptXmin, ptYmin, ptXmax, ptYmax].every(Number.isFinite)) {
+          throw new Error('Project extent contains invalid survey point coordinates.');
+        }
+        const padX = Math.max((ptXmax - ptXmin) * 0.1, 1);
+        const padY = Math.max((ptYmax - ptYmin) * 0.1, 1);
+        const proj4mod = (await import('proj4')).default;
+        const corners: Array<[number, number]> = [
+          [ptXmin - padX, ptYmin - padY],
+          [ptXmax + padX, ptYmin - padY],
+          [ptXmax + padX, ptYmax + padY],
+          [ptXmin - padX, ptYmax + padY],
+        ];
+        const wgs84 = corners.map(([x, y]) =>
+          proj4mod(`EPSG:${projectEpsg}`, 'EPSG:4326', [x, y]) as [number, number]);
+        xmin = Math.min(...wgs84.map(([lon]) => lon));
+        xmax = Math.max(...wgs84.map(([lon]) => lon));
+        ymin = Math.min(...wgs84.map(([, lat]) => lat));
+        ymax = Math.max(...wgs84.map(([, lat]) => lat));
+        inSR = 4326;
+        dbgLog('ESRI', { step: '1-bbox-project', pointCount: points.length, projectEpsg, xmin, ymin, xmax, ymax });
       } else {
         // Description mode: geocode via Nominatim (OpenStreetMap)
         const desc = (descriptionText || '').trim();
@@ -9172,7 +9998,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       const partialNote = exceededTransferLimit
         ? (userStoppedTiling ? ' � tiling stopped by user, coverage is partial' : ' � transfer limit reached on the deepest tile(s), coverage may be partial')
         : '';
-      logActionToFieldbook(`Fetched ${outputLines.length} contour segments onto layer ${layerName} from ${serviceUrl} (${features.length} features${tileSummary}${partialNote}).`);
+      const summary = `Fetched ${outputLines.length} contour segments onto layer ${layerName} from ${serviceUrl} (${features.length} features${tileSummary}${partialNote}).`;
+      logActionToFieldbook(summary);
       showView('canvas');
       if (exceededTransferLimit) {
         setError(userStoppedTiling
@@ -9180,6 +10007,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           : '?? Transfer limit still reached on the smallest tiles � coverage may be partial. Draw a tighter Inclusion boundary for full coverage.');
         setTimeout(() => setError(null), 10000);
       }
+      return {
+        ok: true,
+        featureCount: features.length,
+        segmentCount: outputLines.length,
+        layerName,
+        message: summary,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       dbgLog('ESRI', { step: 'error', message: msg });
@@ -9188,6 +10022,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       // transfer-limit warning.
       const displayMs = msg.length > 120 || msg.includes('\n') ? 20000 : 7000;
       setTimeout(() => setError(null), displayMs);
+      return { ok: false, featureCount: 0, segmentCount: 0, layerName, message: msg };
     } finally {
       setIsFetchingEsri(false);
     }
@@ -9201,7 +10036,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const handleFetchFloodZones = useCallback(async (
     mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
-  ) => {
+    bboxOverride?: [number, number, number, number] | null,
+    options?: import('./services/floodService.ts').FloodFetchOptions,
+  ): Promise<{ ok: boolean; featureCount: number; message: string }> => {
     setIsFetchingFlood(true);
     setError(null);
     try {
@@ -9209,7 +10046,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       const epsg = settings.projection?.epsg;
       let bboxWgs84: [number, number, number, number];
 
-      if (mode === 'inclusion') {
+      if (bboxOverride) {
+        bboxWgs84 = bboxOverride;
+      } else if (mode === 'inclusion') {
         const activeB = activeInclusionBoundaryRef.current;
         const inclusionLines = lines.filter((l: SurveyLine) => l.type === 'inclusion' && (!activeB || l.polylineId === activeB.polylineId));
         if (inclusionLines.length === 0) throw new Error(activeB ? `Active inclusion boundary "${activeB.name}" has no lines.` : 'No inclusion lines drawn. Use the canvas Inclusion tool to draw a boundary first.');
@@ -9241,32 +10080,63 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         bboxWgs84 = await geocodeAreaDescription(descriptionText || '');
       }
 
-      const result = await fetchFemaFloodHazards(bboxWgs84, epsg);
+      const result = await fetchFemaFloodHazards(bboxWgs84, epsg, options);
       if (result.lines.length === 0) {
         throw new Error(`FEMA NFHL returned no flood-hazard polygons for that area${result.exceededTransferLimit ? ' (transfer limit reached \u2014 try a smaller area)' : ''}.`);
       }
-      setLines((prev: SurveyLine[]) => [...prev.filter((l: SurveyLine) => !(l.layer || '').startsWith('FEMA-FLOOD-')), ...result.lines]);
+      setLines((prev: SurveyLine[]) => [
+        ...prev.filter((l: SurveyLine) =>
+          !(l.layer || '').startsWith('FEMA-FLOOD-') && !(l.layer || '').startsWith('FEMA-BFE')),
+        ...result.lines,
+        ...result.bfeLines,
+      ]);
       setLastFloodResult({ zoneCounts: result.zoneCounts, featureCount: result.featureCount });
-      logActionToFieldbook(`Fetched ${result.lines.length} FEMA NFHL flood-hazard segments (${result.featureCount} polygons across ${Object.keys(result.zoneCounts).length} zone codes).`);
+      setLastFloodAreas(result.areas);
+      setLastFloodBfe({ count: result.bfeCount, datum: result.bfeDatum, error: result.bfeError });
+      logActionToFieldbook(
+        `Fetched ${result.lines.length} FEMA NFHL flood-hazard segments ` +
+        `(${result.featureCount} polygons across ${Object.keys(result.zoneCounts).length} zone codes)` +
+        `${result.bfeCount ? ` plus ${result.bfeCount} BFE line features` : ''}.`,
+      );
       showView('canvas');
       if (result.exceededTransferLimit) {
         setError('\u26a0\ufe0f FEMA NFHL transfer limit reached \u2014 only a partial set of polygons was returned. For full coverage, draw an Inclusion boundary around your project area.');
         setTimeout(() => setError(null), 10000);
       }
+      return {
+        ok: true,
+        featureCount: result.featureCount,
+        message: `Fetched ${result.featureCount} FEMA flood-hazard polygons across ${Object.keys(result.zoneCounts).length} zone codes` +
+          `${result.bfeCount ? ` and ${result.bfeCount} BFE lines` : ''}.`,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(`Flood Zone Fetch: ${msg}`);
       setTimeout(() => setError(null), 8000);
+      return { ok: false, featureCount: 0, message: msg };
     } finally {
       setIsFetchingFlood(false);
     }
   }, [lines, points, settings, logActionToFieldbook, showView]);
 
   const handleClearFloodLines = useCallback(() => {
-    setLines((prev: SurveyLine[]) => prev.filter((l: SurveyLine) => !(l.layer || '').startsWith('FEMA-FLOOD-')));
+    setLines((prev: SurveyLine[]) => prev.filter((l: SurveyLine) =>
+      !(l.layer || '').startsWith('FEMA-FLOOD-') && !(l.layer || '').startsWith('FEMA-BFE')));
     setLastFloodResult(null);
-    logActionToFieldbook('Cleared FEMA NFHL flood-zone linework.');
+    setLastFloodBfe(null);
+    setLastFloodAreas([]);
+    setHatches(prev => prev.filter(h => !(h.layer || '').startsWith('FEMA-FLOOD-')));
+    setAreaLabels(prev => prev.filter(l => l.source !== 'fema-flood'));
+    logActionToFieldbook('Cleared FEMA NFHL flood-zone and BFE linework, hatches, and annotations.');
   }, [logActionToFieldbook]);
+
+  /** Queue a FEMA notes block for the active paperspace sheet titleblock. */
+  const handleAddFloodNotesToSheet = useCallback((notes: string) => {
+    if (!notes.trim()) return;
+    setPendingSheetNotes({ id: `flood-notes-${Date.now()}`, text: notes.trim() });
+    showView('sheetview');
+    logActionToFieldbook('FEMA flood-zone notes queued for the active plan sheet titleblock.');
+  }, [showView, logActionToFieldbook]);
 
   /**
    * handleFetchFirmette � fetches a FEMA NFHL firmette-style map image for the
@@ -9454,7 +10324,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const handleFetchSoils = useCallback(async (
     mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
-  ) => {
+    bboxOverride?: [number, number, number, number] | null,
+  ): Promise<{ ok: boolean; featureCount: number; message: string }> => {
     setIsFetchingSoils(true);
     setError(null);
     try {
@@ -9463,7 +10334,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       const epsg = settings.projection?.epsg;
       let bboxWgs84: [number, number, number, number];
 
-      if (mode === 'inclusion') {
+      if (bboxOverride) {
+        bboxWgs84 = bboxOverride;
+      } else if (mode === 'inclusion') {
         const activeB = activeInclusionBoundaryRef.current;
         const inclusionLines = lines.filter((l: SurveyLine) => l.type === 'inclusion' && (!activeB || l.polylineId === activeB.polylineId));
         if (inclusionLines.length === 0) throw new Error(activeB ? `Active inclusion boundary "${activeB.name}" has no lines.` : 'No inclusion lines drawn. Use the canvas Inclusion tool to draw a boundary first.');
@@ -9503,6 +10376,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ]);
       setSoilMapUnits(result.mapUnits);
       setLastSoilsResult(result);
+      setLastSoilAreas(result.areas);
       setSoilReportData(null); // clear stale tabular data on fresh fetch
       logActionToFieldbook(`Fetched ${result.featureCount} SSURGO soil map-unit polygons (${Object.keys(result.zoneCounts).length} map unit symbols).`);
       showView('canvas');
@@ -9510,10 +10384,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setError('?? SSURGO result set may be truncated (service transfer limit reached). Try a smaller area.');
         setTimeout(() => setError(null), 10000);
       }
+      return {
+        ok: true,
+        featureCount: result.featureCount,
+        message: `Fetched ${result.featureCount} SSURGO soil map units (${Object.keys(result.zoneCounts).length} symbols).`,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(`Soils Fetch: ${msg}`);
       setTimeout(() => setError(null), 12000);
+      return { ok: false, featureCount: 0, message: msg };
     } finally {
       setIsFetchingSoils(false);
     }
@@ -9523,9 +10403,55 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setLines((prev: SurveyLine[]) => prev.filter((l: SurveyLine) => !l.layer?.startsWith('SOILS-')));
     setSoilMapUnits([]);
     setLastSoilsResult(null);
+    setLastSoilAreas([]);
     setSoilReportData(null);
-    logActionToFieldbook('Cleared SSURGO soil map-unit linework.');
+    setHatches(prev => prev.filter(h => !(h.layer || '').startsWith('SOILS-')));
+    setAreaLabels(prev => prev.filter(l => l.source !== 'ssurgo-soils'));
+    logActionToFieldbook('Cleared SSURGO soil map-unit linework, hatches, and annotations.');
   }, [logActionToFieldbook]);
+
+  // Rebuild FEMA flood hatches + centroid annotations whenever the fetched
+  // areas or hatch settings change. This makes the panel controls live for
+  // areas that are already on the canvas.
+  useEffect(() => {
+    const skipRebuild = skipFloodAreaRebuildRef.current;
+    skipFloodAreaRebuildRef.current = false;
+    if (lastFloodAreas.length === 0 || skipRebuild) return;
+    const settingsForHatch = settings.floodHatch;
+    const nextHatches = buildAreaHatches(lastFloodAreas, settingsForHatch, 'flood');
+    setHatches(prev => {
+      const kept = prev.filter(h => !(h.layer || '').startsWith('FEMA-FLOOD-'));
+      if (kept.length === prev.length && nextHatches.length === 0) return prev;
+      return [...kept, ...nextHatches];
+    });
+    const nextLabels = buildAreaLabels(lastFloodAreas, settingsForHatch, 'flood');
+    setAreaLabels(prev => {
+      const kept = prev.filter(l => l.source !== 'fema-flood');
+      if (kept.length === prev.length && nextLabels.length === 0) return prev;
+      return [...kept, ...nextLabels];
+    });
+  }, [lastFloodAreas, settings.floodHatch]);
+
+  // Same live rebuild for SSURGO areas. Tabular report data changes both the
+  // AUTO pattern (hydrologic group) and the HSG annotation line.
+  useEffect(() => {
+    const skipRebuild = skipSoilAreaRebuildRef.current;
+    skipSoilAreaRebuildRef.current = false;
+    if (lastSoilAreas.length === 0 || skipRebuild) return;
+    const settingsForHatch = settings.soilHatch;
+    const nextHatches = buildAreaHatches(lastSoilAreas, settingsForHatch, 'soils', soilReportData);
+    setHatches(prev => {
+      const kept = prev.filter(h => !(h.layer || '').startsWith('SOILS-'));
+      if (kept.length === prev.length && nextHatches.length === 0) return prev;
+      return [...kept, ...nextHatches];
+    });
+    const nextLabels = buildAreaLabels(lastSoilAreas, settingsForHatch, 'soils', soilReportData);
+    setAreaLabels(prev => {
+      const kept = prev.filter(l => l.source !== 'ssurgo-soils');
+      if (kept.length === prev.length && nextLabels.length === 0) return prev;
+      return [...kept, ...nextLabels];
+    });
+  }, [lastSoilAreas, settings.soilHatch, soilReportData]);
 
   const handleFetchSoilReport = useCallback(async () => {
     const mukeys = soilMapUnits.map(u => u.mukey).filter(Boolean);
@@ -9655,8 +10581,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       try {
         const removed = await new Promise<number>((resolve) => {
           setLines((prev: SurveyLine[]) => {
-            const before = prev.filter((l: SurveyLine) => (l.layer || '').startsWith('FEMA-FLOOD-')).length;
-            const next = prev.filter((l: SurveyLine) => !(l.layer || '').startsWith('FEMA-FLOOD-'));
+            const isFloodLayer = (l: SurveyLine) =>
+              (l.layer || '').startsWith('FEMA-FLOOD-') || (l.layer || '').startsWith('FEMA-BFE');
+            const before = prev.filter(isFloodLayer).length;
+            const next = prev.filter((l: SurveyLine) => !isFloodLayer(l));
             resolve(before);
             return next;
           });
@@ -9676,6 +10604,27 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   // `cl_create_from_points`, `place_station_offset_point`, `generate_stationed_points`).
   useClSkills({ setCenterlines, logActionToFieldbook });
   useStationingSkills({ centerlinesRef, pointListsRef, setPointLists, logActionToFieldbook });
+
+  /** Raise a standalone A2UI spreadsheet from the catalog or a CACP action. */
+  const openSpreadsheetSurface = useCallback((spec: A2UISpreadsheetSpec) => {
+    const title = spec.title?.trim() || 'Spreadsheet';
+    openA2UISurface({
+      key: `spreadsheet-${Date.now()}`,
+      definitionId: 'workspace-spreadsheet',
+      title,
+      subtitle:
+        spec.description ||
+        `${spec.columns.length} columns · ${spec.rows.length} rows`,
+      category: 'workspace',
+      accent: 'emerald',
+      size: 'wide',
+      source: 'cacp:open_spreadsheet',
+      content: <A2UISpreadsheet spec={spec} />,
+    });
+    logActionToFieldbook(
+      `Opened A2UI spreadsheet "${title}" (${spec.rows.length} rows).`,
+    );
+  }, [logActionToFieldbook]);
 
   // CACP — Domain skill handlers across Structures, Soils, Contouring, Steep
   // Slope, Profile, Voice, AR, DXF, Civil Drafter, Civil Plan Expert, CAD
@@ -9715,6 +10664,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     tinSurfaces,
     steepSlopeTinSurfaces,
     handleGenerateContours,
+    handleCreateTinFromContours,
+    handleImportTinSurface,
+    handleExportTinSurface,
+    openTinSurfaceStudio: openTinSurfacesSurface,
+    openSpreadsheetSurface,
     handleFetchEsriContours,
     handleDiscoverPublicContourServices,
     steepSlopeRuns,
@@ -9822,14 +10776,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     service: import('./services/parcelGisService.ts').ParcelGisServiceDef,
     mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
-  ) => {
+    bboxOverride?: [number, number, number, number] | null,
+  ): Promise<{ ok: boolean; featureCount: number; message: string }> => {
     setIsFetchingParcels(true);
     setError(null);
     try {
       const { PARCEL_LAYER_TAG, fetchParcelsForBbox } = await import('./services/parcelGisService.ts');
       if (!service?.url) throw new Error('No parcel GIS service selected.');
       const epsg = settings.projection?.epsg;
-      const { xmin, ymin, xmax, ymax } = await resolveParcelBbox(mode, descriptionText);
+      const { xmin, ymin, xmax, ymax } = bboxOverride
+        ? { xmin: bboxOverride[0], ymin: bboxOverride[1], xmax: bboxOverride[2], ymax: bboxOverride[3] }
+        : await resolveParcelBbox(mode, descriptionText);
 
 
       // -- 2. Delegate to service module --------------------------------
@@ -9874,11 +10831,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setError('?? Parcel transfer limit reached � try Inclusion mode with a smaller area for full coverage.');
         setTimeout(() => setError(null), 10000);
       }
+      return {
+        ok: true,
+        featureCount: result.parcels.length,
+        message: `Fetched ${result.parcels.length} parcels (${result.lines.length} segments) from ${service.label}.`,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       dbgLog('Parcel', { step: 'error', message: msg });
       setError(`Parcel Fetch: ${msg}`);
       setTimeout(() => setError(null), 7000);
+      return { ok: false, featureCount: 0, message: msg };
     } finally {
       setIsFetchingParcels(false);
     }
@@ -9900,13 +10863,660 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const handleSearchParcelServices = useCallback(async (
     mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
+    bboxOverride?: [number, number, number, number] | null,
   ) => {
     const { searchParcelServicesNearby } = await import('./services/parcelGisService.ts');
-    const bbox = await resolveParcelBbox(mode, descriptionText);
+    const bbox = bboxOverride
+      ? { xmin: bboxOverride[0], ymin: bboxOverride[1], xmax: bboxOverride[2], ymax: bboxOverride[3] }
+      : await resolveParcelBbox(mode, descriptionText);
     return searchParcelServicesNearby(bbox, {
       log: (msg, payload) => dbgLog('Parcel', { msg, ...((payload as object) ?? {}) }),
     });
   }, [resolveParcelBbox, dbgLog]);
+
+  // --- LSAI PROJECT LOCATION ------------------------------------------------
+  // The single owner of "where is this project?". Every cluster is located
+  // separately; county tax lines, flood zones, and soils are fetched against
+  // that cluster's own WGS84 bbox and rendered on the canvas.
+
+  /** Fit the canvas to a project cluster's centre. */
+  const handleFocusProjectCluster = useCallback((cluster: ProjectLocationCluster) => {
+    const center = cluster.estimate.center;
+    if (!center) return;
+    setZoomTarget({
+      pointNumber: `PROJECT-CLUSTER-${cluster.index}`,
+      northing: center.northing,
+      easting: center.easting,
+      description: `${cluster.label} centre`,
+    });
+    showView('canvas');
+  }, [showView]);
+
+  /**
+   * Build the LSAI-owned Project Location A2UI surface. The same payload renders
+   * inline in chat, docked in the tool shelf, floating, and fullscreen.
+   */
+  const buildProjectLocationPayload = useCallback((initialClusterIndex?: number): A2UIPayload => ({
+    kind: 'project-location',
+    agent: AgentType.LSVZ_AGENT,
+    widgetType: 'project-location',
+    status: 'expanded',
+    ...(initialClusterIndex ? { projectLocation: { initialClusterIndex } } : {}),
+  }), []);
+
+  /**
+   * Open the Project Location surface docked in the tool shelf. Deliberately
+   * does not switch the active agent: a Flood/Soils/Boundary agent can open it
+   * mid-conversation without losing its own chat thread.
+   */
+  const openProjectLocationPanel = useCallback(() => {
+    const payload = buildProjectLocationPayload();
+    setDockedA2UIKey(`${payload.agent}:${payload.widgetType}`);
+    setDockedA2UIFallback({ role: MessageRole.MODEL, text: 'Project Location', a2ui: payload });
+    setFloatingA2UIKey(null);
+    setFloatingA2UIFallback(null);
+    setIsToolShelfVisible(true);
+    void ensureProjectClusterLocations();
+  }, [buildProjectLocationPayload, ensureProjectClusterLocations]);
+
+  /** Apply a CRS and record the change in the fieldbook. */
+  const applyProjectProjection = useCallback((projection: ProjectionSetting) => {
+    setSettings(prev => ({ ...prev, projection }));
+    logActionToFieldbook(
+      `Projection set to ${projection.zoneName ?? 'custom'} (EPSG:${projection.epsg ?? '—'}).`,
+    );
+  }, [logActionToFieldbook]);
+
+  /** Apply the CRS recommended by the georeferenced point clusters. */
+  const applyClusterProjection = useCallback(async () => {
+    const set = await ensureProjectClusterLocations();
+    const recommendation = await recommendProjectionForClusters(set);
+    if (!recommendation) return null;
+    applyProjectProjection(recommendation.projection);
+    return {
+      projection: recommendation.projection,
+      label: `${recommendation.projection.state ?? 'State Plane'} · ${recommendation.projection.zoneName ?? 'Zone'} (EPSG:${recommendation.projection.epsg})`,
+    };
+  }, [ensureProjectClusterLocations, applyProjectProjection]);
+
+  /** Canonical A2UI projection control surface (Settings → Coordinate System). */
+  const buildProjectionSurfacePayload = useCallback(
+    (agent: AgentType = AgentType.LSVZ_AGENT): A2UIPayload => ({
+      kind: 'settings',
+      agent,
+      widgetType: 'settings',
+      status: 'expanded',
+      settingsSection: 'crs',
+    }),
+    [],
+  );
+
+  const openProjectionControls = useCallback((agent: AgentType = AgentType.LSVZ_AGENT) => {
+    const payload = buildProjectionSurfacePayload(agent);
+    setDockedA2UIKey(`${payload.agent}:${payload.widgetType}`);
+    setDockedA2UIFallback({ role: MessageRole.MODEL, text: 'Projection controls', a2ui: payload });
+    setFloatingA2UIKey(null);
+    setFloatingA2UIFallback(null);
+    setIsToolShelfVisible(true);
+  }, [buildProjectionSurfacePayload]);
+
+  /** Fetch one GIS layer for one cluster and return a real success/failure. */
+  const fetchProjectClusterLayer = useCallback(async (
+    layer: ProjectLocationAction,
+    cluster: ProjectLocationCluster,
+    options: {
+      aoi?: 'cluster' | 'inclusion';
+      inclusionBbox?: [number, number, number, number] | null;
+    } = {},
+  ): Promise<{ ok: boolean; featureCount: number; message: string }> => {
+    const useInclusion = options.aoi === 'inclusion';
+    const bbox = useInclusion ? (options.inclusionBbox ?? null) : cluster.estimate.bboxWgs84;
+    if (!bbox) {
+      return {
+        ok: false,
+        featureCount: 0,
+        message: useInclusion
+          ? 'The inclusion area has no WGS84 footprint yet — set the project projection (EPSG) and retry.'
+          : 'This cluster has no WGS84 footprint yet — set the project projection (EPSG) and retry.',
+      };
+    }
+    const jurisdictionLabel = useInclusion
+      ? `the inclusion area (${cluster.jurisdiction?.label ?? cluster.label})`
+      : cluster.jurisdiction?.label ?? cluster.label;
+    setProjectLocationBusy({
+      clusterId: useInclusion ? 'inclusion-area' : cluster.id,
+      action: layer,
+    });
+    try {
+      if (layer === 'flood') {
+        return await handleFetchFloodZones('project', undefined, bbox);
+      }
+      if (layer === 'soils') {
+        return await handleFetchSoils('project', undefined, bbox);
+      }
+      const {
+        classifyParcelFetchIssue,
+        parcelFetchGuidance,
+        planParcelServiceAttempts,
+      } = await import('./services/parcelGisService.ts');
+      const candidates = planParcelServiceAttempts({
+        state: cluster.jurisdiction?.state,
+        county: cluster.jurisdiction?.county,
+      });
+      if (candidates.length === 0) {
+        const guidance = parcelFetchGuidance('no-service', jurisdictionLabel);
+        setCountyGisStatus({
+          state: 'error',
+          message: `No County parcel layer is available for ${jurisdictionLabel}.`,
+          guidance,
+          jurisdictionLabel,
+          attempts: [],
+          clusterIndex: cluster.index,
+          updatedAt: Date.now(),
+        });
+        return { ok: false, featureCount: 0, message: guidance };
+      }
+
+      const attempts: CountyParcelAttempt[] = [];
+      const publish = (
+        state: CountyGisStatus['state'],
+        message: string,
+        extra: Partial<CountyGisStatus> = {},
+      ) => {
+        setCountyGisStatus({
+          state,
+          message,
+          jurisdictionLabel,
+          attempts: [...attempts],
+          clusterIndex: cluster.index,
+          aoi: useInclusion ? 'inclusion' : 'cluster',
+          updatedAt: Date.now(),
+          ...extra,
+        });
+      };
+
+      publish('loading', `Contacting ${candidates[0].service.label}…`);
+      for (const candidate of candidates) {
+        const result = await handleFetchParcels(candidate.service, 'project', undefined, bbox);
+        const issue = result.ok ? undefined : classifyParcelFetchIssue(result.message);
+        attempts.push({
+          label: candidate.service.label,
+          match: candidate.match,
+          ok: result.ok,
+          message: result.message,
+          featureCount: result.featureCount,
+          issue,
+        });
+        if (result.ok) {
+          publish('success', result.message, {
+            serviceLabel: candidate.service.label,
+            attempts: [...attempts],
+            featureCount: result.featureCount,
+            usedStatewide: candidate.match === 'statewide',
+            guidance: candidate.match === 'statewide'
+              ? 'The curated county layer was unavailable; the statewide parcel fabric was used instead.'
+              : undefined,
+          });
+          return result;
+        }
+        if (candidate !== candidates[candidates.length - 1]) {
+          publish('loading', `${candidate.service.label} did not respond — trying the next source…`);
+        }
+      }
+
+      // Last resort: discover another public parcel layer over the same
+      // footprint. This is the only fallback for providers that publish county
+      // layers but no statewide fabric (e.g. Pennsylvania), or when the
+      // curated county server itself is unavailable.
+      try {
+        const { describeParcelService, searchParcelServicesNearby } = await import(
+          './services/parcelGisService.ts'
+        );
+        const discovered = await searchParcelServicesNearby(
+          { xmin: bbox[0], ymin: bbox[1], xmax: bbox[2], ymax: bbox[3] },
+          { log: () => {} },
+        );
+        let probed = 0;
+        for (const candidate of discovered) {
+          if (probed >= 2) break;
+          if (!candidate.url) continue;
+          if (candidates.some(existing => existing.service.url === candidate.url)) continue;
+          probed += 1;
+          const discoveredAttempt: CountyParcelAttempt = {
+            label: candidate.title || 'Discovered county layer',
+            match: 'custom',
+            ok: false,
+            message: 'Probing discovered layer…',
+            featureCount: 0,
+            issue: 'unknown',
+          };
+          attempts.push(discoveredAttempt);
+          publish('loading', `Trying discovered layer: ${candidate.title}…`);
+          try {
+            const probe = await describeParcelService(candidate.url, { label: candidate.title });
+            const result = await handleFetchParcels(probe.def, 'project', undefined, bbox);
+            discoveredAttempt.label = probe.def.label;
+            discoveredAttempt.ok = result.ok;
+            discoveredAttempt.message = result.message;
+            discoveredAttempt.featureCount = result.featureCount;
+            discoveredAttempt.issue = result.ok
+              ? undefined
+              : classifyParcelFetchIssue(result.message);
+            if (result.ok) {
+              publish('success', result.message, {
+                serviceLabel: probe.def.label,
+                attempts: [...attempts],
+                featureCount: result.featureCount,
+                usedStatewide: false,
+                guidance: 'Used a county parcel layer discovered through ArcGIS Online.',
+              });
+              return result;
+            }
+          } catch (error) {
+            discoveredAttempt.message = error instanceof Error ? error.message : String(error);
+            discoveredAttempt.issue = classifyParcelFetchIssue(discoveredAttempt.message);
+          }
+          publish('loading', `${discoveredAttempt.label} could not be loaded — continuing…`);
+        }
+      } catch {
+        // Discovery is best-effort; the structured failure below still tells
+        // the user what happened and how to recover.
+      }
+
+      const issue = attempts[0]?.issue ?? 'unknown';
+      const guidance = parcelFetchGuidance(issue, jurisdictionLabel);
+      publish('error', `County parcels are unavailable for ${jurisdictionLabel}.`, {
+        guidance,
+        attempts: [...attempts],
+        usedStatewide: false,
+      });
+      return {
+        ok: false,
+        featureCount: 0,
+        message: `${attempts[0]?.message ?? 'County parcel fetch failed.'} ${guidance}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, featureCount: 0, message };
+    } finally {
+      setProjectLocationBusy(null);
+    }
+  }, [handleFetchFloodZones, handleFetchSoils, handleFetchParcels]);
+
+  const projectClusterChoices = useCallback((kind: ProjectLocationIntentKind, clusters: ProjectLocationCluster[]) => {
+    const label = projectLocationIntentLabel(kind);
+    const options = clusters.map(cluster =>
+      `${label.charAt(0).toUpperCase()}${label.slice(1)} for cluster ${cluster.index}`
+    );
+    if (inclusionAreaInfo) {
+      options.push(`${label.charAt(0).toUpperCase()}${label.slice(1)} for the inclusion area`);
+    }
+    return options;
+  }, [inclusionAreaInfo]);
+
+  /**
+   * Resolve a location request against the cluster set. With multiple clusters
+   * and no explicit index, return the choice list instead of guessing which
+   * site the user meant.
+   */
+  const resolveProjectLocationAction = useCallback(async (
+    intent: { kind: ProjectLocationIntentKind; clusterIndex?: number; aoi?: 'cluster' | 'inclusion' },
+  ): Promise<
+    | { status: 'choice'; message: string; options: string[] }
+    | { status: 'done'; cluster: ProjectLocationCluster; result?: { ok: boolean; featureCount: number; message: string } }
+  > => {
+    const set = await ensureProjectClusterLocations();
+    if (set.clusters.length === 0) {
+      return {
+        status: 'choice',
+        options: [],
+        message: 'No project points are loaded yet — upload a point file, then ask again.',
+      };
+    }
+    if (intent.kind === 'locate') {
+      return { status: 'done', cluster: set.clusters[0] };
+    }
+    if (intent.aoi === 'inclusion') {
+      if (!inclusionAreaInfo) {
+        return {
+          status: 'choice',
+          message: 'No inclusion area is defined. Draw an inclusion boundary on the canvas, then ask again.',
+          options: projectClusterChoices(intent.kind, set.clusters),
+        };
+      }
+      const anchor = set.clusters[0];
+      return {
+        status: 'done',
+        cluster: anchor,
+        result: await fetchProjectClusterLayer(intent.kind, anchor, {
+          aoi: 'inclusion',
+          inclusionBbox: inclusionAreaInfo.bboxWgs84,
+        }),
+      };
+    }
+    if (intent.clusterIndex != null) {
+      const cluster = set.clusters.find(candidate => candidate.index === intent.clusterIndex);
+      if (!cluster) {
+        return {
+          status: 'choice',
+          message: `There is no cluster ${intent.clusterIndex}. This project has ${set.clusters.length} cluster${set.clusters.length === 1 ? '' : 's'}.`,
+          options: projectClusterChoices(intent.kind, set.clusters),
+        };
+      }
+      return { status: 'done', cluster, result: await fetchProjectClusterLayer(intent.kind, cluster) };
+    }
+    if (set.clusters.length > 1 || (inclusionAreaInfo && set.clusters.length === 1)) {
+      return {
+        status: 'choice',
+        message: `This project has ${set.clusters.length} separate point cluster${set.clusters.length === 1 ? '' : 's'}${inclusionAreaInfo ? ' and an inclusion area' : ''}. Which area should I fetch ${projectLocationIntentLabel(intent.kind)} for?`,
+        options: projectClusterChoices(intent.kind, set.clusters),
+      };
+    }
+    const only = set.clusters[0];
+    return { status: 'done', cluster: only, result: await fetchProjectClusterLayer(intent.kind, only) };
+  }, [ensureProjectClusterLocations, fetchProjectClusterLayer, projectClusterChoices, inclusionAreaInfo]);
+
+  const projectClusterPayload = useCallback((cluster: ProjectLocationCluster) => ({
+    index: cluster.index,
+    id: cluster.id,
+    label: cluster.label,
+    pointCount: cluster.pointCount,
+    pointNumbers: cluster.pointNumbers.slice(0, 200),
+    jurisdiction: cluster.jurisdiction
+      ? {
+          state: cluster.jurisdiction.state,
+          county: cluster.jurisdiction.county,
+          municipality: cluster.jurisdiction.place,
+          label: cluster.jurisdiction.label,
+          source: cluster.jurisdiction.source,
+          status: cluster.jurisdiction.status,
+          error: cluster.jurisdiction.error,
+        }
+      : null,
+    centerLatitude: cluster.estimate.centerWgs84?.latitude,
+    centerLongitude: cluster.estimate.centerWgs84?.longitude,
+    centerNorthing: cluster.estimate.center?.northing,
+    centerEasting: cluster.estimate.center?.easting,
+    bboxWgs84: cluster.estimate.bboxWgs84,
+    width: cluster.estimate.width,
+    height: cluster.estimate.height,
+    areaAcres: cluster.estimate.areaAcres,
+    confidence: cluster.estimate.confidence,
+  }), []);
+
+  // CACP surface for the shared location answer. Registered here (after the
+  // GIS fetchers) so lsvz_fetch_cluster_data can render real layers.
+  useEffect(() => {
+    const ok = (message: { id: string }, data: Record<string, unknown>) => ({
+      requestId: message.id,
+      from: AgentType.LSVZ_AGENT,
+      success: true as const,
+      data,
+      timestamp: Date.now(),
+    });
+    const fail = (message: { id: string }, error: string) => ({
+      requestId: message.id,
+      from: AgentType.LSVZ_AGENT,
+      success: false as const,
+      error,
+      timestamp: Date.now(),
+    });
+
+    const unsubLocations = interAgentComm.onCommand('lsvz_project_locations', async (message) => {
+      try {
+        const payload = (message.data ?? {}) as { refresh?: boolean };
+        const set = await ensureProjectClusterLocations({ force: Boolean(payload.refresh) });
+        return ok(message, {
+          clusters: set.clusters.map(projectClusterPayload),
+          clusterCount: set.clusters.length,
+          totalPoints: set.totalPoints,
+          epsg: set.epsg,
+          linkageDistance: set.linkageDistance,
+          summary: describeProjectLocationClusters(set),
+          warnings: set.warnings,
+        });
+      } catch (error) {
+        return fail(message, error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    const unsubLocate = interAgentComm.onCommand('lsvz_locate_project', async (message) => {
+      try {
+        const payload = (message.data ?? {}) as {
+          clusterIndex?: number;
+          pointNumber?: string;
+          latitude?: number;
+          longitude?: number;
+          refresh?: boolean;
+        };
+        const set = await ensureProjectClusterLocations({ force: Boolean(payload.refresh) });
+        const pointNumber = String(payload.pointNumber ?? '').trim();
+        let cluster: ProjectLocationCluster | undefined;
+        if (pointNumber) {
+          cluster = set.clusters.find(candidate => candidate.pointNumbers.includes(pointNumber));
+        } else if (Number.isFinite(payload.latitude) && Number.isFinite(payload.longitude)) {
+          let best = Infinity;
+          for (const candidate of set.clusters) {
+            const center = candidate.estimate.centerWgs84;
+            if (!center) continue;
+            const distance = Math.hypot(center.latitude - Number(payload.latitude), center.longitude - Number(payload.longitude));
+            if (distance < best) { best = distance; cluster = candidate; }
+          }
+        } else if (Number.isFinite(payload.clusterIndex)) {
+          cluster = set.clusters.find(candidate => candidate.index === Number(payload.clusterIndex));
+        } else {
+          cluster = set.clusters[0];
+        }
+        if (!cluster) {
+          return ok(message, {
+            found: false,
+            message: pointNumber
+              ? `Point ${pointNumber} is not in any detected project cluster.`
+              : 'No project cluster matched that request.',
+          });
+        }
+        const jurisdiction = cluster.jurisdiction;
+        return ok(message, {
+          found: true,
+          clusterIndex: cluster.index,
+          state: jurisdiction?.state,
+          county: jurisdiction?.county,
+          municipality: jurisdiction?.place,
+          label: jurisdiction?.label ?? 'Jurisdiction unavailable',
+          source: jurisdiction?.source ?? 'unavailable',
+          centerLatitude: cluster.estimate.centerWgs84?.latitude,
+          centerLongitude: cluster.estimate.centerWgs84?.longitude,
+          bboxWgs84: cluster.estimate.bboxWgs84,
+          message: jurisdiction?.label ?? 'Jurisdiction unavailable',
+        });
+      } catch (error) {
+        return fail(message, error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    const unsubFetch = interAgentComm.onCommand('lsvz_fetch_cluster_data', async (message) => {
+      try {
+        const payload = (message.data ?? {}) as { layer?: ProjectLocationAction; clusterIndex?: number; aoi?: 'cluster' | 'inclusion' };
+        const layer = payload.layer;
+        if (layer !== 'parcels' && layer !== 'flood' && layer !== 'soils') {
+          return fail(message, 'layer must be "parcels", "flood", or "soils".');
+        }
+        const outcome = await resolveProjectLocationAction({
+          kind: layer,
+          clusterIndex: payload.clusterIndex,
+          aoi: payload.aoi,
+        });
+        if (outcome.status === 'choice') {
+          return ok(message, {
+            fetched: false,
+            layer,
+            message: outcome.message,
+            options: outcome.options,
+          });
+        }
+        openProjectLocationPanel();
+        return ok(message, {
+          fetched: outcome.result?.ok ?? false,
+          layer,
+          clusterIndex: outcome.cluster.index,
+          jurisdiction: outcome.cluster.jurisdiction?.label,
+          featureCount: outcome.result?.featureCount ?? 0,
+          message: outcome.result?.message ?? `Requested ${layer} for cluster ${outcome.cluster.index}.`,
+        });
+      } catch (error) {
+        return fail(message, error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    const unsubOpen = interAgentComm.onCommand('lsvz_open_project_locations', async (message) => {
+      try {
+        openProjectLocationPanel();
+        const set = await ensureProjectClusterLocations();
+        return ok(message, {
+          opened: true,
+          clusterCount: set.clusters.length,
+          docked: true,
+        });
+      } catch (error) {
+        return fail(message, error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    const unsubGetProjection = interAgentComm.onCommand('lsvz_get_projection', async (message) => {
+      try {
+        const set = await ensureProjectClusterLocations();
+        const recommendation = await recommendProjectionForClusters(set);
+        return ok(message, {
+          currentEpsg: settings.projection?.epsg ?? null,
+          currentState: settings.projection?.state ?? null,
+          currentZoneName: settings.projection?.zoneName ?? null,
+          recommendedEpsg: recommendation?.projection.epsg ?? null,
+          recommendedState: recommendation?.projection.state ?? null,
+          recommendedZoneName: recommendation?.projection.zoneName ?? null,
+          clusterIndex: recommendation?.clusterIndex ?? null,
+          latitude: recommendation?.latitude ?? null,
+          longitude: recommendation?.longitude ?? null,
+          source: recommendation?.source ?? null,
+          jurisdiction: recommendation?.jurisdictionLabel ?? null,
+          message: recommendation
+            ? `Projection from point cluster ${recommendation.clusterIndex}: ${recommendation.projection.state} · ${recommendation.projection.zoneName} (EPSG:${recommendation.projection.epsg}).`
+            : 'No georeferenced point cluster is available for a projection recommendation.',
+        });
+      } catch (error) {
+        return fail(message, error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    const unsubSetProjection = interAgentComm.onCommand('lsvz_set_projection', async (message) => {
+      try {
+        const payload = (message.data ?? {}) as { epsg?: number; dryRun?: boolean; useGps?: boolean };
+        let projection: ProjectionSetting | null = null;
+        let label = '';
+
+        if (payload.epsg != null) {
+          const known = projectionSettingForEpsg(payload.epsg);
+          if (known) {
+            projection = known.projection;
+            label = known.label;
+          } else {
+            try {
+              const { ensureCrsRegistered } = await import('./utils/crs/registry.ts');
+              const registered = await ensureCrsRegistered(payload.epsg, { epoch: null });
+              if (!registered) {
+                return fail(message, `EPSG:${payload.epsg} is not a built-in State Plane code.`);
+              }
+              projection = { state: null, zoneName: `EPSG:${payload.epsg}`, epsg: payload.epsg };
+              label = `Custom CRS (EPSG:${payload.epsg})`;
+            } catch (error) {
+              return fail(message, error instanceof Error ? error.message : String(error));
+            }
+          }
+        } else if (payload.useGps) {
+          try {
+            const detected = await detectProjectionFromBrowser();
+            projection = detected.projection;
+            label = `${projection.zoneName ?? 'Local CRS'} (EPSG:${projection.epsg ?? '—'})`;
+          } catch (error) {
+            return fail(message, error instanceof Error ? error.message : String(error));
+          }
+        } else {
+          const set = await ensureProjectClusterLocations();
+          const recommendation = await recommendProjectionForClusters(set);
+          if (!recommendation) {
+            return fail(message, 'No georeferenced point cluster is available for a projection recommendation.');
+          }
+          projection = recommendation.projection;
+          label = `${recommendation.projection.state} · ${recommendation.projection.zoneName} (EPSG:${recommendation.projection.epsg})`;
+        }
+
+        if (!projection) return fail(message, 'No projection could be resolved.');
+        if (payload.dryRun) {
+          return ok(message, {
+            applied: false,
+            epsg: projection.epsg,
+            state: projection.state,
+            zoneName: projection.zoneName,
+            message: `Would set ${label}.`,
+          });
+        }
+
+        const previousEpsg = settings.projection?.epsg ?? null;
+        applyProjectProjection(projection);
+        return ok(message, {
+          applied: true,
+          previousEpsg,
+          epsg: projection.epsg,
+          state: projection.state,
+          zoneName: projection.zoneName,
+          message: `Set the project projection to ${label}.`,
+        });
+      } catch (error) {
+        return fail(message, error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    const unsubOpenProjection = interAgentComm.onCommand('lsvz_open_projection', async (message) => {
+      try {
+        const payload = (message.data ?? {}) as { applyRecommended?: boolean; dock?: boolean };
+        let appliedEpsg: number | null = null;
+        if (payload.applyRecommended) {
+          const set = await ensureProjectClusterLocations();
+          const recommendation = await recommendProjectionForClusters(set);
+          if (recommendation) {
+            applyProjectProjection(recommendation.projection);
+            appliedEpsg = recommendation.projection.epsg;
+          }
+        }
+        openProjectionControls(AgentType.LSVZ_AGENT);
+        return ok(message, {
+          opened: true,
+          docked: true,
+          appliedEpsg,
+          currentEpsg: appliedEpsg ?? settings.projection?.epsg ?? null,
+        });
+      } catch (error) {
+        return fail(message, error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    return () => {
+      unsubLocations();
+      unsubLocate();
+      unsubFetch();
+      unsubOpen();
+      unsubGetProjection();
+      unsubSetProjection();
+      unsubOpenProjection();
+    };
+  }, [
+    ensureProjectClusterLocations,
+    resolveProjectLocationAction,
+    openProjectLocationPanel,
+    projectClusterPayload,
+    applyProjectProjection,
+    openProjectionControls,
+    settings.projection,
+  ]);
 
   const handleSaveProfile = useCallback(() => {
     if (!profileData || profileData.length === 0 || !profileInfo) {
@@ -9932,7 +11542,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     while (allFileNames.has(finalName)) {
       finalName = baseName.replace('.csv', `_${counter++}.csv`);
     }
-    
+
     const newFile: SessionFile = {
       name: finalName,
       content: csvContent,
@@ -9974,7 +11584,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const handleStopGenerating = useCallback(() => {
     stopGenerationRef.current = true;
   }, []);
-  
+
   const handleOpenFileInEditor = useCallback((fileName: string, newFiles: SessionFile[] = []) => {
     const allFiles = [rawFile, deedFile, dxfFile, clFile, gisFile, ...(planFiles || []), ...(generatedFiles || []), ...newFiles].filter(f => f !== null) as SessionFile[];
     const fileToOpen = allFiles.find(f => f.name === fileName);
@@ -9999,6 +11609,166 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
     }
   }, [rawFile, deedFile, dxfFile, clFile, gisFile, planFiles, generatedFiles, showView, pointLists, settings]);
+
+  // A deed-summary row hands the source text to the full editor so the user can
+  // review or correct the description before re-parsing/drafting.
+  const handleOpenBoundaryDescriptionInEditor = useCallback((tractId: string, snippet?: string) => {
+    if (deedFile?.content?.trim()) {
+      handleOpenFileInEditor(deedFile.name);
+      return;
+    }
+    const fallback = snippet?.trim();
+    if (!fallback) return;
+    const fileName = `${tractId || 'Deed'} — Description.txt`;
+    setGeneratedFiles(prev => [
+      ...prev.filter(file => file.name !== fileName),
+      { name: fileName, content: fallback },
+    ]);
+    setTextEditorContent(fallback);
+    setTextEditorContentTone('normal');
+    setTextEditorReference(null);
+    setActiveTextEditorFile(fileName);
+    setHasUnsavedChanges(false);
+    showView('texteditor');
+  }, [deedFile, handleOpenFileInEditor, showView]);
+
+  /** Persist text from the A2UI text surface into whichever project file owns it. */
+  const handleSaveTextFile = useCallback((fileName: string, content: string) => {
+    if (rawFile?.name === fileName) setRawFile({ ...rawFile, content });
+    if (deedFile?.name === fileName) setDeedFile({ ...deedFile, content });
+    if (dxfFile?.name === fileName) setDxfFile({ ...dxfFile, content });
+    if (clFile?.name === fileName) setClFile({ ...clFile, content });
+    if (gisFile?.name === fileName) setGisFile({ ...gisFile, content });
+    setPlanFiles(prev => prev?.map(file => file.name === fileName ? { ...file, content } : file) ?? null);
+
+    const generatedMatch = generatedFiles.some(file => file.name === fileName);
+    const knownMatch = [rawFile, deedFile, dxfFile, clFile, gisFile, ...(planFiles ?? [])]
+      .some(file => file?.name === fileName);
+    if (generatedMatch) {
+      setGeneratedFiles(prev => prev.map(file => file.name === fileName ? { ...file, content } : file));
+    } else if (!knownMatch) {
+      setGeneratedFiles(prev => [...prev, { name: fileName, content }]);
+    }
+
+    if (activeTextEditorFile === fileName) {
+      setTextEditorContent(content);
+      setHasUnsavedChanges(false);
+    }
+    logActionToFieldbook(`Saved changes to ${fileName}.`);
+  }, [
+    activeTextEditorFile,
+    rawFile,
+    deedFile,
+    dxfFile,
+    clFile,
+    gisFile,
+    planFiles,
+    generatedFiles,
+    logActionToFieldbook,
+  ]);
+
+  /** Add a text file from the A2UI surface without stealing the current view. */
+  const handleCreateTextFile = useCallback((fileName: string, content: string) => {
+    const taken = new Set([
+      rawFile, deedFile, dxfFile, clFile, gisFile,
+      ...(planFiles ?? []),
+      ...generatedFiles,
+    ].filter((file): file is SessionFile => Boolean(file)).map(file => file.name.toLowerCase()));
+    const finalName = uniqueTextFileName(fileName, taken);
+    setGeneratedFiles(prev => {
+      if (prev.some(file => file.name === finalName)) {
+        return prev.map(file => file.name === finalName ? { ...file, content } : file);
+      }
+      return [...prev, { name: finalName, content }];
+    });
+    logActionToFieldbook(`Created text file "${finalName}".`);
+    return finalName;
+  }, [rawFile, deedFile, dxfFile, clFile, gisFile, planFiles, generatedFiles, logActionToFieldbook]);
+
+  /** Add imported .txt/.md files from the full editor and open the first one. */
+  const handleImportTextFiles = useCallback((files: SessionFile[]) => {
+    const taken = new Set([
+      rawFile, deedFile, dxfFile, clFile, gisFile,
+      ...(planFiles ?? []),
+      ...generatedFiles,
+    ].filter((file): file is SessionFile => Boolean(file)).map(file => file.name.toLowerCase()));
+    const added: SessionFile[] = [];
+    for (const file of files) {
+      const finalName = uniqueTextFileName(file.name, taken);
+      taken.add(finalName.toLowerCase());
+      added.push({ name: finalName, content: file.content });
+    }
+    if (added.length === 0) return;
+    setGeneratedFiles(prev => [...prev, ...added]);
+    const first = added[0];
+    setTextEditorContent(first.content);
+    setTextEditorContentTone('normal');
+    setTextEditorReference(null);
+    setActiveTextEditorFile(first.name);
+    setHasUnsavedChanges(false);
+    showView('texteditor');
+    logActionToFieldbook(`Imported text file "${first.name}".`);
+  }, [rawFile, deedFile, dxfFile, clFile, gisFile, planFiles, generatedFiles, showView, logActionToFieldbook]);
+
+  /** Create a New text document and open it in the full editor. */
+  const handleCreateTextDocument = useCallback((fileName: string, content: string) => {
+    const taken = new Set([
+      rawFile, deedFile, dxfFile, clFile, gisFile,
+      ...(planFiles ?? []),
+      ...generatedFiles,
+    ].filter((file): file is SessionFile => Boolean(file)).map(file => file.name.toLowerCase()));
+    const finalName = uniqueTextFileName(fileName, taken);
+    setGeneratedFiles(prev => [...prev, { name: finalName, content }]);
+    setTextEditorContent(content);
+    setTextEditorContentTone('normal');
+    setTextEditorReference(null);
+    setActiveTextEditorFile(finalName);
+    setHasUnsavedChanges(false);
+    showView('texteditor');
+    logActionToFieldbook(`Created text file "${finalName}".`);
+  }, [rawFile, deedFile, dxfFile, clFile, gisFile, planFiles, generatedFiles, showView, logActionToFieldbook]);
+
+  /** The A2UI editor hands its current draft to the full power-editor. */
+  const handleOpenTextEditorFromSurface = useCallback((fileName: string, content: string) => {
+    const allFiles = [rawFile, deedFile, dxfFile, clFile, gisFile, ...(planFiles ?? []), ...generatedFiles]
+      .filter((file): file is SessionFile => Boolean(file));
+    const existing = allFiles.find(file => file.name === fileName);
+    if (existing && existing.content === content) {
+      handleOpenFileInEditor(existing.name);
+      return;
+    }
+    if (existing) {
+      handleSaveTextFile(existing.name, content);
+      setTextEditorContent(content);
+      setTextEditorContentTone('normal');
+      setTextEditorReference(null);
+      setActiveTextEditorFile(existing.name);
+      setHasUnsavedChanges(false);
+      showView('texteditor');
+      return;
+    }
+    const finalName = handleCreateTextFile(fileName, content);
+    setTextEditorContent(content);
+    setTextEditorContentTone('normal');
+    setTextEditorReference(null);
+    setActiveTextEditorFile(finalName);
+    setHasUnsavedChanges(false);
+    showView('texteditor');
+  }, [rawFile, deedFile, dxfFile, clFile, gisFile, planFiles, generatedFiles, handleOpenFileInEditor, handleSaveTextFile, handleCreateTextFile, showView]);
+
+  /** Canvas toolbar shortcut: prefer the last text file, then the deed, then an empty editor. */
+  const handleOpenTextEditorFromToolbar = useCallback(() => {
+    if (activeTextEditorFile) {
+      showView('texteditor');
+      return;
+    }
+    const preferred = generatedFiles.find(file => /\.(?:txt|md|markdown)$/i.test(file.name)) ?? deedFile ?? null;
+    if (preferred) {
+      handleOpenFileInEditor(preferred.name);
+      return;
+    }
+    showView('texteditor');
+  }, [activeTextEditorFile, generatedFiles, deedFile, handleOpenFileInEditor, showView]);
 
   // Command-line results can be handed to the full text editor for longer
   // inspection or export. Each hand-off replaces a single scratch file so the
@@ -10170,6 +11940,88 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     openCacpReviewSurface(buildCacpReviewContext(notable.length > 0 ? notable : log));
   }, [openCacpReviewSurface]);
 
+  /**
+   * Standard presentation for an A2UI surface launched outside the chat feed.
+   * It gets the same Floating, Chat, and Toolshelf placement lifecycle
+   * as a surface that originated in an agent message.
+   */
+  const openStandaloneA2UISurface = useCallback((message: ChatMessage) => {
+    const payload = message.a2ui;
+    if (!payload) return;
+    const key = `${payload.agent}:${payload.widgetType}`;
+
+    // A standalone launch replaces any bus-hosted copy of the same surface.
+    closeA2UISurface(payload.widgetType);
+    closeA2UISurface(`fullscreen-${payload.kind}-${payload.widgetType}`);
+
+    setStandaloneA2UIMessage(message);
+    setDockedA2UIKey(null);
+    setDockedA2UIFallback(null);
+    setFloatingA2UIKey(key);
+    setFloatingA2UIFallback(message);
+  }, []);
+
+  /** Open the shared Stationing Controls A2UI surface from the baseline tool or Stationing & CL panel. */
+  const openStationingControlsSurface = useCallback(() => {
+    openStandaloneA2UISurface({
+      role: MessageRole.MODEL,
+      text: 'Stationing controls — auto station points follow the P/L switch. Set the point interval, station labels, and geometry tags here.',
+      a2ui: {
+        kind: 'workspace-tool',
+        agent: AgentType.CENTERLINE_STATIONING,
+        widgetType: 'stationing-controls',
+        workspaceTool: 'stationing-controls',
+        status: 'expanded',
+      },
+    });
+  }, [openStandaloneA2UISurface]);
+
+  /** Open Add Point through the standard standalone A2UI presentation path. */
+  const openPointEntrySurface = useCallback(() => {
+    openStandaloneA2UISurface({
+      role: MessageRole.MODEL,
+      text: 'Add a survey point by coordinates or pick it on the canvas.',
+      a2ui: {
+        kind: 'point-entry',
+        agent: AgentType.POINT_EDITOR,
+        widgetType: 'point-entry',
+        status: 'expanded',
+      },
+    });
+  }, [openStandaloneA2UISurface]);
+
+  /** Open Civil Drafter context controls through the standard A2UI surface host. */
+  const openCivilDrafterContextSurface = useCallback(() => {
+    openA2UISurface({
+      key: 'civil-drafter-context',
+      definitionId: 'workspace-civil-drafter-context',
+      title: 'Civil Drafter Context',
+      subtitle: 'Control retained conversation, point payloads, and vision imagery',
+      category: 'workspace',
+      accent: 'fuchsia',
+      size: 'standard',
+      source: 'civil-drafter:context',
+      content: (
+        <CivilDrafterContextPanel
+          volume={civilDrafterContextVolume}
+          modelName={currentModelName}
+        />
+      ),
+    });
+  }, [civilDrafterContextVolume, currentModelName]);
+
+  /** Clear every presentation of the Add Point surface. */
+  const closePointEntrySurface = useCallback(() => {
+    const key = `${AgentType.POINT_EDITOR}:point-entry`;
+    closeA2UISurface('point-entry');
+    closeA2UISurface('fullscreen-point-entry-point-entry');
+    setStandaloneA2UIMessage(current => current?.a2ui?.widgetType === 'point-entry' ? null : current);
+    setDockedA2UIKey(current => current === key ? null : current);
+    setDockedA2UIFallback(current => current?.a2ui?.widgetType === 'point-entry' ? null : current);
+    setFloatingA2UIKey(current => current === key ? null : current);
+    setFloatingA2UIFallback(current => current?.a2ui?.widgetType === 'point-entry' ? null : current);
+  }, []);
+
   /** Expand an in-chat A2UI payload into its fullscreen presentation. */
   const handleA2UIFullscreen = useCallback((payload: A2UIPayload) => {
     if (payload.kind === 'settings' && (!payload.settingsSection || payload.settingsSection === 'all')) {
@@ -10180,6 +12032,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     const title =
       payload.kind === 'cacp-manifests' ? 'CACP manifest explorer' :
       payload.kind === 'cacp-review' ? 'CACP traffic review' :
+      payload.kind === 'text-editor' ? 'Text Editor' :
+      payload.kind === 'spreadsheet' ? (payload.spreadsheet?.title || 'Spreadsheet') :
+      payload.kind === 'point-entry' ? 'Add Point' :
       payload.kind === 'standards-explorer' ? 'CAD standards explorer' :
       payload.kind === 'zoning-research' ? 'Zoning research' :
       payload.kind === 'zoning-sources' ? 'Zoning sources' :
@@ -10187,22 +12042,22 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       payload.kind === 'settings' ? 'Project Settings' :
       payload.kind === 'workspace-tool'
         ? (WORKSPACE_TOOL_LABELS[(payload.workspaceTool ?? payload.widgetType) as A2UIWorkspaceToolId] ?? 'Workspace Tool')
-        : (A2UI_DOCK_TITLES[payload.widgetType] ?? 'A2UI surface');
+        : (A2UI_DOCK_TITLES[payload.widgetType] ?? 'Surface');
 
     openA2UISurface({
       key: `fullscreen-${payload.kind}-${payload.widgetType}`,
       definitionId: payload.widgetType,
       title,
-      subtitle: 'Fullscreen A2UI surface',
+      subtitle: 'Fullscreen surface',
       category:
         payload.kind === 'cacp-manifests' || payload.kind === 'cacp-review'
           ? 'protocol'
-          : payload.kind === 'workspace-tool' || payload.kind === 'cad-manager'
+          : payload.kind === 'workspace-tool' || payload.kind === 'cad-manager' || payload.kind === 'text-editor' || payload.kind === 'spreadsheet'
             ? 'workspace'
             : 'dialog',
       accent:
         payload.kind === 'cacp-review' ? 'amber' :
-        payload.kind === 'cacp-manifests' ? 'emerald' :
+        payload.kind === 'cacp-manifests' || payload.kind === 'point-entry' ? 'emerald' :
         'cyan',
       size: 'fullscreen',
       source: 'chat:fullscreen',
@@ -10225,7 +12080,97 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     });
   }, [c3dSessionToken, isC3DConnected, sendToC3D, reconnectWebSocket]);
 
-  const handleSendMessage = useCallback(async (query: string, agentOverride?: AgentType, askPeerDepth = 0, zoningDistrictOverride?: string) => {
+  /** Central point store used by direct chat entry and the CACP add_point skill. */
+  const addPointAtProjected = useCallback((newPoint: SurveyPoint): {
+    pointNumber: string;
+    northing: number;
+    easting: number;
+  } => {
+    const requestedPn = newPoint.pointNumber?.trim() ?? '';
+    const allExisting = pointLists.flatMap(list => list.points);
+    const taken = new Set(allExisting.map(point => String(point.pointNumber).trim().toUpperCase()));
+    let pointNumber = requestedPn;
+    let renumbered = false;
+
+    if (!pointNumber || taken.has(pointNumber.toUpperCase())) {
+      renumbered = Boolean(requestedPn);
+      try {
+        const agent = PointAgent.getInstance();
+        agent.setLabelingSettings(settings.pointLabelingSettings);
+        agent.setAvailablePoints(allExisting);
+        const [nextPn] = agent.getNextNumbers(1, AgentType.POINT_EDITOR);
+        if (nextPn) pointNumber = String(nextPn);
+      } catch {
+        // Fall through to the deterministic sequential fallback.
+      }
+      if (!pointNumber || taken.has(pointNumber.toUpperCase())) {
+        let next = parseInt(nextAvailablePointNumber, 10);
+        if (!Number.isFinite(next) || next < 1) next = 1;
+        while (taken.has(String(next))) next += 1;
+        pointNumber = String(next);
+      }
+      if (renumbered) {
+        addNotification({
+          kind: 'general',
+          severity: 'warning',
+          title: 'Point Renumbered (CACP)',
+          message: `Point ${requestedPn} already exists. Saved as Point ${pointNumber} via CACP PointAgent authority.`,
+        });
+      }
+    }
+
+    const northing = Math.round(Number(newPoint.northing) * 1000) / 1000;
+    const easting = Math.round(Number(newPoint.easting) * 1000) / 1000;
+    const elevation = Number(newPoint.elevation);
+    const pointToStore: SurveyPoint = {
+      ...newPoint,
+      pointNumber,
+      northing,
+      easting,
+      elevation: Number.isFinite(elevation) ? elevation : 0,
+      description: newPoint.description?.trim() ?? '',
+    };
+    setPointLists(addPointToList(pointToStore, pointLists));
+    logActionToFieldbook(
+      `Added point ${pointNumber} (N: ${northing}, E: ${easting})${newPoint.latitude !== undefined ? ` from ${newPoint.latitude.toFixed(6)}, ${newPoint.longitude?.toFixed(6)}` : ''}.`
+    );
+    return { pointNumber, northing, easting };
+  }, [pointLists, settings.pointLabelingSettings, nextAvailablePointNumber, addNotification, logActionToFieldbook]);
+
+  const addPointAtWgs84 = useCallback((
+    latitude: number,
+    longitude: number,
+    options: { pointNumber?: string; elevation?: number; description?: string } = {},
+  ): {
+    ok: true;
+    pointNumber: string;
+    northing: number;
+    easting: number;
+    latitude: number;
+    longitude: number;
+  } | { ok: false; error: string } => {
+    const projected = wgs84ToProjected(latitude, longitude, settings.projection?.epsg);
+    if (!projected) {
+      return {
+        ok: false,
+        error: settings.projection?.epsg
+          ? 'Could not convert that location to project coordinates. Check the project coordinate system.'
+          : 'Set a project coordinate system before adding a point from a Plus Code or latitude/longitude.',
+      };
+    }
+    const saved = addPointAtProjected({
+      pointNumber: options.pointNumber?.trim() ?? '',
+      northing: projected.northing,
+      easting: projected.easting,
+      elevation: options.elevation ?? 0,
+      description: options.description ?? '',
+      latitude,
+      longitude,
+    });
+    return { ok: true, ...saved, latitude, longitude };
+  }, [addPointAtProjected, settings.projection?.epsg]);
+
+  const handleSendMessage = useCallback(async (query: string, agentOverride?: AgentType, askPeerDepth = 0, zoningDistrictOverride?: string, handoffQuickThought?: string) => {
     console.log('[handleSendMessage] Called with query:', query, 'activeAgent:', activeAgent, 'override:', agentOverride, 'askPeerDepth:', askPeerDepth);
 
     const isInternalFollowUp =
@@ -10367,6 +12312,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             case 'civil-drafter-existing-points':
               handleCivilDrafterUseExistingPoints();
               break;
+            case 'civil-drafter-auto-draft':
+              setShowAutoDraftPanel(true);
+              setIsToolShelfVisible(true);
+              toggleToolDock('autoDraft', true);
+              break;
+            case 'civil-drafter-context':
+              openCivilDrafterContextSurface();
+              break;
             case 'civil-drafter-sample-raw':
               handleCivilDrafterFileUploaded(exampleFileContent, exampleFileName);
               break;
@@ -10438,6 +12391,129 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
     }
 
+    // Contour source routing: "GIS / ESRI / USGS contours" must query the
+    // public service, not triangulate the survey points. A bare "contours"
+    // request gets a Quick Thought choice before any model call.
+    if (!agentOverride && askPeerDepth === 0 && !isInternalFollowUp) {
+      const contourSetHistory = getSetHistoryForAgent(AgentType.CONTOURING_AGENT);
+      const activateContourAgent = (openConversation = true) => {
+        if (!initializedAgents.has(AgentType.CONTOURING_AGENT)) {
+          initializeContouringAgent();
+        }
+        setActiveAgent(AgentType.CONTOURING_AGENT);
+        if (openConversation) {
+          setIsChatPanelVisible(true);
+          setAgentChatOpenSignal(n => n + 1);
+        }
+      };
+      const openContourGisPanel = () => {
+        activateContourAgent();
+        setIsContourGenPanelVisible(true);
+        setIsContourGenMinimized(false);
+        setIsContourEsriPanelVisible(true);
+        setIsContourEsriMinimized(false);
+        setIsToolShelfVisible(true);
+        toggleToolDock('contourEsri', true);
+        showView('canvas');
+      };
+      const openEsriSources = /^(?:please\s+)?open\s+(?:the\s+)?(?:esri|gis)(?:\s+rest)?\s+(?:contour\s+)?sources?[.!?]*$/i.test(query.trim());
+
+      if (openEsriSources) {
+        openContourGisPanel();
+        contourSetHistory?.(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          {
+            role: MessageRole.MODEL,
+            text: 'ESRI REST contour sources are open. Choose <strong>USGS 3DEP</strong>, a state service, or a custom ArcGIS service, then pick the project extent, inclusion boundary, or describe an area.',
+          },
+        ]);
+        return;
+      }
+
+      const contourIntent = detectContourSourceIntent(query);
+      if (contourIntent?.kind === 'ambiguous') {
+        // A source choice belongs in Quick Thought, not a full chat feed. Keep
+        // the feed closed so the option buttons surface beside the socket.
+        activateContourAgent(false);
+        const question = 'Would you like contours from your <strong>survey points / TIN</strong>, or from a <strong>public GIS service</strong> (USGS 3DEP or state GIS)?';
+        contourSetHistory?.(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          {
+            role: MessageRole.MODEL,
+            text: question,
+            result: question,
+            quickThoughtLabel: 'Contour source',
+            quickThoughtText: 'Choose where the contours should come from.',
+            questionOptions: [...CONTOUR_SOURCE_OPTIONS],
+          },
+        ]);
+        setSuggestedQuestions([...CONTOUR_SOURCE_OPTIONS]);
+        return;
+      }
+
+      if (contourIntent?.kind === 'gis') {
+        openContourGisPanel();
+        const hasInclusion = lines.some((line: SurveyLine) => line.type === 'inclusion') && !!settings.projection?.epsg;
+        const hasProjectExtent = points.length > 0 && !!settings.projection?.epsg;
+        const aoiMode: 'inclusion' | 'project' | null = hasInclusion
+          ? 'inclusion'
+          : hasProjectExtent
+            ? 'project'
+            : null;
+        const source = contourIntent.usgsSource;
+
+        if (!source || !aoiMode) {
+          const guidance = !source
+            ? 'The <strong>ESRI REST Sources</strong> panel is open. Pick a state service or paste a custom ArcGIS layer URL, then download.'
+            : 'USGS 3DEP is ready in the <strong>ESRI REST Sources</strong> panel. I need an area first: draw an <strong>inclusion boundary</strong>, load <strong>georeferenced survey points</strong>, or use <strong>Describe Area</strong> in the panel.';
+          contourSetHistory?.(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            { role: MessageRole.MODEL, text: guidance },
+          ]);
+          return;
+        }
+
+        contourSetHistory?.(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          {
+            role: MessageRole.MODEL,
+            text: `Fetching <strong>${source.name}</strong> for the ${aoiMode === 'inclusion' ? 'inclusion boundary' : 'project extent'}…`,
+          },
+        ]);
+
+        const result = await handleFetchEsriContours(
+          source.url,
+          aoiMode,
+          undefined,
+          nationalContourFetchOptions(source),
+        );
+
+        contourSetHistory?.(prev => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last && last.role === MessageRole.MODEL) {
+            next[next.length - 1] = {
+              ...last,
+              text: result.ok
+                ? result.message
+                : `Could not fetch USGS contours: ${result.message} The <strong>ESRI REST Sources</strong> panel is open so you can try another area or source.`,
+              result: result.ok ? result.message : undefined,
+            };
+          }
+          return next;
+        });
+        if (!result.ok) {
+          setIsContourEsriPanelVisible(true);
+          setIsContourEsriMinimized(false);
+        }
+        return;
+      }
+    }
+
     // Multi-step follow-up guardrails: when the user asks to draw a spiral (or
     // clicks a spiral type option in Quick Thought / Flash without parameters),
     // prompt for the exact parameters via Quick Thought and Canvas Flashes
@@ -10504,6 +12580,276 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       return;
     }
 
+    // Direct location entry: "add point at <Plus Code or lat/lon>" stores the
+    // point immediately instead of opening a form or arming the picker.
+    if (!agentOverride && askPeerDepth === 0 && isAddPointCommand(query)) {
+      const parsedLocation = parsePointLocation(query);
+      const directSetHistory = getSetHistoryForAgent(activeAgent || AgentType.POINT_EDITOR);
+      if (directSetHistory && (parsedLocation.location || parsedLocation.error)) {
+        if (parsedLocation.location) {
+          const location = parsedLocation.location;
+          const sourceLabel = location.kind === 'plus-code' ? 'Plus Code' : 'latitude/longitude';
+          const result = addPointAtWgs84(location.latitude, location.longitude, {
+            description: location.kind === 'plus-code' ? `PLUS CODE ${location.plusCode}` : 'LAT/LON',
+          });
+          if ('error' in result) {
+            const errorMessage = result.error;
+            directSetHistory(prev => [
+              ...markPendingA2UICompleted(prev),
+              { role: MessageRole.USER, text: query },
+              { role: MessageRole.MODEL, text: errorMessage },
+            ]);
+            return;
+          }
+          addNotification({
+              kind: 'point-add',
+              severity: 'success',
+              title: 'Point Added',
+              message: `Added Point ${result.pointNumber} from ${sourceLabel} (N: ${result.northing.toFixed(2)}, E: ${result.easting.toFixed(2)})`,
+            });
+            directSetHistory(prev => [
+              ...markPendingA2UICompleted(prev),
+              { role: MessageRole.USER, text: query },
+              {
+                role: MessageRole.MODEL,
+                text: `Added <strong>Point ${result.pointNumber}</strong> from ${sourceLabel} at <strong>${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}</strong> — N ${result.northing.toFixed(3)}, E ${result.easting.toFixed(3)}.`,
+              },
+            ]);
+            setSuggestedQuestions(['Zoom to the new point', 'Open Point Editor', 'Add another point by coordinates']);
+            return;
+        }
+        directSetHistory(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          { role: MessageRole.MODEL, text: parsedLocation.error ?? 'That location could not be parsed.' },
+        ]);
+        return;
+      }
+    }
+
+    // Projection: act on the request instead of only recommending a CRS. The
+    // A2UI Settings → CRS surface is the canonical projection control, and the
+    // quick thoughts make applying or changing it one tap away.
+    if (!agentOverride && askPeerDepth === 0) {
+      const projectionIntent = detectProjectionIntent(query);
+      const projectionHistory = getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
+      if (projectionIntent && projectionHistory) {
+        const targetAgent = activeAgent || AgentType.LSVZ_AGENT;
+        const currentEpsg = settings.projection?.epsg ?? null;
+
+        if (projectionIntent.kind === 'open') {
+          openProjectionControls(targetAgent);
+          projectionHistory(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            {
+              role: MessageRole.MODEL,
+              text: 'Opened the projection controls in the A2UI surface.',
+              a2ui: buildProjectionSurfacePayload(targetAgent),
+            },
+          ]);
+          setSuggestedQuestions([
+            'Set my projection from the point cluster',
+            'Use my GPS location for projection',
+            'Set EPSG:27043',
+            'Where is my project?',
+          ]);
+          return;
+        }
+
+        if (projectionIntent.useGps) {
+          try {
+            const detected = await detectProjectionFromBrowser();
+            applyProjectProjection(detected.projection);
+            const gpsLabel = `${detected.projection.zoneName ?? 'Local CRS'} (EPSG:${detected.projection.epsg ?? '—'})`;
+            const options = ['Open projection controls', 'Where is my project?', 'Fetch county tax lines for cluster 1'];
+            projectionHistory(prev => [
+              ...markPendingA2UICompleted(prev),
+              { role: MessageRole.USER, text: query },
+              {
+                role: MessageRole.MODEL,
+                text: `Set the project projection to <strong>${gpsLabel}</strong> from your GPS location.`,
+                a2ui: buildProjectionSurfacePayload(targetAgent),
+                questionOptions: options,
+              },
+            ]);
+            setSuggestedQuestions(options);
+            return;
+          } catch {
+            // Fall through to the point-cluster recommendation.
+          }
+        }
+
+        const locations = await ensureProjectClusterLocations();
+        const recommendation = await recommendProjectionForClusters(locations);
+        let projection: ProjectionSetting | null = null;
+        let label = '';
+        let sourceNote = '';
+
+        if (projectionIntent.epsg != null) {
+          const known = projectionSettingForEpsg(projectionIntent.epsg);
+          if (known) {
+            projection = known.projection;
+            label = known.label;
+            sourceNote = 'the requested EPSG';
+          } else {
+            try {
+              const { ensureCrsRegistered } = await import('./utils/crs/registry.ts');
+              const registered = await ensureCrsRegistered(projectionIntent.epsg, { epoch: null });
+              if (registered) {
+                projection = {
+                  state: null,
+                  zoneName: `EPSG:${projectionIntent.epsg}`,
+                  epsg: projectionIntent.epsg,
+                };
+                label = `Custom CRS (EPSG:${projectionIntent.epsg})`;
+                sourceNote = 'the requested EPSG';
+              }
+            } catch {
+              // Fall through to the point-cluster recommendation.
+            }
+          }
+        }
+
+        if (!projection && recommendation) {
+          projection = recommendation.projection;
+          label = `${recommendation.projection.state ?? 'State Plane'} · ${recommendation.projection.zoneName ?? 'Zone'} (EPSG:${recommendation.projection.epsg})`;
+          sourceNote = `point cluster ${recommendation.clusterIndex}${recommendation.jurisdictionLabel ? ` (${recommendation.jurisdictionLabel})` : ''} at ${recommendation.latitude.toFixed(5)}, ${recommendation.longitude.toFixed(5)}`;
+        }
+
+        if (!projection) {
+          const options = [
+            'Open projection controls',
+            'Use my GPS location for projection',
+            'Where is my project?',
+          ];
+          projectionHistory(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            {
+              role: MessageRole.MODEL,
+              text: 'I could not derive a projection because no point cluster has a WGS84 footprint yet. Open the projection controls to choose a CRS manually.',
+              a2ui: buildProjectionSurfacePayload(targetAgent),
+              questionOptions: options,
+              needsInput: true,
+            },
+          ]);
+          setSuggestedQuestions(options);
+          return;
+        }
+
+        if (projectionIntent.kind === 'set') {
+          applyProjectProjection(projection);
+          const options = [
+            'Open projection controls',
+            'Use my GPS location for projection',
+            'Where is my project?',
+            'Fetch county tax lines for cluster 1',
+          ];
+          projectionHistory(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            {
+              role: MessageRole.MODEL,
+              text: `Set the project projection to <strong>${label}</strong> from ${sourceNote}.${currentEpsg ? ` Previous: EPSG:${currentEpsg}.` : ''}`,
+              a2ui: buildProjectionSurfacePayload(targetAgent),
+              questionOptions: options,
+            },
+          ]);
+          setSuggestedQuestions(options);
+          return;
+        }
+
+        const options = [
+          `Set EPSG:${projection.epsg}`,
+          'Open projection controls',
+          'Use my GPS location for projection',
+          'Where is my project?',
+        ];
+        projectionHistory(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          {
+            role: MessageRole.MODEL,
+            text: `Recommended <strong>${label}</strong> for ${sourceNote}. Current projection: ${currentEpsg ? `EPSG:${currentEpsg}` : 'none'}. Apply it below or open the controls.`,
+            a2ui: buildProjectionSurfacePayload(targetAgent),
+            questionOptions: options,
+            needsInput: true,
+          },
+        ]);
+        setSuggestedQuestions(options);
+        return;
+      }
+    }
+
+    // Project location: answered from the uploaded point clusters, not by the
+    // model. "Where is my project?" opens the LSAI panel with every cluster's
+    // state/county/municipality; "county tax lines", "flood lines", and
+    // "soils" fetch the layer for the matching cluster and render it.
+    if (!agentOverride && askPeerDepth === 0) {
+      const locationIntent = detectProjectLocationIntent(query);
+      const locationHistory = getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
+      if (locationIntent && locationHistory) {
+        const locations = await ensureProjectClusterLocations();
+        if (locations.clusters.length > 0) {
+          if (locationIntent.kind === 'locate') {
+            locationHistory(prev => [
+              ...markPendingA2UICompleted(prev),
+              { role: MessageRole.USER, text: query },
+              {
+                role: MessageRole.MODEL,
+                text: describeProjectLocationClusters(locations).split('\n').join('<br/>'),
+                a2ui: buildProjectLocationPayload(),
+              },
+            ]);
+            setSuggestedQuestions([
+              'Fetch county tax lines for cluster 1',
+              'Fetch flood lines for cluster 1',
+              'Fetch soils for cluster 1',
+            ]);
+            return;
+          }
+          const outcome = await resolveProjectLocationAction(locationIntent);
+          if (outcome.status === 'choice') {
+            locationHistory(prev => [
+              ...markPendingA2UICompleted(prev),
+              { role: MessageRole.USER, text: query },
+              {
+                role: MessageRole.MODEL,
+                text: outcome.message,
+                ...(outcome.options.length > 0
+                  ? { questionOptions: outcome.options, needsInput: true }
+                  : {}),
+              },
+            ]);
+            if (outcome.options.length > 0) setSuggestedQuestions(outcome.options);
+            return;
+          }
+          const result = outcome.result;
+          const locationLabel = locationIntent.aoi === 'inclusion'
+            ? 'Inclusion area'
+            : (outcome.cluster.jurisdiction?.label ?? outcome.cluster.label);
+          locationHistory(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            {
+              role: MessageRole.MODEL,
+              text: result
+                ? `${result.ok ? '✅' : '⚠️'} ${result.message} (${locationLabel})`
+                : `Located ${outcome.cluster.label}.`,
+              a2ui: buildProjectLocationPayload(outcome.cluster.index),
+            },
+          ]);
+          setSuggestedQuestions([
+            'Centre on canvas',
+            'Fetch flood lines for cluster 1',
+            'Fetch soils for cluster 1',
+          ]);
+          return;
+        }
+      }
+    }
+
     // Latent A2UI surfaces: construct protocol, settings, and workspace tool
     // surfaces on demand when the chat request calls for one.
     if (!agentOverride && askPeerDepth === 0) {
@@ -10511,6 +12857,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       const surfaceSetHistory = getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
       if (surfaceIntent && surfaceSetHistory) {
         let surfacePayload: A2UIPayload;
+        let surfaceReplyText = surfaceIntent.replyText;
         if (surfaceIntent.surface === 'cacp-manifests') {
           surfacePayload = {
             kind: 'cacp-manifests',
@@ -10542,6 +12889,107 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               precision: settings.coordinatePrecision,
               theme: settings.theme,
             },
+          };
+        } else if (surfaceIntent.surface === 'point-list') {
+          const pointData = buildPointListSurfaceData(pointLists);
+          const textEditorSpec = {
+            fileName: pointData.fileName,
+            content: pointData.textContent,
+            mode: 'edit' as const,
+          };
+          surfacePayload = surfaceIntent.view === 'spreadsheet'
+            ? {
+                kind: 'spreadsheet',
+                agent: AgentType.POINT_EDITOR,
+                widgetType: 'spreadsheet',
+                status: 'expanded',
+                spreadsheet: pointData.spreadsheet,
+                textEditor: textEditorSpec,
+              }
+            : {
+                kind: 'text-editor',
+                agent: AgentType.POINT_EDITOR,
+                widgetType: 'text-editor',
+                status: 'expanded',
+                textEditor: textEditorSpec,
+                spreadsheet: pointData.spreadsheet,
+              };
+          surfaceReplyText = pointData.pointCount === 0
+            ? 'There are no points in the project yet. I opened an empty <strong>point list</strong> surface so you can see where the data will appear once points are added.'
+            : surfaceIntent.view === 'spreadsheet'
+              ? `Here is the live <strong>${pointData.pointCount} point${pointData.pointCount === 1 ? '' : 's'}</strong> in the A2UI spreadsheet. Search the grid, copy it as TSV, or download CSV; switch back to Text any time.`
+              : `Here is the live <strong>${pointData.pointCount} point${pointData.pointCount === 1 ? '' : 's'}</strong> in the A2UI text editor. Switch to <strong>Sheet</strong> for a searchable grid with CSV/TSV export.`;
+        } else if (surfaceIntent.surface === 'spreadsheet') {
+          surfacePayload = {
+            kind: 'spreadsheet',
+            agent: activeAgent || AgentType.LSVZ_AGENT,
+            widgetType: 'spreadsheet',
+            status: 'expanded',
+            spreadsheet: createBlankSpreadsheetSpec(),
+          };
+        } else if (surfaceIntent.surface === 'text-editor') {
+          const preferredFile = surfaceIntent.fileHint === 'deed'
+            ? (deedFile ?? generatedFiles.find(file => /\b(?:deed|description|transcript)\b/i.test(file.name)) ?? null)
+            : null;
+          surfacePayload = {
+            kind: 'text-editor',
+            agent: activeAgent || AgentType.TEXT_EDITOR,
+            widgetType: 'text-editor',
+            status: 'expanded',
+            textEditor: {
+              fileName: preferredFile?.name,
+              content: preferredFile?.content,
+              mode: surfaceIntent.mode,
+            },
+          };
+        } else if (surfaceIntent.surface === 'point-entry') {
+          // A bare "add a point" is ambiguous: offer Quick Thought choices.
+          // Explicit canvas wording arms the picker; coordinate/Plus Code
+          // wording opens the A2UI form.
+          if (surfaceIntent.placement === 'quick-thought') {
+            closePointEntrySurface();
+            surfaceSetHistory(prev => [
+              ...markPendingA2UICompleted(prev),
+              { role: MessageRole.USER, text: query },
+              {
+                role: MessageRole.MODEL,
+                text: surfaceIntent.replyText,
+                result: surfaceIntent.replyText,
+                questionOptions: surfaceIntent.questionOptions,
+                needsInput: true,
+              },
+            ]);
+            setSuggestedQuestions(surfaceIntent.suggestedQuestions);
+            return;
+          }
+          if (surfaceIntent.placement === 'canvas') {
+            closePointEntrySurface();
+            surfaceSetHistory(prev => [
+              ...markPendingA2UICompleted(prev),
+              { role: MessageRole.USER, text: query },
+              { role: MessageRole.MODEL, text: surfaceIntent.replyText },
+            ]);
+            setSuggestedQuestions(surfaceIntent.suggestedQuestions);
+            setActiveVisualPanel('canvas');
+            window.setTimeout(() => canvas2dRef.current?.startPointPlacement?.({
+              pointNumber: surfaceIntent.pointNumber,
+            }), 0);
+            return;
+          }
+          surfacePayload = {
+            kind: 'point-entry',
+            agent: AgentType.POINT_EDITOR,
+            widgetType: 'point-entry',
+            status: 'expanded',
+            pointEntry: surfaceIntent.pointNumber ? { pointNumber: surfaceIntent.pointNumber } : undefined,
+          };
+        } else if (surfaceIntent.surface === 'gps-rover') {
+          surfacePayload = {
+            kind: 'gps-rover',
+            agent: AgentType.GPS_STAKEOUT,
+            widgetType: 'gps-rover',
+            status: 'expanded',
+            gpsRover: { mode: surfaceIntent.mode },
           };
         } else if (surfaceIntent.surface === 'workspace-tool') {
           surfacePayload = {
@@ -10584,7 +13032,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         surfaceSetHistory(prev => [
           ...markPendingA2UICompleted(prev),
           { role: MessageRole.USER, text: query },
-          { role: MessageRole.MODEL, text: surfaceIntent.replyText, a2ui: surfacePayload },
+          {
+            role: MessageRole.MODEL,
+            text: surfaceReplyText,
+            a2ui: surfacePayload,
+          },
         ]);
         setSuggestedQuestions(surfaceIntent.suggestedQuestions);
         return;
@@ -11015,7 +13467,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         const toLabel = handoff.displayName;
         setInitializedAgents(prev => new Set(prev).add(handoff.agent));
         setLastActiveAgent(agent);
-        setActiveAgent(handoff.agent);
+        // CACP owns the visible-agent switch: the hand-off transfers control to
+        // the specialist and records it on the delegation stack.
+        interAgentComm.transferAgentFocus(handoff.agent, {
+          from: agent,
+          reason: handoff.matchedOn.slice(0, 3).join(', '),
+        });
+        const handoffText = `CACP handoff — ${fromLabel} → ${toLabel}. ${toLabel} owns this work; continuing automatically.`;
         const targetSetHistory = getSetHistoryForAgent(handoff.agent);
         if (targetSetHistory) {
           targetSetHistory(prev => [
@@ -11024,11 +13482,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             {
               role: MessageRole.MODEL,
               text: `🔀 **CACP handoff — ${fromLabel} → ${toLabel}**\n\nMatched: ${handoff.matchedOn.slice(0, 3).join(', ')}. **${toLabel}** owns this work; continuing there.`,
+              quickThoughtText: handoffText,
             },
           ]);
         }
         logActionToFieldbook(`CACP handoff: ${fromLabel} → ${toLabel} (${handoff.matchedOn.slice(0, 3).join(', ')}).`);
-        setTimeout(() => { void handleSendMessage(query, handoff.agent, askPeerDepth + 1); }, 0);
+        setTimeout(() => { void handleSendMessage(query, handoff.agent, askPeerDepth + 1, undefined, handoffText); }, 0);
         return;
       }
       // No mismatch: broadcast the user's request so peers can claim it (ask-
@@ -11037,11 +13496,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }
 
     if (isInternalFollowUp) {
-      setHistory(prev => [...prev, { role: MessageRole.MODEL, text: '' }]);
+      setHistory(prev => [...prev, { role: MessageRole.MODEL, text: '', quickThoughtText: handoffQuickThought }]);
     } else {
       closeCanvasFlashInput();
       const userMessage: ChatMessage = { role: MessageRole.USER, text: query };
-      setHistory(prev => [...markPendingA2UICompleted(prev), userMessage, { role: MessageRole.MODEL, text: '' }]);
+      setHistory(prev => [...markPendingA2UICompleted(prev), userMessage, { role: MessageRole.MODEL, text: '', quickThoughtText: handoffQuickThought }]);
     }
     setIsLoading(true);
     setError(null);
@@ -11474,6 +13933,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             const newHistory = [...prev];
             const lastMessage = newHistory[newHistory.length - 1];
             if (lastMessage && lastMessage.role === MessageRole.MODEL) {
+                lastMessage.quickThoughtText = undefined;
                 lastMessage.text += chunkText;
             }
             return newHistory;
@@ -11894,6 +14354,21 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           finalResultText = stripThinkingBlocks(resultText) + disclaimer;
       }
 
+      // Boundary responses are structured geometry, not chat prose. Once the
+      // JSON has been extracted, never leave the raw payload in the message
+      // bubble: the A2UI deed summary and the traverse panel render it instead.
+      const boundaryStructuredDisplay = agent === AgentType.DEED_READER && Boolean(jsonContentToParse);
+      const boundaryDisplayText = boundaryStructuredDisplay
+        ? (() => {
+            const prose = finalResultText
+              .replace(/```json[\s\S]*?```/gi, '')
+              .replace(/\*Disclaimer: Your requested data is ready for professional review\.\*/gi, '')
+              .trim();
+            return prose || '**Deed analysis complete.** The structured result is being applied to the canvas.';
+          })()
+        : finalResultText;
+      const displayedFullResponse = boundaryStructuredDisplay ? boundaryDisplayText : finalFullResponse;
+      const displayedResultText = boundaryStructuredDisplay ? boundaryDisplayText : finalResultText;
 
       const combinedResponseProse = [thinkingClarification?.question, finalResultText, thinking]
         .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
@@ -11942,9 +14417,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           if (lastMessage && lastMessage.role === MessageRole.MODEL) {
             newHistory[newHistory.length - 1] = {
               role: MessageRole.MODEL,
-              text: thinkingClarification?.question || finalFullResponse,
+              text: thinkingClarification?.question || displayedFullResponse,
               thinking: thinking,
-              result: thinkingClarification?.question || finalResultText,
+              result: thinkingClarification?.question || displayedResultText,
               isExpanded: isExpanded,
               model: currentModelName,
               questionOptions: thinkingClarification?.options.length
@@ -12084,6 +14559,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 return newHist;
               });
               logActionToFieldbook(`LSAI Agent delegated request to ${targetLabel}: "${delegatedQuery.slice(0, 80)}"`);
+              // CACP focus: the specialist owns the screen while it works. This
+              // hand-off transfers control rather than borrowing it.
+              if (agentConfig[targetAgent]) {
+                interAgentComm.transferAgentFocus(targetAgent, {
+                  from: agent,
+                  reason: 'lsvz_delegate_agent',
+                });
+              }
               setTimeout(() => { void handleSendMessage(delegatedQuery, targetAgent, askPeerDepth + 1); }, 0);
               skipFinallyUpdate = true;
               return;
@@ -12443,23 +14926,60 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           // them under `descriptionsFound`. Without this branch the list is
           // dropped silently and the user sees only the first tract drawn.
           if (agent === AgentType.DEED_READER && Array.isArray(parsedJson.descriptionsFound) && parsedJson.descriptionsFound.length > 0) {
-              const items = parsedJson.descriptionsFound as Array<{ tractId?: string; label?: string; tractName?: string; page?: number; sourcePage?: number; extracted?: boolean; reason?: string }>;
-              const bulletList = items.map((d, i) => {
-                  const id = d.tractId || d.tractName || `Tract ${i + 1}`;
-                  const label = d.label || d.tractName || '';
-                  const page = d.page ?? d.sourcePage;
-                  const status = d.extracted === false ? '?? NOT extracted' : '? extracted';
-                  const reason = d.reason ? ` � ${d.reason}` : '';
-                  const pageStr = page != null ? ` (page ${page})` : '';
-                  return `- **${id}**${label && label !== id ? `: ${label}` : ''}${pageStr} � ${status}${reason}`;
-              }).join('\n');
-              const extractedCount = items.filter(d => d.extracted !== false).length;
+              const items = parsedJson.descriptionsFound as DescriptionsFoundItem[];
+              const descriptionSummary = buildDeedSummaryFromDescriptions(items, {
+                  fileName: deedFile?.name ?? deedSummary?.fileName,
+                  baseSummary: deedSummary,
+              });
               const totalCount = items.length;
-              const summaryMsg = `?? **${totalCount} deed description${totalCount === 1 ? '' : 's'} detected** (${extractedCount} extracted, ${totalCount - extractedCount} pending):\n\n${bulletList}\n\n${totalCount - extractedCount > 0 ? '_Ask me to "extract the remaining descriptions" or to "extract Tract N" for each one not yet drawn._' : ''}`;
-              setHistory(prev => ([
-                  ...prev,
-                  { role: MessageRole.MODEL, text: summaryMsg },
-              ]));
+              const pendingCount = items.filter(item => item.extracted === false).length;
+              const extractedCount = totalCount - pendingCount;
+              const summaryMsg = pendingCount > 0
+                  ? `**${totalCount} deed description${totalCount === 1 ? '' : 's'} detected** — ${extractedCount} extracted, ${pendingCount} pending. Select a description below to open its text or extract its calls.`
+                  : `**${totalCount} deed description${totalCount === 1 ? '' : 's'} detected** — all extracted. Open a description below or continue in the traverse panel.`;
+              const summaryPayload = {
+                  kind: 'deed-summary' as const,
+                  agent: AgentType.DEED_READER,
+                  widgetType: 'deed-summary' as const,
+                  status: 'expanded' as const,
+                  deedSummary: descriptionSummary,
+              };
+              setDeedSummary(descriptionSummary);
+              // A descriptions-only response means the parser finished without
+              // producing any geometry (for example, the deed says "See
+              // Schedule C" but the schedule was not uploaded). Release the
+              // per-tract spinner so rows return to pending / Needs source
+              // instead of sitting on EXTRACTING CALLS forever.
+              const hasBoundaryGeometry = hasParsedBoundaryGeometry(parsedJson);
+              if (!hasBoundaryGeometry) {
+                  setComputingTractIds(new Set());
+                  pendingTractIdRef.current = null;
+                  pendingTractIdsRef.current = [];
+                  pendingTractPobRef.current = null;
+              }
+              setHistory(prev => {
+                  const next = [...prev];
+                  let resultIndex = -1;
+                  for (let i = next.length - 1; i >= 0; i -= 1) {
+                      if (next[i].role !== MessageRole.MODEL) continue;
+                      resultIndex = i;
+                      break;
+                  }
+                  if (resultIndex < 0) {
+                      return [
+                          ...next.filter(msg => msg.a2ui?.kind !== 'deed-summary'),
+                          { role: MessageRole.MODEL, text: summaryMsg, result: summaryMsg, a2ui: summaryPayload },
+                      ];
+                  }
+                  next[resultIndex] = {
+                      ...next[resultIndex],
+                      text: summaryMsg,
+                      result: summaryMsg,
+                      a2ui: summaryPayload,
+                      isExpanded: false,
+                  };
+                  return next.filter((msg, index) => index === resultIndex || msg.a2ui?.kind !== 'deed-summary');
+              });
               logActionToFieldbook(`Deed parser detected ${totalCount} description${totalCount === 1 ? '' : 's'} (${extractedCount} extracted).`);
           }
 
@@ -13588,6 +16108,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 const newFiles: BoundaryFile[] = tractCallGroups.map((group, idx) => {
                   const firstCall = group[0];
                   const existingPt = (firstCall && firstCall.from) ? pointMap.get(firstCall.from) : undefined;
+                  const tractId = pendingTractIdRef.current ?? pendingTractIdsRef.current[idx] ?? undefined;
+                  const tractSummary = (tractId
+                    ? deedSummary?.tracts.find(tract => tract.tractId === tractId)
+                    : undefined) ?? deedSummary?.tracts[idx];
+                  const sourceDeedName = deedSummary?.fileName ?? deedFile?.name;
+                  const deedBaseName = sourceDeedName?.replace(/\.[^/.]+$/, '').trim();
+                  const annotationLot = tractSummary?.tractName?.trim();
+                  const annotationParcelId = tractSummary?.parcelId
+                    ?? deedSummary?.parcelId
+                    ?? deedFile?.deedMetadata?.parcelId;
+                  const annotationOwner = tractSummary?.grantee
+                    ?? deedSummary?.owner
+                    ?? deedFile?.deedMetadata?.owners?.[0];
                   const specifiedPt = userSpecifiedPob ?? (existingPt ? { easting: existingPt.easting, northing: existingPt.northing } : null);
 
                   let finalPob: { easting: number; northing: number };
@@ -13651,7 +16184,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                     createdAt: new Date().toISOString(),
                     calls: group,
                     hidden: false,
-                    sourceTractId: pendingTractIdRef.current ?? undefined,
+                    sourceTractId: tractId,
+                    sourceDeedName,
+                    // Snapshot the per-boundary annotation source so a later
+                    // deed upload cannot move or re-label this tract's centroid
+                    // annotation.
+                    ...(annotationParcelId ? { parcelId: annotationParcelId } : {}),
+                    ...(annotationOwner ? { ownerName: annotationOwner } : {}),
+                    ...(annotationLot && annotationLot !== deedBaseName
+                      ? { lotDescription: annotationLot }
+                      : {}),
                     pobOverride: finalPob,
                     deedConfidence: resolvedConfidence,
                   };
@@ -13660,7 +16202,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 console.log('[DEED_PARSE_BF] About to setBoundaryFiles. newFiles:', newFiles.length,
                   'tractCallGroups sizes:', tractCallGroups.map(g => g.length));
                 setBoundaryFiles(prev => [...prev, ...newFiles]);
-                setDeedSummaryFileIds(newFiles.map(f => f.id));
+                pendingTractIdsRef.current = [];
                 if (newFiles.length > 0) {
                   setActiveBoundaryFileId(newFiles[0].id);
                 }
@@ -13680,6 +16222,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 showView('canvas');
                 setIsBoundaryEditorVisible(true);
                 setIsBoundaryEditorButtonPulsing(false);
+                setIsBoundaryDialogMinimized(false);
+                if (boundaryDockMode === 'toolshelf') {
+                  setActiveBoundaryDockedTab('dialog');
+                  setIsToolShelfVisible(true);
+                }
                 if (newFiles.length === 1) {
                   logActionToFieldbook(`Created boundary file "${newFiles[0].name}" with ${newFiles[0].calls.length} calls.`);
                 } else {
@@ -13955,7 +16502,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 setContourSettings(newSettings);
                 
                 // Allow state to update, then generate contours
-                setTimeout(() => {
+                setTimeout(async () => {
                     let pointsToContour = points;
                     const ignoredSet = new Set(newSettings.ignoredPointNumbers ?? []);
                     if (ignoredSet.size > 0) pointsToContour = pointsToContour.filter(p => !ignoredSet.has(p.pointNumber));
@@ -13972,6 +16519,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
                     setIsGeneratingContours(true);
                     try {
+                        const contourLayers = await resolveContourLineLayersViaCacp();
+                        contourLineLayersRef.current = contourLayers;
                         const breaklines = lines.filter(l => l.type === 'breakline');
                         // FIX: The `generateContours` function now returns labels. Capture and set them.
                         const { lines: contourLines, labels: newLabels } = generateContours(
@@ -13981,7 +16530,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             newSettings.smoothing,
                             newSettings.showLabels,
                             newSettings.labelDensity,
-                            breaklines
+                            breaklines,
+                            undefined,
+                            undefined,
+                            undefined,
+                            contourLayers
                         );
                         setLines(prevLines => {
                             const existingLines = prevLines.filter(l => !l.type?.startsWith('contour'));
@@ -14047,7 +16600,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               });
               
               // Trigger contour generation with these settings
-              setTimeout(() => {
+              setTimeout(async () => {
                 setIsGeneratingContours(true);
                 setError(null);
                 try {
@@ -14062,6 +16615,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         logActionToFieldbook(`Generating ${params.contourInterval}' contours with smoothing level ${params.smoothing}, using ${pointsToContour.length} points.`);
                     }
 
+                    const contourLayers = await resolveContourLineLayersViaCacp();
+                    contourLineLayersRef.current = contourLayers;
                     const breaklines = lines.filter(l => l.type === 'breakline');
                     const { lines: contourLines, labels: newLabels } = generateContours(
                         pointsToContour,
@@ -14070,7 +16625,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         params.smoothing,
                         params.showLabels,
                         params.labelDensity,
-                        breaklines
+                        breaklines,
+                        undefined,
+                        undefined,
+                        undefined,
+                        contourLayers
                     );
 
                     setLines(prevLines => {
@@ -14338,6 +16897,22 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
         } catch (e) {
           console.error("Failed to parse JSON from model response:", e, "\nContent was:", contentToParse);
+          if (agent === AgentType.DEED_READER) {
+            const failureMsg = '**Deed analysis could not be read.** The structured response was incomplete or invalid. Re-run the extraction, or paste the deed calls manually.';
+            setHistory(prev => {
+              const next = [...prev];
+              for (let i = next.length - 1; i >= 0; i -= 1) {
+                if (next[i].role !== MessageRole.MODEL) continue;
+                next[i] = { ...next[i], text: failureMsg, result: failureMsg, isExpanded: false };
+                break;
+              }
+              return next;
+            });
+            setComputingTractIds(new Set());
+            pendingTractIdRef.current = null;
+            pendingTractIdsRef.current = [];
+            pendingTractPobRef.current = null;
+          }
           setError(`Failed to parse JSON from model response:\n${(e as Error).message}`);
         }
       }
@@ -14354,7 +16929,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     attributeScale, pointLayers, showView, logActionToFieldbook, highlights, pdfViewerFiles, textEditorContent, activeTextEditorFile, currentPosition, handleOpenFileInEditor, offlineMapAreas,
     wmsServices, activeWmsLayers, addHighlights, plotGeoJsonFile, customSymbols, handleGenerateContours, points, contourSettings, contourLabels, linesVisible, centerlinesVisible,
     lineLabelScale, hasConfirmedApiKey, setStandardsComplianceLastReport, formatComplianceReportText, buildStandardsComplianceReport, runVisualComplianceAudit, cadManagerContext,
-    applySymbolVisibilityCommand, addNotification, getSetHistoryForAgent
+    applySymbolVisibilityCommand, addNotification, getSetHistoryForAgent, handleFetchEsriContours, toggleToolDock, initializeContouringAgent,
+    closePointEntrySurface, openCivilDrafterContextSurface,
+    ensureProjectClusterLocations, openProjectLocationPanel, resolveProjectLocationAction,
+    buildProjectLocationPayload, applyProjectProjection, buildProjectionSurfacePayload,
+    openProjectionControls
   ]);
 
   // CACP hand-offs from the Civil 3D connector arrive on the sync socket, which
@@ -14698,6 +17277,138 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }
   }, [gpsStakeoutChat, handleSendMessage, settings.projection, logActionToFieldbook, settings.coordinatePrecision, pointLists]);
 
+  /** Store a point at the live fix, shared by the panel and A2UI surface. */
+  const handleGpsCollectFromSurface = useCallback(async (
+    pointNumber: string,
+    description: string
+  ): Promise<{ ok: boolean; message: string }> => {
+    if (!currentPosition) {
+      return { ok: false, message: 'Waiting for a GPS fix — enable location access and step outside.' };
+    }
+    if (!settings.projection.epsg) {
+      return { ok: false, message: 'Select a State Plane / EPSG projection first.' };
+    }
+    const pn = pointNumber.trim();
+    if (!pn) {
+      return { ok: false, message: 'Point number is required.' };
+    }
+    if (points.some(p => p.pointNumber === pn)) {
+      return { ok: false, message: `Point ${pn} already exists — choose another number.` };
+    }
+    const projected = wgs84ToProjected(
+      currentPosition.coords.latitude,
+      currentPosition.coords.longitude,
+      settings.projection.epsg
+    );
+    if (!projected) {
+      return { ok: false, message: 'The GPS fix could not be projected into the project coordinate system.' };
+    }
+    const newPoint: SurveyPoint = {
+      pointNumber: pn,
+      northing: projected.northing,
+      easting: projected.easting,
+      elevation: currentPosition.coords.altitude ?? 0,
+      description: description.trim() || 'GPS',
+    };
+    setPointLists(prev => {
+      const index = prev.findIndex(list => list.id === 'working');
+      if (index === -1) {
+        return [...prev, { id: 'working', name: 'Unsaved Points', points: [newPoint], isVisible: true }];
+      }
+      const next = [...prev];
+      next[index] = { ...next[index], points: [...next[index].points, newPoint] };
+      return next;
+    });
+    logActionToFieldbook(`Collected GPS point ${pn} from the GPS Rover surface.`);
+    return {
+      ok: true,
+      message: `Stored point ${pn} at N ${projected.northing.toFixed(settings.coordinatePrecision)}, E ${projected.easting.toFixed(settings.coordinatePrecision)}.`,
+    };
+  }, [
+    currentPosition,
+    settings.projection.epsg,
+    settings.coordinatePrecision,
+    points,
+    setPointLists,
+    logActionToFieldbook,
+  ]);
+
+  /** Open the dockable GPS Rover dialog on a specific tab. */
+  const openGpsRoverPanel = useCallback((mode: 'stakeout' | 'collect' | 'benchmark' = 'stakeout') => {
+    setActiveAgent(AgentType.GPS_STAKEOUT);
+    // Keep the drawing canvas (with the live blue dot) behind the rover.
+    setActiveVisualPanel('canvas');
+    setGpsInitialTab(mode);
+    setGpsPanelRequestId(value => value + 1);
+    setIsToolShelfVisible(true);
+    setIsGpsRoverPanelVisible(true);
+    toggleToolDock('gpsStakeout', true);
+  }, [toggleToolDock, setActiveVisualPanel]);
+
+  /** Live state consumed by the A2UI GPS Rover surface (polled at ~1 Hz). */
+  const getGpsRoverSnapshot = useCallback((): A2UIGpsRoverSnapshot => {
+    const target = stakeoutTargetPointNumber
+      ? points.find(p => p.pointNumber === stakeoutTargetPointNumber) ?? null
+      : null;
+    let guidance: A2UIGpsRoverSnapshot['guidance'] = null;
+    if (projectedPosition && target) {
+      const deltaNorth = target.northing - projectedPosition.northing;
+      const deltaEast = target.easting - projectedPosition.easting;
+      const roverElevation = currentPosition?.coords.altitude != null
+        ? currentPosition.coords.altitude * 3.280839895013123
+        : null;
+      guidance = {
+        bearingDeg: (Math.atan2(deltaEast, deltaNorth) * 180 / Math.PI + 360) % 360,
+        distanceFt: Math.hypot(deltaNorth, deltaEast),
+        deltaNorthFt: deltaNorth,
+        deltaEastFt: deltaEast,
+        cutFillFt: target.elevation != null && roverElevation != null
+          ? target.elevation - roverElevation
+          : null,
+      };
+    }
+    return {
+      hasFix: Boolean(currentPosition),
+      latitude: currentPosition?.coords.latitude ?? null,
+      longitude: currentPosition?.coords.longitude ?? null,
+      accuracyFt: currentPosition?.coords.accuracy != null
+        ? currentPosition.coords.accuracy * 3.280839895013123
+        : null,
+      altitudeFt: currentPosition?.coords.altitude != null
+        ? currentPosition.coords.altitude * 3.280839895013123
+        : null,
+      northing: projectedPosition?.northing ?? null,
+      easting: projectedPosition?.easting ?? null,
+      epsg: settings.projection.epsg ?? null,
+      projectionLabel: settings.projection.epsg ? `EPSG:${settings.projection.epsg}` : 'No projection',
+      targetPointNumber: stakeoutTargetPointNumber,
+      targetPoint: target
+        ? {
+            pointNumber: target.pointNumber,
+            description: target.description,
+            northing: target.northing,
+            easting: target.easting,
+            elevation: target.elevation,
+          }
+        : null,
+      guidance,
+      nextPointNumber: nextAvailablePointNumber,
+      stakeoutPoints: points.slice(0, 250).map(p => ({
+        pointNumber: p.pointNumber,
+        description: p.description ?? '',
+        northing: p.northing,
+        easting: p.easting,
+        elevation: p.elevation,
+      })),
+    };
+  }, [
+    currentPosition,
+    projectedPosition,
+    points,
+    stakeoutTargetPointNumber,
+    settings.projection.epsg,
+    nextAvailablePointNumber,
+  ]);
 
   const handleCadManagerSessionStart = useCallback(() => {
     try {
@@ -14710,7 +17421,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           setCadManagerChatHistory([{
             role: MessageRole.MODEL,
             text:
-              "Hi � I'm the **CAD Manager Agent**. Your CAD Manager workspace lives in chat as an A2UI surface. " +
+              "Hi � I'm the **CAD Manager Agent**. Your CAD Manager workspace lives in chat as an interactive surface. " +
               "Pop it out or dock it into the agent tool shelf to author description keys, layers, linetypes, and symbols. Ask me anything " +
               "about CAD standards, layer naming, symbol strategy, or why a specific code isn't resolving. " +
               "I'm also the CACP source-of-truth other agents call when they need a layer or symbol for a code.",
@@ -14723,7 +17434,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           ...prev,
           {
             role: MessageRole.MODEL,
-            text: 'The **CAD Manager** workspace is ready. Use **Open workspace**, **Pop out**, or **Dock** to launch it. The card stays here so you can return to chat at any time.',
+            text: 'The **CAD Manager** workspace is ready. Use **Open workspace** or the **Floating**, **Chat**, and **Toolshelf** options to place it. The card stays here so you can return to chat at any time.',
             a2ui: {
               kind: 'cad-manager',
               agent: AgentType.CAD_MANAGER,
@@ -14794,7 +17505,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setIsSpreadsheetEditorOpen(true);
   }, [cadManagerState.standard, cadManagerContext]);
 
-  /** Append the live, filterable CAD standards sheet as an A2UI surface. */
+  /** Append the live, filterable CAD standards sheet as an interactive surface. */
   const handleOpenCadStandardsSheet = useCallback(() => {
     setActiveAgent(AgentType.CAD_MANAGER);
     setInitializedAgents(prev => new Set(prev).add(AgentType.CAD_MANAGER));
@@ -14858,7 +17569,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         },
         {
           role: MessageRole.MODEL,
-          text: 'The uploaded standard is ready as an A2UI sheet. Filter it here, or open the workspace to edit and export it.',
+          text: 'The uploaded standard is ready as a standards sheet. Filter it here, or open the workspace to edit and export it.',
           a2ui: {
             kind: 'standards-explorer',
             agent: AgentType.CAD_MANAGER,
@@ -14906,7 +17617,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // hint flashing on an unrelated toolbar icon.
     if (agent !== AgentType.DEED_READER) {
       setIsBoundaryEditorButtonPulsing(false);
-    } else if (boundaryFiles.length > 0 || deedFile || deedSummary) {
+    } else if (boundaryFiles.length > 0) {
       setIsBoundaryEditorVisible(true);
       setIsBoundaryEditorButtonPulsing(false);
     }
@@ -15095,6 +17806,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   
    const handleUpdateCenterline = useCallback((updatedCL: Centerline) => {
     setCenterlines(prev => prev.map(cl => cl.id === updatedCL.id ? updatedCL : cl));
+  }, []);
+
+  const handleUpsertCenterline = useCallback((centerline: Centerline) => {
+    setCenterlines(prev => {
+      const index = prev.findIndex(cl => cl.id === centerline.id);
+      if (index === -1) return [centerline, ...prev];
+      const next = [...prev];
+      next[index] = centerline;
+      return next;
+    });
   }, []);
   
   const handlePlaceStationOffsetPoint = useCallback((northing: number, easting: number, pointNumber: string, description: string) => {
@@ -15462,6 +18183,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         const newLine = addLineToList({
           from: c.from,
           to: c.to,
+          type: 'parcel',
           bearing: c.bearing,
           distance: c.distance,
           isCurve: c.isCurve,
@@ -15778,6 +18500,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setClosureInvestigation(null);
   }, [closureInvestigation, boundaryFiles, propagateBoundaryCalls, applyBoundaryPropagation, logActionToFieldbook]);
 
+  // The investigation is a first-class drag/dock panel, not a fixed global
+  // surface. Opening it must bring the selected placement into view, exactly
+  // like the other agent tools.
+  useEffect(() => {
+    if (!closureInvestigation) return;
+    if (closureDockMode === 'toolshelf') {
+      requestToolShelfTab('closure-investigation');
+      setIsToolShelfVisible(true);
+    } else if (closureDockMode === 'chat') {
+      setAgentChatOpenSignal(n => n + 1);
+    }
+  }, [closureInvestigation?.fileId, closureDockMode, requestToolShelfTab]);
+
   // Called by DrawingCanvas when user completes a bearing+distance boundary call.
   // Creates the endpoint and the SurveyLine, then calls back with the new point.
   const handleAddBoundaryCall = useCallback((
@@ -15808,6 +18543,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       newLine = addLineToList({
         from: from.pointNumber,
         to: ptNumber,
+        type: 'parcel',
         bearing: chordBearingStr,
         distance: chordDist.toFixed(2),
         isCurve: true,
@@ -15822,7 +18558,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       const dist = parseDistance(distance);
       if (dist === null) return;
       newCoords = direct(from, brRad, dist);
-      newLine = addLineToList({ from: from.pointNumber, to: ptNumber, bearing, distance });
+      newLine = addLineToList({ from: from.pointNumber, to: ptNumber, bearing, distance, type: 'parcel' });
     }
 
     const endPt: SurveyPoint = { pointNumber: ptNumber, northing: newCoords.northing, easting: newCoords.easting, elevation: 0, description: 'BP' };
@@ -17002,6 +19738,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         to: endPointNumber,
         bearing: rotateBearing(call.bearing, rotRad),
         distance: call.distance,
+        type: 'parcel',
         isCurve: call.isCurve,
         curveRadius: call.curveRadius,
         arcLength: call.arcLength,
@@ -17135,30 +19872,97 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
   const handleAddPoint = useCallback((newPoint: SurveyPoint) => {
       try {
-        let pointToStore = newPoint;
-        const allExisting = pointLists.flatMap(l => l.points);
-        if (allExisting.some(p => String(p.pointNumber).trim().toUpperCase() === String(pointToStore.pointNumber).trim().toUpperCase())) {
-            const agent = PointAgent.getInstance();
-            agent.setLabelingSettings(settings.pointLabelingSettings);
-            agent.setAvailablePoints(allExisting);
-            const [nextPn] = agent.getNextNumbers(1, AgentType.POINT_EDITOR);
-            pointToStore = { ...newPoint, pointNumber: nextPn };
-            addNotification({
-              kind: 'general',
-              severity: 'warning',
-              title: 'Point Renumbered (CACP)',
-              message: `Point ${newPoint.pointNumber} already exists. Saved as Point ${nextPn} via CACP PointAgent authority.`,
-            });
-        }
-        const newLists = addPointToList(pointToStore, pointLists);
-        logActionToFieldbook(`Manually added point: ${pointToStore.pointNumber} (N: ${pointToStore.northing}, E: ${pointToStore.easting})`);
-        setPointLists(newLists);
+        addPointAtProjected(newPoint);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to add point';
         setError(message);
         setTimeout(() => setError(null), 3000);
       }
-  }, [pointLists, settings.pointLabelingSettings, addNotification, logActionToFieldbook]);
+  }, [addPointAtProjected]);
+
+  /** Duplicate check shared by the A2UI point-entry surface and CACP numbering. */
+  const isPointNumberTakenFromSurface = useCallback((pointNumber: string) => {
+    const normalized = pointNumber.trim().toUpperCase();
+    if (!normalized) return false;
+    return pointLists.some(list =>
+      list.points.some(point => String(point.pointNumber).trim().toUpperCase() === normalized)
+    );
+  }, [pointLists]);
+
+  /** PointAgent CACP next number, with a deterministic sequential fallback. */
+  const getNextPointNumberFromSurface = useCallback((excludePointNumber?: string): string => {
+    const allExisting = pointLists.flatMap(list => list.points);
+    const excluded = excludePointNumber?.trim().toUpperCase();
+    try {
+      const agent = PointAgent.getInstance();
+      agent.setLabelingSettings(settings.pointLabelingSettings);
+      agent.setAvailablePoints(allExisting);
+      const [nextPn] = agent.getNextNumbers(1, AgentType.POINT_EDITOR);
+      if (nextPn && String(nextPn).trim().toUpperCase() !== excluded) {
+        return String(nextPn);
+      }
+    } catch {
+      // Fall through to the deterministic check.
+    }
+    const taken = new Set(allExisting.map(point => String(point.pointNumber).trim().toUpperCase()));
+    if (excluded) taken.add(excluded);
+    let next = parseInt(nextAvailablePointNumber, 10);
+    if (!Number.isFinite(next) || next < 1) next = 1;
+    while (taken.has(String(next))) next += 1;
+    return String(next);
+  }, [pointLists, settings.pointLabelingSettings, nextAvailablePointNumber]);
+
+  /** Store a point entered in the A2UI point-entry surface. */
+  const handleAddPointFromSurface = useCallback((newPoint: SurveyPoint): { ok: boolean; message?: string; pointNumber?: string } => {
+    const requestedPn = newPoint.pointNumber.trim();
+    const n = Number(newPoint.northing);
+    const e = Number(newPoint.easting);
+    if (!requestedPn) return { ok: false, message: 'Point number is required.' };
+    if (!Number.isFinite(n) || !Number.isFinite(e)) {
+      return { ok: false, message: 'Enter valid Northing and Easting coordinates.' };
+    }
+    const elevation = Number(newPoint.elevation);
+    const pointNumber = isPointNumberTakenFromSurface(requestedPn)
+      ? getNextPointNumberFromSurface(requestedPn)
+      : requestedPn;
+    const pointToStore: SurveyPoint = {
+      ...newPoint,
+      pointNumber,
+      northing: Math.round(n * 1000) / 1000,
+      easting: Math.round(e * 1000) / 1000,
+      elevation: Number.isFinite(elevation) ? elevation : 0,
+      description: newPoint.description?.trim() ?? '',
+    };
+    handleAddPoint(pointToStore);
+    addNotification({
+      kind: 'point-add',
+      severity: 'success',
+      title: 'Point Added',
+      message: pointNumber === requestedPn
+        ? `Added Point ${pointNumber} (N: ${pointToStore.northing.toFixed(2)}, E: ${pointToStore.easting.toFixed(2)})`
+        : `Point ${requestedPn} existed. Saved as Point ${pointNumber} via CACP.`,
+    });
+    return {
+      ok: true,
+      pointNumber,
+      message: pointNumber === requestedPn
+        ? `Added Point ${pointNumber}.`
+        : `Point ${requestedPn} already existed. Saved as Point ${pointNumber} via CACP.`,
+    };
+  }, [addNotification, getNextPointNumberFromSurface, handleAddPoint, isPointNumberTakenFromSurface]);
+
+  /** Arm the canvas add-point tool from the A2UI surface. */
+  const handleStartPointPlacementFromA2UI = useCallback((options: {
+    pointNumber: string;
+    elevation: string;
+    description: string;
+  }) => {
+    closePointEntrySurface();
+    setActiveVisualPanel('canvas');
+    // Let the canvas panel mount before arming its add-point tool when the
+    // surface was opened from chat or fullscreen over another view.
+    window.setTimeout(() => canvas2dRef.current?.startPointPlacement?.(options), 0);
+  }, [closePointEntrySurface, setActiveVisualPanel]);
 
   const handleStartDivideSelection = useCallback(() => {
     canvas2dRef.current?.beginSelectionMode?.();
@@ -17530,6 +20334,110 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     });
   }, [setPointLists]);
 
+  // CACP: any agent can add a point from a Plus Code, WGS84 pair, or directly
+  // projected N/E. Numbering and duplicate renumbering stay with PointAgent.
+  useEffect(() => {
+    const unsub = interAgentComm.onCommand('add_point', async (message) => {
+      const data = (message.data ?? {}) as Record<string, unknown>;
+      const pointNumber = data.pointNumber == null ? '' : String(data.pointNumber);
+      const elevation = data.elevation == null ? 0 : Number(data.elevation);
+      const description = typeof data.description === 'string' ? data.description : '';
+      const plusCode = typeof data.plusCode === 'string'
+        ? data.plusCode
+        : typeof data.plus_code === 'string'
+          ? data.plus_code
+          : '';
+
+      if (plusCode) {
+        const decoded = decodePlusCode(plusCode);
+        if (!decoded) {
+          return {
+            requestId: message.id,
+            from: AgentType.POINT_EDITOR,
+            success: false,
+            error: 'Invalid full Google Plus Code.',
+            timestamp: Date.now(),
+          };
+        }
+        const result = addPointAtWgs84(decoded.latitude, decoded.longitude, {
+          pointNumber,
+          elevation: Number.isFinite(elevation) ? elevation : 0,
+          description: description || `PLUS CODE ${decoded.code}`,
+        });
+        if ('error' in result) {
+          return {
+            requestId: message.id,
+            from: AgentType.POINT_EDITOR,
+            success: false,
+            error: result.error,
+            timestamp: Date.now(),
+          };
+        }
+        return {
+          requestId: message.id,
+          from: AgentType.POINT_EDITOR,
+          success: true,
+          data: result,
+          timestamp: Date.now(),
+        };
+      }
+
+      const latitude = Number(data.latitude ?? data.lat);
+      const longitude = Number(data.longitude ?? data.lon ?? data.lng);
+      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+        const result = addPointAtWgs84(latitude, longitude, {
+          pointNumber,
+          elevation: Number.isFinite(elevation) ? elevation : 0,
+          description,
+        });
+        if ('error' in result) {
+          return {
+            requestId: message.id,
+            from: AgentType.POINT_EDITOR,
+            success: false,
+            error: result.error,
+            timestamp: Date.now(),
+          };
+        }
+        return {
+          requestId: message.id,
+          from: AgentType.POINT_EDITOR,
+          success: true,
+          data: result,
+          timestamp: Date.now(),
+        };
+      }
+
+      const northing = Number(data.northing ?? data.n ?? data.y);
+      const easting = Number(data.easting ?? data.e ?? data.x);
+      if (Number.isFinite(northing) && Number.isFinite(easting)) {
+        const saved = addPointAtProjected({
+          pointNumber,
+          northing,
+          easting,
+          elevation: Number.isFinite(elevation) ? elevation : 0,
+          description,
+        });
+        return {
+          requestId: message.id,
+          from: AgentType.POINT_EDITOR,
+          success: true,
+          data: saved,
+          timestamp: Date.now(),
+        };
+      }
+
+      return {
+        requestId: message.id,
+        from: AgentType.POINT_EDITOR,
+        success: false,
+        error: 'Provide plusCode, latitude/longitude, or northing/easting.',
+        timestamp: Date.now(),
+      };
+    });
+    return unsub;
+  }, [addPointAtProjected, addPointAtWgs84]);
+
   // Connect the AI gateway relay so external platforms (Claude/ChatGPT/Grok)
   // can stage points / reserve numbers into this open session via the CACP bus.
   useEffect(() => {
@@ -17657,6 +20565,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             dimensions,
             hatches,
             cadManagerState.standard?.hatches ?? [],
+            agentAnnotMode,
         );
         const blob = new Blob([dxfContent], { type: 'application/dxf;charset=utf-8' });
         triggerDownload(blob, options.fileName);
@@ -17665,7 +20574,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setError(`DXF Export Error: ${errorMessage}`);
     }
     setIsDxfExportModalOpen(false);
-  }, [points, visibleLines, visibleCenterlines, settings, customSymbols, contourLabels, parcelLabels, parcelLabelFormatter, parcelCadTextStyles, annotationCategories, dimensions, hatches, cadManagerState.standard?.hatches]);
+  }, [points, visibleLines, visibleCenterlines, settings, customSymbols, contourLabels, parcelLabels, parcelLabelFormatter, parcelCadTextStyles, annotationCategories, dimensions, hatches, cadManagerState.standard?.hatches, agentAnnotMode]);
 
 
    const handleExportPoints = useCallback((format: 'csv' | 'txt_comma' | 'txt_space') => {
@@ -17763,6 +20672,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         contourGenerations: contourGenerations.length > 0 ? contourGenerations : undefined,
         streetLabels: streetLabels.length > 0 ? streetLabels : undefined,
         parcelLabels: parcelLabels.length > 0 ? parcelLabels : undefined,
+        areaLabels: areaLabels.length > 0 ? areaLabels : undefined,
+        floodAreas: lastFloodAreas.length > 0 ? lastFloodAreas : undefined,
+        soilAreas: lastSoilAreas.length > 0 ? lastSoilAreas : undefined,
         annotationCategories: annotationCategories,
         jobInfo,
         rawChatHistory,
@@ -17994,10 +20906,26 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   setStreetLabels(sessionState.streetLabels);
                 }
                 if (sessionState.parcelLabels && sessionState.parcelLabels.length > 0) {
-                  setParcelLabels(sessionState.parcelLabels);
+                    setParcelLabels(sessionState.parcelLabels);
                 }
+                if (sessionState.areaLabels && sessionState.areaLabels.length > 0) {
+                    setAreaLabels(sessionState.areaLabels);
+                }
+                // Source areas let the live hatch controls keep working after a
+                // reload; old sessions without them retain their saved hatches.
+                skipFloodAreaRebuildRef.current = (sessionState.hatches || []).some(h => (h.layer || '').startsWith('FEMA-FLOOD-'));
+                skipSoilAreaRebuildRef.current = (sessionState.hatches || []).some(h => (h.layer || '').startsWith('SOILS-'));
+                setLastFloodAreas(sessionState.floodAreas || []);
+                setLastSoilAreas(sessionState.soilAreas || []);
                 if (sessionState.annotationCategories && sessionState.annotationCategories.length > 0) {
-                  setAnnotationCategories(sessionState.annotationCategories);
+                    // Merge in any categories added after this session was saved
+                    // (e.g. flood-zones / soil-map-units) so their styles exist.
+                    const loadedCategories = sessionState.annotationCategories;
+                    const mergedCategories = [
+                        ...DEFAULT_ANNOTATION_CATEGORIES.map(def => loadedCategories.find(c => c.id === def.id) ?? def),
+                        ...loadedCategories.filter(c => !DEFAULT_ANNOTATION_CATEGORIES.some(def => def.id === c.id)),
+                    ];
+                    setAnnotationCategories(mergedCategories);
                 }
                 if ((sessionState.boundaryFiles || []).length > 0) {
                   setIsBoundaryEditorVisible(false);
@@ -18010,6 +20938,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
                 setRawChatHistory(needsMigration ? sessionState.rawChatHistory.map(migrateMessage) : sessionState.rawChatHistory);
                 setDeedChatHistory(needsMigration ? sessionState.deedChatHistory.map(migrateMessage) : sessionState.deedChatHistory);
+                const loadedDeedSummaryMessage = (sessionState.deedChatHistory || []).find(msg => msg.a2ui?.kind === 'deed-summary');
+                if (loadedDeedSummaryMessage?.a2ui?.deedSummary) {
+                  setDeedSummary(loadedDeedSummaryMessage.a2ui.deedSummary);
+                }
                 setCivilDrafterChatHistory(needsMigration ? (sessionState.civilDrafterChatHistory || []).map(migrateMessage) : sessionState.civilDrafterChatHistory || []);
                 setDxfChatHistory(needsMigration ? (sessionState.dxfChatHistory || []).map(migrateMessage) : sessionState.dxfChatHistory || []);
                 setStationingChatHistory(needsMigration ? (sessionState.stationingChatHistory || []).map(migrateMessage) : sessionState.stationingChatHistory || []);
@@ -18216,7 +21148,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 const newLists = [...prevLists];
                 // CACP: identify CL/PI markers by description, not by PN format.
                 newLists[workingListIndex].points = newLists[workingListIndex].points.filter(
-                    p => p.description !== 'CL' && p.description !== 'PI' && !p.pointNumber.includes('+')
+                    p => p.description !== 'CL' && p.description !== 'PI' && !p.pointNumber.includes('+') && !(p.description || '').startsWith('CL STA ')
                 );
                 return newLists;
             });
@@ -18224,7 +21156,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         };
 
         const newPoints: SurveyPoint[] = [];
-        cl.pis.forEach(pi => {
+        // The canvas P/L switch is the master on/off for auto-created CL/PI
+        // markers: P/L and P emit them; L keeps the alignment linework only.
+        const autoStationPoints = agentDrawMode !== 'lines';
+        if (autoStationPoints) cl.pis.forEach(pi => {
             newPoints.push({
                 pointNumber: pi.pointNumber,
                 northing: pi.northing,
@@ -18235,14 +21170,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         });
 
         const totalLength = calculateCenterlineLength(cl);
+        const stationInterval = Math.max(1, Number(settings.stationing?.pointInterval) || 100);
         // CACP: collect stations first, batch-issue PNs from PointAgent so the
         // station value lives in the description only.
         const clStations: { station: number; coords: { northing: number; easting: number } }[] = [];
-        let currentStation = Math.ceil(cl.beginStation / 100) * 100;
-        while (currentStation < cl.beginStation + totalLength) {
-            const coords = calculatePointFromStationOffset(cl, currentStation, 0);
-            if (coords) clStations.push({ station: currentStation, coords });
-            currentStation += 100;
+        if (autoStationPoints) {
+            let currentStation = Math.ceil(cl.beginStation / stationInterval) * stationInterval;
+            while (currentStation < cl.beginStation + totalLength) {
+                const coords = calculatePointFromStationOffset(cl, currentStation, 0);
+                if (coords) clStations.push({ station: currentStation, coords });
+                currentStation += stationInterval;
+            }
         }
         const clAgent = PointAgent.getInstance();
         clAgent.setLabelingSettings(settings.pointLabelingSettings);
@@ -18281,7 +21219,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             }
         });
     }
-  }, [centerlines, activeAgent, isSessionActive]);
+  }, [centerlines, activeAgent, isSessionActive, agentDrawMode, settings.stationing?.pointInterval, settings.pointLabelingSettings]);
 
   const initializeLsvzAgent = useCallback(() => {
     try {
@@ -18706,10 +21644,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     activeAgent === AgentType.ROADING_AGENT ? roadingChatHistory :
     gpsStakeoutChatHistory;
 
-  // Cursor-anchored numeric inputs: a flash mirrors only a quick number form
-  // beside the canvas cursor. Questions with option buttons, text questions and
-  // forms with choices stay in Quick Thought / the chat, so the same prompt is
-  // never raised twice at once.
+  // Cursor-anchored quick inputs: a flash mirrors a one/two-field plain form
+  // (for example a point number and description) beside the canvas cursor.
+  // Questions with option buttons, selects, checkboxes, or longer forms stay in
+  // Quick Thought / the chat, so the same prompt is never raised twice at once.
   const canvasFlashInputKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const pending = (() => {
@@ -18726,12 +21664,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           a2ui.status !== 'dismissed'
         ) {
           const form = a2ui.inputForm;
-          // A flash exists to collect a number without crossing the screen.
-          // Selects, checkboxes, text fields and buttons belong to Quick Thought.
-          if (
-            form.fields.length === 0 ||
-            !form.fields.every(field => field.type === 'number')
-          ) {
+          // A flash exists to collect a quick value without crossing the screen.
+          // Choices, checkboxes, and longer forms belong to Quick Thought.
+          if (!canMirrorInputFormAsFlash(form)) {
             return null;
           }
           return {
@@ -19007,6 +21942,28 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   cadTextStyles={parcelCadTextStyles}
                 />
               </div>
+              <div className="border-t border-white/10 pt-3">
+                <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                  Stationing &amp; Baseline
+                </p>
+                <A2UIStationingControls
+                  settings={settings}
+                  onSettingsChange={setSettings}
+                  agentDrawMode={agentDrawMode}
+                  onAgentDrawModeChange={setAgentDrawMode}
+                />
+              </div>
+            </div>
+          );
+        case 'stationing-controls':
+          return (
+            <div className="p-2">
+              <A2UIStationingControls
+                settings={settings}
+                onSettingsChange={setSettings}
+                agentDrawMode={agentDrawMode}
+                onAgentDrawModeChange={setAgentDrawMode}
+              />
             </div>
           );
         case 'drafting-style-library':
@@ -19130,6 +22087,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           return <ClosureReportPanel reports={closureReports} />;
         case 'steep-slope-report':
           return <SteepSlopeReportPanel runs={steepSlopeRuns} tinSurfaces={steepSlopeTinSurfaces} />;
+        case 'tin-surfaces':
+          return (
+            <A2UITinSurfaces
+              surfaces={tinSurfaces}
+              contourGenerationCount={contourGenerations.length}
+              isImporting={isImportingTin}
+              importStatus={tinImportStatus}
+              onImport={handleImportTin}
+              onCreateFromContours={() => handleCreateTinFromContours()}
+              onExport={handleExportTinSurface}
+            />
+          );
         case 'legal-writer':
           return legalWriterState ? (
             <LegalWriterPanel
@@ -19149,10 +22118,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             <SheetView
               points={points}
               lines={lines}
+              hatches={hatches}
+              customHatches={cadManagerState.standard?.hatches ?? []}
               projectName={jobInfo?.jobName}
               cadLayerColors={cadLayerColorMap}
               profileData={profileData}
               profileInfo={profileInfo}
+              pendingNotes={pendingSheetNotes}
+              onPendingNotesConsumed={() => setPendingSheetNotes(null)}
             />
           );
         case 'roading-panel':
@@ -19210,6 +22183,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
     },
     [
+      agentDrawMode,
+      setAgentDrawMode,
+      setSettings,
       customSymbols,
       handleAddSymbol,
       handleUpdateSymbol,
@@ -19303,6 +22279,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       closureReports,
       steepSlopeRuns,
       steepSlopeTinSurfaces,
+      tinSurfaces,
+      contourGenerations.length,
+      isImportingTin,
+      tinImportStatus,
+      handleImportTin,
+      handleCreateTinFromContours,
+      handleExportTinSurface,
       legalWriterState,
       handleRegenerateLegal,
       profileData,
@@ -19310,12 +22293,100 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     ]
   );
 
+  // CACP — Deed / Boundary Agent skills. Exposes documents, descriptions,
+  // boundary calls, alignment, transforms, POB, and draft actions to peers.
+  useDeedSkillHandlers({
+    deedFile,
+    deedSummary,
+    boundaryFiles,
+    activeBoundaryFileId,
+    points,
+    pointLists,
+    computingTractIds,
+    setActiveBoundaryFileId,
+    setBoundaryFiles,
+    setIsBoundaryEditorVisible,
+    setIsBoundaryDialogMinimized,
+    setBoundaryAlignmentDockMode,
+    setIsBoundaryAlignmentOpen,
+    setBoundaryCornerAlignRequest,
+    onOpenDescription: handleOpenBoundaryDescriptionInEditor,
+    onParseTracts: (tractIds, pob) => {
+      if (isFreeTierTimeLocked) {
+        setIsLockDismissed(false);
+        setShowHostCostReminder(true);
+        return;
+      }
+      const tracts = (deedSummary?.tracts ?? []).filter(tract => tractIds.includes(tract.tractId));
+      if (tracts.length === 0) return;
+      pendingTractIdRef.current = tracts.length === 1 ? tracts[0].tractId : null;
+      pendingTractIdsRef.current = tracts.map(tract => tract.tractId);
+      pendingTractPobRef.current = pob ?? null;
+      setComputingTractIds(prev => new Set([...prev, ...tracts.map(tract => tract.tractId)]));
+      if (tracts.length === 1) {
+        const tract = tracts[0];
+        const pageHint = tract.sourcePage != null ? ` (source page ${tract.sourcePage})` : '';
+        const nameHint = tract.tractName ? ` ("${tract.tractName}")` : '';
+        const pobHint = pob
+          ? ` Start the boundary at the Point of Beginning E=${pob.easting.toFixed(4)}, N=${pob.northing.toFixed(4)}.`
+          : '';
+        void handleSendMessage(
+          `Extract ONLY ${tract.tractId}${nameHint}${pageHint} from this deed. ` +
+          `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${tract.tractId}", points, lines }]) for this tract only. ` +
+          `Do not include any other tract.` +
+          pobHint
+        );
+        return;
+      }
+      const labels = tracts.map(tract => {
+        const nameHint = tract.tractName ? ` ("${tract.tractName}")` : '';
+        const pageHint = tract.sourcePage != null ? ` (source page ${tract.sourcePage})` : '';
+        return `${tract.tractId}${nameHint}${pageHint}`;
+      }).join(', ');
+      void handleSendMessage(
+        `Extract ONLY these deed descriptions: ${labels}. ` +
+        'Return JSON with boundaries: [{ tractId, points, lines }] for exactly these descriptions. ' +
+        'Do not include any other tract.'
+      );
+    },
+    onParseAll: () => {
+      if (isFreeTierTimeLocked) {
+        setIsLockDismissed(false);
+        setShowHostCostReminder(true);
+        return;
+      }
+      pendingTractIdRef.current = null;
+      pendingTractIdsRef.current = deedSummary ? deedSummary.tracts.map(tract => tract.tractId) : [];
+      pendingTractPobRef.current = null;
+      if (deedSummary) setComputingTractIds(new Set(deedSummary.tracts.map(tract => tract.tractId)));
+      void handleSendMessage('Extract all boundary descriptions from this deed.');
+    },
+    onUpdateCall: handleBoundaryCallUpdate,
+    onAssociatePoints: handleAssociatePointsToBoundary,
+    onDisassociatePoint: handleDisassociatePointFromBoundary,
+    onBestFit: handleBestFitBoundaryToPoints,
+    onTransform: handleBoundaryTransformChange,
+    onPobChange: handleBoundaryPobChange,
+    onDrawToLinework: handleDrawBoundaryToLinework,
+    logActionToFieldbook,
+  });
+
   const a2uiHostContextValue = useMemo<A2UIHostContextValue>(() => ({
     onOpenFullscreen: handleA2UIFullscreen,
+    onApplyClusterProjection: applyClusterProjection,
+    projectBboxWgs84: getInclusionBboxWgs84(activeInclusionBoundaryId),
+    gpsPosition: currentPosition
+      ? { latitude: currentPosition.coords.latitude, longitude: currentPosition.coords.longitude }
+      : null,
     onRetryCacpItem: retryCacpReviewItem,
     onInspectCacpAgent: openCacpManifestSurface,
     onPointsUploaded: handlePointsUploaded,
     onPointEditorSessionStart: handlePointEditorSessionStart,
+    onAddPointFromSurface: handleAddPointFromSurface,
+    getNextPointNumber: getNextPointNumberFromSurface,
+    isPointNumberTaken: isPointNumberTakenFromSurface,
+    onStartPointPlacement: handleStartPointPlacementFromA2UI,
+    convertLatLon,
     onRawFileUploaded: handleFileUploaded,
     onCivilDrafterFileUploaded: handleCivilDrafterFileUploaded,
     onCivilDrafterPdfUploaded: handleCivilDrafterPdfUploaded,
@@ -19324,6 +22395,58 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     onDeedSubmitted: handleDeedSubmitted,
     onDeedStartFromScratch: handleDeedStartFromScratch,
     onOpenBoundaryGis: handleOpenBoundaryGis,
+    boundaryDeedSummary: deedSummary,
+    boundaryDeedFiles: boundaryFiles,
+    boundaryComputingTractIds: Array.from(computingTractIds),
+    boundaryActiveFileId: activeBoundaryFileId,
+    onBoundaryProcessTracts: (tractIds, summarySnapshot) => {
+      if (isFreeTierTimeLocked) {
+        setIsLockDismissed(false);
+        setShowHostCostReminder(true);
+        return;
+      }
+      const tracts = ((summarySnapshot ?? deedSummary)?.tracts ?? []).filter(tract => tractIds.includes(tract.tractId));
+      if (tracts.length === 0) return;
+      pendingTractIdRef.current = tracts.length === 1 ? tracts[0].tractId : null;
+      pendingTractIdsRef.current = tracts.map(tract => tract.tractId);
+      pendingTractPobRef.current = null;
+      setComputingTractIds(prev => new Set([...prev, ...tracts.map(tract => tract.tractId)]));
+      const labels = tracts.map(tract => {
+        const nameHint = tract.tractName ? ` ("${tract.tractName}")` : '';
+        const pageHint = tract.sourcePage != null ? ` (source page ${tract.sourcePage})` : '';
+        return `${tract.tractId}${nameHint}${pageHint}`;
+      }).join(', ');
+      void handleSendMessage(
+        `Extract ONLY these deed descriptions: ${labels}. ` +
+        'Return JSON with boundaries: [{ tractId, points, lines }] for exactly these descriptions. ' +
+        'Do not include any other tract.'
+      );
+    },
+    onBoundaryParseFullDeed: () => {
+      if (isFreeTierTimeLocked) {
+        setIsLockDismissed(false);
+        setShowHostCostReminder(true);
+        return;
+      }
+      pendingTractIdRef.current = null;
+      pendingTractIdsRef.current = [];
+      pendingTractPobRef.current = null;
+      setComputingTractIds(new Set());
+      void handleSendMessage('Extract all boundary descriptions from this deed.');
+    },
+    onBoundaryOpenEditor: (fileId) => {
+      if (fileId) setActiveBoundaryFileId(fileId);
+      setIsBoundaryEditorVisible(true);
+      setIsBoundaryDialogMinimized(false);
+      if (boundaryDockMode === 'toolshelf') {
+        requestToolShelfTab('boundary-deed');
+        setActiveBoundaryDockedTab('dialog');
+        setIsToolShelfVisible(true);
+      } else if (boundaryDockMode === 'chat') {
+        setActiveBoundaryDockedTab('dialog');
+      }
+    },
+    onBoundaryOpenDescription: handleOpenBoundaryDescriptionInEditor,
     freeDeedsRemaining: deedCreditSnapshot?.remaining ?? null,
     freeDeedsLimit: deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT,
     freeDeedsUnlimited: Boolean(deedCreditSnapshot?.unlimited || isDeedMeterExempt),
@@ -19386,11 +22509,74 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     onOpenCadStandards: handleOpenCadStandardsSheet,
     onOpenCadWorkspace: handleOpenCadWorkspace,
     onOpenSpreadsheetEditor: handleOpenSpreadsheetEditor,
+    textFiles: [
+      rawFile, deedFile, dxfFile, clFile, gisFile,
+      ...(planFiles ?? []),
+      ...generatedFiles,
+    ].filter((file): file is SessionFile => Boolean(file)),
+    onSaveTextFile: handleSaveTextFile,
+    onCreateTextFile: handleCreateTextFile,
+    onImportTextFile: handleCreateTextFile,
+    onOpenFullTextEditor: handleOpenTextEditorFromSurface,
     onStartCanvasHatch: handleStartCanvasHatchFromA2UI,
     onApplyHatchToSelection: handleApplyHatchToSelectionFromA2UI,
     onHatchCircles: handleHatchCirclesFromA2UI,
     onCountHatchCircles: handleCountHatchCircles,
     onOpenHatchManager: () => showView('hatchmanager'),
+    getGpsRoverSnapshot,
+    onGpsOpenPanel: openGpsRoverPanel,
+    onGpsSetTarget: (pointNumber: string) => {
+      setStakeoutTargetPointNumber(pointNumber);
+      openGpsRoverPanel('stakeout');
+    },
+    onGpsCollectPoint: handleGpsCollectFromSurface,
+    tinSurfaces,
+    contourGenerationCount: contourGenerations.length,
+    isImportingTin,
+    tinImportStatus,
+    onImportTinSurface: handleImportTin,
+    onCreateTinFromContours: () => handleCreateTinFromContours(),
+    onExportTinSurface: handleExportTinSurface,
+    getProjectLocationSnapshot: () => ({
+      clusterSet: displayedProjectLocationSet,
+      isResolving: isResolvingProjectLocation,
+      error: projectLocationError,
+      busy: projectLocationBusy,
+      countyStatus: countyGisStatus,
+      inclusionArea: inclusionAreaInfo,
+    }),
+    onProjectLocationFocus: (clusterIndex: number) => {
+      const cluster = displayedProjectLocationSet.clusters.find(item => item.index === clusterIndex);
+      if (cluster) handleFocusProjectCluster(cluster);
+    },
+    onProjectLocationFetch: (action, clusterIndex) => {
+      const cluster = displayedProjectLocationSet.clusters.find(item => item.index === clusterIndex);
+      if (cluster) void fetchProjectClusterLayer(action, cluster);
+    },
+    onProjectLocationRefresh: () => { void ensureProjectClusterLocations({ force: true }); },
+    onProjectLocationCountyRetry: () => {
+      const cluster = displayedProjectLocationSet.clusters.find(
+        item => item.index === countyGisStatus?.clusterIndex,
+      );
+      if (cluster) {
+        void fetchProjectClusterLayer('parcels', cluster, {
+          aoi: countyGisStatus?.aoi,
+          inclusionBbox: countyGisStatus?.aoi === 'inclusion'
+            ? inclusionAreaInfo?.bboxWgs84
+            : null,
+        });
+      }
+    },
+    onProjectLocationFetchInclusion: (action) => {
+      const cluster = displayedProjectLocationSet.clusters[0];
+      if (cluster && inclusionAreaInfo) {
+        void fetchProjectClusterLayer(action, cluster, {
+          aoi: 'inclusion',
+          inclusionBbox: inclusionAreaInfo.bboxWgs84,
+        });
+      }
+    },
+    onOpenCountyGis: handleOpenParcelGisFromUpload,
     renderWorkspaceTool,
     onSubmitInput: (message, payload) => {
       void handleSendMessage(message, payload.agent);
@@ -19402,6 +22588,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     openCacpManifestSurface,
     handlePointsUploaded,
     handlePointEditorSessionStart,
+    handleAddPointFromSurface,
+    getNextPointNumberFromSurface,
+    isPointNumberTakenFromSurface,
+    handleStartPointPlacementFromA2UI,
+    convertLatLon,
     handleFileUploaded,
     handleCivilDrafterFileUploaded,
     handleCivilDrafterPdfUploaded,
@@ -19436,6 +22627,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     handleOpenCadStandardsSheet,
     handleOpenCadWorkspace,
     handleOpenSpreadsheetEditor,
+    handleSaveTextFile,
+    handleCreateTextFile,
+    handleOpenTextEditorFromSurface,
+    rawFile,
+    deedFile,
+    dxfFile,
+    clFile,
+    gisFile,
+    planFiles,
+    generatedFiles,
     handleStartCanvasHatchFromA2UI,
     handleApplyHatchToSelectionFromA2UI,
     handleHatchCirclesFromA2UI,
@@ -19444,6 +22645,28 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     renderWorkspaceTool,
     handleStartDivideSelection,
     handleDivideSelectedLines,
+    getGpsRoverSnapshot,
+    openGpsRoverPanel,
+    handleGpsCollectFromSurface,
+    tinSurfaces,
+    contourGenerations.length,
+    isImportingTin,
+    tinImportStatus,
+    handleImportTin,
+    handleCreateTinFromContours,
+    handleExportTinSurface,
+    displayedProjectLocationSet,
+    isResolvingProjectLocation,
+    projectLocationError,
+    projectLocationBusy,
+    handleFocusProjectCluster,
+    fetchProjectClusterLayer,
+    ensureProjectClusterLocations,
+    countyGisStatus,
+    inclusionAreaInfo,
+    handleOpenParcelGisFromUpload,
+    applyClusterProjection,
+    currentPosition,
   ]);
 
   if (pageMode === null) {
@@ -19500,22 +22723,25 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
 
   
-  const chatHeaderControls = (
+  const buildHeaderControls = (includeCacpBadge: boolean) => (
     <>
       {settings.forceAgent && (
         <span
-          className="inline-flex h-6 items-center gap-1 rounded border border-amber-400/40 bg-amber-500/15 px-2 text-[10px] font-semibold text-amber-200"
+          className="inline-flex h-6 items-center gap-1 rounded border border-sky-400/40 bg-sky-500/15 px-2 text-[10px] font-semibold text-sky-200"
           title={`Force Agent test mode: interactive chat requests go to ${agentConfig[settings.forceAgent]?.label ?? settings.forceAgent}. CACP handoff and peer delegation are disabled for those turns.`}
         >
           🔒 <span className="hidden sm:inline">{agentConfig[settings.forceAgent]?.label ?? settings.forceAgent} forced</span>
         </span>
       )}
-      <CacpBadge agent={activeAgent} onClick={(a) => setCacpManifestAgent(a)} />
+      {includeCacpBadge && (
+        <CacpBadge agent={activeAgent} onClick={(a) => setCacpManifestAgent(a)} />
+      )}
       {activeAgent === AgentType.CIVIL_DRAFTER && isCurrentAgentInitialized && (
         <button
-          onClick={() => setShowCivilDrafterContextPanel(v => !v)}
-          className={`inline-flex h-6 items-center gap-1.5 rounded border px-2 text-[10px] font-semibold transition-colors duration-150 ${showCivilDrafterContextPanel ? 'border-fuchsia-400/40 bg-fuchsia-500/15 text-fuchsia-200' : 'border-white/[0.08] bg-white/[0.03] text-slate-300 hover:border-white/[0.14] hover:bg-white/[0.06] hover:text-white'} light-theme:border-gray-300 light-theme:bg-gray-100 light-theme:text-gray-700 light-theme:hover:bg-gray-200`}
-          title="Context settings � control how much conversation the Civil Drafter carries between requests (fixes 'input exceeds maximum tokens' after several draws)"
+          type="button"
+          onClick={openCivilDrafterContextSurface}
+          className="inline-flex h-6 items-center gap-1.5 rounded border border-white/[0.08] bg-white/[0.03] px-2 text-[10px] font-semibold text-slate-300 transition-colors duration-150 hover:border-white/[0.14] hover:bg-white/[0.06] hover:text-white light-theme:border-gray-300 light-theme:bg-gray-100 light-theme:text-gray-700 light-theme:hover:bg-gray-200"
+          title="Open Civil Drafter context settings in the A2UI surface host (fixes 'input exceeds maximum tokens' after several draws)"
         >
           <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">Context</span>
@@ -19541,7 +22767,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       {isCurrentAgentInitialized && addDataButtonLabels[activeAgent] && (
         <button
           onClick={() => setIsAddingData(true)}
-          className="inline-flex h-6 items-center gap-1.5 rounded border border-white/[0.08] bg-white/[0.03] px-2 text-[10px] font-semibold text-slate-300 transition-colors duration-150 hover:border-white/[0.14] hover:bg-white/[0.06] hover:text-white light-theme:border-gray-300 light-theme:bg-gray-100 light-theme:text-gray-700 light-theme:hover:bg-gray-200"
+          className="black-hole-btn black-hole-btn--cyan inline-flex h-6 items-center gap-1.5 rounded px-2 text-[10px] font-semibold text-white transition-colors duration-150"
           title={addDataButtonLabels[activeAgent]}
         >
           <ArrowUpTrayIcon className="h-3.5 w-3.5" />
@@ -19551,10 +22777,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </>
   );
 
+  const chatHeaderControls = buildHeaderControls(true);
+  const toolShelfHeaderControls = buildHeaderControls(false);
+
   const activeBoundaryFile = boundaryFiles.find(f => f.id === activeBoundaryFileId) ?? (boundaryFiles.length > 0 ? boundaryFiles[boundaryFiles.length - 1] : undefined);
   const activeBoundaryCallsCount = activeBoundaryFile?.calls?.length ?? 0;
 
-  const renderBoundaryEditor = (docked: boolean) => (
+  const renderBoundaryEditor = (mode: DockMode) => (
     <BoundaryEditor
       boundaryFiles={boundaryFiles}
       pointMap={pointMap}
@@ -19572,10 +22801,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       onWriteLegal={handleWriteBoundaryLegal}
       onDrawToLinework={handleDrawBoundaryToLinework}
       onClose={() => {
+        // The deed summary lives in chat now; closing the traverse panel must
+        // not orphan the summary card or break its compute links.
         setIsBoundaryEditorVisible(false);
         setIsAddCallRowPulsing(false);
-        setDeedSummaryFileIds([]);
-        setDeedSummary(null);
       }}
       onSaveToFileManager={handleSaveBoundaryToFileManager}
       onRenameFile={handleRenameBoundaryFile}
@@ -19601,6 +22830,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setBoundaryCornerAlignRequest({ token: Date.now(), movableBfId: bfId });
       }}
       summary={deedSummary ?? undefined}
+      onOpenDescription={handleOpenBoundaryDescriptionInEditor}
+      onOpenAlignmentTools={() => {
+        setBoundaryAlignmentDockMode('floating');
+        setIsBoundaryAlignmentOpen(true);
+      }}
       pendingFileName={boundaryFiles.length === 0 && !deedSummary ? (deedFile?.name ?? 'Deed') : undefined}
       computingTractIds={computingTractIds}
       onComputeTract={(tractId, pob) => {
@@ -19612,6 +22846,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         const t = deedSummary?.tracts.find(x => x.tractId === tractId);
         if (!t) return;
         pendingTractIdRef.current = tractId;
+        pendingTractIdsRef.current = [tractId];
         pendingTractPobRef.current = pob;
         setComputingTractIds(prev => new Set(prev).add(tractId));
         const pageHint = t.sourcePage != null ? ` (source page ${t.sourcePage})` : '';
@@ -19633,6 +22868,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           return;
         }
         pendingTractIdRef.current = null;
+        pendingTractIdsRef.current = deedSummary ? deedSummary.tracts.map(tract => tract.tractId) : [];
         pendingTractPobRef.current = null;
         if (deedSummary) {
           setComputingTractIds(new Set(deedSummary.tracts.map(t => t.tractId)));
@@ -19647,21 +22883,54 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
         void handleSendMessage('Extract all boundary descriptions from this deed.');
       }}
-      isDocked={docked}
-      onToggleDock={() => {
-        const next = !docked;
-        setIsBoundaryDialogDocked(next);
-        if (next) {
+      dockMode={mode}
+      onDockModeChange={next => {
+        setBoundaryDockMode(next);
+        if (next === 'toolshelf') {
+          requestToolShelfTab('boundary-deed');
           setIsToolShelfVisible(true);
           setActiveBoundaryDockedTab('dialog');
         }
+        if (next === 'chat') setAgentChatOpenSignal(n => n + 1);
       }}
       isMinimized={isBoundaryDialogMinimized}
       onToggleMinimize={() => setIsBoundaryDialogMinimized(prev => !prev)}
     />
   );
 
-  const renderParcelPanel = (docked: boolean) => (
+  const renderBoundaryAlignment = (docked: boolean) => {
+    if (!activeBoundaryFile) return null;
+    return (
+      <BoundaryAlignmentDialog
+        file={activeBoundaryFile}
+        boundaryFileCount={boundaryFiles.length}
+        selectedPointNumber={selectedPoint?.pointNumber}
+        showRotatedBearings={showRotatedBearings}
+        isDocked={docked}
+        onDockChange={(nextDocked) => {
+          setBoundaryAlignmentDockMode(nextDocked ? 'toolshelf' : 'floating');
+          if (nextDocked) {
+            requestToolShelfTab('boundary-align');
+            setIsToolShelfVisible(true);
+          }
+        }}
+        onClose={() => setIsBoundaryAlignmentOpen(false)}
+        onTransformChange={handleBoundaryTransformChange}
+        onPobChange={handleBoundaryPobChange}
+        onAssociatePoints={handleAssociatePointsToBoundary}
+        onDisassociatePoint={handleDisassociatePointFromBoundary}
+        onBestFitToPoints={handleBestFitBoundaryToPoints}
+        onAlignToOtherBoundary={(movableBfId) => setBoundaryAlignRequest({ token: Date.now(), movableBfId })}
+        onAlignCornersToPoints={(bfId) => {
+          setActiveBoundaryFileId(bfId);
+          setBoundaryCornerAlignRequest({ token: Date.now(), movableBfId: bfId });
+        }}
+        onShowRotatedBearingsChange={setShowRotatedBearings}
+      />
+    );
+  };
+
+  const renderParcelPanel = (mode: DockMode) => (
     <ParcelPanel
       projectPoints={points}
       projectLines={lines}
@@ -19678,19 +22947,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       cadTextStyles={parcelCadTextStyles}
       propertyOwnerCategory={annotationCategories.find(c => c.id === 'property-owners') ?? null}
       onParcelLabelFormatterChange={setParcelLabelFormatter}
-      isDocked={docked}
-      onToggleDock={() => {
-        if (docked) {
-          setIsParcelPanelDocked(false);
-          setIsParcelPanelVisible(true);
-          setIsParcelPanelMinimized(false);
-        } else {
-          setIsParcelPanelDocked(true);
-          setIsParcelPanelVisible(true);
-          setIsParcelPanelMinimized(false);
+      dockMode={mode}
+      onDockModeChange={next => {
+        setParcelDockMode(next);
+        setIsParcelPanelVisible(true);
+        setIsParcelPanelMinimized(false);
+        if (next === 'toolshelf') {
+          requestToolShelfTab('boundary-gis');
           setActiveBoundaryDockedTab('gis');
           setIsToolShelfVisible(true);
         }
+        if (next === 'chat') setAgentChatOpenSignal(n => n + 1);
       }}
       isMinimized={isParcelPanelMinimized}
       onToggleMinimize={() => setIsParcelPanelMinimized(prev => !prev)}
@@ -19703,10 +22970,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     />
   );
 
-  const renderAutoDraftPanel = (docked: boolean) => (
+  const renderAutoDraftPanel = (mode: DockMode) => (
     <AutoDraftPanel
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('autoDraft')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('autoDraft', next)}
       points={points}
       lines={lines}
       jobInfo={jobInfo}
@@ -19717,6 +22984,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         district: zoningDistrict,
       } satisfies ZoningContext}
       projectEpsg={settings.projection?.epsg ?? null}
+      projectionLabel={
+        settings.projection?.zoneName
+          ? [settings.projection.state, settings.projection.zoneName].filter(Boolean).join(' · ')
+          : null
+      }
+      gpsPosition={currentPosition ? { latitude: currentPosition.coords.latitude, longitude: currentPosition.coords.longitude } : null}
+      onProjectionDetected={(projection) => setSettings(prev => ({ ...prev, projection }))}
       mapKeys={{
         geminiKey: settings.userApiKey || undefined,
         mapsKey: settings.googleMaps?.apiKey || undefined,
@@ -19813,17 +23087,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     />
   );
 
-  const renderFloodPanel = (docked: boolean) => (
+  const renderFloodPanel = (mode: DockMode) => (
     <FloatingPanel
       title="Flood Zone Agent"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('flood')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('flood', next)}
       onClose={() => setIsFloodPanelVisible(false)}
       initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
       initialY={120}
     >
       <FloodPanel
-        onFetchFloodZones={handleFetchFloodZones}
+        onFetchFloodZones={(mode, descriptionText, options) =>
+          handleFetchFloodZones(mode, descriptionText, null, options)}
         isFetching={isFetchingFlood}
         hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
         inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
@@ -19836,21 +23111,58 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         floodHatch={settings.floodHatch}
         onFloodHatchChange={(patch) => setSettings(prev => ({
           ...prev,
-          floodHatch: { style: 'lines', scale: 50, opacity: 0.18, ...(prev.floodHatch ?? {}), ...patch },
+          floodHatch: { style: 'lines', scale: 50, opacity: 0.35, ...(prev.floodHatch ?? {}), ...patch },
         }))}
         onFetchFirmette={handleFetchFirmette}
         isFetchingFirmette={isFetchingFirmette}
         hasFirmette={!!floodFirmetteData}
         onViewFirmette={() => setIsFirmetteViewerVisible(true)}
+        floodAreas={lastFloodAreas}
+        bfeSummary={lastFloodBfe}
+        onAddSheetNotes={handleAddFloodNotesToSheet}
       />
     </FloatingPanel>
   );
 
-  const renderStructuresPanel = (docked: boolean) => (
+  const renderClosureInvestigation = (mode: DockMode) => {
+    if (!closureInvestigation) return null;
+    return (
+      <FloatingPanel
+        key={`closure-investigation-${closureInvestigation.fileId}`}
+        title="Closure investigation"
+        dockMode={mode}
+        onDockModeChange={next => {
+          setClosureDockMode(next);
+          if (next === 'toolshelf') {
+            requestToolShelfTab('closure-investigation');
+            setIsToolShelfVisible(true);
+          }
+          if (next === 'chat') setAgentChatOpenSignal(n => n + 1);
+        }}
+        onClose={() => setClosureInvestigation(null)}
+        initialX={typeof window !== 'undefined' ? Math.max(24, window.innerWidth / 2 - 380) : 80}
+        initialY={96}
+        width="min(780px, 94vw)"
+        maxHeight="88vh"
+        accentBorder="border-cyan-500/40"
+      >
+        <A2UIClosureInvestigation
+          fileName={closureInvestigation.fileName}
+          ambiguities={closureInvestigation.ambiguities}
+          reviewStatus={closureInvestigation.reviewStatus}
+          humanReview={closureInvestigation.humanReview}
+          reviewError={closureInvestigation.reviewError}
+          onApplyHypothesis={handleApplyClosureHypothesis}
+        />
+      </FloatingPanel>
+    );
+  };
+
+  const renderStructuresPanel = (mode: DockMode) => (
     <FloatingPanel
       title="Structures Agent"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('structures')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('structures', next)}
       onClose={() => setIsStructuresPanelVisible(false)}
       initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
       initialY={160}
@@ -19877,11 +23189,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </FloatingPanel>
   );
 
-  const renderSoilsPanel = (docked: boolean) => (
+  const renderSoilsPanel = (mode: DockMode) => (
     <FloatingPanel
       title="Soils Agent"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('soils')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('soils', next)}
       onClose={() => setIsSoilsPanelVisible(false)}
       initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
       initialY={220}
@@ -19896,6 +23208,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         onFetchReport={handleFetchSoilReport}
         isFetchingReport={isFetchingSoilReport}
         soilReportData={soilReportData}
+        soilHatch={settings.soilHatch}
+        onSoilHatchChange={(patch) => setSettings(prev => ({
+          ...prev,
+          soilHatch: { style: 'lines', scale: 25, opacity: 0.3, ...(prev.soilHatch ?? {}), ...patch },
+        }))}
         inclusionBoundaries={inclusionBoundaries}
         activeInclusionBoundaryId={activeInclusionBoundaryId}
         onSelectInclusionBoundary={setActiveInclusionBoundaryId}
@@ -19903,12 +23220,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </FloatingPanel>
   );
 
-  const renderRoadingPanel = (docked: boolean) => (
+  const renderRoadingPanel = (mode: DockMode) => (
     <FloatingPanel
       title="Roading Studio"
       accentBorder="border-amber-500/40"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('roading')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('roading', next)}
       onClose={() => setIsRoadingPanelVisible(false)}
       initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
       initialY={140}
@@ -19961,10 +23278,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </FloatingPanel>
   );
 
-  const renderProfileGenPanel = (docked: boolean) => (
+  const renderProfileGenPanel = (mode: DockMode) => (
     <ProfileGenerationPanel
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('profileGen')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('profileGen', next)}
       allPoints={pointLists.flatMap((l: import('./types.ts').PointList) => l.points)}
       profilePointCount={profileData?.length ?? 0}
       profileElevMin={profileData && profileData.length > 0 ? Math.min(...profileData.map((p: import('./types.ts').ProfilePoint) => p.elevation)) : undefined}
@@ -19979,13 +23296,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     />
   );
 
-  const renderGpsStakeoutPanel = (docked: boolean) => (
+  const renderGpsStakeoutPanel = (mode: DockMode) => (
     <FloatingPanel
-      title="Stakeout"
+      title="GPS Rover"
       accentBorder="border-blue-500/50"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('gpsStakeout')}
-      onClose={() => setIsGpsStakeoutFloatingVisible(false)}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('gpsStakeout', next)}
+      onClose={() => setIsGpsRoverPanelVisible(false)}
       initialX={typeof window !== 'undefined' ? Math.max(20, window.innerWidth / 2 - 220) : 80}
       initialY={80}
       width="min(460px, 96vw)"
@@ -20003,48 +23320,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         targetPointNumber={stakeoutTargetPointNumber}
         setTargetPointNumber={setStakeoutTargetPointNumber}
         nextAvailablePointNumber={nextAvailablePointNumber}
-        initialTab="stakeout"
-        lockedTab
+        initialTab={gpsInitialTab ?? "stakeout"}
+        tabRequestId={gpsPanelRequestId}
       />
     </FloatingPanel>
   );
 
-  const renderGpsCollectPanel = (docked: boolean) => (
-    <FloatingPanel
-      title="Collect"
-      accentBorder="border-emerald-500/50"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('gpsCollect')}
-      onClose={() => setIsGpsCollectFloatingVisible(false)}
-      initialX={typeof window !== 'undefined' ? Math.max(20, window.innerWidth / 2 + 20) : 80}
-      initialY={80}
-      width="min(400px, 96vw)"
-      maxHeight="88vh"
-    >
-      <GpsStakeoutPanel
-        isOverlay={false}
-        currentPosition={currentPosition}
-        projectedPosition={projectedPosition}
-        projectPoints={points}
-        pointLists={pointLists}
-        onStorePoint={handleStoreGpsPoint}
-        onStoreStakedPoint={handleStoreStakedGpsPoint}
-        settings={settings}
-        targetPointNumber={stakeoutTargetPointNumber}
-        setTargetPointNumber={setStakeoutTargetPointNumber}
-        nextAvailablePointNumber={nextAvailablePointNumber}
-        initialTab="collect"
-        lockedTab
-      />
-    </FloatingPanel>
-  );
-
-  const renderShrinkwrapPanel = (docked: boolean) => shrinkwrap ? (
+  const renderShrinkwrapPanel = (mode: DockMode) => shrinkwrap ? (
     <FloatingPanel
       title="Shrinkwrap"
       accentBorder="border-violet-500/40"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('shrinkwrap')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('shrinkwrap', next)}
       onClose={() => setIsShrinkwrapPanelVisible(false)}
       initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 460) : 120}
       initialY={160}
@@ -20140,12 +23427,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </FloatingPanel>
   ) : null;
 
-  const renderInclusionBoundariesPanel = (docked: boolean) => (
+  const renderInclusionBoundariesPanel = (mode: DockMode) => (
     <FloatingPanel
       title="Inclusion Boundaries"
       accentBorder="border-emerald-500/40"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('inclusion')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('inclusion', next)}
       onClose={() => setIsInclusionBoundariesPanelVisible(false)}
       initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
       initialY={200}
@@ -20218,12 +23505,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </FloatingPanel>
   );
 
-  const renderContourGenPanel = (docked: boolean) => (
+  const renderContourGenPanel = (mode: DockMode) => (
     <FloatingPanel
       title="Contour Generation"
       accentBorder="border-amber-500/30"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('contourGen')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('contourGen', next)}
       onClose={() => setIsContourGenPanelVisible(false)}
       minimized={isContourGenMinimized}
       onToggleMinimize={() => setIsContourGenMinimized(v => !v)}
@@ -20237,6 +23524,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       <ContourGenerationPanel
         settings={contourSettings}
         onSettingsChange={setContourSettings}
+        onImportTin={handleImportTin}
+        onExportTin={() => handleExportTinSurface(undefined, 'landxml')}
+        onCreateTinFromContours={() => handleCreateTinFromContours()}
+        canCreateTinFromContours={contourGenerations.length > 0}
+        isImportingTin={isImportingTin}
+        tinImportProgress={tinImportProgress}
+        tinImportStatus={tinImportStatus}
+        tinSurfaces={tinSurfaces}
         onGenerate={handleGenerateContours}
         isGenerating={isGeneratingContours}
         points={points}
@@ -20251,12 +23546,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </FloatingPanel>
   );
 
-  const renderContourEsriPanel = (docked: boolean) => (
+  const renderContourEsriPanel = (mode: DockMode) => (
     <FloatingPanel
       title="ESRI REST Contour Sources"
       accentBorder="border-teal-500/30"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('contourEsri')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('contourEsri', next)}
       onClose={() => setIsContourEsriPanelVisible(false)}
       minimized={isContourEsriMinimized}
       onToggleMinimize={() => setIsContourEsriMinimized(v => !v)}
@@ -20276,16 +23571,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
         inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
         hasProjectProjection={!!settings.projection?.epsg}
+        hasProjectExtent={points.length > 0 && !!settings.projection?.epsg}
         isFetchingEsri={isFetchingEsri}
         onFetchEsriContours={handleFetchEsriContours}
       />
     </FloatingPanel>
   );
 
-  const renderContourMgmtPanel = (docked: boolean) => (
+  const renderContourMgmtPanel = (mode: DockMode) => (
     <ContourManagementPanel
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('contourMgmt')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('contourMgmt', next)}
       generations={contourGenerations}
       inclusionBoundaries={inclusionBoundaries}
       onToggleVisible={handleContourGenToggleVisible}
@@ -20294,18 +23590,21 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       onSetOpacity={handleContourGenSetOpacity}
       onToggleEsriBlend={handleContourGenToggleBlend}
       onSetEsriBlendPolylineId={handleContourGenSetBlendPolylineId}
+      onCreateTinFromGeneration={handleCreateTinFromContours}
+      creatingTinGenerationId={creatingTinGenerationId}
+      recentlyCreatedTinGenerationId={recentlyCreatedTinGenerationId}
       onDelete={handleContourGenDelete}
       onNewGeneration={() => setIsContourGenPanelVisible(true)}
       onClose={() => setIsContourManagementVisible(false)}
     />
   );
 
-  const renderSteepSlopePanel = (docked: boolean) => (
+  const renderSteepSlopePanel = (mode: DockMode) => (
     <FloatingPanel
       title="Steep Slope"
       accentBorder="border-rose-500/30"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('steepSlope')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('steepSlope', next)}
       onClose={() => setIsSteepSlopePanelVisible(false)}
       minimized={isSteepSlopePanelMinimized}
       onToggleMinimize={() => setIsSteepSlopePanelMinimized(v => !v)}
@@ -20337,12 +23636,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     void handleSendMessage(prompt, AgentType.COGO_AGENT);
   };
 
-  const renderCogoToolsPanel = (docked: boolean) => (
+  const renderCogoToolsPanel = (mode: DockMode) => (
     <FloatingPanel
       title="COGO Tools"
       accentBorder="border-violet-500/40"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('cogo')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('cogo', next)}
     >
       <CogoPanel
         pointLists={pointLists}
@@ -20354,12 +23653,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </FloatingPanel>
   );
 
-  const renderStationingToolsPanel = (docked: boolean) => (
+  const renderStationingToolsPanel = (mode: DockMode) => (
     <FloatingPanel
       title="Stationing Tools"
       accentBorder="border-purple-500/40"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('stationing')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('stationing', next)}
     >
       <StationingChat
         centerlines={centerlines}
@@ -20367,16 +23666,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         onPlacePoint={handlePlaceStationOffsetPoint}
         activeAgent={activeAgent}
         settings={settings}
+        agentDrawMode={agentDrawMode}
+        onOpenStationingSettings={openStationingControlsSurface}
       />
     </FloatingPanel>
   );
 
-  const renderPointEditorToolsPanel = (docked: boolean) => (
+  const renderPointEditorToolsPanel = (mode: DockMode) => (
     <FloatingPanel
       title="Point Editor Tools"
       accentBorder="border-yellow-500/40"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('pointEditor')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('pointEditor', next)}
     >
       <PointEditorChat
         pointLists={pointLists}
@@ -20404,12 +23705,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </FloatingPanel>
   );
 
-  const renderGnssPanel = (docked: boolean) => (
+  const renderGnssPanel = (mode: DockMode) => (
     <FloatingPanel
       title="RINEX / GNSS Tools"
       accentBorder="border-lime-500/40"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('gnss')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('gnss', next)}
     >
       <GNSSProcessingPanel
         onClose={() => {}}
@@ -20426,12 +23727,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </FloatingPanel>
   );
 
-  const renderDronePanel = (docked: boolean) => (
+  const renderDronePanel = (mode: DockMode) => (
     <FloatingPanel
       title="Drone Processing Tools"
       accentBorder="border-amber-500/40"
-      isDocked={docked}
-      onToggleDock={() => toggleToolDock('drone')}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('drone', next)}
     >
       {isRestrictedApiKey ? (
         <div className="max-w-2xl rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 text-amber-100">
@@ -20458,22 +23759,22 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const dockedA2UIToolItem: DockableToolItem[] = dockedA2UIPayload
     ? [{
         id: 'a2ui-chat-tool',
-        title: A2UI_DOCK_TITLES[dockedA2UIPayload.widgetType] || 'A2UI Tool',
+        title: A2UI_DOCK_TITLES[dockedA2UIPayload.widgetType] || 'Tool',
+        ownerAgent: dockedA2UIPayload.agent,
         icon: <SparklesIcon className="w-3.5 h-3.5 text-cyan-400" />,
         content: (
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/[0.06] px-3 py-1.5">
               <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-slate-500">
-                Docked from chat
+                Docked surface
               </span>
               <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => dockedA2UIMessage && handleToggleA2UIFloat(dockedA2UIMessage)}
-                  className="rounded border border-cyan-500/30 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400/60 hover:bg-cyan-500/10"
-                >
-                  Pop out
-                </button>
+                {dockedA2UIMessage && (
+                  <DockModeControl
+                    mode="toolshelf"
+                    onChange={next => handleSetA2UIDockMode(dockedA2UIMessage, next)}
+                  />
+                )}
                 <button
                   type="button"
                   onClick={() => handleA2UIFullscreen(dockedA2UIPayload)}
@@ -20481,25 +23782,23 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 >
                   Fullscreen
                 </button>
-                <button
-                  type="button"
-                  onClick={handleReturnA2UIToChat}
-                  className="rounded border border-white/[0.08] px-2 py-0.5 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06]"
-                >
-                  Return to chat
-                </button>
               </div>
             </div>
             <div className={dockedA2UIPayload.kind === 'cad-manager' ? 'min-h-0 flex-1 overflow-hidden' : 'min-h-0 flex-1 overflow-y-auto px-3 pb-3'}>
               <A2UISurface
                 payload={dockedA2UIPayload}
                 presentation="docked"
+                dockMode="toolshelf"
+                onDock={() => setIsToolShelfVisible(true)}
+                onPopOut={() => dockedA2UIMessage && handleSetA2UIDockMode(dockedA2UIMessage, 'floating')}
+                onChat={handleReturnA2UIToChat}
                 cadManagerContent={cadManagerA2UIContent}
               />
             </div>
           </div>
         ),
         isDocked: true,
+        dockMode: 'toolshelf',
         onDock: () => setIsToolShelfVisible(true),
         onUndock: handleReturnA2UIToChat,
       }]
@@ -20507,12 +23806,47 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
   const dockableToolItems: DockableToolItem[] = [
     ...dockedA2UIToolItem,
-    ...(activeAgent === AgentType.DEED_READER && isBoundaryEditorVisible && (boundaryFiles.length > 0 || deedSummaryFileIds.length > 0 || deedSummary || deedFile)
+    ...(closureInvestigation
+      ? [{
+          id: 'closure-investigation',
+          title: 'Closure Investigation',
+          ownerAgent: AgentType.DEED_READER,
+          icon: <SparklesIcon className="w-3.5 h-3.5 text-cyan-400" />,
+          content: renderClosureInvestigation(closureDockMode),
+          isDocked: closureDockMode === 'toolshelf',
+          dockMode: closureDockMode,
+          onDock: () => {
+            requestToolShelfTab('closure-investigation');
+            setClosureDockMode('toolshelf');
+            setIsToolShelfVisible(true);
+          },
+          onUndock: () => setClosureDockMode('floating'),
+        }]
+      : []),
+    ...(activeAgent === AgentType.DEED_READER && isBoundaryAlignmentOpen && activeBoundaryFile
+      ? [{
+          id: 'boundary-align',
+          title: 'Alignment Tools',
+          ownerAgent: AgentType.DEED_READER,
+          icon: <AdjustmentsHorizontalIcon className="w-3.5 h-3.5 text-cyan-400" />,
+          content: renderBoundaryAlignment(true),
+          isDocked: boundaryAlignmentDockMode === 'toolshelf',
+          onDock: () => {
+            requestToolShelfTab('boundary-align');
+            setBoundaryAlignmentDockMode('toolshelf');
+            setIsBoundaryAlignmentOpen(true);
+            setIsToolShelfVisible(true);
+          },
+          onUndock: () => setBoundaryAlignmentDockMode('floating'),
+        }]
+      : []),
+    ...(activeAgent === AgentType.DEED_READER && isBoundaryEditorVisible && boundaryFiles.length > 0
       ? [{
           id: 'boundary-deed',
           title: 'Deed Draft',
+          ownerAgent: AgentType.DEED_READER,
           icon: <CourthouseIcon className="w-3.5 h-3.5 text-emerald-400" />,
-          content: renderBoundaryEditor(true),
+          content: renderBoundaryEditor(boundaryDockMode),
           isDocked: isBoundaryDialogDocked,
           onDock: () => {
             setIsBoundaryDialogDocked(true);
@@ -20528,8 +23862,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'boundary-gis',
           title: 'County Parcels GIS',
-          icon: <GisAgentIcon className="w-3.5 h-3.5 text-orange-400" />,
-          content: renderParcelPanel(true),
+          ownerAgent: AgentType.DEED_READER,
+          icon: <GisAgentIcon className="w-3.5 h-3.5 text-sky-400" />,
+          content: renderParcelPanel(parcelDockMode),
           isDocked: isParcelPanelDocked,
           onDock: () => {
             setIsParcelPanelDocked(true);
@@ -20545,8 +23880,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'cogo',
           title: 'COGO Tools',
+          ownerAgent: AgentType.COGO_AGENT,
           icon: <CogoIcon className="w-3.5 h-3.5 text-violet-400" />,
-          content: renderCogoToolsPanel(true),
+          content: renderCogoToolsPanel(getToolDockMode('cogo')),
           isDocked: dockedTools.cogo,
           onDock: () => toggleToolDock('cogo', true),
           onUndock: () => toggleToolDock('cogo', false),
@@ -20556,8 +23892,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'shrinkwrap',
           title: 'Shrinkwrap',
+          ownerAgent: AgentType.COGO_AGENT,
           icon: <CogoIcon className="w-3.5 h-3.5 text-violet-400" />,
-          content: renderShrinkwrapPanel(true),
+          content: renderShrinkwrapPanel(getToolDockMode('shrinkwrap')),
           isDocked: dockedTools.shrinkwrap,
           onDock: () => toggleToolDock('shrinkwrap', true),
           onUndock: () => toggleToolDock('shrinkwrap', false),
@@ -20567,7 +23904,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'inclusion',
           title: 'Inclusion Boundaries',
-          content: renderInclusionBoundariesPanel(true),
+          content: renderInclusionBoundariesPanel(getToolDockMode('inclusion')),
           isDocked: dockedTools.inclusion,
           onDock: () => toggleToolDock('inclusion', true),
           onUndock: () => toggleToolDock('inclusion', false),
@@ -20577,8 +23914,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'stationing',
           title: 'Stationing Tools',
+          ownerAgent: AgentType.CENTERLINE_STATIONING,
           icon: <ScaleIcon className="w-3.5 h-3.5 text-purple-400" />,
-          content: renderStationingToolsPanel(true),
+          content: renderStationingToolsPanel(getToolDockMode('stationing')),
           isDocked: dockedTools.stationing,
           onDock: () => toggleToolDock('stationing', true),
           onUndock: () => toggleToolDock('stationing', false),
@@ -20588,8 +23926,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'pointEditor',
           title: 'Point Tools',
-          icon: <PlumbBobIcon className="w-3.5 h-3.5 text-yellow-400" />,
-          content: renderPointEditorToolsPanel(true),
+          ownerAgent: AgentType.POINT_EDITOR,
+          icon: <PlumbBobIcon className="w-3.5 h-3.5 text-sky-400" />,
+          content: renderPointEditorToolsPanel(getToolDockMode('pointEditor')),
           isDocked: dockedTools.pointEditor,
           onDock: () => toggleToolDock('pointEditor', true),
           onUndock: () => toggleToolDock('pointEditor', false),
@@ -20599,8 +23938,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'contourGen',
           title: 'Contour Generation',
-          icon: <ContourIcon className="w-3.5 h-3.5 text-amber-400" />,
-          content: renderContourGenPanel(true),
+          ownerAgent: AgentType.CONTOURING_AGENT,
+          icon: <ContourIcon className="w-3.5 h-3.5 text-teal-400" />,
+          content: renderContourGenPanel(getToolDockMode('contourGen')),
           isDocked: dockedTools.contourGen,
           onDock: () => toggleToolDock('contourGen', true),
           onUndock: () => toggleToolDock('contourGen', false),
@@ -20610,8 +23950,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'contourEsri',
           title: 'ESRI REST Sources',
+          ownerAgent: AgentType.CONTOURING_AGENT,
           icon: <GisAgentIcon className="w-3.5 h-3.5 text-teal-400" />,
-          content: renderContourEsriPanel(true),
+          content: renderContourEsriPanel(getToolDockMode('contourEsri')),
           isDocked: dockedTools.contourEsri,
           onDock: () => toggleToolDock('contourEsri', true),
           onUndock: () => toggleToolDock('contourEsri', false),
@@ -20621,8 +23962,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'contourMgmt',
           title: 'Contour Generations',
-          icon: <ContourIcon className="w-3.5 h-3.5 text-amber-400" />,
-          content: renderContourMgmtPanel(true),
+          ownerAgent: AgentType.CONTOURING_AGENT,
+          icon: <ContourIcon className="w-3.5 h-3.5 text-teal-400" />,
+          content: renderContourMgmtPanel(getToolDockMode('contourMgmt')),
           isDocked: dockedTools.contourMgmt,
           onDock: () => toggleToolDock('contourMgmt', true),
           onUndock: () => toggleToolDock('contourMgmt', false),
@@ -20632,8 +23974,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'steepSlope',
           title: 'Steep Slope Tools',
+          ownerAgent: AgentType.STEEP_SLOPE_AGENT,
           icon: <SlopeIcon className="w-3.5 h-3.5 text-rose-400" />,
-          content: renderSteepSlopePanel(true),
+          content: renderSteepSlopePanel(getToolDockMode('steepSlope')),
           isDocked: dockedTools.steepSlope,
           onDock: () => toggleToolDock('steepSlope', true),
           onUndock: () => toggleToolDock('steepSlope', false),
@@ -20643,8 +23986,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'profileGen',
           title: 'Profile Generator',
+          ownerAgent: AgentType.PROFILE_AGENT,
           icon: <ProfileIcon className="w-3.5 h-3.5 text-sky-400" />,
-          content: renderProfileGenPanel(true),
+          content: renderProfileGenPanel(getToolDockMode('profileGen')),
           isDocked: dockedTools.profileGen,
           onDock: () => toggleToolDock('profileGen', true),
           onUndock: () => toggleToolDock('profileGen', false),
@@ -20654,8 +23998,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'autoDraft',
           title: 'Auto Draft',
+          ownerAgent: AgentType.CIVIL_DRAFTER,
           icon: <CivilDrafterIcon className="w-3.5 h-3.5 text-fuchsia-400" />,
-          content: renderAutoDraftPanel(true),
+          content: renderAutoDraftPanel(getToolDockMode('autoDraft')),
           isDocked: dockedTools.autoDraft,
           onDock: () => toggleToolDock('autoDraft', true),
           onUndock: () => toggleToolDock('autoDraft', false),
@@ -20665,8 +24010,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'flood',
           title: 'Flood Zone Tools',
+          ownerAgent: AgentType.FLOOD_AGENT,
           icon: <FloodIcon className="w-3.5 h-3.5 text-cyan-400" />,
-          content: renderFloodPanel(true),
+          content: renderFloodPanel(getToolDockMode('flood')),
           isDocked: dockedTools.flood,
           onDock: () => toggleToolDock('flood', true),
           onUndock: () => toggleToolDock('flood', false),
@@ -20676,8 +24022,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'structures',
           title: 'Structures Tools',
+          ownerAgent: AgentType.STRUCTURES_AGENT,
           icon: <StructuresIcon className="w-3.5 h-3.5 text-orange-400" />,
-          content: renderStructuresPanel(true),
+          content: renderStructuresPanel(getToolDockMode('structures')),
           isDocked: dockedTools.structures,
           onDock: () => toggleToolDock('structures', true),
           onUndock: () => toggleToolDock('structures', false),
@@ -20687,8 +24034,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'soils',
           title: 'Soils Tools',
+          ownerAgent: AgentType.SOILS_AGENT,
           icon: <SoilsIcon className="w-3.5 h-3.5 text-stone-400" />,
-          content: renderSoilsPanel(true),
+          content: renderSoilsPanel(getToolDockMode('soils')),
           isDocked: dockedTools.soils,
           onDock: () => toggleToolDock('soils', true),
           onUndock: () => toggleToolDock('soils', false),
@@ -20698,41 +24046,33 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'roading',
           title: 'Roading Studio',
-          icon: <RoadIcon className="w-3.5 h-3.5 text-amber-400" />,
-          content: renderRoadingPanel(true),
+          ownerAgent: AgentType.ROADING_AGENT,
+          icon: <RoadIcon className="w-3.5 h-3.5 text-rose-400" />,
+          content: renderRoadingPanel(getToolDockMode('roading')),
           isDocked: dockedTools.roading,
           onDock: () => toggleToolDock('roading', true),
           onUndock: () => toggleToolDock('roading', false),
         }]
       : []),
-    ...(isGpsStakeoutFloatingVisible
+    ...(isGpsRoverPanelVisible
       ? [{
           id: 'gpsStakeout',
-          title: 'GPS Stakeout',
+          title: 'GPS Rover',
+          ownerAgent: AgentType.GPS_STAKEOUT,
           icon: <CrosshairsIcon className="w-3.5 h-3.5 text-blue-400" />,
-          content: renderGpsStakeoutPanel(true),
+          content: renderGpsStakeoutPanel(getToolDockMode('gpsStakeout')),
           isDocked: dockedTools.gpsStakeout,
           onDock: () => toggleToolDock('gpsStakeout', true),
           onUndock: () => toggleToolDock('gpsStakeout', false),
-        }]
-      : []),
-    ...(isGpsCollectFloatingVisible
-      ? [{
-          id: 'gpsCollect',
-          title: 'GPS Collect',
-          icon: <MapPinIcon className="w-3.5 h-3.5 text-emerald-400" />,
-          content: renderGpsCollectPanel(true),
-          isDocked: dockedTools.gpsCollect,
-          onDock: () => toggleToolDock('gpsCollect', true),
-          onUndock: () => toggleToolDock('gpsCollect', false),
         }]
       : []),
     ...(activeAgent === AgentType.GNSS_AGENT
       ? [{
           id: 'gnss',
           title: 'RINEX / GNSS Tools',
+          ownerAgent: AgentType.GNSS_AGENT,
           icon: <SatelliteIcon className="w-3.5 h-3.5 text-lime-400" />,
-          content: renderGnssPanel(true),
+          content: renderGnssPanel(getToolDockMode('gnss')),
           isDocked: dockedTools.gnss,
           onDock: () => toggleToolDock('gnss', true),
           onUndock: () => toggleToolDock('gnss', false),
@@ -20742,8 +24082,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ? [{
           id: 'drone',
           title: 'Drone Tools',
-          icon: <DroneIcon className="w-3.5 h-3.5 text-amber-400" />,
-          content: renderDronePanel(true),
+          ownerAgent: AgentType.DRONE_AGENT,
+          icon: <DroneIcon className="w-3.5 h-3.5 text-violet-400" />,
+          content: renderDronePanel(getToolDockMode('drone')),
           isDocked: dockedTools.drone,
           onDock: () => toggleToolDock('drone', true),
           onUndock: () => toggleToolDock('drone', false),
@@ -20752,29 +24093,30 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   ];
 
   const boundaryToolsRowAccessories = activeAgent === AgentType.DEED_READER ? (
-    <div className="flex items-center gap-1.5 flex-wrap">
+    <div className="flex flex-wrap items-center gap-1.5">
       <button
         type="button"
         onClick={() => {
+          requestToolShelfTab('boundary-deed');
           setIsBoundaryDialogDocked(true);
           setIsBoundaryDialogMinimized(false);
           setIsBoundaryEditorVisible(true);
           setActiveBoundaryDockedTab('dialog');
           setIsToolShelfVisible(true);
         }}
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition-all border shadow-sm ${
+        className={`${boundaryFiles.length === 0 ? 'hidden' : ''} black-hole-btn ${
           !isBoundaryDialogDocked
-            ? 'bg-cyan-950/70 text-cyan-200 border-cyan-500/60 hover:bg-cyan-900/80'
+            ? 'black-hole-btn--cyan'
             : (!isBoundaryDialogMinimized && isBoundaryEditorVisible)
-              ? 'bg-emerald-950/70 text-emerald-200 border-emerald-500/60 hover:bg-emerald-900/80'
-              : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
-        }`}
+              ? 'black-hole-btn--emerald'
+              : 'black-hole-btn--neutral'
+        } inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold text-white transition-all`}
         title={!isBoundaryDialogDocked ? 'Deed Dialog is floating on canvas — click to dock into Tool Station' : 'Open Deed Dialog in Tool Station'}
       >
-        <CourthouseIcon className={`w-3.5 h-3.5 ${!isBoundaryDialogDocked ? 'text-cyan-400' : 'text-emerald-400'}`} />
+        <CourthouseIcon className="w-3.5 h-3.5" />
         <span>Deed</span>
         {activeBoundaryCallsCount > 0 && (
-          <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-200 border border-emerald-400/40">
+          <span className="rounded-full border border-white/15 bg-white/10 px-1.5 py-0.2 font-mono text-[10px] font-bold text-white/85">
             {activeBoundaryCallsCount}
           </span>
         )}
@@ -20782,25 +24124,26 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       <button
         type="button"
         onClick={() => {
+          requestToolShelfTab('boundary-gis');
           setIsParcelPanelDocked(true);
           setIsParcelPanelMinimized(false);
           setIsParcelPanelVisible(true);
           setActiveBoundaryDockedTab('gis');
           setIsToolShelfVisible(true);
         }}
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition-all border shadow-sm ${
+        className={`black-hole-btn ${
           !isParcelPanelDocked
-            ? 'bg-amber-950/70 text-amber-200 border-amber-500/60 hover:bg-amber-900/80'
+            ? 'black-hole-btn--blue'
             : (!isParcelPanelMinimized && isParcelPanelVisible)
-              ? 'bg-orange-950/70 text-orange-200 border-orange-500/60 hover:bg-orange-900/80'
-              : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
-        }`}
+              ? 'black-hole-btn--cyan'
+              : 'black-hole-btn--neutral'
+        } inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold text-white transition-all`}
         title={!isParcelPanelDocked ? 'County Parcels GIS is floating on canvas — click to dock into Tool Station' : 'Open County Parcels GIS in Tool Station'}
       >
-        <GisAgentIcon className={`w-3.5 h-3.5 ${!isParcelPanelDocked ? 'text-amber-400' : 'text-orange-400'}`} />
+        <GisAgentIcon className="w-3.5 h-3.5" />
         <span>GIS</span>
         {lastFetchedParcels.length > 0 && (
-          <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-orange-500/20 text-orange-200 border border-orange-400/40">
+          <span className="rounded-full border border-white/15 bg-white/10 px-1.5 py-0.2 font-mono text-[10px] font-bold text-white/85">
             {lastFetchedParcels.length}
           </span>
         )}
@@ -20978,7 +24321,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                           initializeGpsStakeoutAgent();
                           setIsInitialScreen(false);
                           setActiveAgent(AgentType.GPS_STAKEOUT);
-                          setIsGpsStakeoutFloatingVisible(true);
+                          setGpsInitialTab('stakeout');
+                          setGpsPanelRequestId(value => value + 1);
+                          setIsGpsRoverPanelVisible(true);
                           toggleToolDock('gpsStakeout', true);
                           showView('canvas');
                         }}
@@ -20991,8 +24336,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                           initializeGpsStakeoutAgent();
                           setIsInitialScreen(false);
                           setActiveAgent(AgentType.GPS_STAKEOUT);
-                          setIsGpsCollectFloatingVisible(true);
-                          toggleToolDock('gpsCollect', true);
+                          setGpsInitialTab('collect');
+                          setGpsPanelRequestId(value => value + 1);
+                          setIsGpsRoverPanelVisible(true);
+                          toggleToolDock('gpsStakeout', true);
                           showView('canvas');
                         }}
                         onOpenContouringFromGis={() => {
@@ -21102,11 +24449,67 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         layerColors={cadLayerColorMap}
                                         layerLinetypes={layerLinetypeMap}
                                         linetypeOptions={cadLinetypeOptions}
+                                        layerVisibility={cadLayerVisibility}
                                         onSelectLayer={setActiveDrawingLayer}
+                                        onToggleLayerVisibility={handleToggleCadLayer}
                                         onLayerColorChange={(name, color) => handleCadLayerPropertyChange(name, { color })}
                                         onLayerLinetypeChange={(name, lineType) => handleCadLayerPropertyChange(name, { lineType })}
                                     />
+                                    <button
+                                        data-draw-menu-anchor
+                                        onClick={() => {
+                                            setIsLayerPanelOpen(false);
+                                            canvas2dRef.current?.toggleDrawingToolsMenu();
+                                        }}
+                                        className={`p-2 rounded-full transition-colors text-xs font-medium ${canvasToolState.isDrawing ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
+                                        title="Draw menu — linework, hatch, and edit tools (B for baseline)"
+                                        aria-label="Open draw menu"
+                                    >
+                                        Draw
+                                    </button>
+                                    <button
+                                        onClick={() => handleOpenSpreadsheetEditor()}
+                                        className="p-2 rounded-full transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
+                                        title="Codes — open the CAD standards codes spreadsheet"
+                                        aria-label="Open Codes spreadsheet"
+                                        data-testid="toolbar-open-cad-spreadsheet"
+                                    >
+                                        Codes
+                                    </button>
+                                    <button
+                                        onClick={openPointEntrySurface}
+                                        className="p-2 rounded-full transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
+                                        title="Point — add a survey point by picking the canvas or entering coordinates (P)"
+                                        aria-label="Open Add Point tool"
+                                    >
+                                        Point
+                                    </button>
+                                    <button
+                                        onClick={handleOpenTextEditorFromToolbar}
+                                        className="p-2 rounded-full transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
+                                        title="Txt — open the A2UI text editor for deeds, notes, and .md files"
+                                        aria-label="Open Text Editor"
+                                        data-testid="toolbar-open-text-editor"
+                                    >
+                                        Txt
+                                    </button>
                                     <button onClick={() => handleOpenDxfExportModal()} className="p-2 rounded-full hover:bg-gray-700 transition-colors flex items-center gap-1" title="Export DXF"><DownloadIcon className="h-[18px] w-[18px] text-gray-300"/><span className="text-xs font-medium text-gray-300">DXF</span></button>
+                                    <button
+                                        onClick={() => {
+                                            setSettings(prev => ({
+                                                ...prev,
+                                                googleMaps: {
+                                                    ...prev.googleMaps,
+                                                    enabled: !prev.googleMaps?.enabled,
+                                                    ...(!prev.googleMaps?.enabled ? { mapType: 'naip' as const, scale: 2 } : {}),
+                                                },
+                                            }));
+                                        }}
+                                        className={`px-2.5 py-2 rounded text-[11px] font-bold font-mono transition-colors ${settings.googleMaps?.enabled ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
+                                        title={settings.googleMaps?.enabled ? 'Map Imagery: ON (Click to toggle)' : 'Map Imagery: OFF (Click to toggle)'}
+                                    >
+                                        MAP
+                                    </button>
                                     <button onClick={() => undo()} disabled={!canUndo} className={`p-2 rounded-full transition-colors ${canUndo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canUndo && undoLabel ? `Undo: ${undoLabel} (Ctrl+Z or U)` : 'Nothing to undo'}><UndoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
                                     <button onClick={() => redo()} disabled={!canRedo} className={`p-2 rounded-full transition-colors ${canRedo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canRedo && redoLabel ? `Redo: ${redoLabel} (Ctrl+Y)` : 'Nothing to redo'}><RedoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
                                     <button
@@ -21115,16 +24518,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         title="Edit history � jump to any earlier state"
                                     >
                                         Hist
-                                    </button>
-                                    {/* Canvas tools promoted from the floating toolbar */}
-                                    <button
-                                        onClick={() => handleOpenSpreadsheetEditor()}
-                                        className="p-2 rounded-full transition-colors hover:bg-gray-700 text-gray-300"
-                                        title="CAD Standards spreadsheet — open full screen"
-                                        aria-label="Open CAD Standards spreadsheet"
-                                        data-testid="toolbar-open-cad-spreadsheet"
-                                    >
-                                        <ToolbarStandardsIcon className="h-[18px] w-[18px]" />
                                     </button>
                                     <button
                                         onClick={() => setIsTinShadingEnabled(v => !v)}
@@ -21204,22 +24597,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             <div className="flex-grow"></div>
                             <button onClick={() => setIsGridVisible(v => !v)} className={`p-2 rounded-full transition-colors ${isGridVisible ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-700'}`} title={isGridVisible ? 'Hide background grid' : 'Show background grid'}><GridIcon className={`h-[18px] w-[18px] ${isGridVisible ? 'text-white' : 'text-gray-400'}`}/></button>
                             <button
-                                onClick={() => {
-                                    setSettings(prev => ({
-                                        ...prev,
-                                        googleMaps: {
-                                            ...prev.googleMaps,
-                                            enabled: !prev.googleMaps?.enabled,
-                                            ...(!prev.googleMaps?.enabled ? { mapType: 'naip' as const, scale: 2 } : {}),
-                                        },
-                                    }));
-                                }}
-                                className={`px-2.5 py-2 rounded text-[11px] font-bold font-mono transition-colors ${settings.googleMaps?.enabled ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
-                                title={settings.googleMaps?.enabled ? 'Map Imagery: ON (Click to toggle)' : 'Map Imagery: OFF (Click to toggle)'}
-                            >
-                                MAP
-                            </button>
-                            <button
                                 onClick={showSettings}
                                 className="p-2 rounded-full transition-colors hover:bg-gray-700 text-gray-300"
                                 title="Settings"
@@ -21262,8 +24639,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         isChatResizing={isResizingToolShelf}
                                         dockedA2UIKey={dockedA2UIMessage ? dockedA2UIKey : null}
                                         floatingA2UIKey={floatingA2UIMessage ? floatingA2UIKey : null}
+                                        onSetA2UIDockMode={handleSetA2UIDockMode}
                                         onToggleA2UIDock={handleToggleA2UIDock}
                                         onToggleA2UIFloat={handleToggleA2UIFloat}
+                                        standaloneA2UIMessage={standaloneA2UIMessage}
                                         agentChatOpenSignal={agentChatOpenSignal}
                                         boundaryQuickActions={
                                             activeAgent === AgentType.DEED_READER
@@ -21327,6 +24706,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onDeleteLine={handleDeleteLine}
                                         onDeletePoints={(pointNumbers) => pointNumbers.forEach(pn => handleDeletePoint(pn))}
                                         onDeleteCenterline={(centerlineId) => setCenterlines(prev => prev.filter(cl => cl.id !== centerlineId))}
+                                        onUpsertCenterline={handleUpsertCenterline}
+                                        onOpenStationingSettings={openStationingControlsSurface}
                                         onBatchLinesChange={handleBatchLines}
                                         canUndo={canUndo}
                                         canRedo={canRedo}
@@ -21375,6 +24756,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onDeleteHatch={handleDeleteHatch}
                                         onOpenHatchManager={() => showView('hatchmanager')}
                                         onAddPoint={handleAddPoint}
+                                        onOpenPointDialog={openPointEntrySurface}
                                         nextAvailablePointNumber={nextAvailablePointNumber}
                                         dimensionScale={dimensionScale}
                                         setDimensionScale={setDimensionScale}
@@ -21384,6 +24766,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         annotationScale={annotationScale}
                                         setAnnotationScale={setAnnotationScale}
                                         parcelLabels={parcelLabels}
+                                        mapAreaLabels={areaLabels}
                                         parcelLabelFormatter={parcelLabelFormatter}
                                         parcelCadTextStyles={parcelCadTextStyles}
                                         annotationCategories={annotationCategories}
@@ -21440,9 +24823,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         toolsRowAccessories={boundaryToolsRowAccessories}
                                         hasDockableTools={dockableToolItems.length > 0}
                                         chatToolDialogs={
-                                            isToolShelfVisible
-                                                ? []
-                                                : dockableToolItems.filter(item => item.isDocked && item.id !== 'a2ui-chat-tool')
+                                            dockableToolItems.filter(item =>
+                                                item.id !== 'a2ui-chat-tool' &&
+                                                (item.id === 'boundary-deed'
+                                                    ? boundaryDockMode
+                                                    : item.id === 'boundary-gis'
+                                                        ? parcelDockMode
+                                                        : item.id === 'closure-investigation'
+                                                            ? closureDockMode
+                                                            : getToolDockMode(item.id)) === 'chat'
+                                            )
                                         }
                                         isToolDockOpen={isToolShelfVisible}
                                         onToggleToolDock={toggleToolShelf}
@@ -21543,10 +24933,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         />
                                     )}
                                     {/* Civil Drafter Auto Draft panel */}
-                                    {activeAgent === AgentType.CIVIL_DRAFTER && showAutoDraftPanel && !dockedTools.autoDraft && (
+                                    {activeAgent === AgentType.CIVIL_DRAFTER && showAutoDraftPanel && getToolDockMode('autoDraft') === 'floating' && (
                                         <AutoDraftPanel
-                                            isDocked={false}
-                                            onToggleDock={() => toggleToolDock('autoDraft')}
+                                            dockMode="floating"
+                                            onDockModeChange={next => setToolDockMode('autoDraft', next)}
                                             points={points}
                                             lines={lines}
                                             jobInfo={jobInfo}
@@ -21557,6 +24947,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 district: zoningDistrict,
                                             } satisfies ZoningContext}
                                             projectEpsg={settings.projection?.epsg ?? null}
+                                            projectionLabel={
+                                                settings.projection?.zoneName
+                                                    ? [settings.projection.state, settings.projection.zoneName].filter(Boolean).join(' · ')
+                                                    : null
+                                            }
+                                            gpsPosition={currentPosition ? { latitude: currentPosition.coords.latitude, longitude: currentPosition.coords.longitude } : null}
+                                            onProjectionDetected={(projection) => setSettings(prev => ({ ...prev, projection }))}
                                             mapKeys={{
                                                 geminiKey: settings.userApiKey || undefined,
                                                 mapsKey: settings.googleMaps?.apiKey || undefined,
@@ -21769,13 +25166,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                     })()}
                                     {/* Boundary Editor overlay � shown when there are boundary files */}
                                     {/* Boundary Editor: Render floating ONLY when explicitly popped out */}
-                                    {isBoundaryEditorVisible && (boundaryFiles.length > 0 || deedSummaryFileIds.length > 0 || deedSummary || deedFile) && !isBoundaryDialogDocked && (
-                                        renderBoundaryEditor(false)
+                                    {isBoundaryEditorVisible && boundaryFiles.length > 0 && boundaryDockMode === 'floating' && (
+                                        renderBoundaryEditor('floating')
+                                    )}
+                                    {isBoundaryAlignmentOpen && activeBoundaryFile && boundaryAlignmentDockMode === 'floating' && (
+                                        renderBoundaryAlignment(false)
                                     )}
 
                                     {/* County Parcels / GIS: Render floating ONLY when explicitly popped out */}
-                                    {activeAgent === AgentType.DEED_READER && !isParcelPanelDocked && isParcelPanelVisible && (
-                                        renderParcelPanel(false)
+                                    {activeAgent === AgentType.DEED_READER && parcelDockMode === 'floating' && isParcelPanelVisible && (
+                                        renderParcelPanel('floating')
                                     )}
                                     </>
                                 ) : activeVisualPanel === 'cutsheet' ? (
@@ -21805,6 +25205,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onContentChange={handleTextEditorContentChange}
                                         onSaveChanges={handleSaveChanges}
                                         hasUnsavedChanges={hasUnsavedChanges}
+                                        onCreateFile={handleCreateTextDocument}
+                                        onImportTextFiles={handleImportTextFiles}
                                     />
                                 ) : activeVisualPanel === 'gpsstakeout' ? (
                                     <GpsStakeoutPanel 
@@ -21820,6 +25222,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         setTargetPointNumber={setStakeoutTargetPointNumber}
                                         nextAvailablePointNumber={nextAvailablePointNumber}
                                         initialTab={gpsInitialTab}
+                                        tabRequestId={gpsPanelRequestId}
                                     />
                                 ) : activeVisualPanel === 'filemanager' ? (
                                     <FileManagerPanel
@@ -21967,10 +25370,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                     <SheetView
                                       points={points}
                                       lines={lines}
+                                      hatches={hatches}
+                                      customHatches={cadManagerState.standard?.hatches ?? []}
                                       projectName={jobInfo?.jobName}
                                       cadLayerColors={cadLayerColorMap}
                                       profileData={profileData}
                                       profileInfo={profileInfo}
+                                      pendingNotes={pendingSheetNotes}
+                                      onPendingNotesConsumed={() => setPendingSheetNotes(null)}
                                     />
                                 ) : activeVisualPanel === 'draftstylelib' ? (
                                     <DraftingStyleLibrary
@@ -22010,8 +25417,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         <AgentToolDock
                           activeAgent={activeAgent}
                           items={dockableToolItems}
-                          headerControls={chatHeaderControls}
+                          headerControls={toolShelfHeaderControls}
                           toolsRowAccessories={boundaryToolsRowAccessories}
+                          requestedTabId={toolShelfTabRequest?.tabId}
+                          requestedTabToken={toolShelfTabRequest?.token}
+                          hideToolTabs={activeAgent === AgentType.DEED_READER}
                           onClose={toggleToolShelf}
                         />
                       </AgentToolShelf>
@@ -22063,6 +25473,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 onPlacePoint={handlePlaceStationOffsetPoint}
                                                 activeAgent={activeAgent}
                                                 settings={settings}
+                                                agentDrawMode={agentDrawMode}
+                                                onOpenStationingSettings={openStationingControlsSurface}
                                             />
                                         ) : activeAgent === AgentType.DEED_READER ? (
                                             undefined
@@ -22202,20 +25614,20 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 isBoundaryEditorVisible &&
                                                 isBoundaryDialogDocked &&
                                                 !isBoundaryDialogMinimized &&
-                                                (boundaryFiles.length > 0 || deedSummaryFileIds.length > 0 || deedSummary || deedFile);
+                                                boundaryFiles.length > 0;
                                             const isParcelPanelShowing =
                                                 isParcelPanelVisible &&
                                                 isParcelPanelDocked &&
                                                 !isParcelPanelMinimized;
 
                                             if (isBoundaryDialogShowing && isParcelPanelShowing) {
-                                                return activeBoundaryDockedTab === 'gis' ? renderParcelPanel(true) : renderBoundaryEditor(true);
+                                                return activeBoundaryDockedTab === 'gis' ? renderParcelPanel('toolshelf') : renderBoundaryEditor('toolshelf');
                                             }
                                             if (isBoundaryDialogShowing) {
-                                                return renderBoundaryEditor(true);
+                                                return renderBoundaryEditor('toolshelf');
                                             }
                                             if (isParcelPanelShowing) {
-                                                return renderParcelPanel(true);
+                                                return renderParcelPanel('toolshelf');
                                             }
                                             return undefined;
                                         })()
@@ -22226,12 +25638,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 {/* Deed Button */}
                                                 <button
                                                     type="button"
+                                                    disabled={boundaryFiles.length === 0}
                                                     onClick={() => {
                                                         const isBoundaryShowing =
                                                             isBoundaryEditorVisible &&
                                                             isBoundaryDialogDocked &&
                                                             !isBoundaryDialogMinimized &&
-                                                            (boundaryFiles.length > 0 || deedSummaryFileIds.length > 0 || deedSummary || deedFile);
+                                                            boundaryFiles.length > 0;
 
                                                         if (!isBoundaryDialogDocked) {
                                                             setIsBoundaryDialogDocked(true);
@@ -22249,17 +25662,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                             setActiveBoundaryDockedTab('dialog');
                                                         }
                                                     }}
-                                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition-all border shadow-sm ${
+                                                    className={`${boundaryFiles.length === 0 ? 'hidden' : ''} black-hole-btn ${
                                                         !isBoundaryDialogDocked
-                                                            ? 'bg-cyan-950/70 text-cyan-200 border-cyan-500/60 hover:bg-cyan-900/80'
+                                                            ? 'black-hole-btn--cyan'
                                                             : (!isBoundaryDialogMinimized && isBoundaryEditorVisible && (activeBoundaryDockedTab === 'dialog' || !isParcelPanelVisible || isParcelPanelMinimized || !isParcelPanelDocked))
-                                                                ? 'bg-emerald-950/70 text-emerald-200 border-emerald-500/60 hover:bg-emerald-900/80'
-                                                                : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
-                                                    }`}
-                                                    style={{
-                                                        color: (!isBoundaryDialogMinimized && isBoundaryEditorVisible && isBoundaryDialogDocked && (activeBoundaryDockedTab === 'dialog' || !isParcelPanelVisible || isParcelPanelMinimized || !isParcelPanelDocked)) ? (agentThemeColors[activeAgent] || '#34d399') : undefined,
-                                                        borderColor: (!isBoundaryDialogMinimized && isBoundaryEditorVisible && isBoundaryDialogDocked && (activeBoundaryDockedTab === 'dialog' || !isParcelPanelVisible || isParcelPanelMinimized || !isParcelPanelDocked)) ? (agentThemeColors[activeAgent] || '#34d399') : undefined,
-                                                    }}
+                                                                ? 'black-hole-btn--emerald'
+                                                                : 'black-hole-btn--neutral'
+                                                    } inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold text-white transition-all`}
                                                     title={
                                                         !isBoundaryDialogDocked
                                                             ? 'Deed Dialog is floating on canvas — click to dock into chat'
@@ -22268,20 +25677,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                                 : 'Minimize Deed in chat'
                                                     }
                                                 >
-                                                    <CourthouseIcon className={`w-3.5 h-3.5 ${!isBoundaryDialogDocked ? 'text-cyan-400' : 'text-emerald-400'}`} />
+                                                    <CourthouseIcon className="w-3.5 h-3.5" />
                                                     <span>Deed</span>
                                                     {activeBoundaryCallsCount > 0 && (
-                                                        <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
-                                                            !isBoundaryDialogDocked
-                                                                ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/40'
-                                                                : !isBoundaryDialogMinimized && isBoundaryEditorVisible
-                                                                    ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40'
-                                                                    : 'bg-gray-800 text-gray-400'
-                                                        }`}>
+                                                        <span className="rounded-full border border-white/15 bg-white/10 px-1.5 py-0.2 text-[10px] font-mono font-bold text-white/85">
                                                             {activeBoundaryCallsCount}
                                                         </span>
                                                     )}
-                                                    <span className="text-[10px] text-gray-400 font-mono">
+                                                    <span className="text-[10px] text-white/55 font-mono">
                                                         {!isBoundaryDialogDocked ? 'Float' : (!isBoundaryDialogMinimized && isBoundaryEditorVisible && (activeBoundaryDockedTab === 'dialog' || !isParcelPanelVisible || isParcelPanelMinimized || !isParcelPanelDocked) ? '▲' : '▼')}
                                                     </span>
                                                 </button>
@@ -22312,17 +25715,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                             setActiveBoundaryDockedTab('gis');
                                                         }
                                                     }}
-                                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition-all border shadow-sm ${
+                                                    className={`black-hole-btn ${
                                                         !isParcelPanelDocked
-                                                            ? 'bg-amber-950/70 text-amber-200 border-amber-500/60 hover:bg-amber-900/80'
+                                                            ? 'black-hole-btn--blue'
                                                             : (!isParcelPanelMinimized && isParcelPanelVisible && (activeBoundaryDockedTab === 'gis' || !isBoundaryEditorVisible || isBoundaryDialogMinimized || !isBoundaryDialogDocked))
-                                                                ? 'bg-orange-950/70 text-orange-200 border-orange-500/60 hover:bg-orange-900/80 shadow-orange-950/40'
-                                                                : 'bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600'
-                                                    }`}
-                                                    style={{
-                                                        color: (!isParcelPanelMinimized && isParcelPanelVisible && isParcelPanelDocked && (activeBoundaryDockedTab === 'gis' || !isBoundaryEditorVisible || isBoundaryDialogMinimized || !isBoundaryDialogDocked)) ? '#fb923c' : undefined,
-                                                        borderColor: (!isParcelPanelMinimized && isParcelPanelVisible && isParcelPanelDocked && (activeBoundaryDockedTab === 'gis' || !isBoundaryEditorVisible || isBoundaryDialogMinimized || !isBoundaryDialogDocked)) ? '#f97316' : undefined,
-                                                    }}
+                                                                ? 'black-hole-btn--cyan'
+                                                                : 'black-hole-btn--neutral'
+                                                    } inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold text-white transition-all`}
                                                     title={
                                                         !isParcelPanelDocked
                                                             ? 'County Parcels GIS is floating on canvas — click to dock into chat'
@@ -22331,20 +25730,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                                 : 'Minimize County Parcels GIS in chat'
                                                     }
                                                 >
-                                                    <GisAgentIcon className={`w-3.5 h-3.5 ${!isParcelPanelDocked ? 'text-amber-400' : 'text-orange-400'}`} />
+                                                    <GisAgentIcon className="w-3.5 h-3.5" />
                                                     <span>GIS</span>
                                                     {lastFetchedParcels.length > 0 && (
-                                                        <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
-                                                            !isParcelPanelDocked
-                                                                ? 'bg-amber-500/20 text-amber-200 border border-amber-400/40'
-                                                                : !isParcelPanelMinimized && isParcelPanelVisible
-                                                                    ? 'bg-orange-500/20 text-orange-200 border border-orange-400/40'
-                                                                    : 'bg-gray-800 text-gray-400'
-                                                        }`}>
+                                                        <span className="rounded-full border border-white/15 bg-white/10 px-1.5 py-0.2 text-[10px] font-mono font-bold text-white/85">
                                                             {lastFetchedParcels.length}
                                                         </span>
                                                     )}
-                                                    <span className="text-[10px] text-gray-400 font-mono">
+                                                    <span className="text-[10px] text-white/55 font-mono">
                                                         {!isParcelPanelDocked ? 'Float' : (!isParcelPanelMinimized && isParcelPanelVisible && (activeBoundaryDockedTab === 'gis' || !isBoundaryEditorVisible || isBoundaryDialogMinimized || !isBoundaryDialogDocked) ? '▲' : '▼')}
                                                     </span>
                                                 </button>
@@ -22463,13 +25856,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           {!showWelcome && canConfigureGemini3 && showGemini3Panel && (
             <Gemini3ControlsPanel activeAgent={activeAgent} onClose={() => setShowGemini3Panel(false)} />
           )}
-          {!showWelcome && activeAgent === AgentType.CIVIL_DRAFTER && showCivilDrafterContextPanel && (
-            <CivilDrafterContextPanel
-              volume={civilDrafterContextVolume}
-              modelName={currentModelName}
-              onClose={() => setShowCivilDrafterContextPanel(false)}
-            />
-          )}
           {!showWelcome && cacpManifestAgent && (
             <CacpManifestModal agent={cacpManifestAgent} onClose={() => setCacpManifestAgent(null)} />
           )}
@@ -22511,12 +25897,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               onClose={() => setIsSpreadsheetEditorOpen(false)}
             />
           )}
+          {closureInvestigation && closureDockMode === 'floating' && renderClosureInvestigation('floating')}
           {floatingA2UIMessage?.a2ui && (
             <FloatingPanel
               key={floatingA2UIKey ?? 'a2ui-floating'}
-              title={A2UI_DOCK_TITLES[floatingA2UIMessage.a2ui.widgetType] || 'A2UI Tool'}
-              isDocked={false}
-              onToggleDock={() => handleToggleA2UIDock(floatingA2UIMessage)}
+              title={A2UI_DOCK_TITLES[floatingA2UIMessage.a2ui.widgetType] || 'Tool'}
+              dockMode="floating"
+              onDockModeChange={next => handleSetA2UIDockMode(floatingA2UIMessage, next)}
               onClose={handleReturnA2UIToChat}
               initialX={typeof window !== 'undefined' ? Math.max(24, window.innerWidth / 2 - 380) : 80}
               initialY={72}
@@ -22526,16 +25913,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             >
               <div className="mb-2 flex items-center justify-between gap-2 border-b border-white/[0.06] pb-2">
                 <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-slate-500">
-                  Floating from chat
+                  Floating surface
                 </span>
                 <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleToggleA2UIDock(floatingA2UIMessage)}
-                    className="rounded border border-cyan-500/30 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400/60 hover:bg-cyan-500/10"
-                  >
-                    Dock
-                  </button>
                   <button
                     type="button"
                     onClick={() => floatingA2UIMessage.a2ui && handleA2UIFullscreen(floatingA2UIMessage.a2ui)}
@@ -22543,33 +25923,31 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   >
                     Fullscreen
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleReturnA2UIToChat}
-                    className="rounded border border-white/[0.08] px-2 py-0.5 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06]"
-                  >
-                    Return to chat
-                  </button>
                 </div>
               </div>
               <A2UISurface
                 payload={floatingA2UIMessage.a2ui}
                 presentation="floating"
+                dockMode="floating"
+                onDock={() => handleSetA2UIDockMode(floatingA2UIMessage, 'toolshelf')}
+                onPopOut={() => handleSetA2UIDockMode(floatingA2UIMessage, 'floating')}
+                onChat={() => handleSetA2UIDockMode(floatingA2UIMessage, 'chat')}
                 cadManagerContent={floatingA2UIMessage.a2ui.kind === 'cad-manager' ? cadManagerA2UIContent : undefined}
               />
             </FloatingPanel>
           )}
-          {isFloodPanelVisible && !dockedTools.flood && (
+          {isFloodPanelVisible && getToolDockMode('flood') === 'floating' && (
             <FloatingPanel
               title="Flood Zone Agent"
-              isDocked={false}
-              onToggleDock={() => toggleToolDock('flood')}
+              dockMode="floating"
+              onDockModeChange={next => setToolDockMode('flood', next)}
               onClose={() => setIsFloodPanelVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
               initialY={120}
             >
               <FloodPanel
-                onFetchFloodZones={handleFetchFloodZones}
+                onFetchFloodZones={(mode, descriptionText, options) =>
+                  handleFetchFloodZones(mode, descriptionText, null, options)}
                 isFetching={isFetchingFlood}
                 hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
                 inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
@@ -22582,12 +25960,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 floodHatch={settings.floodHatch}
                 onFloodHatchChange={(patch) => setSettings(prev => ({
                   ...prev,
-                  floodHatch: { style: 'lines', scale: 50, opacity: 0.18, ...(prev.floodHatch ?? {}), ...patch },
+                  floodHatch: { style: 'lines', scale: 50, opacity: 0.35, ...(prev.floodHatch ?? {}), ...patch },
                 }))}
                 onFetchFirmette={handleFetchFirmette}
                 isFetchingFirmette={isFetchingFirmette}
                 hasFirmette={!!floodFirmetteData}
                 onViewFirmette={() => setIsFirmetteViewerVisible(true)}
+                floodAreas={lastFloodAreas}
+                bfeSummary={lastFloodBfe}
+                onAddSheetNotes={handleAddFloodNotesToSheet}
               />
             </FloatingPanel>
           )}
@@ -22626,11 +26007,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               </div>
             </FloatingPanel>
           )}
-          {isStructuresPanelVisible && !dockedTools.structures && (
+          {isStructuresPanelVisible && getToolDockMode('structures') === 'floating' && (
             <FloatingPanel
               title="Structures Agent"
-              isDocked={false}
-              onToggleDock={() => toggleToolDock('structures')}
+              dockMode="floating"
+              onDockModeChange={next => setToolDockMode('structures', next)}
               onClose={() => setIsStructuresPanelVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
               initialY={160}
@@ -22657,11 +26038,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             </FloatingPanel>
           )}
           {/* Soils Agent � SSURGO soil map-unit overlay floating panel */}
-          {isSoilsPanelVisible && !dockedTools.soils && (
+          {isSoilsPanelVisible && getToolDockMode('soils') === 'floating' && (
             <FloatingPanel
               title="Soils Agent"
-              isDocked={false}
-              onToggleDock={() => toggleToolDock('soils')}
+              dockMode="floating"
+              onDockModeChange={next => setToolDockMode('soils', next)}
               onClose={() => setIsSoilsPanelVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
               initialY={220}
@@ -22676,18 +26057,23 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 onFetchReport={handleFetchSoilReport}
                 isFetchingReport={isFetchingSoilReport}
                 soilReportData={soilReportData}
+                soilHatch={settings.soilHatch}
+                onSoilHatchChange={(patch) => setSettings(prev => ({
+                  ...prev,
+                  soilHatch: { style: 'lines', scale: 25, opacity: 0.3, ...(prev.soilHatch ?? {}), ...patch },
+                }))}
                 inclusionBoundaries={inclusionBoundaries}
                 activeInclusionBoundaryId={activeInclusionBoundaryId}
                 onSelectInclusionBoundary={setActiveInclusionBoundaryId}
               />
             </FloatingPanel>
           )}
-          {isRoadingPanelVisible && !dockedTools.roading && renderRoadingPanel(false)}
+          {isRoadingPanelVisible && getToolDockMode('roading') === 'floating' && renderRoadingPanel('floating')}
           {/* Profile Agent � client-side profile generator panel */}
-          {isProfileGenPanelVisible && !dockedTools.profileGen && (
+          {isProfileGenPanelVisible && getToolDockMode('profileGen') === 'floating' && (
             <ProfileGenerationPanel
-              isDocked={false}
-              onToggleDock={() => toggleToolDock('profileGen')}
+              dockMode="floating"
+              onDockModeChange={next => setToolDockMode('profileGen', next)}
               allPoints={pointLists.flatMap((l: import('./types.ts').PointList) => l.points)}
               profilePointCount={profileData?.length ?? 0}
               profileElevMin={profileData && profileData.length > 0 ? Math.min(...profileData.map((p: import('./types.ts').ProfilePoint) => p.elevation)) : undefined}
@@ -22701,15 +26087,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               onClose={() => setIsProfileGenPanelVisible(false)}
             />
           )}
-          {/* GPS Rover � independent Stakeout floating panel (v26.05.19.1) */}
-          {isGpsStakeoutFloatingVisible && !dockedTools.gpsStakeout && (
+          {/* GPS Rover — one master tabbed dialog */}
+          {isGpsRoverPanelVisible && getToolDockMode('gpsStakeout') === 'floating' && (
             <FloatingPanel
-              title="? Stakeout"
+              title="GPS Rover"
               accentBorder="border-blue-500/50"
-              isDocked={false}
-              onToggleDock={() => toggleToolDock('gpsStakeout')}
-              onClose={() => setIsGpsStakeoutFloatingVisible(false)}
-              initialX={typeof window !== 'undefined' ? Math.max(20, window.innerWidth / 2 - 220) : 80}
+              dockMode="floating"
+              onDockModeChange={next => setToolDockMode('gpsStakeout', next)}
+              onClose={() => setIsGpsRoverPanelVisible(false)}
+              initialX={typeof window !== 'undefined' ? Math.max(20, window.innerWidth / 2 - 230) : 80}
               initialY={80}
               width="min(460px, 96vw)"
               maxHeight="88vh"
@@ -22726,47 +26112,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 targetPointNumber={stakeoutTargetPointNumber}
                 setTargetPointNumber={setStakeoutTargetPointNumber}
                 nextAvailablePointNumber={nextAvailablePointNumber}
-                initialTab="stakeout"
-                lockedTab
+                initialTab={gpsInitialTab ?? "stakeout"}
+                tabRequestId={gpsPanelRequestId}
               />
             </FloatingPanel>
           )}
-          {/* GPS Rover � independent Collect floating panel (v26.05.19.1) */}
-          {isGpsCollectFloatingVisible && !dockedTools.gpsCollect && (
-            <FloatingPanel
-              title="?? Collect"
-              accentBorder="border-emerald-500/50"
-              isDocked={false}
-              onToggleDock={() => toggleToolDock('gpsCollect')}
-              onClose={() => setIsGpsCollectFloatingVisible(false)}
-              initialX={typeof window !== 'undefined' ? Math.max(20, window.innerWidth / 2 + 20) : 80}
-              initialY={80}
-              width="min(400px, 96vw)"
-              maxHeight="88vh"
-            >
-              <GpsStakeoutPanel
-                isOverlay={false}
-                currentPosition={currentPosition}
-                projectedPosition={projectedPosition}
-                projectPoints={points}
-                pointLists={pointLists}
-                onStorePoint={handleStoreGpsPoint}
-                onStoreStakedPoint={handleStoreStakedGpsPoint}
-                settings={settings}
-                targetPointNumber={stakeoutTargetPointNumber}
-                setTargetPointNumber={setStakeoutTargetPointNumber}
-                nextAvailablePointNumber={nextAvailablePointNumber}
-                initialTab="collect"
-                lockedTab
-              />
-            </FloatingPanel>
-          )}
-          {shrinkwrap && isShrinkwrapPanelVisible && !dockedTools.shrinkwrap && (
+          {shrinkwrap && isShrinkwrapPanelVisible && getToolDockMode('shrinkwrap') === 'floating' && (
             <FloatingPanel
               title="Shrinkwrap"
               accentBorder="border-violet-500/40"
-              isDocked={false}
-              onToggleDock={() => toggleToolDock('shrinkwrap')}
+              dockMode="floating"
+              onDockModeChange={next => setToolDockMode('shrinkwrap', next)}
               onClose={() => setIsShrinkwrapPanelVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 460) : 120}
               initialY={160}
@@ -22863,12 +26219,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               />
             </FloatingPanel>
           )}
-          {isInclusionBoundariesPanelVisible && !dockedTools.inclusion && (
+          {isInclusionBoundariesPanelVisible && getToolDockMode('inclusion') === 'floating' && (
             <FloatingPanel
               title="Inclusion Boundaries"
               accentBorder="border-emerald-500/40"
-              isDocked={false}
-              onToggleDock={() => toggleToolDock('inclusion')}
+              dockMode="floating"
+              onDockModeChange={next => setToolDockMode('inclusion', next)}
               onClose={() => setIsInclusionBoundariesPanelVisible(false)}
               initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 480) : 120}
               initialY={200}
@@ -22948,12 +26304,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               />
             </FloatingPanel>
           )}
-          {activeAgent === AgentType.CONTOURING_AGENT && isContourGenPanelVisible && !dockedTools.contourGen && (
+          {activeAgent === AgentType.CONTOURING_AGENT && isContourGenPanelVisible && getToolDockMode('contourGen') === 'floating' && (
             <FloatingPanel
               title="Contour Generation"
               accentBorder="border-amber-500/30"
-              isDocked={false}
-              onToggleDock={() => toggleToolDock('contourGen')}
+              dockMode="floating"
+              onDockModeChange={next => setToolDockMode('contourGen', next)}
               onClose={() => setIsContourGenPanelVisible(false)}
               minimized={isContourGenMinimized}
               onToggleMinimize={() => setIsContourGenMinimized(v => !v)}
@@ -22967,6 +26323,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               <ContourGenerationPanel
                 settings={contourSettings}
                 onSettingsChange={setContourSettings}
+                onImportTin={handleImportTin}
+                onExportTin={() => handleExportTinSurface(undefined, 'landxml')}
+                onCreateTinFromContours={() => handleCreateTinFromContours()}
+                canCreateTinFromContours={contourGenerations.length > 0}
+                isImportingTin={isImportingTin}
+                tinImportProgress={tinImportProgress}
+                tinImportStatus={tinImportStatus}
+                tinSurfaces={tinSurfaces}
                 onGenerate={handleGenerateContours}
                 isGenerating={isGeneratingContours}
                 points={points}
@@ -22980,12 +26344,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               />
             </FloatingPanel>
           )}
-          {activeAgent === AgentType.CONTOURING_AGENT && isContourEsriPanelVisible && !dockedTools.contourEsri && (
+          {activeAgent === AgentType.CONTOURING_AGENT && isContourEsriPanelVisible && getToolDockMode('contourEsri') === 'floating' && (
             <FloatingPanel
               title="ESRI REST Contour Sources"
               accentBorder="border-teal-500/30"
-              isDocked={false}
-              onToggleDock={() => toggleToolDock('contourEsri')}
+              dockMode="floating"
+              onDockModeChange={next => setToolDockMode('contourEsri', next)}
               onClose={() => setIsContourEsriPanelVisible(false)}
               minimized={isContourEsriMinimized}
               onToggleMinimize={() => setIsContourEsriMinimized(v => !v)}
@@ -23005,17 +26369,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 hasInclusionBoundary={lines.some((l: SurveyLine) => l.type === 'inclusion')}
                 inclusionSegmentCount={lines.filter((l: SurveyLine) => l.type === 'inclusion').length}
                 hasProjectProjection={!!settings.projection?.epsg}
+                hasProjectExtent={points.length > 0 && !!settings.projection?.epsg}
                 isFetchingEsri={isFetchingEsri}
                 onFetchEsriContours={handleFetchEsriContours}
               />
             </FloatingPanel>
           )}
-          {activeAgent === AgentType.STEEP_SLOPE_AGENT && isSteepSlopePanelVisible && !dockedTools.steepSlope && (
+          {activeAgent === AgentType.STEEP_SLOPE_AGENT && isSteepSlopePanelVisible && getToolDockMode('steepSlope') === 'floating' && (
             <FloatingPanel
               title="Steep Slope"
               accentBorder="border-rose-500/30"
-              isDocked={false}
-              onToggleDock={() => toggleToolDock('steepSlope')}
+              dockMode="floating"
+              onDockModeChange={next => setToolDockMode('steepSlope', next)}
               onClose={() => setIsSteepSlopePanelVisible(false)}
               minimized={isSteepSlopePanelMinimized}
               onToggleMinimize={() => setIsSteepSlopePanelMinimized(v => !v)}
@@ -23075,8 +26440,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           {!showWelcome && isReleaseStagesModalVisible && <ReleaseStagesModal isOpen={isReleaseStagesModalVisible} onClose={() => setIsReleaseStagesModalVisible(false)} />}
 
           {/* Contour Generations Manager � persistent across agents (v26.05.19.3) */}
-          {!showWelcome && isContourManagementVisible && !dockedTools.contourMgmt && (
-            renderContourMgmtPanel(false)
+          {!showWelcome && isContourManagementVisible && getToolDockMode('contourMgmt') === 'floating' && (
+            renderContourMgmtPanel('floating')
           )}
           {!showWelcome && isClaudeSettingsVisible && (
             <ClaudeSettingsPanel
@@ -23330,113 +26695,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             </div>
           )}
 
-          {/* Closure investigation modal � deterministic geometry findings plus
-              source-aware, review-only hypotheses. */}
-          {closureInvestigation && (
-            <div className="fixed inset-0 bg-gray-900/80 z-50 flex items-center justify-center p-4 animate-fade-in">
-              <div className="bg-gray-800 border border-amber-500 rounded-lg shadow-xl p-6 max-w-3xl w-full max-h-[90vh] overflow-y-auto animate-modal-panel-fade-in-down">
-                <h3 className="text-lg font-bold text-amber-400">
-                  Closure Investigation � {closureInvestigation.fileName}
-                </h3>
-                <p className="text-gray-300 text-sm mt-1">
-                  {closureInvestigation.ambiguities.length === 0
-                    ? 'No deterministic geometry issues detected.'
-                    : `${closureInvestigation.ambiguities.length} geometry item(s) flagged.`}
-                </p>
-                {closureInvestigation.ambiguities.length > 0 && (
-                  <ul className="mt-4 max-h-64 overflow-y-auto space-y-2 text-xs">
-                    {closureInvestigation.ambiguities.map(a => (
-                      <li key={a.id} className="p-2 rounded border border-gray-700 bg-gray-900/50">
-                        <div className="flex items-center gap-2">
-                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${a.severity === 'error' ? 'bg-rose-700 text-rose-100' : a.severity === 'warning' ? 'bg-amber-700 text-amber-100' : 'bg-sky-700 text-sky-100'}`}>
-                            {a.severity.toUpperCase()}
-                          </span>
-                          <span className="font-semibold text-gray-200">{a.kind}</span>
-                        </div>
-                        <p className="mt-1 text-gray-400">{a.reason}</p>
-                        {a.proposedFix && (
-                          <p className="mt-1 text-gray-500 italic">Computed possibility: {a.proposedFix.summary}. This is not applied automatically.</p>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <div className="mt-5 border-t border-gray-700 pt-4">
-                  <h4 className="text-sm font-bold text-sky-300">Deed evidence review</h4>
-                  {closureInvestigation.reviewStatus === 'loading' && (
-                    <div className="mt-3 flex items-center gap-2 text-sm text-gray-300">
-                      <span className="w-4 h-4 rounded-full border-2 border-sky-400 border-t-transparent animate-spin" />
-                      Comparing the traverse with the source deed and testing likely transcription errors�
-                    </div>
-                  )}
-                  {closureInvestigation.reviewStatus === 'unavailable' && (
-                    <p className="mt-2 text-sm text-amber-300">
-                      Source review unavailable: {closureInvestigation.reviewError}
-                    </p>
-                  )}
-                  {closureInvestigation.humanReview && (
-                    <>
-                      <p className="mt-2 text-sm text-gray-200">{closureInvestigation.humanReview.summary}</p>
-                      {closureInvestigation.humanReview.hypotheses.length === 0 ? (
-                        <p className="mt-3 text-xs text-gray-400">No evidence-based cause could be isolated. Verify the deed image, adjoining descriptions, and survey records manually.</p>
-                      ) : (
-                        <div className="mt-3 space-y-3">
-                          {closureInvestigation.humanReview.hypotheses.map(hypothesis => (
-                            <div key={hypothesis.id} className="p-3 rounded border border-gray-600 bg-gray-900/60 text-xs">
-                              <div className="flex items-center gap-2">
-                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${hypothesis.confidence === 'high' ? 'bg-emerald-700 text-emerald-100' : hypothesis.confidence === 'medium' ? 'bg-amber-700 text-amber-100' : 'bg-gray-600 text-gray-100'}`}>
-                                  {hypothesis.confidence.toUpperCase()}
-                                </span>
-                                <span className="font-semibold text-gray-100">{hypothesis.title}</span>
-                                {hypothesis.rowIndex !== undefined && <span className="text-gray-500">row {hypothesis.rowIndex + 1}</span>}
-                              </div>
-                              <p className="mt-1.5 text-gray-300">{hypothesis.reason}</p>
-                              {hypothesis.sourceQuote && (
-                                <blockquote className="mt-2 border-l-2 border-sky-600 pl-2 text-sky-200 italic">
-                                  �{hypothesis.sourceQuote}�{hypothesis.sourcePage ? ` � page ${hypothesis.sourcePage}` : ''}
-                                </blockquote>
-                              )}
-                              <p className="mt-2 text-gray-400"><span className="font-semibold text-gray-300">Geometry:</span> {hypothesis.geometricEvidence}</p>
-                              {hypothesis.rowIndex !== undefined && hypothesis.proposedPatch && (
-                                <div className="mt-3 flex items-center justify-between gap-3">
-                                  <span className="font-mono text-emerald-300">
-                                    Proposed: {Object.entries(hypothesis.proposedPatch).map(([field, value]) => `${field}=${String(value)}`).join(', ')}
-                                  </span>
-                                  <button
-                                    onClick={() => handleApplyClosureHypothesis(hypothesis)}
-                                    className="flex-shrink-0 px-3 py-1.5 text-xs font-semibold bg-emerald-700 hover:bg-emerald-600 text-white rounded"
-                                  >
-                                    Review and apply�
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {closureInvestigation.humanReview.cautions.length > 0 && (
-                        <div className="mt-4 p-3 rounded border border-amber-700/50 bg-amber-950/20 text-xs text-amber-200">
-                          <div className="font-semibold">Verify before changing the deed calls</div>
-                          <ul className="mt-1 list-disc list-inside space-y-1">
-                            {closureInvestigation.humanReview.cautions.map((caution, index) => <li key={index}>{caution}</li>)}
-                          </ul>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-                <div className="mt-6 flex justify-end gap-3">
-                  <button
-                    onClick={() => setClosureInvestigation(null)}
-                    className="px-4 py-2 text-sm font-semibold bg-gray-600 hover:bg-gray-500 text-white rounded-md"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-          
           {/* In-scope errors now surface in the NotificationCenter bell; the
               red banner is only shown out of scope via GlobalErrorDialog. */}
 
@@ -23482,6 +26740,21 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           <A2UISurfaceHost
             audience="workspace"
             defaultSize={settings.a2ui?.defaultSize ?? 'standard'}
+            onLaunchDefinition={definition => {
+              if (definition.id === 'point-entry') openPointEntrySurface();
+              else if (definition.id === 'workspace-text-editor') handleOpenTextEditorFromToolbar();
+              else if (definition.id === 'workspace-civil-drafter-context') {
+                openCivilDrafterContextSurface();
+              }
+              else if (definition.id === 'workspace-tin-surfaces') openTinSurfacesSurface();
+              else if (definition.id === 'workspace-spreadsheet') {
+                openSpreadsheetSurface(createBlankSpreadsheetSpec());
+              }
+              else if (definition.widgetType === 'closure-investigation') {
+                const latestBoundary = boundaryFiles[boundaryFiles.length - 1];
+                if (latestBoundary) void handleInvestigateClosure(latestBoundary.id);
+              }
+            }}
           />
           </div>
         </div>

@@ -221,6 +221,7 @@ export type A2UISettingsSection =
   | 'a2ui';
 
 export type A2UIWorkspaceToolId =
+  | 'stationing-controls'
   | 'symbol-manager'
   | 'linetype-manager'
   | 'hatch-manager'
@@ -237,7 +238,8 @@ export type A2UIWorkspaceToolId =
   | 'steep-slope-report'
   | 'legal-writer'
   | 'sheet-view'
-  | 'roading-panel';
+  | 'roading-panel'
+  | 'tin-surfaces';
 
 export interface A2UIInputField {
   id: string;
@@ -268,7 +270,9 @@ export interface A2UIInputFormSpec {
 
 export type A2UIWidgetType =
   | 'input-form'
+  | 'deed-summary'
   | 'selection-prompt'
+  | 'point-entry'
   | 'point-upload'
   | 'deed-upload'
   | 'raw-upload'
@@ -287,10 +291,15 @@ export type A2UIWidgetType =
   | 'cad-manager-workspace'
   | 'cad-standards-table'
   | 'hatch-studio'
+  | 'gps-rover'
+  | 'project-location'
   | 'zoning-research'
   | 'zoning-sources'
   | 'surface-console'
+  | 'text-editor'
+  | 'spreadsheet'
   | 'cacp-review'
+  | 'closure-investigation'
   | 'cacp-manifests'
   | 'cacp-inspector'
   | 'settings'
@@ -364,6 +373,159 @@ export interface A2UISelectionPromptSpec {
   pointCount?: number;
 }
 
+/**
+ * Estimated project footprint derived from drawing geometry (points and/or
+ * linework). Produced by utils/projectLocation.estimateProjectLocation and
+ * shared by the GPS Rover panel, the A2UI GPS Rover surface, and CACP.
+ */
+export interface ProjectLocationEstimate {
+  hasGeometry: boolean;
+  source: 'points-and-linework' | 'points' | 'linework' | 'gps-fix' | 'none';
+  confidence: 'high' | 'medium' | 'low' | 'none';
+  epsg: number | null;
+  marginProjected: number;
+  pointCount: number;
+  lineCount: number;
+  centerlineCount: number;
+  vertexCount: number;
+  bounds: {
+    minEasting: number;
+    minNorthing: number;
+    maxEasting: number;
+    maxNorthing: number;
+  } | null;
+  center: { northing: number; easting: number } | null;
+  width: number;
+  height: number;
+  areaAcres: number;
+  diagonal: number;
+  bboxWgs84: [number, number, number, number] | null;
+  centerWgs84: { latitude: number; longitude: number } | null;
+  summary: string;
+  warnings: string[];
+}
+
+/**
+ * Resolved jurisdiction for one project point cluster. `source: 'projection'`
+ * means only the state was known (from the project CRS); county and
+ * municipality still need a geocode.
+ */
+export interface ProjectLocationJurisdiction {
+  state?: string;
+  county?: string;
+  place?: string;
+  placeType?: 'incorporated' | 'subdivision';
+  /** Human-readable line, e.g. "Norristown, Montgomery County, Pennsylvania". */
+  label: string;
+  source: 'census-geocoder' | 'nominatim' | 'projection' | 'unavailable';
+  status: 'resolved' | 'unavailable';
+  error?: string;
+}
+
+/**
+ * One spatially distinct group of project points. Each cluster owns its own
+ * footprint estimate and jurisdiction so multi-site projects are answered
+ * separately instead of being averaged into the empty space between sites.
+ */
+export interface ProjectLocationCluster {
+  id: string;
+  /** 1-based display index. */
+  index: number;
+  label: string;
+  pointCount: number;
+  pointNumbers: string[];
+  estimate: ProjectLocationEstimate;
+  jurisdiction: ProjectLocationJurisdiction | null;
+}
+
+/** Every distinct project location derived from the current drawing. */
+export type CountyParcelIssue =
+  | 'no-projection'
+  | 'no-service'
+  | 'timeout'
+  | 'network'
+  | 'server'
+  | 'empty'
+  | 'unknown';
+
+export interface CountyParcelAttempt {
+  label: string;
+  match: 'county' | 'statewide' | 'custom';
+  ok: boolean;
+  message: string;
+  featureCount: number;
+  issue?: CountyParcelIssue;
+}
+
+/** Live status of the County (parcel GIS) action, shared with the A2UI surface. */
+export interface CountyGisStatus {
+  state: 'loading' | 'success' | 'warning' | 'error';
+  message: string;
+  guidance?: string;
+  jurisdictionLabel?: string;
+  serviceLabel?: string;
+  attempts: CountyParcelAttempt[];
+  featureCount?: number;
+  usedStatewide?: boolean;
+  clusterIndex?: number;
+  /** Which drawn area the fetch used. */
+  aoi?: 'cluster' | 'inclusion';
+  updatedAt: number;
+}
+
+export interface ProjectLocationClusterSet {
+  clusters: ProjectLocationCluster[];
+  epsg: number | null;
+  totalPoints: number;
+  /** Distance in project units used to decide two points belong together. */
+  linkageDistance: number;
+  createdAt: number;
+  warnings: string[];
+}
+
+export type A2UIGpsRoverMode = 'overview' | 'stakeout' | 'collect' | 'benchmark';
+
+export interface A2UIGpsRoverSpec {
+  mode?: A2UIGpsRoverMode;
+  initialPointNumber?: string;
+}
+
+/** Live snapshot rendered by the A2UI GPS Rover surface. */
+export interface A2UIGpsRoverSnapshot {
+  hasFix: boolean;
+  latitude?: number | null;
+  longitude?: number | null;
+  accuracyFt?: number | null;
+  altitudeFt?: number | null;
+  northing?: number | null;
+  easting?: number | null;
+  epsg?: number | null;
+  projectionLabel?: string;
+  targetPointNumber: string;
+  targetPoint: {
+    pointNumber: string;
+    description?: string;
+    northing: number;
+    easting: number;
+    elevation?: number;
+  } | null;
+  guidance: {
+    bearingDeg: number;
+    distanceFt: number;
+    deltaNorthFt: number;
+    deltaEastFt: number;
+    cutFillFt: number | null;
+  } | null;
+  nextPointNumber?: string;
+  stakeoutPoints?: Array<{
+    pointNumber: string;
+    description: string;
+    northing?: number;
+    easting?: number;
+    elevation?: number;
+  }>;
+}
+
 export interface A2UIHatchStudioSpec {
   title?: string;
   description?: string;
@@ -381,6 +543,50 @@ export interface A2UIHatchStudioSpec {
   code?: string;
 }
 
+export interface A2UIPointEntrySpec {
+  pointNumber?: string;
+  northing?: string;
+  easting?: string;
+  elevation?: string;
+  description?: string;
+}
+
+/** File to open and optional inline content for the in-chat A2UI text editor. */
+export interface A2UITextEditorSpec {
+  fileName?: string;
+  /** Content to open when the file is not yet in the host's file list. */
+  content?: string;
+  /** Start on the New text form instead of an existing file. */
+  mode?: 'edit' | 'new';
+}
+
+export type A2UISpreadsheetValue = string | number | boolean | null;
+
+export interface A2UISpreadsheetColumn {
+  /** Row object key for this column. */
+  key: string;
+  label: string;
+  /** Relative width hint in pixels. */
+  width?: number;
+  align?: 'left' | 'center' | 'right';
+}
+
+export interface A2UISpreadsheetRow {
+  [key: string]: A2UISpreadsheetValue | undefined;
+}
+
+/** Lightweight tabular data rendered by the shared A2UI spreadsheet surface. */
+export interface A2UISpreadsheetSpec {
+  title?: string;
+  description?: string;
+  fileName?: string;
+  columns: A2UISpreadsheetColumn[];
+  rows: A2UISpreadsheetRow[];
+  /** Allow local cell edits and row add/delete. Defaults to true. */
+  editable?: boolean;
+  pageSize?: number;
+}
+
 export interface A2UIPayload {
   /** Surface kind: inquisitive prompt, upload/intake widget, data explorer, or bridge surface. */
   kind:
@@ -388,11 +594,17 @@ export interface A2UIPayload {
     | 'upload-widget'
     | 'selection-prompt'
     | 'standards-explorer'
+    | 'point-entry'
+    | 'text-editor'
+    | 'spreadsheet'
     | 'hatch-studio'
+    | 'gps-rover'
+    | 'project-location'
     | 'zoning-research'
     | 'zoning-sources'
     | 'cad-manager'
     | 'input-form'
+    | 'deed-summary'
     | 'surface-console'
     | 'cacp-review'
     | 'cacp-manifests'
@@ -409,10 +621,22 @@ export interface A2UIPayload {
   status?: 'prompting' | 'expanded' | 'completed' | 'dismissed';
   /** Optional summary displayed once completed */
   completedSummary?: string;
+  /** Deed summary bound to a chat-hosted boundary summary surface. */
+  deedSummary?: DeedSummary;
   /** Pre-set query/facet for the compact CAD-standards explorer. */
   standardsFilter?: A2UIStandardsFilter;
+  /** Optional defaults for the A2UI point-entry surface. */
+  pointEntry?: A2UIPointEntrySpec;
+  /** File/content binding for the A2UI text editor surface. */
+  textEditor?: A2UITextEditorSpec;
+  /** Tabular data for the shared A2UI spreadsheet surface, or a sheet view of a text payload. */
+  spreadsheet?: A2UISpreadsheetSpec;
   /** Interactive A2UI Hatch Studio parameters for fluid conversational hatching. */
   hatchStudio?: A2UIHatchStudioSpec;
+  /** Focus mode for the live GPS Rover surface. */
+  gpsRover?: A2UIGpsRoverSpec;
+  /** Optional cluster to emphasise in the LSAI project-location surface. */
+  projectLocation?: { initialClusterIndex?: number };
   /** Jurisdiction bound to a chat-hosted zoning research surface. */
   zoningContext?: A2UIZoningContext;
   /** Citation-to-source ledger for a specific zoning answer. */
@@ -437,6 +661,22 @@ export interface A2UIPayload {
   roadingDesign?: Partial<RoadTypicalSection & { mode?: 'existing-synthesis' | 'corridor-design'; centerlineId?: string }>;
 }
 
+/** Live state for the LSAI-owned project-location A2UI surface. */
+export interface A2UIProjectLocationSnapshot {
+  clusterSet: ProjectLocationClusterSet;
+  isResolving: boolean;
+  error?: string | null;
+  busy?: { clusterId: string; action: 'parcels' | 'flood' | 'soils' } | null;
+  countyStatus?: CountyGisStatus | null;
+  /** Active drawn inclusion boundary, offered as an alternate query area. */
+  inclusionArea?: {
+    id: string;
+    name: string;
+    segmentCount: number;
+    bboxWgs84: [number, number, number, number];
+  } | null;
+}
+
 export interface ChatMessage {
   role: MessageRole;
   text: string;
@@ -450,6 +690,10 @@ export interface ChatMessage {
   questionOptions?: string[];
   /** A failed tool action is waiting for one missing value before it can retry. */
   needsInput?: boolean;
+  /** Short-lived note shown in Quick Thought, such as a handoff status or concise answer. */
+  quickThoughtText?: string;
+  /** Optional badge for `quickThoughtText`; defaults to the handoff label. */
+  quickThoughtLabel?: string;
   /** A2UI (Agent-to-UI) interactive surface embedded directly in the chat message */
   a2ui?: A2UIPayload;
   sources?: any[];
@@ -486,7 +730,7 @@ export interface SurveyLine {
   fillPath?: Array<{ x: number, y: number, z: number }>;
   bearing?: string;
   distance?: string;
-  type?: 'breakline' | 'inclusion' | 'exclusion' | 'shrinkwrap-preview' | 'contour-major' | 'contour-minor' | 'parcel' | 'flood' | 'steep-slope' | 'tin-edge';
+  type?: 'baseline' | 'breakline' | 'inclusion' | 'exclusion' | 'shrinkwrap-preview' | 'contour-major' | 'contour-minor' | 'parcel' | 'flood' | 'bfe' | 'soils' | 'steep-slope' | 'tin-edge';
   fromPt?: { x: number, y: number, z: number };
   toPt?: { x: number, y: number, z: number };
   // Curve parameters (for closure calculations and plotting)
@@ -511,6 +755,12 @@ export interface SurveyLine {
   contourGenId?: string;
   /** Line source — 'esri' for ESRI/State fetched contours, 'survey' for generated contours. */
   source?: 'esri' | 'survey';
+  /** Elevation callout drawn along the line (used by FEMA BFE linework). */
+  labelText?: string;
+  /** Base Flood Elevation in feet, when this line came from the NFHL BFE layer. */
+  bfeElevation?: number;
+  /** Vertical datum reported by FEMA for the BFE (e.g. NAVD88). */
+  bfeDatum?: string;
 }
 
 /**
@@ -612,7 +862,9 @@ export type AnnotationCategoryId =
     | 'callout'
     | 'roads'
     | 'contour-labels'
-    | 'property-owners';
+    | 'property-owners'
+    | 'flood-zones'
+    | 'soil-map-units';
 
 /** Per-category rendering style for the canvas annotation system. */
 export interface AnnotationCategoryStyle {
@@ -648,6 +900,8 @@ export const DEFAULT_ANNOTATION_CATEGORIES: AnnotationCategoryStyle[] = [
     { id: 'roads',           label: 'Roads',           scale: 1.0, color: '#60a5fa', fontFamily: 'Arial', italic: false, bold: true,   styleSource: 'local', textCase: 'original', lineSpacing: 1.2, visible: true, existingItalic: true,  existingScale: 0.25 },
     { id: 'contour-labels',  label: 'Contour Labels',  scale: 1.0, color: '#a78bfa', fontFamily: 'Arial', italic: false, bold: false,  styleSource: 'local', textCase: 'original', lineSpacing: 1.2, visible: true, existingItalic: false, existingScale: 1.0  },
     { id: 'property-owners', label: 'Property Owners', scale: 0.8, color: '#86efac', fontFamily: 'Arial', italic: true,  bold: false,  styleSource: 'local', textCase: 'uppercase', lineSpacing: 1.2, visible: true, existingItalic: true,  existingScale: 0.25 },
+    { id: 'flood-zones',     label: 'Flood Zones',     scale: 0.9, color: '#22d3ee', fontFamily: 'Arial', italic: false, bold: true,   styleSource: 'local', textCase: 'uppercase', lineSpacing: 1.2, visible: true, existingItalic: false, existingScale: 1.0  },
+    { id: 'soil-map-units',  label: 'Soil Map Units',  scale: 0.9, color: '#e7c99a', fontFamily: 'Arial', italic: false, bold: false,  styleSource: 'local', textCase: 'uppercase', lineSpacing: 1.2, visible: true, existingItalic: false, existingScale: 1.0  },
 ];
 
 export interface ParcelLabelFormatter {
@@ -766,6 +1020,7 @@ export interface DeedTractSummary {
     tractName?: string;         // optional descriptive name
     sourcePage?: number;        // page in the source PDF where this tract begins
     snippet?: string;           // first ~200 chars of the description (for UI preview)
+    reason?: string;            // parser note when a description could not be extracted
     grantor?: string;
     grantee?: string;
     parcelId?: string;
@@ -1090,6 +1345,44 @@ export interface NotionIntegration {
     lastSync?: string; // ISO date string
 }
 
+export type StationLabelFormat = 'hundreds' | 'decimal';
+export type StationPrecision = 0 | 1 | 2;
+
+export interface StationingSettings {
+    /** Feet between automatically plotted station points on a baseline. */
+    pointInterval: number;
+    /** Draw station labels along centerlines on the canvas. */
+    showStationLabels: boolean;
+    /** Feet between centerline station labels. */
+    labelInterval: number;
+    /** Draw PI / BOP / PC / PT tags on the canvas. */
+    showGeometryLabels: boolean;
+    /** Screen-fixed multiplier for centerline annotation text height. */
+    labelScale: number;
+    /** Text placed before a station value, e.g. STA. */
+    stationPrefix: string;
+    /** Show or suppress the station prefix without changing its saved value. */
+    showStationPrefix: boolean;
+    /** Optional text placed after a station value, e.g. FT or '. */
+    stationSuffix: string;
+    /** Survey station notation or plain decimal feet. */
+    stationLabelFormat: StationLabelFormat;
+    /** Decimal places used by the station value. */
+    stationPrecision: StationPrecision;
+    /** Vertical label offset in CSS pixels; negative places labels below. */
+    labelOffsetPx: number;
+    /** Draw a contrasting background behind station labels. */
+    showLabelBackground: boolean;
+    /** Show PI labels when geometry tags are enabled. */
+    showPiLabels: boolean;
+    /** Show PC/PT labels when geometry tags are enabled. */
+    showPcPtLabels: boolean;
+    /** Show BOP/EOP labels when geometry tags are enabled. */
+    showEndpointLabels: boolean;
+    /** Show the automatically generated CL STA point descriptions. */
+    showStationPointLabels: boolean;
+}
+
 export interface Settings {
     theme: 'dark' | 'light';
     coordinatePrecision: number;
@@ -1106,6 +1399,8 @@ export interface Settings {
     northArrowPosition: 'left' | 'right';
     pointLabelingSettings: PointLabelingSettings;
     uncertaintySensitivity: 'low' | 'medium' | 'high' | 'strict';
+    /** Baseline / Stationing & CL auto-point and annotation preferences. */
+    stationing?: StationingSettings;
   userApiKey?: string;
     /** BYOK: OpenAI API key (sk-…). Stored in localStorage only; used browser-direct. */
     openaiApiKey?: string;
@@ -1116,6 +1411,8 @@ export interface Settings {
     pointAttributeScaling: 'screen' | 'world'; // Controls if point labels scale with zoom or stay fixed size
     /** When true, point descriptions may render matching custom/CAD/built-in symbols. Default: false. */
     showPointSymbols?: boolean;
+    /** When true, points compress into screen-space primitives while zoomed out or crowded. Default: false. */
+    pointEfficiencyMode?: boolean;
     /** When true, show ephemeral pill notifications for CACP inter-agent traffic. Default: false. */
     showCacpNotifications?: boolean;
     /** When true, include internal CACP handler dispatch phases in activity notifications. */
@@ -1133,14 +1430,10 @@ export interface Settings {
         region?: string;
         styleJson?: string;
     };
-    floodHatch?: {
-        /** Hatch pattern drawn inside FEMA flood-zone polygons. */
-        style: 'lines' | 'cross' | 'dots' | 'chevron' | 'none';
-        /** Spacing between hatch lines in survey feet (world units). 20 = tight, 100 = loose. */
-        scale: number;
-        /** Fill opacity 0–1. */
-        opacity: number;
-    };
+    /** FEMA flood-zone hatching. */
+    floodHatch?: AreaHatchSettings;
+    /** SSURGO soil map-unit hatching. */
+    soilHatch?: AreaHatchSettings;
       /**
        * When enabled, show a debug preflight message before each model run with
        * estimated input token count and estimated input-side cost.
@@ -1473,6 +1766,9 @@ export interface BoundaryFile {
    * tractId from the matching DeedSummary.tracts[] entry. Used by the
    * DeedSummaryPanel to mark pending summary rows as computed. */
   sourceTractId?: string;
+  /** Deed/document that produced this boundary. Tract ids repeat between
+   * uploads, so summary rows must match on the source deed as well. */
+  sourceDeedName?: string;
   /** When this BoundaryFile was produced during a batch deed job, the
    * DeedBatchFileRecord.id it belongs to. Enables the review panel to find
    * boundary files for a given batch file and drive coarse alignment. */
@@ -1744,6 +2040,55 @@ export interface CanvasHatch {
     createdAt: string;
 }
 
+export type MapAreaSource = 'fema-flood' | 'ssurgo-soils';
+export type MapAreaLabelCategory = 'flood-zones' | 'soil-map-units';
+
+/** Closed GIS polygon plus the metadata needed for a hatch and annotation. */
+export interface MapAreaFeature {
+    id: string;
+    source: MapAreaSource;
+    /** CAD layer shared by the boundary lines, hatch, and label. */
+    layer: string;
+    loops: HatchBoundaryLoop[];
+    /** Interior anchor for the centroid annotation, in project coordinates. */
+    centroid: { x: number; y: number };
+    /** Approximate net area in project units² (square feet for US projects). */
+    areaSqFt?: number;
+    /** Ready-to-render primary annotation lines. */
+    labelLines: string[];
+    attributes?: Record<string, string | number | boolean | null | undefined>;
+}
+
+/** Centroid annotation for a FEMA flood zone or SSURGO soil map unit. */
+export interface MapAreaLabel {
+    id: string;
+    x: number;
+    y: number;
+    angle: number;
+    lines: string[];
+    category: MapAreaLabelCategory | string;
+    source: MapAreaSource | string;
+    visible?: boolean;
+}
+
+/** User-controlled hatching for FEMA / soils area overlays. */
+export interface AreaHatchSettings {
+    /** Legacy style fallback for sessions saved before patternName existed. */
+    style: 'lines' | 'cross' | 'dots' | 'chevron' | 'none';
+    /** Explicit hatch pattern, 'AUTO' by source/attribute, or 'none'. */
+    patternName?: string;
+    /** Desired hatch spacing in project feet. */
+    scale: number;
+    /** Pattern rotation in degrees. */
+    angleDeg?: number;
+    /** Fill opacity 0–1. */
+    opacity: number;
+    /** Optional hatch color override. */
+    color?: string;
+    /** Show centroid annotations for the fetched areas. */
+    showLabels?: boolean;
+}
+
 export interface ClosureReport {
   id: string;
   name: string;
@@ -1853,6 +2198,11 @@ export interface SessionState {
     /** GIS parcel centroid labels (v26.05.19.15). Rendered as styled annotation
      *  text with "N/F [OWNER]" surveying notation rather than survey points. */
     parcelLabels?: ParcelLabel[];
+    /** FEMA flood-zone / SSURGO soil-map-unit centroid annotations. */
+    areaLabels?: MapAreaLabel[];
+    /** Source GIS polygons, kept so hatch controls stay live after reload. */
+    floodAreas?: MapAreaFeature[];
+    soilAreas?: MapAreaFeature[];
     /** Per-category annotation rendering styles (v26.05.19.15). */
     annotationCategories?: AnnotationCategoryStyle[];
     /** Named inclusion-polyline groups (v26.05.17.39). Each entry binds a

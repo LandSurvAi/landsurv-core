@@ -10,6 +10,22 @@ import { getHolidayTheme } from './InitialAgentSelection';
 
 export type WelcomeMode = 'main' | 'free-code';
 
+const FOOTER_LINK_CLASS = 'flex min-h-8 items-center whitespace-nowrap border-slate-700/70 px-4 py-2 text-[11px] font-medium tracking-[0.01em] text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white focus-visible:relative focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-cyan-400/70 light-theme:border-gray-200 light-theme:text-gray-600 light-theme:hover:bg-gray-100 light-theme:hover:text-gray-900';
+
+const FOOTER_SITE_LINKS = [
+  { label: 'Sitemap', href: 'https://sitemap.landsurv.ai' },
+  { label: 'TOS', href: 'https://tos.landsurv.ai' },
+  { label: 'Legal', href: 'https://legal.landsurv.ai' },
+  { label: 'Privacy', href: 'https://privacy.landsurv.ai' },
+];
+
+const FOOTER_POLICY_LINKS = [
+  { label: 'Standards', href: 'https://standards.landsurv.ai' },
+  { label: 'DPA', href: 'https://dpa.landsurv.ai' },
+  { label: 'Subprocessors', href: 'https://subprocessors.landsurv.ai' },
+  { label: 'Compliance', href: 'https://compliance.landsurv.ai' },
+];
+
 export interface WelcomeScreenProps {
   onClose: () => void;
   version: string;
@@ -458,16 +474,30 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         </main>
 
         {/* Footer Bar */}
-        <footer className="px-4 py-3 sm:px-6 bg-gray-950/40 border-t border-gray-800 shrink-0 light-theme:bg-gray-50 light-theme:border-gray-200">
+        <footer className="px-4 py-3 sm:px-6 sm:py-3.5 bg-gray-950/40 border-t border-gray-800 shrink-0 light-theme:bg-gray-50 light-theme:border-gray-200">
           {mode === 'main' ? (
-            <div className="flex flex-col items-center gap-2.5 md:grid md:grid-cols-[1fr_auto_1fr] md:items-center md:gap-10">
-              {/* Community links — centered in the fixed bar */}
-              <div className="flex items-center justify-center gap-5 md:col-start-2 md:row-start-1">
+            <div className="mx-auto flex w-full max-w-[38rem] flex-col overflow-hidden rounded-md border border-slate-700/70 bg-slate-950/35 md:flex-row md:items-stretch light-theme:border-gray-300 light-theme:bg-white">
+              <nav aria-label="Site links" className="grid min-w-0 flex-1 grid-cols-2">
+                {FOOTER_SITE_LINKS.map((link, index) => (
+                  <a
+                    key={link.label}
+                    href={link.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`${FOOTER_LINK_CLASS} ${index % 2 === 0 ? 'border-r' : ''} ${index < 2 ? 'border-b' : ''}`}
+                  >
+                    {link.label}
+                  </a>
+                ))}
+              </nav>
+
+              {/* Community links — fixed center column with crisp rules on both sides */}
+              <div className="flex shrink-0 items-center justify-center gap-4 border-y border-slate-700/70 bg-slate-900/30 px-5 py-2 md:gap-3 md:border-x md:border-y-0 light-theme:border-gray-200 light-theme:bg-gray-50">
                 <a
                   href="https://www.youtube.com/@LandSurvAI"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-red-500 hover:text-red-400 hover:scale-110 transition-all"
+                  className="rounded-md p-1.5 text-red-500 transition-all hover:scale-110 hover:text-red-400 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/70"
                   title="Watch tutorials on YouTube"
                   aria-label="LandSurv.ai on YouTube"
                 >
@@ -477,7 +507,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   href="https://www.facebook.com/profile.php?id=61583326114422"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-[#1877F2] hover:text-[#4a9bff] hover:scale-110 transition-all"
+                  className="rounded-md p-1.5 text-[#1877F2] transition-all hover:scale-110 hover:text-[#4a9bff] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/70"
                   title="Join our Facebook community"
                   aria-label="LandSurv.ai on Facebook"
                 >
@@ -487,7 +517,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   href="https://www.linkedin.com/in/michael-sersen-b710a2320/"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-[#0A66C2] hover:text-[#3b8fd6] hover:scale-110 transition-all"
+                  className="rounded-md p-1.5 text-[#0A66C2] transition-all hover:scale-110 hover:text-[#3b8fd6] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/70"
                   title="Connect with Michael Sersen on LinkedIn"
                   aria-label="Michael Sersen on LinkedIn"
                 >
@@ -495,45 +525,19 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 </a>
               </div>
 
-              {/* Left legal group — 2×2 beside the socials */}
-              <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-xs text-gray-500 light-theme:text-gray-600 md:col-start-1 md:row-start-1 md:grid md:grid-cols-2 md:justify-self-end md:justify-items-start">
-                {[
-                  { label: 'Sitemap', href: 'https://sitemap.landsurv.ai' },
-                  { label: 'TOS', href: 'https://tos.landsurv.ai' },
-                  { label: 'Legal', href: 'https://legal.landsurv.ai' },
-                  { label: 'Privacy', href: 'https://privacy.landsurv.ai' },
-                ].map(link => (
+              <nav aria-label="Policy and standards links" className="grid min-w-0 flex-1 grid-cols-2">
+                {FOOTER_POLICY_LINKS.map((link, index) => (
                   <a
                     key={link.label}
                     href={link.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-gray-400 hover:text-white underline-offset-2 hover:underline transition-colors"
+                    className={`${FOOTER_LINK_CLASS} ${index % 2 === 0 ? 'border-r' : ''} ${index < 2 ? 'border-b' : ''}`}
                   >
                     {link.label}
                   </a>
                 ))}
-              </div>
-
-              {/* Right legal group — 2×2 beside the socials */}
-              <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-xs text-gray-500 light-theme:text-gray-600 md:col-start-3 md:row-start-1 md:grid md:grid-cols-2 md:justify-self-start md:justify-items-start">
-                {[
-                  { label: 'Standards', href: 'https://standards.landsurv.ai' },
-                  { label: 'DPA', href: 'https://dpa.landsurv.ai' },
-                  { label: 'Subprocessors', href: 'https://subprocessors.landsurv.ai' },
-                  { label: 'Compliance', href: 'https://compliance.landsurv.ai' },
-                ].map(link => (
-                  <a
-                    key={link.label}
-                    href={link.href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-gray-400 hover:text-white underline-offset-2 hover:underline transition-colors"
-                  >
-                    {link.label}
-                  </a>
-                ))}
-              </div>
+              </nav>
             </div>
           ) : (
             <div className="flex items-center justify-between gap-2.5">

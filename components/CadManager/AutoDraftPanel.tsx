@@ -21,7 +21,8 @@
  */
 
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import type { SurveyPoint, SurveyLine, JobInfo, CustomSymbol, StreetLabel } from '../../types.ts';
+import type { SurveyPoint, SurveyLine, JobInfo, CustomSymbol, StreetLabel, ProjectionSetting } from '../../types.ts';
+import { detectProjectionForCoordinates, detectProjectionFromBrowser } from '../../utils/autoProjection.ts';
 import {
   type OrchestratorPhase,
   type ZoningContext,
@@ -36,6 +37,7 @@ import { SURVEY_SYMBOL_LIBRARY, findMatchingSymbol } from '../../data/surveySymb
 import { loadCountiesForState, loadMunicipalitiesForState, useJurisdictionList, useMunicipalitiesForCounty } from '../../utils/usJurisdictions';
 import { ESRI_STATE_SERVICES } from '../../utils/esriStateServices.ts';
 import { ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon } from '../icons.tsx';
+import { DockModeControl, type DockMode } from '../DockModeControl.tsx';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,6 +48,12 @@ interface AutoDraftPanelProps {
   zoningContext: ZoningContext;
   /** Project coordinate system EPSG (settings.projection.epsg). */
   projectEpsg?: number | null;
+  /** Current host GPS fix, when available. */
+  gpsPosition?: { latitude: number; longitude: number } | null;
+  /** Human-readable active projection for the pre-flight display. */
+  projectionLabel?: string | null;
+  /** Persist a GPS-detected projection back to project settings. */
+  onProjectionDetected?: (projection: ProjectionSetting) => void;
   /** Keys for the static-map cascade. */
   mapKeys?:     StaticMapKeys;
   /** Called once per draft stage with the stage prompt (+ map imagery) — wire to
@@ -74,6 +82,8 @@ interface AutoDraftPanelProps {
   onDismiss:    () => void;
   isDocked?:    boolean;
   onToggleDock?: () => void;
+  dockMode?:    DockMode;
+  onDockModeChange?: (mode: DockMode) => void;
 }
 
 type StepId = 'location' | 'aoi' | 'sources' | 'terrain' | 'codes' | 'draw';
@@ -130,14 +140,22 @@ const CONF_COLOR: Record<'high' | 'medium' | 'low', string> = {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function AutoDraftPanel({
-  points, lines, jobInfo, zoningContext, projectEpsg, mapKeys,
+  points, lines, jobInfo, zoningContext, projectEpsg, gpsPosition, projectionLabel,
+  onProjectionDetected, mapKeys,
   onDraft, getCanvasLineCount, onCanvasLines, onParcelResult, onStreetLabels,
   getSymbolCoverage, onAddSymbols, onGenerateContours, onFetchGisContours, onSteepSlopes, onDismiss,
-  isDocked = false, onToggleDock,
+  isDocked: isDockedProp = false, onToggleDock, dockMode, onDockModeChange,
 }: AutoDraftPanelProps) {
+  const mode: DockMode = dockMode ?? (isDockedProp ? 'toolshelf' : 'floating');
+  const isDocked = mode !== 'floating';
   const [phases, setPhases]     = useState<OrchestratorPhase[]>([]);
   const [isRunning, setRunning] = useState(false);
   const [isDone,    setDone]    = useState(false);
+  const [detectedEpsg, setDetectedEpsg] = useState<number | null>(null);
+  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [locationNotice, setLocationNotice] = useState<string | null>(null);
+  const effectiveProjectEpsg = detectedEpsg ?? projectEpsg ?? null;
   const logRef = useRef<HTMLDivElement>(null);
 
   const hasLocation = !!(zoningContext.state && zoningContext.place);
@@ -227,11 +245,11 @@ export default function AutoDraftPanel({
     zoningContext.state,
   ].filter(Boolean).join(', ');
 
-  const resolvePreview = useCallback(async (locText?: string) => {
+  const resolvePreview = useCallback(async (locText?: string, epsgOverride?: number | null) => {
     setAoiPreview({ status: 'resolving' });
     try {
       const result = await resolveAoi({
-        points, lines, projectEpsg,
+        points, lines, projectEpsg: epsgOverride ?? effectiveProjectEpsg,
         locationText: locText || undefined,
       });
       setAoiPreview({ status: 'ok', result });
@@ -239,7 +257,7 @@ export default function AutoDraftPanel({
       setAoiPreview({ status: 'fail', error: e instanceof Error ? e.message : String(e) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [points, lines, projectEpsg]);
+  }, [points, lines, effectiveProjectEpsg]);
 
   // Resolve the AOI in the background as soon as the panel opens.
   useEffect(() => {
@@ -259,6 +277,47 @@ export default function AutoDraftPanel({
       county: co || zoningContext.county,
       place:  mu || zoningContext.place,
     };
+  };
+
+  const handleUseMyLocation = async () => {
+    setIsDetectingLocation(true);
+    setLocationError(null);
+    setLocationNotice(null);
+    try {
+      const detected = gpsPosition
+        ? await detectProjectionForCoordinates(gpsPosition.latitude, gpsPosition.longitude)
+        : await detectProjectionFromBrowser();
+      const jurisdiction = detected.jurisdiction;
+      if (jurisdiction?.state) setLocState(jurisdiction.state);
+      if (jurisdiction?.county) setLocCounty(jurisdiction.county);
+      if (jurisdiction?.place) setLocMuni(jurisdiction.place);
+
+      const nextLocation = [
+        jurisdiction?.place,
+        jurisdiction?.county ? `${jurisdiction.county} County` : null,
+        jurisdiction?.state,
+      ].filter(Boolean).join(', ');
+      const nextEpsg = detected.projection.epsg;
+      if (nextEpsg) {
+        setDetectedEpsg(nextEpsg);
+        onProjectionDetected?.(detected.projection);
+      }
+      setLocationNotice(
+        `Using ${detected.label}${nextEpsg ? ` (EPSG:${nextEpsg})` : ''}.`,
+      );
+      await resolvePreview(nextLocation || locationText, nextEpsg);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/denied|permission/i.test(message)) {
+        setLocationError('Location permission denied. Allow location access or enter the site location manually.');
+      } else if (/timed?\s*out/i.test(message)) {
+        setLocationError('Location lookup timed out. Try again or enter the site location manually.');
+      } else {
+        setLocationError(`Could not detect location: ${message}`);
+      }
+    } finally {
+      setIsDetectingLocation(false);
+    }
   };
 
   const handleRun = async (overrides?: { allDefaults?: boolean }) => {
@@ -322,7 +381,7 @@ export default function AutoDraftPanel({
         lines,
         jobInfo,
         zoningContext: zc,
-        projectEpsg,
+        projectEpsg: effectiveProjectEpsg,
         config: {
           sources: gis
             ? src
@@ -417,15 +476,19 @@ export default function AutoDraftPanel({
           )}
         </div>
         <div className="flex items-center gap-1">
-          {onToggleDock && (
-            <button
-              type="button"
-              onClick={onToggleDock}
-              className="text-violet-300 hover:text-white p-1 rounded hover:bg-violet-800/50 transition-colors"
-              title={isDocked ? 'Pop out Auto Draft to canvas' : 'Dock Auto Draft into Tool Station'}
-            >
-              {isDocked ? <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" /> : <ArrowDownOnSquareIcon className="w-3.5 h-3.5" />}
-            </button>
+          {(onDockModeChange || onToggleDock) && (
+            onDockModeChange ? (
+              <DockModeControl mode={mode} onChange={onDockModeChange} />
+            ) : (
+              <button
+                type="button"
+                onClick={onToggleDock}
+                className="text-violet-300 hover:text-white p-1 rounded hover:bg-violet-800/50 transition-colors"
+                title={isDocked ? 'Pop out Auto Draft to canvas' : 'Dock Auto Draft into Tool Station'}
+              >
+                {isDocked ? <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" /> : <ArrowDownOnSquareIcon className="w-3.5 h-3.5" />}
+              </button>
+            )
           )}
           <button
             onClick={onDismiss}
@@ -457,9 +520,21 @@ export default function AutoDraftPanel({
           {step === 'location' && (
             <div className="space-y-2">
               <p className="text-xs font-semibold text-violet-200">📍 Where is this site?</p>
-              <p className="text-xs text-gray-500 leading-snug">
-                No location is configured. It enables zoning, parcel and geocode lookups.
-              </p>
+              <div className="rounded-lg border border-violet-500/25 bg-violet-500/5 p-2.5 space-y-1.5">
+                <p className="text-xs text-gray-500 leading-snug">
+                  No location is configured. Use your GPS fix to fill state, county, municipality, and the project projection.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void handleUseMyLocation()}
+                  disabled={isDetectingLocation}
+                  className="w-full rounded-md border border-violet-400/40 bg-violet-600/20 px-2 py-1.5 text-[11px] font-semibold text-violet-200 transition-colors hover:bg-violet-600/30 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isDetectingLocation ? 'Locating…' : 'Use my GPS location'}
+                </button>
+                {locationNotice && <p className="text-[10px] text-emerald-300">{locationNotice}</p>}
+                {locationError && <p role="alert" className="text-[10px] text-rose-300">{locationError}</p>}
+              </div>
               <select
                 value={locState}
                 onChange={(e) => { setLocState(e.target.value); setLocCounty(''); setLocMuni(''); }}
@@ -501,6 +576,12 @@ export default function AutoDraftPanel({
           {step === 'aoi' && (
             <div className="space-y-2">
               <p className="text-xs font-semibold text-violet-200">🎯 Site area for GIS data</p>
+              <p className="text-[10px] text-gray-500 leading-snug">
+                {locationText || defaultLocationText || 'No location set'}
+                {effectiveProjectEpsg
+                  ? ` · Projection EPSG:${effectiveProjectEpsg}${projectionLabel ? ` · ${projectionLabel}` : ''}`
+                  : ' · No projection set'}
+              </p>
               {aoiPreview.status === 'resolving' && (
                 <p className="text-xs text-yellow-400 animate-pulse">Resolving area of interest…</p>
               )}

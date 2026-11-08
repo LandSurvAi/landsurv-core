@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { type SurveyPoint, type PointList, AgentType } from '../types.ts';
 import { DownloadIcon, EraserIcon, FullscreenIcon, ExitFullscreenIcon, ChevronDownIcon, ChevronUpIcon, ArrowUpTrayIcon, CameraIcon, XMarkIcon, CrosshairsIcon, MapPinIcon, EyeIcon } from './icons.tsx';
 import { expandGoogleMapsShortLink, isGoogleMapsShortLink, parseGoogleMapsLatLon } from '../utils/googleMaps.ts';
+import { decodePlusCode } from '../utils/plusCode.ts';
 import { useErrorReporter } from '../contexts/AppStateContext';
 
 interface PointEditorPanelProps {
@@ -32,8 +33,9 @@ export const PointEditorPanel: React.FC<PointEditorPanelProps> = ({
   nextAvailablePointNumber, convertLatLon
 }) => {
   const [newPoint, setNewPoint] = useState({ pn: '', n: '', e: '', z: '', d: '' });
-  const [addMode, setAddMode] = useState<'ne' | 'latlon'>('ne');
+  const [addMode, setAddMode] = useState<'ne' | 'latlon' | 'plus'>('ne');
   const [latLonInput, setLatLonInput] = useState({ lat: '', lon: '', z: '', d: '' });
+  const [plusCodeInput, setPlusCodeInput] = useState({ code: '', z: '', d: '' });
   const { reportError } = useErrorReporter();
     const [mapsLinkInput, setMapsLinkInput] = useState('');
   const [newListName, setNewListName] = useState('');
@@ -135,6 +137,33 @@ export const PointEditorPanel: React.FC<PointEditorPanelProps> = ({
 
   const handleAddPointSubmit = (e: React.FormEvent) => {
       e.preventDefault();
+      if (addMode === 'plus') {
+          const decoded = decodePlusCode(plusCodeInput.code);
+          if (!decoded) {
+              reportError({ title: 'Invalid Plus Code', message: 'Enter a full Google Plus Code such as 87G8Q2PQ+5X. Shortened codes need a reference location.' });
+              return;
+          }
+          if (!convertLatLon) {
+              reportError({ title: 'Projection required', message: 'Set a project projection before adding a point from a Plus Code.' });
+              return;
+          }
+          const converted = convertLatLon(decoded.latitude, decoded.longitude);
+          if (!converted) {
+              reportError({ title: 'Conversion failed', message: 'Could not convert the Plus Code to project coordinates. Check projection settings.' });
+              return;
+          }
+          onAddPoint({
+              pointNumber: newPoint.pn,
+              northing: converted.northing,
+              easting: converted.easting,
+              elevation: parseFloat(plusCodeInput.z) || 0,
+              description: plusCodeInput.d,
+              latitude: decoded.latitude,
+              longitude: decoded.longitude,
+          });
+          setPlusCodeInput({ code: '', z: '', d: '' });
+          return;
+      }
       if (addMode === 'latlon' && convertLatLon) {
           const lat = parseFloat(latLonInput.lat);
           const lon = parseFloat(latLonInput.lon);
@@ -363,12 +392,17 @@ export const PointEditorPanel: React.FC<PointEditorPanelProps> = ({
                     <div className="flex rounded overflow-hidden border border-gray-600 text-[10px] font-semibold">
                         <button onClick={() => setAddMode('ne')} className={`px-2 py-0.5 transition-colors ${addMode === 'ne' ? 'bg-cyan-700 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>N/E</button>
                         <button onClick={() => setAddMode('latlon')} className={`px-2 py-0.5 transition-colors ${addMode === 'latlon' ? 'bg-cyan-700 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Lat/Lon</button>
+                        <button onClick={() => setAddMode('plus')} className={`px-2 py-0.5 transition-colors ${addMode === 'plus' ? 'bg-cyan-700 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Plus Code</button>
                     </div>
                 )}
             </div>
             <form onSubmit={handleAddPointSubmit} className="grid grid-cols-12 gap-2 items-center">
                 <input type="text" placeholder="PN" required value={newPoint.pn} onChange={e => setNewPoint(p => ({...p, pn: e.target.value}))} className="col-span-2 p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md" />
-                {addMode === 'ne' ? (<>
+                {addMode === 'plus' ? (<>
+                    <input type="text" placeholder="Google Plus Code (full)" required value={plusCodeInput.code} onChange={e => setPlusCodeInput(p => ({...p, code: e.target.value}))} className="col-span-8 p-1.5 text-xs bg-gray-700 border border-cyan-700/60 rounded-md font-mono uppercase" />
+                    <input type="number" step="any" placeholder="Elev" value={plusCodeInput.z} onChange={e => setPlusCodeInput(p => ({...p, z: e.target.value}))} className="col-span-2 p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md" />
+                    <input type="text" placeholder="Desc" value={plusCodeInput.d} onChange={e => setPlusCodeInput(p => ({...p, d: e.target.value}))} className="col-span-2 p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md" />
+                </>) : addMode === 'ne' ? (<>
                     <input type="number" step="any" placeholder="Northing" required value={newPoint.n} onChange={e => setNewPoint(p => ({...p, n: e.target.value}))} className="col-span-3 p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md" />
                     <input type="number" step="any" placeholder="Easting"  required value={newPoint.e} onChange={e => setNewPoint(p => ({...p, e: e.target.value}))} className="col-span-3 p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md" />
                     <input type="number" step="any" placeholder="Elev" value={newPoint.z} onChange={e => setNewPoint(p => ({...p, z: e.target.value}))} className="col-span-2 p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md" />
@@ -382,7 +416,7 @@ export const PointEditorPanel: React.FC<PointEditorPanelProps> = ({
                     <input type="text" placeholder="Desc" value={latLonInput.d} onChange={e => setLatLonInput(p => ({...p, d: e.target.value}))} className="col-span-2 p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md" />
                 </>)}
                 <button type="submit" className="col-span-12 w-full mt-2 py-1.5 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700 transition-colors text-xs">
-                    {addMode === 'latlon' ? 'Convert & Add Point' : 'Add Point'}
+                    {addMode === 'latlon' ? 'Convert & Add Point' : addMode === 'plus' ? 'Add Point from Plus Code' : 'Add Point'}
                 </button>
             </form>
         </div>

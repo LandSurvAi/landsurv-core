@@ -14,6 +14,7 @@ import { HISTORY_SKILLS } from './historySkillSchemas';
 import { COGO_EXTENDED_SKILLS } from './cogoSkillSchemas';
 import { GEO_AI_SKILLS } from './geoSkillSchemas';
 import { CL_SKILLS } from './clSkillSchemas';
+import { DEED_SKILLS } from './deedSkillSchemas';
 import { ROADING_SKILLS } from './roadingSkillSchemas';
 
 /** A loose JSON-Schema-ish descriptor. Kept narrow on purpose. */
@@ -222,6 +223,35 @@ agentRegistry.register({
       outputs: { points: { type: 'array', items: { type: 'object' }, required: true } },
     },
     {
+      id: 'add_point',
+      name: 'Add Point',
+      type: 'action' as const,
+      description:
+        'Authoritative point creation. Accepts a full Google Plus Code, a WGS84 latitude/longitude pair, or project northing/easting. PointAgent assigns the next number when pointNumber is omitted and renumbers duplicates instead of overwriting an existing point.',
+      inputs: {
+        plusCode:    { type: 'string',  description: 'Full Google Plus Code, e.g. 87G8Q2PQ+5X.' },
+        latitude:    { type: 'number',  description: 'WGS84 latitude for Plus Code-free input.' },
+        longitude:   { type: 'number',  description: 'WGS84 longitude for Plus Code-free input.' },
+        northing:    { type: 'number',  description: 'Project northing when the caller already has projected coordinates.' },
+        easting:     { type: 'number',  description: 'Project easting when the caller already has projected coordinates.' },
+        pointNumber: { type: 'string',  description: 'Optional requested point number; duplicate numbers are renumbered by PointAgent.' },
+        elevation:   { type: 'number',  description: 'Optional elevation.' },
+        description: { type: 'string',  description: 'Optional point description.' },
+      },
+      outputs: {
+        pointNumber: { type: 'string',  required: true },
+        northing:    { type: 'number',  required: true },
+        easting:     { type: 'number',  required: true },
+        latitude:    { type: 'number',  description: 'Present when the input was WGS84 or a Plus Code.' },
+        longitude:   { type: 'number',  description: 'Present when the input was WGS84 or a Plus Code.' },
+      },
+      examples: [
+        'User: "add point at 87G8Q2PQ+5X" → askPeer add_point {plusCode:"87G8Q2PQ+5X"}',
+        'User: "set a point at 39.9526, -75.1652" → askPeer add_point {latitude:39.9526, longitude:-75.1652}',
+        'CACP caller already has project coordinates → askPeer add_point {northing:5000, easting:6000, description:"MON"}',
+      ],
+    },
+    {
       id: 'remove_points',
       name: 'Remove Points',
       type: 'action' as const,
@@ -294,6 +324,7 @@ agentRegistry.register({
       inputs:  { parcelId: { type: 'string', required: true } },
       outputs: { points: { type: 'array', items: { type: 'object' } }, pointCount: { type: 'integer' } },
     },
+    ...DEED_SKILLS,
   ],
 });
 
@@ -428,7 +459,7 @@ agentRegistry.register({
   agent: AgentType.GPS_STAKEOUT,
   displayName: 'GPS Rover',
   cacpEnabled: true,
-  version: '1.0.0',
+  version: '1.2.0',
   skills: [
     {
       id: 'gps_get_current_position',
@@ -506,6 +537,61 @@ agentRegistry.register({
         numbers: { type: 'array', items: { type: 'string' }, required: true },
       },
     },
+    {
+      id: 'gps_get_stakeout_guidance',
+      name: 'Get Stakeout Guidance',
+      description:
+        'Computes live bearing, distance, delta northing/easting, and cut/fill from the rover fix to a stakeout target. Uses the active target when pointNumber is omitted.',
+      inputs: {
+        pointNumber: { type: 'string', description: 'Optional target point number; defaults to the active stakeout target.' },
+      },
+      outputs: {
+        hasFix:           { type: 'boolean', required: true },
+        targetPointNumber:{ type: 'string', required: true },
+        description:      { type: 'string' },
+        bearingDeg:       { type: 'number' },
+        distanceFt:       { type: 'number' },
+        deltaNorthFt:     { type: 'number' },
+        deltaEastFt:      { type: 'number' },
+        cutFillFt:        { type: 'number' },
+        epsg:             { type: 'integer' },
+      },
+    },
+    {
+      id: 'gps_collect_point',
+      name: 'Collect GPS Point',
+      type: 'action' as const,
+      description:
+        'Stores a new point at the rover\'s current fix in the project working point list. Omit pointNumber to have the Point Editor issue the next number. Fails when there is no fix, no projection, or the point number already exists.',
+      inputs: {
+        pointNumber: { type: 'string', description: 'Optional point number. Defaults to the next available number.' },
+        description: { type: 'string', description: 'Optional point description. Default "GPS".' },
+      },
+      outputs: {
+        stored:      { type: 'boolean', required: true },
+        pointNumber: { type: 'string', required: true },
+        northing:    { type: 'number' },
+        easting:     { type: 'number' },
+        elevation:   { type: 'number' },
+        message:     { type: 'string', required: true },
+      },
+    },
+    {
+      id: 'gps_open_rover',
+      name: 'Open GPS Rover',
+      type: 'action' as const,
+      description:
+        'Opens (and docks) the single GPS Rover dialog on the canvas, optionally focused on stakeout, collect, or benchmark. Project location now belongs to the LSAI Agent (lsvz_project_locations / lsvz_open_project_locations).',
+      inputs: {
+        mode: { type: 'string', enum: ['stakeout', 'collect', 'benchmark'], description: 'Panel focus. Default stakeout.' },
+        dock: { type: 'boolean', description: 'Dock into the agent tool shelf. Default true.' },
+      },
+      outputs: {
+        opened: { type: 'boolean', required: true },
+        mode:   { type: 'string', required: true },
+        docked: { type: 'boolean', required: true },
+      },
+    },
   ],
 });
 
@@ -513,7 +599,7 @@ agentRegistry.register({
   agent: AgentType.LSVZ_AGENT,
   displayName: 'LSAI Agent',
   cacpEnabled: true,
-  version: '1.2.0',
+  version: '1.5.0',
   skills: [
     {
       id: 'lsvz_dispatch',
@@ -586,6 +672,210 @@ agentRegistry.register({
         recorded: { type: 'integer' },
         fact:     { type: 'object' },
       },
+    },
+    {
+      id: 'lsvz_project_locations',
+      name: 'List Project Locations',
+      description:
+        'The shared answer to "where is this project?". Splits the loaded survey points into spatially distinct clusters and returns each cluster with its state, county, municipality, WGS84 centre/bbox, extents, area, point counts, and confidence. Results are cached and published to the Project Knowledge Base under project.location.*. No network access is required after the first lookup.',
+      inputs: {
+        refresh: { type: 'boolean', description: 'Re-run the jurisdiction lookup instead of using cached results.' },
+      },
+      outputs: {
+        clusters: {
+          type: 'array',
+          items: { type: 'object' },
+          required: true,
+          description: 'One entry per cluster: index, pointCount, label, jurisdiction {state,county,place,label,source}, centerLatitude/Longitude, bboxWgs84, width, height, areaAcres, confidence.',
+        },
+        clusterCount:  { type: 'integer', required: true },
+        totalPoints:   { type: 'integer', required: true },
+        epsg:          { type: 'integer' },
+        linkageDistance: { type: 'number', description: 'Point gap (project units) used to separate clusters.' },
+        summary:       { type: 'string', required: true },
+        warnings:      { type: 'array', items: { type: 'string' } },
+      },
+      examples: [
+        'Boundary Agent needs the county before choosing a tax-parcel fabric → lsvz_project_locations.',
+        'User: "where is this project?" → each point cluster answered with state, county, and municipality.',
+        'User uploaded two disconnected point sets → two clusters are returned separately.',
+      ],
+    },
+    {
+      id: 'lsvz_locate_project',
+      name: 'Locate a Project Cluster',
+      description:
+        'Returns the jurisdiction for one project cluster (or the cluster containing a given point / nearest a coordinate). Use this when another agent needs a single definitive "what state/county/municipality is this in?" answer.',
+      inputs: {
+        clusterIndex: { type: 'integer', description: '1-based cluster index from lsvz_project_locations.' },
+        pointNumber:  { type: 'string', description: 'Optional project point number; its cluster is located.' },
+        latitude:     { type: 'number', description: 'Optional WGS84 latitude; the nearest cluster is located.' },
+        longitude:    { type: 'number', description: 'Optional WGS84 longitude; the nearest cluster is located.' },
+        refresh:      { type: 'boolean' },
+      },
+      outputs: {
+        found:        { type: 'boolean', required: true },
+        clusterIndex: { type: 'integer' },
+        state:        { type: 'string' },
+        county:       { type: 'string' },
+        municipality: { type: 'string' },
+        label:        { type: 'string' },
+        source:       { type: 'string', description: 'census-geocoder | nominatim | projection | unavailable.' },
+        centerLatitude:  { type: 'number' },
+        centerLongitude: { type: 'number' },
+        bboxWgs84:    { type: 'array', items: { type: 'number' } },
+        message:      { type: 'string', required: true },
+      },
+    },
+    {
+      id: 'lsvz_fetch_cluster_data',
+      name: 'Fetch County / Flood / Soils for a Cluster or Inclusion Area',
+      type: 'action' as const,
+      description:
+        'Fetches public GIS data and renders it on the canvas: county tax-parcel linework (auto-picks the county fabric from the resolved jurisdiction, then statewide, then a nearby ArcGIS layer), FEMA NFHL flood zones, or USDA SSURGO soils. Query one project cluster by default, or set aoi:"inclusion" to use the drawn inclusion boundary as the extent.',
+      inputs: {
+        layer:        { type: 'string', enum: ['parcels', 'flood', 'soils'], required: true },
+        clusterIndex: { type: 'integer', description: '1-based cluster index; defaults to the only cluster.' },
+        aoi:          { type: 'string', enum: ['cluster', 'inclusion'], description: 'Query area. inclusion uses the active/drawn inclusion polygon instead of a cluster footprint.' },
+        refresh:      { type: 'boolean', description: 'Re-resolve the jurisdiction before fetching.' },
+      },
+      outputs: {
+        fetched:      { type: 'boolean', required: true },
+        layer:        { type: 'string', required: true },
+        clusterIndex: { type: 'integer' },
+        aoi:          { type: 'string' },
+        jurisdiction: { type: 'string' },
+        featureCount: { type: 'integer' },
+        message:      { type: 'string', required: true },
+      },
+      examples: [
+        'User uploaded points and asked for "county GIS tax lines" → lsvz_fetch_cluster_data({layer:"parcels"}).',
+        'User asked for flood lines on the second site → lsvz_fetch_cluster_data({layer:"flood", clusterIndex:2}).',
+        'User asked for soils over the inclusion area → lsvz_fetch_cluster_data({layer:"soils", aoi:"inclusion"}).',
+      ],
+    },
+    {
+      id: 'lsvz_get_projection',
+      name: 'Get Project Projection',
+      type: 'query' as const,
+      description:
+        'Returns the active project CRS plus the State Plane zone recommended by the georeferenced point clusters. Use before GIS reprojection or when a user asks what projection the project should use.',
+      inputs: {
+        refresh: { type: 'boolean', description: 'Re-resolve cluster jurisdiction before recommending.' },
+      },
+      outputs: {
+        currentEpsg:      { type: 'integer' },
+        currentState:     { type: 'string' },
+        currentZoneName:  { type: 'string' },
+        recommendedEpsg:  { type: 'integer' },
+        recommendedState: { type: 'string' },
+        recommendedZoneName: { type: 'string' },
+        clusterIndex:     { type: 'integer' },
+        latitude:         { type: 'number' },
+        longitude:        { type: 'number' },
+        source:           { type: 'string' },
+        jurisdiction:     { type: 'string' },
+        message:          { type: 'string', required: true },
+      },
+      examples: [
+        'User asks "what projection should I use?" → lsvz_get_projection({}).',
+        'A GIS agent needs the current CRS → lsvz_get_projection({}).',
+      ],
+    },
+    {
+      id: 'lsvz_set_projection',
+      name: 'Set Project Projection',
+      type: 'action' as const,
+      description:
+        'Sets the project CRS. Pass epsg for an explicit State Plane or worldwide EPSG code, use useGps to derive it from the device fix, or omit both to apply the projection recommended by the point clusters. Use dryRun to preview without changing the project.',
+      inputs: {
+        epsg:   { type: 'integer', description: 'State Plane or worldwide EPSG code. Omit to use the point-cluster recommendation.' },
+        useGps: { type: 'boolean', description: 'Derive the CRS from the device GPS fix instead of the point clusters.' },
+        dryRun: { type: 'boolean', description: 'Preview the resolved projection without applying it.' },
+      },
+      outputs: {
+        applied:      { type: 'boolean', required: true },
+        epsg:         { type: 'integer' },
+        previousEpsg: { type: 'integer' },
+        state:        { type: 'string' },
+        zoneName:     { type: 'string' },
+        message:      { type: 'string', required: true },
+      },
+      examples: [
+        'User: "set my projection from the point cluster" → lsvz_set_projection({}).',
+        'User: "use Ohio South" → lsvz_set_projection({epsg:27043}).',
+        'User: "set the projection from my GPS location" → lsvz_set_projection({useGps:true}).',
+      ],
+    },
+    {
+      id: 'lsvz_open_projection',
+      name: 'Open Projection Controls',
+      type: 'action' as const,
+      description:
+        'Opens the A2UI Settings → Coordinate System surface, optionally applying the point-cluster recommendation first. This is the same projection control surface the user sees in chat and the tool shelf.',
+      inputs: {
+        applyRecommended: { type: 'boolean', description: 'Apply the point-cluster recommendation before opening.' },
+        dock:            { type: 'boolean', description: 'Dock into the agent tool shelf. Default true.' },
+      },
+      outputs: {
+        opened:       { type: 'boolean', required: true },
+        docked:       { type: 'boolean', required: true },
+        appliedEpsg:  { type: 'integer' },
+        currentEpsg:  { type: 'integer' },
+      },
+      examples: [
+        'User: "open projection settings" → lsvz_open_projection({}).',
+      ],
+    },
+    {
+      id: 'lsvz_open_project_locations',
+      name: 'Open Project Location Panel',
+      type: 'action' as const,
+      description:
+        'Opens the LSAI Project Location tool shelf panel, showing every point cluster with its state, county, municipality, footprint, and one-click county tax line / flood / soils actions.',
+      inputs: {
+        clusterIndex: { type: 'integer', description: 'Optional cluster to bring into focus.' },
+        dock:         { type: 'boolean', description: 'Dock into the agent tool shelf. Default true.' },
+      },
+      outputs: {
+        opened:       { type: 'boolean', required: true },
+        clusterCount: { type: 'integer', required: true },
+        docked:       { type: 'boolean', required: true },
+      },
+    },
+    {
+      id: 'open_spreadsheet',
+      name: 'Open A2UI Spreadsheet',
+      type: 'action' as const,
+      description:
+        'Opens the shared lightweight A2UI spreadsheet with agent-supplied columns and rows. Use it for point lists, comparison tables, cut sheets, and any tabular answer instead of dumping rows into chat text.',
+      inputs: {
+        title:       { type: 'string', description: 'Spreadsheet title shown in the A2UI header.' },
+        description: { type: 'string', description: 'Optional subtitle or data provenance.' },
+        fileName:    { type: 'string', description: 'CSV download filename.' },
+        columns: {
+          type: 'array',
+          required: true,
+          description:
+            'Column keys (strings) or objects: {key, label, width?, align?: "left"|"center"|"right"}.',
+        },
+        rows: {
+          type: 'array',
+          description:
+            'Row objects keyed by column key, or arrays in column order. Missing cells render blank.',
+        },
+        editable: { type: 'boolean', description: 'Allow local cell edits and row add/delete. Default true.' },
+        pageSize: { type: 'integer', description: 'Rows per page (10-1000). Default 100.' },
+      },
+      outputs: {
+        opened:      { type: 'boolean', required: true },
+        rowCount:    { type: 'integer', required: true },
+        columnCount: { type: 'integer', required: true },
+      },
+      examples: [
+        'Point Editor lists points → open_spreadsheet({title:"Project Points", columns:["Point #","Northing","Easting"], rows:[...]})',
+        'Soils Agent compares map units → open_spreadsheet({columns:[{key:"symbol",label:"Map unit"},{key:"acres",label:"Acres",align:"right"}], rows:[...]})',
+      ],
     },
   ],
 });
@@ -1195,6 +1485,85 @@ agentRegistry.register({
       ],
     },
     {
+      id: 'create_tin_from_contours',
+      name: 'Create TIN from Contours',
+      type: 'action' as const,
+      description:
+        'Builds a TIN surface from the contour vertices of a contour generation and saves it to the session and File Manager. ' +
+        'Use this when the user asks to create, build, or save a surface from existing contours.',
+      inputs: {
+        generationId: {
+          type: 'string',
+          description: 'Optional contour generation id. Defaults to the most recent generation.',
+        },
+        name: { type: 'string', description: 'Optional surface name.' },
+      },
+      outputs: {
+        tinId: { type: 'string', required: true, description: 'Created TIN surface id.' },
+        name: { type: 'string', required: true },
+        vertexCount: { type: 'integer', required: true },
+        triangleCount: { type: 'integer', required: true },
+        fileName: { type: 'string', description: 'Native .tin file saved to File Manager.' },
+      },
+      examples: [
+        'Create a TIN from the latest contours',
+        'Build and save a surface from contour generation gen-123',
+      ],
+    },
+    {
+      id: 'import_tin_surface',
+      name: 'Import TIN Surface',
+      type: 'action' as const,
+      description:
+        'Imports a .tin, .xml, or .landxml surface payload into the session. The caller supplies the file content and name; ' +
+        'the host parses it, registers the surface, and saves the source file to File Manager.',
+      inputs: {
+        content: { type: 'string', required: true, description: 'Raw file content (text LandXML/.tin) or base64 in fileData.' },
+        name: { type: 'string', required: true, description: 'File name including extension (.tin/.xml/.landxml).' },
+        fileData: { type: 'string', description: 'Optional base64 bytes for binary Carlson .tin files.' },
+      },
+      outputs: {
+        tinId: { type: 'string', required: true },
+        name: { type: 'string', required: true },
+        vertexCount: { type: 'integer', required: true },
+        triangleCount: { type: 'integer', required: true },
+      },
+      examples: ['Import this LandXML surface into the project'],
+    },
+    {
+      id: 'export_tin_surface',
+      name: 'Export TIN Surface',
+      type: 'action' as const,
+      description:
+        'Exports a loaded TIN surface as LandXML or native .tin. The file is saved to File Manager and a browser download is triggered.',
+      inputs: {
+        sourceTinId: { type: 'string', description: 'Optional TIN surface id. Defaults to the most recent loaded surface.' },
+        format: {
+          type: 'string',
+          enum: ['landxml', 'native'],
+          default: 'landxml',
+          description: 'landxml (.xml) or native text (.tin).',
+        },
+      },
+      outputs: {
+        fileName: { type: 'string', required: true },
+        format: { type: 'string', required: true },
+        vertexCount: { type: 'integer', required: true },
+        triangleCount: { type: 'integer', required: true },
+      },
+      examples: ['Export the loaded TIN as LandXML', 'Save the surface as a .tin file'],
+    },
+    {
+      id: 'open_tin_surfaces',
+      name: 'Open TIN Surfaces Surface',
+      type: 'action' as const,
+      description:
+        'Opens the A2UI TIN Surfaces workspace surface so the user can import, create, and export surfaces from any agent chat.',
+      inputs: {},
+      outputs: { opened: { type: 'boolean', required: true } },
+      examples: ['Open TIN surfaces', 'Show the surface manager'],
+    },
+    {
       id: 'fetch_esri_rest_contours',
       name: 'Fetch ESRI REST Contours',
       type: 'action' as const,
@@ -1209,13 +1578,24 @@ agentRegistry.register({
           required: true,
           description:
             'Base URL of the ESRI REST Feature Service or Map Service layer ' +
-            '(e.g. https://www.pasda.psu.edu/arcgis/rest/services/pasda/Contours2ft/MapServer/0).',
+            '(e.g. https://services.pasda.psu.edu/arcgis/rest/services/PAMAP_Contours/MapServer/2).',
+        },
+        mode: {
+          type: 'string',
+          enum: ['project', 'inclusion', 'description'],
+          description:
+            'Area of interest. "project" uses the loaded survey points, ' +
+            '"inclusion" uses the active inclusion boundary, and "description" geocodes descriptionText.',
+        },
+        descriptionText: {
+          type: 'string',
+          description: 'Required when mode="description". Free-text place name or address.',
         },
         bbox: {
           type: 'object',
           description:
             'Optional bounding box { xmin, ymin, xmax, ymax } in the service spatial reference. ' +
-            'When omitted the agent uses the current project extent.',
+            'When omitted the agent uses the mode-selected project extent or inclusion boundary.',
         },
         sr: {
           type: 'integer',
@@ -1227,12 +1607,14 @@ agentRegistry.register({
         },
       },
       outputs: {
-        features: {
-          type: 'array',
-          items: { type: 'object' },
-          description: 'Array of contour polyline features with elevation attributes.',
+        featureCount: {
+          type: 'integer',
+          description: 'Number of contour features returned by the service.',
         },
-        count: { type: 'integer', description: 'Number of features returned.' },
+        count: {
+          type: 'integer',
+          description: 'Number of contour segments added to the drawing.',
+        },
         sr: { type: 'object', description: 'Spatial reference of returned geometry.' },
         layerName: { type: 'string', description: 'Name of the service layer fetched.' },
       },
@@ -1465,14 +1847,25 @@ agentRegistry.register({
       name: 'Fetch FEMA Flood Zones',
       type: 'action' as const,
       description:
-        'Fetches FEMA National Flood Hazard Layer (NFHL, MapServer/28 — S_FLD_HAZ_AR) ' +
-        'polygons for a project area and drops them onto the canvas as SurveyLines ' +
-        'tagged type=\'flood\' and layer=\'FEMA-FLOOD-<ZONE>\' (one CAD layer per FEMA zone code: ' +
-        'AE, AH, AO, VE, X, X-Shaded, etc.). The area is specified either by drawn ' +
-        'inclusion polygon (mode=\'inclusion\') OR by free-text description that gets ' +
-        'geocoded via Nominatim (mode=\'description\'). Reprojects WGS84 → project EPSG ' +
-        'client-side so the linework lands on the correct State Plane / UTM coordinates.',
+        'Fetches FEMA National Flood Hazard Layer (NFHL) flood-hazard polygons for a project area ' +
+        'and drops them onto the canvas as SurveyLines tagged type=\'flood\' and ' +
+        'layer=\'FEMA-FLOOD-<ZONE>\' (one CAD layer per FEMA zone code: AE, AH, AO, VE, X, ' +
+        'X-Shaded, etc.). When includeBfe is true (the UI default) it also pulls NFHL layer 16 ' +
+        '(S_BFE) and plots Base Flood Elevation lines on layer \'FEMA-BFE\' with one BFE ' +
+        'elevation callout per line. The area is specified either by drawn inclusion polygon ' +
+        '(mode=\'inclusion\') OR by free-text description that gets geocoded via Nominatim ' +
+        '(mode=\'description\'). Reprojects WGS84 → project EPSG client-side so the linework ' +
+        'lands on the correct State Plane / UTM coordinates. The Flood Agent should ask the user ' +
+        'which deliverables they want (BFE lines, zone callouts, written report, paperspace notes) ' +
+        'before and after fetching instead of assuming.',
       inputs: {
+        includeBfe: {
+          type: 'boolean',
+          description:
+            'Also fetch FEMA Base Flood Elevation lines (NFHL layer 16) onto layer ' +
+            'FEMA-BFE. Default true. Set false when the user only wants zone rings ' +
+            'or the BFE service is unavailable.',
+        },
         mode: {
           type: 'string',
           required: true,
@@ -1492,13 +1885,16 @@ agentRegistry.register({
         addedLines:    { type: 'integer', description: 'Number of polygon segments added to the canvas.' },
         featureCount:  { type: 'integer', description: 'Number of FEMA flood polygons returned.' },
         zoneCounts:    { type: 'object', description: 'Map of FEMA zone code → polygon count, e.g. {"AE": 14, "X": 7}.' },
-        layers:        { type: 'array', items: { type: 'string' }, description: 'CAD layer names created (FEMA-FLOOD-AE, FEMA-FLOOD-X, ...).' },
+        bfeCount:      { type: 'integer', description: 'Number of FEMA Base Flood Elevation line features added.' },
+        bfeDatum:      { type: 'string', description: 'Vertical datum reported by FEMA for the BFE lines (e.g. NAVD88), when available.' },
+        layers:        { type: 'array', items: { type: 'string' }, description: 'CAD layer names created (FEMA-FLOOD-AE, FEMA-FLOOD-X, FEMA-BFE, ...).' },
         truncated:     { type: 'boolean', description: 'True if FEMA NFHL hit the transfer limit and only a partial set came back.' },
       },
       examples: [
         'Civil Drafter is laying out a site plan and needs the AE / X floodplain rings — calls fetch_flood_zones with mode=\'inclusion\' to use the project boundary already on the canvas.',
         'Boundary Agent is drafting a metes-and-bounds and the legal references "FEMA Zone AE per FIRM panel" — calls fetch_flood_zones with mode=\'description\' for the parcel address to pull the actual regulatory rings.',
         'Civil Plan Expert needs flood-hazard overlay for a stormwater report — calls fetch_flood_zones to render the floodway and 100-year polygons as their own visibility-controllable CAD layers.',
+        'User asks for a flood exhibit — the Flood Agent asks whether to include BFE lines and zone callouts, then offers to write a flood-zone report or add the notes block to the paperspace plan sheet.',
       ],
     },
     {
@@ -1506,9 +1902,10 @@ agentRegistry.register({
       name: 'Clear FEMA Flood Linework',
       type: 'action' as const,
       description:
-        'Removes every SurveyLine whose layer starts with "FEMA-FLOOD-" from the canvas. ' +
-        'Use before re-fetching a different area, or to hide flood overlay without ' +
-        'touching layer visibility.',
+        'Removes every SurveyLine whose layer starts with "FEMA-FLOOD-" or "FEMA-BFE" from ' +
+        'the canvas, plus the associated flood hatches and zone callouts. Use before ' +
+        're-fetching a different area, or to hide the flood overlay without touching ' +
+        'layer visibility.',
       inputs: {},
       outputs: {
         removedLines: { type: 'integer', description: 'Number of FEMA flood SurveyLines removed.' },

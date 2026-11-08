@@ -1,23 +1,35 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { FloodIcon } from './icons.tsx';
-import type { InclusionBoundary, Settings } from '../types.ts';
+import type { AreaHatchSettings, InclusionBoundary, MapAreaFeature } from '../types.ts';
+import { AreaHatchControls } from './AreaHatchControls.tsx';
+import { buildFloodSheetNotes, buildFloodZoneReport } from '../services/floodReport.ts';
 
 /**
- * FloodPanel (v26.05.17.16) \u2014 controls for the Flood Zone Agent.
+ * FloodPanel — controls for the Flood Zone Agent.
  *
  * Mirrors the Contour Agent's "inclusion or description" UX: the user either
  * draws an inclusion polygon on the canvas first, or types a free-text area
  * description (county, township, address, lat/lon, etc.) and we geocode it
- * via Nominatim. Either way, FEMA NFHL (layer 28) is queried for the bbox
- * and returned polygons are converted to SurveyLines tagged
+ * via Nominatim. Either way, FEMA NFHL is queried for the bbox and returned
+ * polygons are converted to SurveyLines tagged
  * layer='FEMA-FLOOD-<ZONE>', type='flood'.
  *
- * Designed to be rendered inside <FloatingPanel> as the pilot for moving
- * dialogs out of the docked-sidebar paradigm.
+ * The agent is deliberately inquisitive: before fetching it asks whether BFE
+ * lines should come along, and after fetching it offers zone callouts, a
+ * written flood-zone report, and a notes block for the plan sheet.
  */
 
+interface FloodFetchOptions {
+  /** Also fetch FEMA Base Flood Elevation linework (NFHL layer 16). */
+  includeBfe?: boolean;
+}
+
 interface FloodPanelProps {
-  onFetchFloodZones: (mode: 'inclusion' | 'description', descriptionText?: string) => void;
+  onFetchFloodZones: (
+    mode: 'inclusion' | 'description',
+    descriptionText?: string,
+    options?: FloodFetchOptions,
+  ) => void;
   isFetching: boolean;
   hasInclusionBoundary: boolean;
   inclusionSegmentCount: number;
@@ -30,9 +42,15 @@ interface FloodPanelProps {
   onSelectInclusionBoundary?: (id: string | null) => void;
   onManageInclusionBoundaries?: () => void;
   /** Current hatch settings from app Settings object. */
-  floodHatch?: Settings['floodHatch'];
-  /** Called when the user changes a hatch setting. */
-  onFloodHatchChange?: (patch: Partial<NonNullable<Settings['floodHatch']>>) => void;
+  floodHatch?: Partial<AreaHatchSettings>;
+  /** Called when the user changes a hatch setting; applies live to fetched areas. */
+  onFloodHatchChange?: (patch: Partial<AreaHatchSettings>) => void;
+  /** Closed FEMA polygons from the last fetch — powers the report + notes. */
+  floodAreas?: MapAreaFeature[];
+  /** Optional BFE linework summary from the last fetch. */
+  bfeSummary?: { count: number; datum?: string | null; error?: string } | null;
+  /** Append a notes block to the active paperspace sheet titleblock. */
+  onAddSheetNotes?: (notes: string) => void;
   /** Trigger a FIRMETTE image fetch for the current query area (requires a prior flood fetch). */
   onFetchFirmette?: () => void;
   /** Whether a firmette image is currently being fetched. */
@@ -44,16 +62,16 @@ interface FloodPanelProps {
 }
 
 const ZONE_BLURBS: Record<string, string> = {
-  A:     '1% annual chance \u2014 no BFE determined',
-  AE:    '1% annual chance \u2014 BFE determined',
-  AH:    '1% annual chance shallow flooding (1\u20133 ft)',
-  AO:    '1% annual chance sheet flow (1\u20133 ft)',
-  VE:    '1% annual chance \u2014 coastal high hazard (wave action)',
-  X:     'Minimal risk \u2014 outside 0.2% annual chance',
+  A:     '1% annual chance — no BFE determined',
+  AE:    '1% annual chance — BFE determined',
+  AH:    '1% annual chance shallow flooding (1–3 ft)',
+  AO:    '1% annual chance sheet flow (1–3 ft)',
+  VE:    '1% annual chance — coastal high hazard (wave action)',
+  X:     'Minimal risk — outside 0.2% annual chance',
   'X-SHADED': '0.2% annual chance (500-year)',
   D:     'Possible but undetermined hazard',
   OPEN:  'Open water',
-  AREA: 'Area not included',
+  AREA:  'Area not included',
 };
 
 export const FloodPanel: React.FC<FloodPanelProps> = ({
@@ -69,6 +87,9 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
   onManageInclusionBoundaries,
   floodHatch,
   onFloodHatchChange,
+  floodAreas = [],
+  bfeSummary,
+  onAddSheetNotes,
   onFetchFirmette,
   isFetchingFirmette,
   hasFirmette,
@@ -76,6 +97,10 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
 }) => {
   const [mode, setMode] = useState<'inclusion' | 'description'>('description');
   const [description, setDescription] = useState('');
+  /** Asked up-front so the agent can bring BFE lines in the same pass. */
+  const [includeBfe, setIncludeBfe] = useState(true);
+  const [showReport, setShowReport] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const canFetch =
     !isFetching &&
@@ -84,10 +109,54 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
 
   const handleFetch = () => {
     if (!canFetch) return;
-    onFetchFloodZones(mode, mode === 'description' ? description.trim() : undefined);
+    onFetchFloodZones(
+      mode,
+      mode === 'description' ? description.trim() : undefined,
+      { includeBfe },
+    );
   };
 
   const zoneEntries = lastResult ? Object.entries(lastResult.zoneCounts).sort((a, b) => b[1] - a[1]) : [];
+  const calloutsEnabled = floodHatch?.showLabels !== false;
+
+  const reportInput = useMemo(() => ({
+    areas: floodAreas,
+    zoneCounts: lastResult?.zoneCounts ?? {},
+    featureCount: lastResult?.featureCount ?? 0,
+    bfeCount: bfeSummary?.count ?? 0,
+    bfeDatum: bfeSummary?.datum ?? null,
+    bfeError: bfeSummary?.error ?? null,
+  }), [floodAreas, lastResult, bfeSummary]);
+
+  const reportText = useMemo(
+    () => buildFloodZoneReport(reportInput),
+    [reportInput],
+  );
+  const sheetNotes = useMemo(
+    () => buildFloodSheetNotes(reportInput),
+    [reportInput],
+  );
+
+  const copyReport = () => {
+    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
+    void navigator.clipboard.writeText(reportText).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => { /* clipboard blocked — download still works */ });
+  };
+
+  const downloadReport = () => {
+    if (typeof document === 'undefined') return;
+    const blob = new Blob([reportText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'fema-flood-zone-report.txt';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="space-y-4 text-sm">
@@ -175,13 +244,51 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
         </div>
       )}
 
-      {/* Fetch button + FIRMETTE row */}
+      {/* Inquisitive deliverables checklist — asked before the fetch */}
+      <div className="rounded-md border border-cyan-700/30 bg-cyan-950/20 p-3 space-y-2">
+        <div className="text-[10px] font-bold uppercase tracking-wide text-cyan-300">
+          Before I fetch — what do you want with it?
+        </div>
+        <label className="flex items-start gap-2 text-[11px] text-gray-300 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={includeBfe}
+            onChange={e => setIncludeBfe(e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5 accent-cyan-400"
+          />
+          <span>
+            <span className="font-semibold text-cyan-200">Base Flood Elevation (BFE) lines</span>
+            <span className="block text-[10px] text-gray-500">
+              Dashed elevation lines with BFE callouts on layer FEMA-BFE. Slower, but gives you the regulatory elevations.
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-[11px] text-gray-300 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={calloutsEnabled}
+            onChange={e => onFloodHatchChange?.({ showLabels: e.target.checked })}
+            className="mt-0.5 h-3.5 w-3.5 accent-cyan-400"
+          />
+          <span>
+            <span className="font-semibold text-cyan-200">FEMA zone callouts</span>
+            <span className="block text-[10px] text-gray-500">
+              Centroid labels such as “FEMA ZONE AE / BFE 12.5 FT”.
+            </span>
+          </span>
+        </label>
+        <p className="text-[10px] leading-relaxed text-gray-500">
+          After the fetch I can also write a flood-zone report or drop a notes block onto the paperspace plan sheet.
+        </p>
+      </div>
+
+      {/* Fetch button */}
       <button
         onClick={handleFetch}
         disabled={!canFetch}
         className="w-full py-2.5 px-4 font-semibold text-white bg-cyan-600 rounded-md hover:bg-cyan-700 transition-colors disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
       >
-        {isFetching ? 'Fetching FEMA NFHL…' : 'Fetch Flood Zones'}
+        {isFetching ? 'Fetching FEMA NFHL…' : includeBfe ? 'Fetch Flood Zones + BFEs' : 'Fetch Flood Zones'}
       </button>
 
       {/* FIRMETTE row — visible after at least one flood fetch */}
@@ -224,7 +331,7 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
                 onClick={onClearFloodLines}
                 className="text-xs text-gray-400 hover:text-red-400 underline"
               >
-                Clear flood lines
+                Clear flood areas
               </button>
             )}
           </div>
@@ -241,74 +348,105 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
               ))}
             </ul>
           )}
+          <div className="flex items-center justify-between text-[11px] border-t border-gray-700/60 pt-1.5">
+            <span className="text-gray-400">BFE lines</span>
+            <span className={bfeSummary?.count ? 'font-mono text-blue-300' : 'text-gray-500'}>
+              {bfeSummary?.count
+                ? `${bfeSummary.count}${bfeSummary.datum ? ` · ${bfeSummary.datum}` : ''}`
+                : 'none'}
+            </span>
+          </div>
+          {bfeSummary?.error && (
+            <p className="text-[10px] text-amber-300/90">
+              BFE layer unavailable for this area: {bfeSummary.error}
+            </p>
+          )}
         </div>
       )}
 
-      {/* Footer hint */}
-      {/* Hatch Fill Controls */}
-      <div className="border border-cyan-700/30 rounded-md bg-cyan-950/20 p-3 space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold text-cyan-300 uppercase tracking-wide">Hatch Fill</span>
-          <span className="text-[10px] text-gray-500">drawn inside flood polygons</span>
+      {/* Inquisitive follow-up — the agent asks what else to produce */}
+      {lastResult && (
+        <div className="rounded-md border border-gray-700/70 bg-gray-900/50 p-3 space-y-2">
+          <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400">
+            Want me to take it further?
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setShowReport(v => !v)}
+              className={`px-2 py-1.5 text-[11px] font-semibold rounded border transition ${
+                showReport
+                  ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
+                  : 'bg-gray-900 border-gray-700 text-gray-300 hover:border-gray-500'
+              }`}
+            >
+              {showReport ? 'Hide report' : 'Flood report'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onAddSheetNotes?.(sheetNotes)}
+              disabled={!onAddSheetNotes}
+              className="px-2 py-1.5 text-[11px] font-semibold rounded border border-gray-700 bg-gray-900 text-gray-300 hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Notes → plan sheet
+            </button>
+          </div>
+          {!bfeSummary?.count && (
+            <button
+              type="button"
+              onClick={() => {
+                setIncludeBfe(true);
+                if (mode === 'description' && description.trim().length > 2) {
+                  onFetchFloodZones('description', description.trim(), { includeBfe: true });
+                } else if (hasInclusionBoundary) {
+                  onFetchFloodZones('inclusion', undefined, { includeBfe: true });
+                }
+              }}
+              disabled={isFetching || (mode === 'description' ? description.trim().length <= 2 : !hasInclusionBoundary)}
+              className="w-full px-2 py-1.5 text-[11px] font-semibold rounded border border-blue-500/40 bg-blue-900/30 text-blue-300 hover:bg-blue-800/40 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Add BFE lines to this area
+            </button>
+          )}
+          <p className="text-[10px] text-gray-500 leading-relaxed">
+            I can also label the zones one by one, clip the floodplain to your boundary, or include FIRMETTE imagery.
+          </p>
         </div>
+      )}
 
-        {/* Style selector */}
-        <div>
-          <label className="block text-[10px] uppercase tracking-wide text-gray-400 mb-1">Pattern</label>
-          <div className="grid grid-cols-5 gap-1">
-            {(['none', 'lines', 'cross', 'chevron', 'dots'] as const).map(s => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => onFloodHatchChange?.({ style: s })}
-                className={`py-1 rounded text-[10px] font-semibold border transition-colors
-                  ${(floodHatch?.style ?? 'lines') === s
-                    ? 'bg-cyan-500/30 border-cyan-400 text-cyan-200'
-                    : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-cyan-600'}`}
-                title={s}
-              >
-                {s === 'none' ? '∅' : s === 'lines' ? '///' : s === 'cross' ? '×' : s === 'chevron' ? '~~~' : '···'}
+      {/* Report preview */}
+      {showReport && lastResult && (
+        <div className="rounded-md border border-cyan-500/25 bg-gray-950/70 p-2 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-cyan-300">Flood zone report</span>
+            <div className="flex gap-2">
+              <button type="button" onClick={copyReport} className="text-[10px] text-gray-400 hover:text-cyan-300 underline">
+                {copied ? 'Copied' : 'Copy'}
               </button>
-            ))}
+              <button type="button" onClick={downloadReport} className="text-[10px] text-gray-400 hover:text-cyan-300 underline">
+                Download
+              </button>
+            </div>
           </div>
+          <pre className="max-h-56 overflow-auto whitespace-pre-wrap font-mono text-[10px] leading-relaxed text-gray-300">
+            {reportText}
+          </pre>
         </div>
+      )}
 
-        {/* Scale slider */}
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-[10px] uppercase tracking-wide text-gray-400">Spacing</label>
-            <span className="text-[10px] font-mono text-cyan-300">{floodHatch?.scale ?? 50} ft</span>
-          </div>
-          <input
-            type="range" min={10} max={200} step={5}
-            value={floodHatch?.scale ?? 50}
-            onChange={e => onFloodHatchChange?.({ scale: Number(e.target.value) })}
-            className="w-full accent-cyan-400"
-          />
-          <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
-            <span>tight</span><span>loose</span>
-          </div>
-        </div>
-
-        {/* Opacity slider */}
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-[10px] uppercase tracking-wide text-gray-400">Opacity</label>
-            <span className="text-[10px] font-mono text-cyan-300">{Math.round((floodHatch?.opacity ?? 0.18) * 100)}%</span>
-          </div>
-          <input
-            type="range" min={3} max={60} step={1}
-            value={Math.round((floodHatch?.opacity ?? 0.18) * 100)}
-            onChange={e => onFloodHatchChange?.({ opacity: Number(e.target.value) / 100 })}
-            className="w-full accent-cyan-400"
-          />
-        </div>
-      </div>
+      {/* Live hatch + annotation controls — rebuilds editable CanvasHatch
+          entities and centroid labels for already-fetched flood areas. */}
+      <AreaHatchControls
+        kind="flood"
+        value={floodHatch}
+        areaCount={lastResult?.featureCount ?? 0}
+        onChange={onFloodHatchChange}
+      />
 
       <p className="text-xs text-gray-500 leading-relaxed border-t border-gray-700 pt-2">
         Each FEMA flood zone is added as its own CAD layer (<code className="text-cyan-300">FEMA-FLOOD-AE</code>,
-        <code className="text-cyan-300 ml-1">FEMA-FLOOD-X</code>, etc.) so you can style or hide each from the
-        CAD Manager and Data Visibility panels.
+        <code className="text-cyan-300 ml-1">FEMA-FLOOD-X</code>, etc.) and BFE linework lands on{' '}
+        <code className="text-blue-300">FEMA-BFE</code> so you can style or hide each independently.
       </p>
     </div>
   );

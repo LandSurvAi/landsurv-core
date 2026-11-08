@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AgentType } from '../types.ts';
-import { agentConfig, agentThemeColors } from '../constants/agents.ts';
+import type { DockMode } from './DockModeControl.tsx';
+import { agentConfig } from '../constants/agents.ts';
 import {
   ChevronDownIcon,
   ArrowDownOnSquareIcon,
@@ -10,11 +11,15 @@ import {
 export interface DockableToolItem {
   id: string;
   title: string;
+  /** Agent whose first visit should bring this tool's tab forward. */
+  ownerAgent?: AgentType;
   icon?: React.ReactNode;
   /** Rendered content when docked inside the station. */
   content: React.ReactNode;
   /** True when the tool is currently docked in the station; false when popped out on the canvas. */
   isDocked: boolean;
+  /** Tri-state placement for the same tool across chat, canvas, and shelf. */
+  dockMode?: DockMode;
   /** Callback to dock the tool into the station (or toggle dock). */
   onDock: () => void;
   /** Callback to pop out the tool onto the canvas. */
@@ -26,6 +31,12 @@ interface AgentToolDockProps {
   items: DockableToolItem[];
   headerControls?: React.ReactNode;
   toolsRowAccessories?: React.ReactNode;
+  /** Select this docked tool after a toolbar action. */
+  requestedTabId?: string | null;
+  /** Bump this token to re-apply the requested tab even when the id is unchanged. */
+  requestedTabToken?: number;
+  /** Hide the tab strip when the toolbar already switches between the docked tools. */
+  hideToolTabs?: boolean;
   onClose: () => void;
 }
 
@@ -34,19 +45,22 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
   items,
   headerControls,
   toolsRowAccessories,
+  requestedTabId,
+  requestedTabToken,
+  hideToolTabs = false,
   onClose,
 }) => {
   const effectiveAgent = activeAgent || AgentType.LSVZ_AGENT;
   const agentMeta = agentConfig[effectiveAgent];
-  const agentLabel =
-    effectiveAgent === AgentType.LSVZ_AGENT
-      ? 'LSAI Agent'
-      : agentMeta?.label || effectiveAgent;
   const AgentIcon = agentMeta?.icon || LsvzIcon;
-  const accentColor = agentThemeColors[effectiveAgent] || '#38bdf8';
+  // Keep the shelf visually consistent across agents instead of inheriting
+  // agent-specific accent colors.
+  const accentColor = '#22d3ee';
 
-  const dockedItems = items.filter(i => i.isDocked);
-  const floatingItems = items.filter(i => !i.isDocked);
+  const isInShelf = (item: DockableToolItem) =>
+    item.dockMode ? item.dockMode === 'toolshelf' : item.isDocked;
+  const dockedItems = items.filter(isInShelf);
+  const floatingItems = items.filter(item => !isInShelf(item));
 
   const [selectedTabId, setSelectedTabId] = useState<string | null>(
     dockedItems[0]?.id ?? null
@@ -62,91 +76,82 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
     }
   }, [dockedItems, selectedTabId]);
 
+  // When an agent's own tool lands in the shelf, bring that tab forward.
+  // Other docked tools stay in place as sibling tabs.
+  const agentToolTabId =
+    dockedItems.find(item => item.ownerAgent === activeAgent)?.id ?? null;
+  useEffect(() => {
+    if (agentToolTabId) setSelectedTabId(agentToolTabId);
+  }, [activeAgent, agentToolTabId]);
+
+  // A toolbar button (for example GIS) can request a specific docked panel.
+  // Apply it after the default agent-tool selection so the requested tab wins.
+  const requestedTabAvailable = Boolean(
+    requestedTabId && dockedItems.some(item => item.id === requestedTabId)
+  );
+  useEffect(() => {
+    if (requestedTabAvailable && requestedTabId) {
+      setSelectedTabId(requestedTabId);
+    }
+  }, [requestedTabId, requestedTabToken, requestedTabAvailable]);
+
   const activeDockedItem =
     dockedItems.find(i => i.id === selectedTabId) ?? dockedItems[0] ?? null;
 
   return (
     <div className="flex flex-col h-full bg-[#0a0f16] text-gray-200 light-theme:bg-gray-100 light-theme:text-gray-800">
-      {/* Tool Docking Station Header */}
+      {/* Tools-first header: no title strip, so the shelf starts with controls. */}
       <header className="flex-shrink-0 border-b border-white/[0.06] bg-[#080d14] light-theme:border-gray-300/40 light-theme:bg-white">
-        <div className="flex h-12 items-center justify-between gap-2 px-3">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <span
-              className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg border border-white/[0.1] bg-white/[0.03]"
-              style={{ borderColor: `${accentColor}55` }}
-            >
-              <AgentIcon className="h-4 w-4" style={{ color: accentColor }} />
-            </span>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="truncate text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-200 light-theme:text-gray-800">
-                  {agentLabel}
-                </span>
-              </div>
-              <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-slate-500">
-                <span>Tool Shelf</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-shrink-0 items-center gap-1">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-100"
-              title="Close the tool shelf"
-              aria-label="Close the tool shelf"
-            >
-              <ChevronDownIcon className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-
-        {(headerControls || toolsRowAccessories) && (
-          <div className="scrollbar-hide flex flex-wrap items-center gap-1.5 overflow-x-auto border-t border-white/[0.04] px-3 py-1.5">
+        <div className="flex items-center gap-1.5 px-2 py-1.5">
+          <div className="scrollbar-hide flex min-w-0 flex-1 flex-wrap items-center gap-1.5 overflow-x-auto">
             {toolsRowAccessories}
             {headerControls}
           </div>
-        )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-slate-100"
+            title="Collapse the tool shelf"
+            aria-label="Collapse the tool shelf"
+          >
+            <ChevronDownIcon className="h-4 w-4" />
+          </button>
+        </div>
 
         {/* Tool Tabs when multiple tools are registered for the active workspace */}
-        {items.length > 1 && (
-          <div className="flex items-center gap-1 overflow-x-auto border-t border-white/[0.05] bg-[#060a10] px-2.5 py-1.5">
+        {!hideToolTabs && items.length > 1 && (
+          <div className="scrollbar-hide flex items-center gap-1 overflow-x-auto border-t border-white/[0.05] bg-black/20 px-2 py-1.5">
             {items.map(item => {
-              const isSelected = activeDockedItem?.id === item.id && item.isDocked;
+              const inShelf = isInShelf(item);
+              const isSelected = activeDockedItem?.id === item.id && inShelf;
               return (
                 <button
                   key={item.id}
                   type="button"
                   onClick={() => {
-                    if (!item.isDocked) {
+                    if (!inShelf) {
                       item.onDock();
                     }
                     setSelectedTabId(item.id);
                   }}
-                  className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-semibold transition-all ${
+                  className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[10.5px] font-semibold transition-all ${
                     isSelected
-                      ? 'bg-white/[0.08] text-white'
-                      : item.isDocked
-                      ? 'border-white/[0.08] bg-white/[0.02] text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'
+                      ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-100 shadow-sm'
+                      : inShelf
+                      ? 'border-transparent bg-transparent text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'
                       : 'border-cyan-500/40 bg-cyan-950/40 text-cyan-300 hover:bg-cyan-900/50'
                   }`}
-                  style={
-                    isSelected
-                      ? { borderColor: accentColor, color: accentColor }
-                      : undefined
-                  }
                   title={
-                    item.isDocked
+                    inShelf
                       ? `Switch to ${item.title}`
-                      : `${item.title} is floating on canvas — click to dock here`
+                      : `${item.title} is ${item.dockMode === 'chat' ? 'docked in chat' : 'floating on canvas'} — click to move it to the Toolshelf`
                   }
                 >
                   {item.icon}
-                  <span className="truncate max-w-[130px]">{item.title}</span>
-                  {!item.isDocked && (
+                  <span className="truncate max-w-[110px]">{item.title}</span>
+                  {!inShelf && (
                     <span className="ml-0.5 rounded bg-cyan-500/20 px-1 py-0.2 font-mono text-[9px] text-cyan-200">
-                      Float
+                      {item.dockMode === 'chat' ? 'Chat' : 'Floating'}
                     </span>
                   )}
                 </button>
@@ -157,7 +162,7 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
       </header>
 
       {/* Docked Tool Workspace Area */}
-      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col pl-px">
         {activeDockedItem ? (
           <div className="flex-1 min-h-0 flex flex-col">
             {activeDockedItem.content}
@@ -176,7 +181,7 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
             <h3 className="mt-1 text-sm font-semibold text-slate-200">
               {floatingItems.length > 0
                 ? 'Tools Undocked (Floating on Canvas)'
-                : `No Docked Tools Open for ${agentLabel}`}
+                : 'No Docked Tools Open'}
             </h3>
             <p className="mt-1 max-w-[260px] text-xs leading-relaxed text-slate-500">
               {floatingItems.length > 0
@@ -196,7 +201,7 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
                     className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-950/50 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-900/60 transition-colors"
                   >
                     <ArrowDownOnSquareIcon className="w-4 h-4 text-cyan-400" />
-                    <span>Dock {item.title}</span>
+                    <span>Move {item.title} to Toolshelf</span>
                   </button>
                 ))}
               </div>

@@ -3,6 +3,7 @@ import React, { useState, useCallback } from 'react';
 import { CourthouseIcon } from './icons';
 import { UploadShell, UploadPanel, UploadDropzone, UploadPrimaryButton, UploadGhostButton, UploadActionBar, UploadModeSwitch, UploadFileList } from './UploadShell.tsx';
 import { processPdfForMultimodal, processRasterImageForMultimodal, isRasterImageFile, type OcrProgress } from '../utils/pdfUtils';
+import { combineDeedFiles } from '../utils/deedSessionFiles.ts';
 import PdfPageSelector from './PdfPageSelector';
 import { exampleDeedContent } from '../assets/example.deed';
 import { SessionFile } from '../types';
@@ -231,6 +232,8 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
 
       if (processedFiles.length > 1 && onDeedBatchSubmitted) {
         onDeedBatchSubmitted(processedFiles);
+      } else if (processedFiles.length > 1) {
+        onDeedSubmitted(combineDeedFiles(processedFiles));
       } else {
         onDeedSubmitted(processedFiles[0]);
       }

@@ -37,6 +37,25 @@ export type A2UISurfaceIntent =
       suggestedQuestions: string[];
     }
   | {
+      surface: 'text-editor';
+      mode: 'edit' | 'new';
+      /** Prefer the loaded deed/legal description, when the request names it. */
+      fileHint?: 'deed';
+      replyText: string;
+      suggestedQuestions: string[];
+    }
+  | {
+      surface: 'point-list';
+      view: 'text' | 'spreadsheet';
+      replyText: string;
+      suggestedQuestions: string[];
+    }
+  | {
+      surface: 'spreadsheet';
+      replyText: string;
+      suggestedQuestions: string[];
+    }
+  | {
       surface: 'workspace-tool';
       tool: A2UIWorkspaceToolId;
       agent: AgentType;
@@ -45,6 +64,22 @@ export type A2UISurfaceIntent =
     }
   | {
       surface: 'cad-standards-editor';
+      replyText: string;
+      suggestedQuestions: string[];
+    }
+  | {
+      surface: 'gps-rover';
+      mode: 'overview' | 'stakeout' | 'collect' | 'benchmark';
+      replyText: string;
+      suggestedQuestions: string[];
+    }
+  | {
+      surface: 'point-entry';
+      pointNumber?: string;
+      /** Bare add-point requests ask how; explicit wording arms a path. */
+      placement: 'quick-thought' | 'canvas' | 'form';
+      /** Clickable choices when the request did not name an entry method. */
+      questionOptions?: string[];
       replyText: string;
       suggestedQuestions: string[];
     }
@@ -59,7 +94,7 @@ const REQUEST_VERB_RE =
   /\b(?:show|open|inspect|browse|list|view|display|review|pull\s+up|what(?:'s| is)|which|any)\b/i;
 
 const ACTION_OR_HOWTO_VERB_RE =
-  /\b(?:show|open|inspect|browse|list|view|display|review|pull\s+up|bring\s+up|launch|edit|adjust|change|configure|set(?:\s+up)?|turn\s+(?:on|off)|enable|disable|toggle|switch|update|manage|hatch|bhatch|fill|shade|cross[- ]?hatch|how\s+(?:do\s+i|to|can\s+i)|where\s+(?:do\s+i|can\s+i|is|are))\b/i;
+  /\b(?:add|create|enter|place|drop|show|open|inspect|browse|list|view|display|review|pull\s+up|bring\s+up|launch|edit|adjust|change|configure|set(?:\s+up)?|turn\s+(?:on|off)|enable|disable|toggle|switch|update|manage|import|export|hatch|bhatch|fill|shade|cross[- ]?hatch|how\s+(?:do\s+i|to|can\s+i)|where\s+(?:do\s+i|can\s+i|is|are))\b/i;
 
 const MANIFEST_RE = /\b(?:manifests?|skills?|schemas?|capabilit(?:y|ies))\b/i;
 const CACCP_RE = /\bcacp\b/i;
@@ -199,7 +234,7 @@ const SETTINGS_SECTION_RULES: readonly SettingsIntentRule[] = [
     section: 'a2ui',
     pattern: /\b(?:a2ui\s+settings?|default\s+surface\s+size|auto[- ]open\s+cacp\s+review)\b/i,
     replyText:
-      'Here are the live <strong>A2UI &amp; Agent Surface</strong> settings in chat. Configure auto-open CACP review and the default surface size below.',
+      'Here are the live <strong>Agent Surface</strong> settings in chat. Configure auto-open CACP review and the default surface size below.',
     suggestedQuestions: [
       'Show CACP manifests',
       'Review blocked CACP traffic',
@@ -274,6 +309,18 @@ const WORKSPACE_TOOL_RULES: readonly WorkspaceToolRule[] = [
       'Open Point Labeling settings',
       'Open Symbol Manager',
       'Open Drafting Style Library',
+    ],
+  },
+  {
+    tool: 'stationing-controls',
+    agent: AgentType.CENTERLINE_STATIONING,
+    pattern: /\b(?:stationing|baseline|centerline)\s+(?:controls?|settings?)\b|\b(?:auto\s+station\s+points?|station\s+point\s+interval|station\s+labels?)\b/i,
+    replyText:
+      'Here are the live <strong>Stationing Controls</strong>. Auto station points follow the canvas P/L switch; adjust the interval and centerline annotations here.',
+    suggestedQuestions: [
+      'Open Annotate Manager',
+      'Open Stationing & CL tools',
+      'Turn off auto station points',
     ],
   },
   {
@@ -397,6 +444,18 @@ const WORKSPACE_TOOL_RULES: readonly WorkspaceToolRule[] = [
     ],
   },
   {
+    tool: 'tin-surfaces',
+    agent: AgentType.CONTOURING_AGENT,
+    pattern: /\b(?:tin\s+surfaces?|surface\s+(?:manager|studio)|(?:create|build|make)\s+(?:a\s+)?(?:tin|surface)\s+(?:from|using)\s+contours?|import\s+(?:a\s+)?(?:\.?tin|landxml|surface)|export\s+(?:a\s+)?(?:tin|surface|landxml)|contour\s+surface)\b/i,
+    replyText:
+      'Here is the live <strong>TIN Surfaces</strong> surface in chat. Create a surface from the latest contour generation, import a <code>.tin</code> or LandXML file, or export a surface — every action is also exposed over CACP.',
+    suggestedQuestions: [
+      'Create TIN from the latest contours',
+      'Import a .TIN or LandXML surface',
+      'Open Steep Slope Report',
+    ],
+  },
+  {
     tool: 'steep-slope-report',
     agent: AgentType.STEEP_SLOPE_AGENT,
     pattern: /\b(?:steep\s+slope\s+reports?(?:\s+panel)?|slope\s+analysis\s+report)\b/i,
@@ -434,8 +493,28 @@ const WORKSPACE_TOOL_RULES: readonly WorkspaceToolRule[] = [
   },
 ];
 
+const POINT_ENTRY_RE =
+  /\b(?:(?:add|create|enter|place|drop)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:survey\s+|project\s+)?point(?![a-z])(?:\s+(?:dialog|manually|by\s+coordinates|with\s+coordinates|entry))?|(?:open|show|launch)\s+(?:the\s+)?(?:add\s+point|point\s+(?:entry|dialog|surface)))\b/i;
+
+// Coordinates, Plus Codes, a dialog/form, or a manual entry request means the
+// user wants to type the point. Explicit canvas wording arms the picker.
+const POINT_ENTRY_FORM_RE =
+  /\b(?:coordinates?|plus\s*code|google\s*plus|dialog|form|entry|manually|manual|by\s+hand|type\s+(?:it|the\s+point|in))\b/i;
+const POINT_ENTRY_CANVAS_RE =
+  /\b(?:canvas|click(?:ing)?|pick(?:ing)?|point\s+and\s+click|on\s+the\s+map)\b/i;
+const POINT_ENTRY_CHOICES = [
+  'Place a point on the canvas',
+  'Enter a point by coordinates',
+  'Enter a point by Google Plus Code',
+] as const;
+
 const CAD_SPREADSHEET_EDITOR_RE =
   /\b(?:(?:edit|open|launch|modify|change|update)\s+(?:the\s+|my\s+)?(?:cad\s+)?(?:standards?\s+)?(?:spreadsheet|standards?\s+editor|full\s+editor)|(?:standards?\s+)?spreadsheet\s+editor)\b/i;
+
+const POINT_LIST_RE =
+  /\b(?:point\s+(?:list|table|grid|spreadsheet)|(?:all|my|the|project|survey|current|loaded)\s+points\b|(?:list|show|view|display|open)\s+(?:all\s+|my\s+|the\s+|project\s+)?points\b)/i;
+const GENERIC_SPREADSHEET_RE =
+  /\b(?:open|show|start|create|new|blank)\b[\s\S]{0,24}\bspreadsheet\b/i;
 
 /**
  * Map a chat message to a surface intent. Returns null when the message should
@@ -486,9 +565,107 @@ export function resolveA2UISurfaceIntent(query: string): A2UISurfaceIntent | nul
     };
   }
 
+  // 3. GPS Rover surface — live fix, stakeout, collect, and benchmark.
+  // Project location is owned by the LSAI Agent's cluster toolset instead.
+  const GPS_ROVER_RE =
+    /\b(?:gps\s+(?:rover|panel|surface|status|dashboard|tools?)|rover\s+(?:panel|surface|status|dashboard)|open\s+(?:the\s+)?gps(?:\s+rover)?)\b/i;
+
+  if (GPS_ROVER_RE.test(trimmed) && (hasActionOrHowToVerb || hasVerb)) {
+    const mode = /\bstake\s?out\b/i.test(trimmed)
+      ? 'stakeout'
+      : /\bcollect|topo(?:graphic)?\s+shot\b/i.test(trimmed)
+        ? 'collect'
+        : /\bbenchmark|calibration|check\s+(?:a\s+)?(?:known\s+)?point\b/i.test(trimmed)
+          ? 'benchmark'
+          : 'overview';
+    return {
+      surface: 'gps-rover',
+      mode,
+      replyText:
+        'Here is the live <strong>GPS Rover</strong> surface. It shows the current fix, stakeout guidance, point collection, and benchmark checks — everything is also exposed over CACP.',
+      suggestedQuestions: [
+        'Open GPS Rover stakeout',
+        'Collect a point at the current fix',
+        'Show the CACP manifests for GPS Rover',
+      ],
+    };
+  }
+
   if (!hasActionOrHowToVerb) return null;
 
-  // 3. CAD Standards Spreadsheet Editor direct intent
+  // 3a. Point database views: the default is the in-chat text editor; explicit
+  // sheet/grid/table wording opens the same data directly in the spreadsheet.
+  if (
+    POINT_LIST_RE.test(trimmed) &&
+    !/\b(?:settings?|label(?:ing|s)?|numbering|symbols?|entry|upload|manager)\b/i.test(trimmed)
+  ) {
+    const view = /\b(?:spreadsheet|sheet|grid|table)\b/i.test(trimmed)
+      ? 'spreadsheet'
+      : 'text';
+    return {
+      surface: 'point-list',
+      view,
+      replyText:
+        view === 'spreadsheet'
+          ? 'Here is the live <strong>point list</strong> in the A2UI spreadsheet. Search the grid, copy it as TSV, or download CSV; switch back to Text any time.'
+          : 'Here is the live <strong>point list</strong> in the A2UI text editor. Switch to <strong>Sheet</strong> for a searchable grid with CSV/TSV export.',
+      suggestedQuestions:
+        view === 'spreadsheet'
+          ? ['Open the point list as text', 'Open Point Tools', 'Show only working points']
+          : ['Open point list as spreadsheet', 'Open Point Tools', 'Show only working points'],
+    };
+  }
+
+  // 3b. Generic blank spreadsheet for tables and quick calculations. Named CAD
+  // standards spreadsheets stay on their richer editor below.
+  if (
+    GENERIC_SPREADSHEET_RE.test(trimmed) &&
+    !/\b(?:cad|standards?)\b/i.test(trimmed)
+  ) {
+    return {
+      surface: 'spreadsheet',
+      replyText:
+        'Here is a lightweight <strong>A2UI spreadsheet</strong>. Edit the scratch grid, search it, or copy/download the data. It is also available to agents through the <code>open_spreadsheet</code> CACP action.',
+      suggestedQuestions: [
+        'Open point list as spreadsheet',
+        'Show CACP manifests',
+        'Open the Text Editor',
+      ],
+    };
+  }
+
+  // 3c. First-class A2UI Text Editor. Show document text, deed transcripts,
+  // OCR output, notes, and markdown in the same surface every agent uses.
+  const TEXT_EDITOR_SUBJECT_RE =
+    /(?:\b(?:text\s+editor|document\s+text|deed\s+text|cursive|transcript|transcription|ocr(?:\s+text)?|markdown|text\s+of|contents?\s+of|file\s+(?:text|content))\b|\.md\b)/i;
+  const READ_DOCUMENT_RE =
+    /\b(?:read|transcribe|extract|show|view|display|open)\b[\s\S]{0,40}\b(?:deed|document|description|note|transcript)\b(?!\s+(?:writer|manager|panel))/i;
+  const NEW_TEXT_RE =
+    /\b(?:new\s+(?:(?:markdown|md|txt|text)\s+)?(?:text|note|document)|create\s+(?:a\s+)?(?:new\s+)?(?:(?:markdown|md|txt|text)\s+)?(?:text|note|document))\b/i;
+  if (TEXT_EDITOR_SUBJECT_RE.test(trimmed) || READ_DOCUMENT_RE.test(trimmed) || NEW_TEXT_RE.test(trimmed)) {
+    const mode = NEW_TEXT_RE.test(trimmed) ? 'new' : 'edit';
+    const fileHint = /\b(?:deed|legal\s+description|cursive|parcel|title)\b/i.test(trimmed)
+      ? 'deed'
+      : undefined;
+    return {
+      surface: 'text-editor',
+      mode,
+      fileHint,
+      replyText:
+        mode === 'new'
+          ? 'Here is the live <strong>A2UI Text Editor</strong>. Start a plain <code>.txt</code> or Markdown <code>.md</code> note; it stays in the project file list and is available to every agent.'
+          : fileHint === 'deed'
+            ? 'Here is the live <strong>A2UI Text Editor</strong> with the deed text. Review or correct the transcript, then save it back to the project file list.'
+            : 'Here is the live <strong>A2UI Text Editor</strong>. Open a project text file, edit it, or start a new <code>.txt</code> / <code>.md</code> note without leaving the conversation.',
+      suggestedQuestions: [
+        'Show the deed text',
+        'Create a new Markdown note',
+        'Open the full Text Editor',
+      ],
+    };
+  }
+
+  // 4. CAD Standards Spreadsheet Editor direct intent
   if (CAD_SPREADSHEET_EDITOR_RE.test(trimmed)) {
     return {
       surface: 'cad-standards-editor',
@@ -502,7 +679,47 @@ export function resolveA2UISurfaceIntent(query: string): A2UISurfaceIntent | nul
     };
   }
 
-  // 4. Granular section-scoped Settings surfaces
+  // 4. First-class A2UI point-entry dialog. A bare "add a point" is ambiguous,
+  // so offer the entry methods as Quick Thought choices. Explicit coordinate,
+  // Plus Code, dialog, or canvas wording takes the matching path immediately.
+  if (POINT_ENTRY_RE.test(trimmed)) {
+    const pointNumberMatch = trimmed.match(/\bpoint\s*#?\s*(\d+)\b/i);
+    const wantsForm = POINT_ENTRY_FORM_RE.test(trimmed);
+    const wantsCanvas = !wantsForm && POINT_ENTRY_CANVAS_RE.test(trimmed);
+    if (!wantsForm && !wantsCanvas) {
+      return {
+        surface: 'point-entry',
+        pointNumber: pointNumberMatch?.[1],
+        placement: 'quick-thought',
+        questionOptions: [...POINT_ENTRY_CHOICES],
+        replyText:
+          'How would you like to add the point? Pick it on the canvas, type coordinates, or use a full Google Plus Code. PointAgent CACP assigns the number.',
+        suggestedQuestions: [...POINT_ENTRY_CHOICES],
+      };
+    }
+    return {
+      surface: 'point-entry',
+      pointNumber: pointNumberMatch?.[1],
+      placement: wantsForm ? 'form' : 'canvas',
+      replyText: wantsForm
+        ? 'Here is the live <strong>point-entry</strong> surface. Enter coordinates, a full Google Plus Code, elevation, and a description — PointAgent CACP keeps the number unique.'
+        : 'Click on the canvas to place the point. I’ve armed the add-point tool with the next CACP number; press Esc when finished.',
+      suggestedQuestions: wantsForm
+        ? [
+            'Place a point on the canvas',
+            'Enter a point by Google Plus Code',
+            'Use the next CACP point number',
+            'Open Point Editor',
+          ]
+        : [
+            'Enter a point by coordinates',
+            'Enter a point by Google Plus Code',
+            'Open the Add Point dialog',
+          ],
+    };
+  }
+
+  // 5. Granular section-scoped Settings surfaces
   for (const rule of SETTINGS_SECTION_RULES) {
     if (rule.pattern.test(trimmed)) {
       return {

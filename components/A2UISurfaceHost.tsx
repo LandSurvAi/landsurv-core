@@ -97,7 +97,7 @@ export function openSurfaceConsole({
     key: 'surface-console',
     definitionId: 'surface-console',
     title: 'Surface console',
-    subtitle: 'Search and launch every A2UI surface in this context',
+    subtitle: 'Search and launch every surface in this context',
     category: 'system',
     accent: 'cyan',
     size: defaultSize,
@@ -151,7 +151,7 @@ interface A2UISurfaceHostProps {
 export const A2UISurfaceHost: React.FC<A2UISurfaceHostProps> = ({
   audience,
   launcher = false,
-  launcherLabel = 'A2UI',
+  launcherLabel = 'Surfaces',
   defaultSize = 'standard',
   onLaunchDefinition,
   renderSurface,
@@ -291,7 +291,7 @@ export const A2UISurfaceHost: React.FC<A2UISurfaceHostProps> = ({
                 <div className="min-w-0">
                   <h2 className="truncate text-[12px] font-semibold text-slate-100">{activeSurface.title}</h2>
                   <p className="mt-0.5 truncate text-[9.5px] text-slate-500">
-                    {activeSurface.subtitle ?? 'A2UI surface'}
+                    {activeSurface.subtitle ?? 'Surface'}
                   </p>
                 </div>
               </div>
@@ -342,7 +342,7 @@ export const A2UISurfaceHost: React.FC<A2UISurfaceHostProps> = ({
                 <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-white/[0.07] bg-black/20 px-3 py-1.5">
                   <span className="inline-flex items-center gap-1.5 text-[8.5px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                     <span className={`h-1 w-1 rounded-full ${styles.dot}`} />
-                    A2UI surface
+                    Surface
                   </span>
                   <span className="truncate font-mono text-[8.5px] text-slate-600">
                     {activeSurface.source ?? 'workspace'}
@@ -358,7 +358,7 @@ export const A2UISurfaceHost: React.FC<A2UISurfaceHostProps> = ({
             type="button"
             onClick={openConsole}
             data-testid="a2ui-launcher"
-            title="Open A2UI surface console (Ctrl+Shift+A)"
+            title="Open surface console (Ctrl+Shift+A)"
             className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-cyan-400/35 bg-[#071019]/95 px-3 py-1.5 text-[10.5px] font-semibold text-cyan-200 shadow-lg shadow-cyan-950/40 backdrop-blur transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/10 hover:text-white"
           >
             <Sparkles className="h-3.5 w-3.5" />
@@ -386,6 +386,9 @@ function getDefinitionGlyph(definitionId: string): string | undefined {
     settings: '⚙',
     help: '?',
     'workspace-cad-manager': '⚙',
+    'workspace-text-editor': 'T',
+    'workspace-spreadsheet': '▦',
+    'point-entry': 'P',
     'explore-cad-standards': '≡',
     'explore-zoning': 'Z',
   };

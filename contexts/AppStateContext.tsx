@@ -124,6 +124,7 @@ export const AppStateProvider: React.FC<AppStateProviderProps> = ({ children, av
     uncertaintySensitivity: 'medium',
     pointAttributeScaling: 'screen', // Point attributes default to locked screen-relative size so scaling thousands of points doesn't slow the system
     showPointSymbols: false,
+    pointEfficiencyMode: false,
     debugPreflightEstimate: false,
     debugGimbalHud: false,
     enableGeoAiDrafting: (typeof window !== 'undefined' && localStorage.getItem('landsurv_enable_geo_ai_drafting') === 'true') || false,

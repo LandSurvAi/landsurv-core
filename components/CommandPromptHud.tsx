@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { CommandPromptSpec } from '../utils/canvasCommands';
 
 interface CommandPromptHudProps {
@@ -9,7 +9,8 @@ interface CommandPromptHudProps {
   y: number;
   onChange: (key: string, value: string) => void;
   onActivate: (index: number) => void;
-  onSubmit: () => void;
+  /** Returns an error message to keep the prompt open and show inline. */
+  onSubmit: (values?: Record<string, string>) => string | void;
   onCancel: () => void;
 }
 
@@ -54,11 +55,13 @@ export const CommandPromptHud: React.FC<CommandPromptHudProps> = ({
   onCancel,
 }) => {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Give the widget first crack at the keyboard when a prompt opens. Clicking
   // the command line still hands input back there for typed values.
   useEffect(() => {
-    const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
+    setError(null);
+    const timer = window.setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
     return () => window.clearTimeout(timer);
   }, [prompt.id]);
 
@@ -74,14 +77,28 @@ export const CommandPromptHud: React.FC<CommandPromptHudProps> = ({
   const activate = (index: number, focus: boolean) => {
     const next = ((index % fields.length) + fields.length) % fields.length;
     onActivate(next);
-    if (focus) requestAnimationFrame(() => inputRef.current?.focus());
+    if (focus) requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
+  };
+
+  /**
+   * Submit the value currently in the input, not just the last value React has
+   * committed to the parent. This keeps Enter/Apply reliable when the field is
+   * changed and submitted in the same interaction, and it lets a rejected
+   * fillet keep the caret in the radius box instead of silently losing focus.
+   */
+  const submit = () => {
+    const liveValue = inputRef.current?.value;
+    const submitted = liveValue === undefined ? values : { ...values, [field.key]: liveValue };
+    const message = onSubmit(submitted);
+    setError(typeof message === 'string' && message.trim() ? message.trim() : null);
+    requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (safeIndex >= fields.length - 1) onSubmit();
+      if (safeIndex >= fields.length - 1) submit();
       else activate(safeIndex + 1, true);
       return;
     }
@@ -137,7 +154,10 @@ export const CommandPromptHud: React.FC<CommandPromptHudProps> = ({
               <input
                 ref={inputRef}
                 value={values[field.key] ?? ''}
-                onChange={e => onChange(field.key, e.target.value)}
+                onChange={e => {
+                  setError(null);
+                  onChange(field.key, e.target.value);
+                }}
                 onFocus={() => onActivate(safeIndex)}
                 onKeyDown={handleKeyDown}
                 inputMode={field.kind === 'number' ? 'decimal' : 'text'}
@@ -152,13 +172,20 @@ export const CommandPromptHud: React.FC<CommandPromptHudProps> = ({
             <button
               type="button"
               aria-label="Apply input"
-              onClick={onSubmit}
+              onMouseDown={e => e.preventDefault()}
+              onClick={submit}
               className="flex h-8 shrink-0 items-center gap-1 rounded border border-slate-600/80 bg-slate-700/35 px-2.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-slate-200 transition-colors hover:border-slate-500 hover:bg-slate-700/65 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-600/70"
             >
               <span className="text-[11px] leading-none text-slate-400">↵</span>
               Apply
             </button>
           </div>
+
+          {error && (
+            <div role="alert" className="border-t border-rose-500/20 bg-rose-500/[0.06] px-2.5 py-1 font-sans text-[9px] leading-snug text-rose-300">
+              {error}
+            </div>
+          )}
 
           <div className="flex items-center justify-between border-t border-white/[0.05] px-2.5 py-1 text-[8px] uppercase tracking-[0.12em] text-slate-500">
             <span>Enter apply</span>
@@ -222,7 +249,10 @@ export const CommandPromptHud: React.FC<CommandPromptHudProps> = ({
           <input
             ref={inputRef}
             value={values[field.key] ?? ''}
-            onChange={e => onChange(field.key, e.target.value)}
+            onChange={e => {
+              setError(null);
+              onChange(field.key, e.target.value);
+            }}
             onFocus={() => onActivate(safeIndex)}
             onKeyDown={handleKeyDown}
             inputMode={field.kind === 'number' ? 'decimal' : 'text'}
@@ -265,12 +295,19 @@ export const CommandPromptHud: React.FC<CommandPromptHudProps> = ({
         <button
           type="button"
           aria-label="Apply input"
-          onClick={onSubmit}
+          onMouseDown={e => e.preventDefault()}
+          onClick={submit}
           className="ml-auto flex h-7 shrink-0 items-center gap-1 rounded-md border border-slate-600/80 bg-slate-700/35 px-2 text-[8px] font-semibold uppercase tracking-[0.1em] text-slate-200 transition-colors hover:border-slate-500 hover:bg-slate-700/65 hover:text-white"
         >
           <span className="text-[10px] leading-none text-slate-400">↵</span> apply
         </button>
       </div>
+
+      {error && (
+        <div role="alert" className="mt-1 rounded border border-rose-500/25 bg-rose-500/[0.07] px-2 py-1 font-sans text-[9px] leading-snug text-rose-300">
+          {error}
+        </div>
+      )}
 
       <div className="mt-1 flex items-center justify-center gap-1.5 text-[8px] uppercase tracking-[0.13em] text-slate-500">
         <span>scroll</span>

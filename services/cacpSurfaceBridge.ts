@@ -196,7 +196,7 @@ export async function retryCacpReviewItem(item: A2UICacpReviewItem) {
       : {};
 
   return interAgentComm.sendMessage(item.from as AgentType, to, item.command, data, {
-    context: 'Re-dispatched from the A2UI CACP review surface',
+    context: 'Re-dispatched from the CACP review surface',
     traceId: item.traceId,
   });
 }

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { SoilsIcon } from './icons.tsx';
-import type { InclusionBoundary, SoilMapUnit } from '../types.ts';
+import type { AreaHatchSettings, InclusionBoundary, SoilMapUnit } from '../types.ts';
+import { AreaHatchControls } from './AreaHatchControls.tsx';
 import type { SoilsFetchResult } from '../services/soilsService.ts';
 
 /**
@@ -30,6 +31,9 @@ interface SoilsPanelProps {
   inclusionBoundaries?: InclusionBoundary[];
   activeInclusionBoundaryId?: string | null;
   onSelectInclusionBoundary?: (id: string | null) => void;
+  /** Current soil hatch settings; applies live to already-fetched areas. */
+  soilHatch?: Partial<AreaHatchSettings>;
+  onSoilHatchChange?: (patch: Partial<AreaHatchSettings>) => void;
 }
 
 const FARMLAND_LABELS: Record<string, string> = {
@@ -60,6 +64,8 @@ export const SoilsPanel: React.FC<SoilsPanelProps> = ({
   inclusionBoundaries = [],
   activeInclusionBoundaryId = null,
   onSelectInclusionBoundary,
+  soilHatch,
+  onSoilHatchChange,
 }) => {
   const [mode, setMode] = useState<'inclusion' | 'description'>('description');
   const [description, setDescription] = useState('');
@@ -262,6 +268,15 @@ export const SoilsPanel: React.FC<SoilsPanelProps> = ({
           )}
         </div>
       )}
+
+      {/* Live hatch + annotation controls — rebuilds editable CanvasHatch
+          entities and centroid labels for already-fetched soil areas. */}
+      <AreaHatchControls
+        kind="soils"
+        value={soilHatch}
+        areaCount={lastResult?.featureCount ?? 0}
+        onChange={onSoilHatchChange}
+      />
 
       {/* Footer */}
       <p className="text-xs text-gray-500 leading-relaxed border-t border-gray-700 pt-2">

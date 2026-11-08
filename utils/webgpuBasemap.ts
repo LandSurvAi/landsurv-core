@@ -6,8 +6,10 @@
  */
 
 import { FLOATS_PER_INSTANCE, LINE_SHADER, MAX_INSTANCES, MAX_PATTERNS, GpuLineBatch } from './webgpuLines.ts';
+import { FLOATS_PER_POINT, MAX_POINTS, POINT_SHADER, GpuPointBatch } from './webgpuPoints.ts';
 
 export { GpuLineBatch, parseCssColor } from './webgpuLines.ts';
+export { GpuPointBatch } from './webgpuPoints.ts';
 
 export type BasemapSource = HTMLImageElement | ImageBitmap;
 
@@ -40,7 +42,8 @@ export type GpuPowerPreference = 'high-performance' | 'low-power' | 'default';
 /** Hardware acceleration is on unless the user explicitly turned it off. */
 export function isWebGpuEnabled(): boolean {
   try {
-    return localStorage.getItem(WEBGPU_ENABLED_KEY) !== 'off';
+    const stored = localStorage.getItem(WEBGPU_ENABLED_KEY);
+    return stored !== 'off' && stored !== 'false';
   } catch {
     return true;
   }
@@ -52,6 +55,62 @@ export function getGpuPowerPreference(): GpuPowerPreference {
     if (stored === 'high-performance' || stored === 'low-power' || stored === 'default') return stored;
   } catch { /* storage unavailable */ }
   return 'high-performance';
+}
+
+export interface WebGpuProbeResult {
+  browserSupported: boolean;
+  adapterAvailable: boolean;
+  adapterLabel?: string;
+  error?: string;
+}
+
+/**
+ * Verify the full adapter/device handshake instead of treating the presence of
+ * `navigator.gpu` as proof that hardware acceleration is working. The probe
+ * device is destroyed immediately and does not affect the live renderer.
+ */
+export async function probeWebGpuAdapter(): Promise<WebGpuProbeResult> {
+  if (typeof navigator === 'undefined' || !(navigator as any).gpu) {
+    return {
+      browserSupported: false,
+      adapterAvailable: false,
+      error: 'navigator.gpu is not available',
+    };
+  }
+
+  try {
+    const adapter = await (navigator as any).gpu.requestAdapter({
+      powerPreference: getGpuPowerPreference(),
+    });
+    if (!adapter) {
+      return {
+        browserSupported: true,
+        adapterAvailable: false,
+        error: 'No compatible GPU adapter was returned',
+      };
+    }
+
+    const info = (adapter as any).info;
+    const adapterLabel = info
+      ? [info.description, info.device, info.vendor, info.architecture]
+          .filter(Boolean)
+          .join(' — ')
+      : '';
+
+    const device = await adapter.requestDevice();
+    device.destroy?.();
+    return {
+      browserSupported: true,
+      adapterAvailable: true,
+      adapterLabel: adapterLabel || undefined,
+    };
+  } catch (err) {
+    return {
+      browserSupported: true,
+      adapterAvailable: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 const SHADER = /* wgsl */ `
@@ -118,19 +177,26 @@ export class WebGpuBasemap {
   private lineBindGroup: any;
   private lineBuffer: any = null;
   private lineBufferCapacity = 0;
+  private pointPipeline: any;
+  private pointGlobals: any;
+  private pointBindGroup: any;
+  private pointBuffer: any = null;
+  private pointBufferCapacity = 0;
   private patternScratch = new Float32Array(MAX_PATTERNS * 12);
   readonly lineBatch = new GpuLineBatch();
+  readonly pointBatch = new GpuPointBatch();
   private textures = new Map<BasemapSource, TexEntry>();
   private slots: Slot[] = [];
   private frame = 0;
   private _ready = true;
 
-  private constructor(device: any, context: any, pipeline: any, sampler: any, linePipeline: any) {
+  private constructor(device: any, context: any, pipeline: any, sampler: any, linePipeline: any, pointPipeline: any) {
     this.device = device;
     this.context = context;
     this.pipeline = pipeline;
     this.sampler = sampler;
     this.linePipeline = linePipeline;
+    this.pointPipeline = pointPipeline;
     this.lineGlobals = device.createBuffer({ size: 16, usage: 0x40 | 0x08 });
     this.linePatterns = device.createBuffer({ size: MAX_PATTERNS * 12 * 4, usage: 0x80 | 0x08 });
     this.lineBindGroup = device.createBindGroup({
@@ -139,6 +205,11 @@ export class WebGpuBasemap {
         { binding: 0, resource: { buffer: this.lineGlobals } },
         { binding: 1, resource: { buffer: this.linePatterns } },
       ],
+    });
+    this.pointGlobals = device.createBuffer({ size: 16, usage: 0x40 | 0x08 });
+    this.pointBindGroup = device.createBindGroup({
+      layout: pointPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.pointGlobals } }],
     });
   }
 
@@ -165,7 +236,8 @@ export class WebGpuBasemap {
 
       const module = device.createShaderModule({ code: SHADER });
       const lineModule = device.createShaderModule({ code: LINE_SHADER });
-      for (const [name, m] of [['basemap', module], ['lines', lineModule]] as const) {
+      const pointModule = device.createShaderModule({ code: POINT_SHADER });
+      for (const [name, m] of [['basemap', module], ['lines', lineModule], ['points', pointModule]] as const) {
         const info = await m.getCompilationInfo();
         const errors = info.messages.filter((msg: any) => msg.type === 'error');
         if (errors.length) {
@@ -219,7 +291,35 @@ export class WebGpuBasemap {
         primitive: { topology: 'triangle-list' },
       });
 
-      const renderer = new WebGpuBasemap(device, context, pipeline, sampler, linePipeline);
+      const pointPipeline = await device.createRenderPipelineAsync({
+        layout: 'auto',
+        vertex: {
+          module: pointModule,
+          entryPoint: 'vs',
+          buffers: [{
+            arrayStride: FLOATS_PER_POINT * 4,
+            stepMode: 'instance',
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x4' },
+              { shaderLocation: 1, offset: 16, format: 'float32x4' },
+            ],
+          }],
+        },
+        fragment: {
+          module: pointModule,
+          entryPoint: 'fs',
+          targets: [{
+            format,
+            blend: {
+              color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            },
+          }],
+        },
+        primitive: { topology: 'triangle-list' },
+      });
+
+      const renderer = new WebGpuBasemap(device, context, pipeline, sampler, linePipeline, pointPipeline);
       device.addEventListener('uncapturederror', (ev: any) => {
         console.error('[WebGPU] Validation error, falling back to Canvas2D:', ev.error?.message ?? ev.error);
         renderer._ready = false;
@@ -229,7 +329,13 @@ export class WebGpuBasemap {
         renderer._ready = false;
         onLost();
       });
-      console.info('[WebGPU] Basemap + linework renderer active');
+      const adapterInfo = (adapter as any).info;
+      const adapterLabel = adapterInfo
+        ? [adapterInfo.description, adapterInfo.device, adapterInfo.vendor]
+            .filter(Boolean)
+            .join(' — ')
+        : '';
+      console.info(`[WebGPU] Basemap + linework + point renderer active${adapterLabel ? ` (${adapterLabel})` : ''}`);
       return renderer;
     } catch (err) {
       console.warn('[WebGPU] Basemap renderer unavailable, using Canvas2D:', err);
@@ -301,7 +407,7 @@ export class WebGpuBasemap {
     return slot;
   }
 
-  render(layers: BasemapLayer[], view: BasemapView, lines?: GpuLineBatch | null): void {
+  render(layers: BasemapLayer[], view: BasemapView, lines?: GpuLineBatch | null, points?: GpuPointBatch | null): void {
     if (!this._ready) return;
     this.frame++;
     try {
@@ -358,6 +464,28 @@ export class WebGpuBasemap {
         pass.setVertexBuffer(0, this.lineBuffer);
         pass.draw(6, lines.count);
       }
+
+      if (points && points.count > 0) {
+        const needed = points.count * FLOATS_PER_POINT * 4;
+        if (!this.pointBuffer || this.pointBufferCapacity < needed) {
+          this.pointBuffer?.destroy();
+          this.pointBufferCapacity = Math.min(
+            Math.max(needed, 1 << 16) * 2,
+            MAX_POINTS * FLOATS_PER_POINT * 4,
+          );
+          this.pointBuffer = this.device.createBuffer({ size: this.pointBufferCapacity, usage: 0x20 | 0x08 });
+        }
+        this.device.queue.writeBuffer(this.pointBuffer, 0, points.data.buffer, 0, needed);
+        this.device.queue.writeBuffer(
+          this.pointGlobals,
+          0,
+          new Float32Array([view.width, view.height, 0, 0]),
+        );
+        pass.setPipeline(this.pointPipeline);
+        pass.setBindGroup(0, this.pointBindGroup);
+        pass.setVertexBuffer(0, this.pointBuffer);
+        pass.draw(6, points.count);
+      }
       pass.end();
       this.device.queue.submit([encoder.finish()]);
     } catch (err) {
@@ -375,6 +503,8 @@ export class WebGpuBasemap {
     this.lineBuffer?.destroy();
     this.lineGlobals?.destroy();
     this.linePatterns?.destroy();
+    this.pointBuffer?.destroy();
+    this.pointGlobals?.destroy();
     try {
       this.context.unconfigure();
     } catch {

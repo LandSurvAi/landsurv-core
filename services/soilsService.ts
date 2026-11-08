@@ -1,4 +1,5 @@
-import { SurveyLine, SoilMapUnit } from '../types.ts';
+import { SurveyLine, SoilMapUnit, MapAreaFeature } from '../types.ts';
+import { buildAreaLoops, areaCentroid, areaSquareUnits, wrapAreaLabelText } from '../utils/areaGeometry.ts';
 
 /**
  * soilsService (v26.05.26.4) — USDA NRCS SSURGO soil survey fetcher.
@@ -22,6 +23,8 @@ export const SSURGO_MAP_UNITS_URL = SDA_URL;
 
 export interface SoilsFetchResult {
   lines: SurveyLine[];
+  /** Closed polygons for editable canvas hatches and centroid annotations. */
+  areas: MapAreaFeature[];
   mapUnits: SoilMapUnit[];
   featureCount: number;
   zoneCounts: Record<string, number>;   // musym → polygon count
@@ -187,10 +190,12 @@ INNER JOIN SDA_Get_Mupolygonkey_from_intersection_with_WktWgs84('${bboxWkt}') AS
   }
 
   const lines: SurveyLine[] = [];
+  const areas: MapAreaFeature[] = [];
   const zoneCounts: Record<string, number> = {};
   const mapUnitMap = new Map<string, SoilMapUnit>();
 
-  for (const row of rows) {
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex];
     const [mukeyRaw, musymRaw, munameRaw, farmlndclRaw, muacresRaw, wktRaw] = row as [
       string | number, string, string, string | null, string | number | null, string,
     ];
@@ -217,7 +222,31 @@ INNER JOIN SDA_Get_Mupolygonkey_from_intersection_with_WktWgs84('${bboxWkt}') AS
     const rings = parseWktPolygon(wktRaw || '');
     const layerName = `SOILS-${musym}`;
 
-    for (const ring of rings) {
+    // One MapAreaFeature per SSURGO row so each polygon gets its own hatch
+    // and centroid annotation while sharing the map-unit CAD layer.
+    const loops = buildAreaLoops(rings, ptConvert);
+    const centroid = areaCentroid(loops);
+    if (loops.length > 0 && centroid) {
+      const labelLines = [`SOIL ${musym}`, ...wrapAreaLabelText(muname, 34, 2)];
+      areas.push({
+        id: `ssurgo-${rowIndex}-${mukey || musym}`.replace(/[^A-Za-z0-9_-]+/g, '-'),
+        source: 'ssurgo-soils',
+        layer: layerName,
+        loops,
+        centroid,
+        areaSqFt: areaSquareUnits(loops),
+        labelLines,
+        attributes: {
+          mukey,
+          musym,
+          muname,
+          farmlndcl: farmlndcl ?? null,
+        },
+      });
+    }
+
+    rings.forEach((ring, ri) => {
+      const polylineId = `soils-${rowIndex}-${ri}`;
       for (let i = 0; i < ring.length - 1; i++) {
         let [x1, y1] = ring[i];
         let [x2, y2] = ring[i + 1];
@@ -231,14 +260,16 @@ INNER JOIN SDA_Get_Mupolygonkey_from_intersection_with_WktWgs84('${bboxWkt}') AS
           toPt:   { x: x2, y: y2, z: 0 },
           type: 'soils',
           layer: layerName,
+          polylineId,
           bearing: muname || musym,
         });
       }
-    }
+    });
   }
 
   return {
     lines,
+    areas,
     mapUnits: Array.from(mapUnitMap.values()),
     featureCount: rows.length,
     zoneCounts,

@@ -171,38 +171,48 @@ export function sampleElevationsForPoints(
 }
 
 /**
+ * A contour source accepted by {@link buildTinFromContours}. Supports both the
+ * legacy segment form (fromPt/toPt) used by older callers and the IsoPath form
+ * (`vertices` + `elevation`) produced by contour generation.
+ */
+export interface TinContourSource {
+  elevation?: number;
+  fromPt?: { x: number; y: number; z?: number };
+  toPt?: { x: number; y: number; z?: number };
+  vertices?: Array<{ x: number; y: number }>;
+}
+
+/**
  * Build a TIN from contour lines by extracting elevation-tagged vertices.
  * Each vertex in each contour line becomes a sample point at that contour's elevation.
  * Returns null if fewer than 3 usable points are extracted.
  */
 export function buildTinFromContours(
-  contourLines: Array<{ fromPt?: { x: number; y: number; z?: number }; toPt?: { x: number; y: number; z?: number }; elevation?: number }>,
+  contourLines: TinContourSource[],
   opts: { name?: string; color?: string } = {}
 ): TinSurface | null {
-  const points = new Set<string>();
   const bw: BWPoint[] = [];
   const pointMap = new Map<string, BWPoint>();
 
+  const addVertex = (x: number, y: number, z: number) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
+    const key = `${x},${y}`;
+    if (pointMap.has(key)) return;
+    const pt: BWPoint = { x, y, z, idx: bw.length };
+    bw.push(pt);
+    pointMap.set(key, pt);
+  };
+
   for (const line of contourLines) {
     const elev = line.elevation ?? line.fromPt?.z ?? line.toPt?.z ?? 0;
-    
-    if (line.fromPt) {
-      const key = `${line.fromPt.x},${line.fromPt.y}`;
-      if (!pointMap.has(key)) {
-        const pt: BWPoint = { x: line.fromPt.x, y: line.fromPt.y, z: elev, idx: bw.length };
-        bw.push(pt);
-        pointMap.set(key, pt);
-      }
+
+    if (line.vertices && line.vertices.length > 0) {
+      for (const v of line.vertices) addVertex(v.x, v.y, elev);
+      continue;
     }
-    
-    if (line.toPt) {
-      const key = `${line.toPt.x},${line.toPt.y}`;
-      if (!pointMap.has(key)) {
-        const pt: BWPoint = { x: line.toPt.x, y: line.toPt.y, z: elev, idx: bw.length };
-        bw.push(pt);
-        pointMap.set(key, pt);
-      }
-    }
+
+    if (line.fromPt) addVertex(line.fromPt.x, line.fromPt.y, elev);
+    if (line.toPt) addVertex(line.toPt.x, line.toPt.y, elev);
   }
 
   if (bw.length < 3) return null;
@@ -225,4 +235,85 @@ export function buildTinFromContours(
     sourcePointIds: bw.map((_, i) => `contour-${i}`),
     color: opts.color || '#06b6d4',
   };
+}
+
+/** Escape text for XML attributes and element content. */
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Serialize a TIN to the native text `.tin` format understood by
+ * `TinImportService` (VERTICES / TRIANGLES sections, one-based faces).
+ */
+export function tinSurfaceToNativeTin(tin: TinSurface): string {
+  const lines: string[] = [
+    '# LandSurv.ai TIN surface',
+    `# name: ${tin.name}`,
+    `# created: ${tin.createdAt}`,
+    `# vertices: ${tin.vertices.length}`,
+    `# triangles: ${tin.triangles.length}`,
+    'VERTICES',
+  ];
+  for (const v of tin.vertices) {
+    lines.push(`${v.easting} ${v.northing} ${v.elevation}`);
+  }
+  lines.push('TRIANGLES');
+  for (const [a, b, c] of tin.triangles) {
+    lines.push(`${a + 1} ${b + 1} ${c + 1}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Serialize a TIN to LandXML 1.2 (surfaces / PNT + FCE), matching the importer
+ * used by `TinImportService` and Civil 3D.
+ */
+export function tinSurfaceToLandXml(tin: TinSurface): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  const name = escapeXml(tin.name || 'TIN Surface');
+
+  const points = tin.vertices
+    .map((v, i) => `          <P id="${i + 1}">${v.northing} ${v.easting} ${v.elevation}</P>`)
+    .join('\n');
+  const faces = tin.triangles
+    .map(([a, b, c]) => `          <F>${a + 1} ${b + 1} ${c + 1}</F>`)
+    .join('\n');
+
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    `<LandXML version="1.2" date="${date}" time="${time}" xmlns="http://www.landxml.org/schema/LandXML-1.2">`,
+    '  <Units>',
+    '    <Imperial linearUnit="USSurveyFoot" areaUnit="SquareFoot" volumeUnit="CubicFoot" temperatureUnit="Fahrenheit" pressureUnit="InchesOfMercury" directionUnit="DecimalDegrees"/>',
+    '  </Units>',
+    '  <Surfaces>',
+    `    <Surface name="${name}" surfType="TIN">`,
+    `      <Definition surfType="TIN">`,
+    '        <Pnts>',
+    points,
+    '        </Pnts>',
+    '        <Faces>',
+    faces,
+    '        </Faces>',
+    '      </Definition>',
+    '    </Surface>',
+    '  </Surfaces>',
+    '</LandXML>',
+  ].join('\n');
+}
+
+/** File-system-safe base name for an exported surface. */
+export function tinSurfaceFileBaseName(tin: TinSurface): string {
+  const base = (tin.name || 'tin-surface')
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[^a-z0-9._-]+/gi, '_')
+    .replace(/^_+|_+$/g, '');
+  return base || 'tin-surface';
 }

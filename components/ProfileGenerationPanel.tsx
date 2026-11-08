@@ -16,6 +16,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { SurveyPoint, Centerline } from '../types.ts';
 import { ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon } from './icons.tsx';
+import { DockModeControl, type DockMode } from './DockModeControl.tsx';
 
 // ── Props ──────────────────────────────────────────────────────────────────────
 
@@ -47,6 +48,8 @@ interface ProfileGenerationPanelProps {
   onClose: () => void;
   isDocked?: boolean;
   onToggleDock?: () => void;
+  dockMode?: DockMode;
+  onDockModeChange?: (mode: DockMode) => void;
 }
 
 // ── Panel ──────────────────────────────────────────────────────────────────────
@@ -63,9 +66,13 @@ export const ProfileGenerationPanel: React.FC<ProfileGenerationPanelProps> = ({
   onViewProfile,
   onSaveProfile,
   onClose,
-  isDocked = false,
+  isDocked: isDockedProp = false,
   onToggleDock,
+  dockMode,
+  onDockModeChange,
 }) => {
+  const mode: DockMode = dockMode ?? (isDockedProp ? 'toolshelf' : 'floating');
+  const isDocked = mode !== 'floating';
   // Position + drag
   const panelRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
@@ -152,15 +159,19 @@ export const ProfileGenerationPanel: React.FC<ProfileGenerationPanelProps> = ({
           <path strokeLinecap="round" strokeLinejoin="round" d="M3 20l4-8 4 4 4-6 4 10" />
         </svg>
         <span className="text-xs font-bold text-sky-300 uppercase tracking-wide flex-1">Profile Generator</span>
-        {onToggleDock && (
-          <button
-            type="button"
-            onClick={onToggleDock}
-            className="p-1 rounded hover:bg-gray-800 text-sky-300 hover:text-white transition-colors"
-            title={isDocked ? 'Pop out Profile Generator to canvas' : 'Dock Profile Generator into Tool Station'}
-          >
-            {isDocked ? <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" /> : <ArrowDownOnSquareIcon className="w-3.5 h-3.5" />}
-          </button>
+        {(onDockModeChange || onToggleDock) && (
+          onDockModeChange ? (
+            <DockModeControl mode={mode} onChange={onDockModeChange} />
+          ) : (
+            <button
+              type="button"
+              onClick={onToggleDock}
+              className="p-1 rounded hover:bg-gray-800 text-sky-300 hover:text-white transition-colors"
+              title={isDocked ? 'Pop out Profile Generator to canvas' : 'Dock Profile Generator into Tool Station'}
+            >
+              {isDocked ? <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" /> : <ArrowDownOnSquareIcon className="w-3.5 h-3.5" />}
+            </button>
+          )
         )}
         <button
           type="button"

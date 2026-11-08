@@ -6,19 +6,24 @@ import {
   type A2UISurfaceSize,
   type NtripSettings,
   type PointLabelingSettings,
+  type ProjectionSetting,
   type Settings,
 } from '../types.ts';
 import { DEFAULT_SETTINGS } from '../utils/sessionDefaults.ts';
 import { LINEAR_UNIT_OPTIONS, type LinearUnit } from '../utils/linearUnits.ts';
 import { projectionStates, projectionZones } from '../utils/projections.ts';
+import { detectProjectionFromBrowser } from '../utils/autoProjection.ts';
+import GlobalCrsPicker from './GlobalCrsPicker.tsx';
 import {
   WebGpuBasemap,
   getGpuPowerPreference,
   isWebGpuEnabled,
+  probeWebGpuAdapter,
   WEBGPU_ENABLED_KEY,
   WEBGPU_POWER_KEY,
   WEBGPU_PREF_EVENT,
   type GpuPowerPreference,
+  type WebGpuProbeResult,
 } from '../utils/webgpuBasemap.ts';
 
 interface A2UISettingsSurfaceProps {
@@ -31,6 +36,12 @@ interface A2UISettingsSurfaceProps {
   autoHighThinkingModel?: string;
   autoHighThinkingOptions?: string[];
   onAutoHighThinkingModelChange?: (model: string) => void;
+  /** Apply the CRS recommended by the georeferenced point clusters. */
+  onApplyClusterProjection?: () => Promise<{ projection: ProjectionSetting; label: string } | null>;
+  /** WGS84 [west, south, east, north] of the project boundary, for CRS suggestions. */
+  projectBboxWgs84?: [number, number, number, number] | null;
+  /** Latest GPS fix, for CRS suggestions. */
+  gpsPosition?: { latitude: number; longitude: number } | null;
 }
 
 const SECTION_META: Record<
@@ -98,8 +109,8 @@ const SECTION_META: Record<
     subtitle: 'Connect a Notion integration token to export fieldbook notes and points.',
   },
   a2ui: {
-    label: 'A2UI',
-    title: 'A2UI & Agent Surfaces',
+    label: 'Surfaces',
+    title: 'Agent Surfaces',
     subtitle: 'Configure CACP traffic auto-review and default surface window size.',
   },
 };
@@ -133,6 +144,9 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
   autoHighThinkingModel,
   autoHighThinkingOptions = ['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4-argon', 'claude-sonnet-5', 'claude-opus-5'],
   onAutoHighThinkingModelChange,
+  onApplyClusterProjection,
+  projectBboxWgs84,
+  gpsPosition,
 }) => {
   const settingsCtx = useContext(SettingsContext);
   const [fallbackSettings, setFallbackSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -143,13 +157,76 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
   const [webgpuEnabled, setWebgpuEnabled] = useState<boolean>(() => isWebGpuEnabled());
   const [gpuPower, setGpuPower] = useState<GpuPowerPreference>(() => getGpuPowerPreference());
   const webgpuSupported = typeof WebGpuBasemap?.isSupported === 'function' ? WebGpuBasemap.isSupported() : false;
+  const [gpuProbe, setGpuProbe] = useState<WebGpuProbeResult | null>(null);
+  const gpuReady = webgpuEnabled && gpuProbe?.adapterAvailable === true;
+  const gpuProbeFailed = webgpuEnabled && gpuProbe !== null && !gpuProbe.adapterAvailable;
 
   useEffect(() => {
     setSection(initialSection);
   }, [initialSection]);
 
+  useEffect(() => {
+    if (!webgpuEnabled || !webgpuSupported) {
+      setGpuProbe(null);
+      return;
+    }
+    let cancelled = false;
+    setGpuProbe(null);
+    probeWebGpuAdapter().then(result => {
+      if (!cancelled) setGpuProbe(result);
+    });
+    return () => { cancelled = true; };
+  }, [webgpuEnabled, webgpuSupported, gpuPower]);
+
   const updateSetting = <K extends keyof Settings>(key: K, value: Settings[K]) => {
     setSettings(prev => ({ ...prev, [key]: value }));
+  };
+
+  const [isDetectingProjection, setIsDetectingProjection] = useState(false);
+  const [isApplyingClusterProjection, setIsApplyingClusterProjection] = useState(false);
+  const [projectionError, setProjectionError] = useState<string | null>(null);
+  const [projectionStatus, setProjectionStatus] = useState<string | null>(null);
+
+  const handleDetectProjectionFromGps = async () => {
+    setIsDetectingProjection(true);
+    setProjectionError(null);
+    setProjectionStatus(null);
+    try {
+      const detected = await detectProjectionFromBrowser();
+      updateSetting('projection', detected.projection);
+      setProjectionStatus(
+        `Applied ${detected.projection.zoneName ?? 'the local CRS'} (EPSG:${detected.projection.epsg ?? '—'}) from your GPS location.`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setProjectionError(
+        /denied|permission/i.test(message)
+          ? 'Location permission denied. Allow location access or search the EPSG registry below.'
+          : `Could not detect a projection: ${message}`,
+      );
+    } finally {
+      setIsDetectingProjection(false);
+    }
+  };
+
+  const handleApplyClusterProjection = async () => {
+    if (!onApplyClusterProjection) return;
+    setIsApplyingClusterProjection(true);
+    setProjectionError(null);
+    setProjectionStatus(null);
+    try {
+      const applied = await onApplyClusterProjection();
+      if (!applied) {
+        setProjectionError('No georeferenced point cluster is available yet.');
+        return;
+      }
+      updateSetting('projection', applied.projection);
+      setProjectionStatus(`Applied ${applied.label} from the point cluster.`);
+    } catch (error) {
+      setProjectionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsApplyingClusterProjection(false);
+    }
   };
 
   const handleWebgpuEnabledChange = (enabled: boolean) => {
@@ -339,7 +416,7 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
                 Enable WebGPU Hardware Acceleration
               </span>
               <span className="mt-0.5 block text-[10px] leading-snug text-slate-400">
-                Renders basemap imagery and anti-aliased linework on the GPU. Turn off to force the Canvas2D fallback.
+                Renders basemap imagery, anti-aliased linework, and compressed point clouds on the GPU. Turn off to force the Canvas2D fallback.
               </span>
             </span>
           </label>
@@ -363,15 +440,19 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
           <div className="flex items-center gap-2 rounded-md border border-white/[0.07] bg-black/20 px-2.5 py-1.5 text-[10px] text-slate-400">
             <span
               className={`h-2 w-2 shrink-0 rounded-full ${
-                !webgpuSupported ? 'bg-rose-500' : webgpuEnabled ? 'bg-emerald-400' : 'bg-amber-400'
+                !webgpuSupported || gpuProbeFailed ? 'bg-rose-500' : gpuReady ? 'bg-emerald-400' : 'bg-amber-400'
               }`}
             />
             <span>
               {!webgpuSupported
                 ? 'Browser WebGPU unavailable — using Canvas2D fallback.'
-                : webgpuEnabled
-                  ? 'WebGPU hardware acceleration is active.'
-                  : 'WebGPU paused — using Canvas2D fallback.'}
+                : !webgpuEnabled
+                  ? 'WebGPU paused — using Canvas2D fallback.'
+                  : !gpuProbe
+                    ? 'Checking for a compatible GPU adapter…'
+                    : !gpuProbe.adapterAvailable
+                      ? `WebGPU enabled but the adapter did not initialize${gpuProbe.error ? ` (${gpuProbe.error})` : ''}. Using Canvas2D.`
+                      : `WebGPU adapter ready${gpuProbe.adapterLabel ? ` — ${gpuProbe.adapterLabel}` : ''}.`}
             </span>
           </div>
         </div>
@@ -455,11 +536,57 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
               Enable Point Symbols on Canvas (custom, CAD Manager, and built-in symbols)
             </span>
           </label>
+
+          <label className="flex cursor-pointer items-center gap-2 sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={settings.pointEfficiencyMode === true}
+              onChange={e => updateSetting('pointEfficiencyMode', e.target.checked)}
+              aria-label="Point Efficiency Mode"
+              className="h-4 w-4 accent-cyan-400"
+            />
+            <span className="text-[11px] font-medium text-slate-200">
+              Point Efficiency Mode — compress crowded points into dots and skip labels until zoomed in
+            </span>
+          </label>
         </div>
       )}
 
       {section === 'crs' && (
         <div data-testid="a2ui-settings-section-crs" className="grid grid-cols-1 gap-3 border-t border-white/[0.07] p-3.5 sm:grid-cols-2">
+          <div className="flex flex-wrap items-start justify-between gap-2 sm:col-span-2">
+            <p className="max-w-[52ch] text-[10.5px] leading-relaxed text-slate-400">
+              Bind a State Plane zone, search the worldwide EPSG registry, or derive the CRS from the point clusters or your GPS fix.
+            </p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {onApplyClusterProjection && (
+                <button
+                  type="button"
+                  onClick={() => void handleApplyClusterProjection()}
+                  disabled={isApplyingClusterProjection}
+                  className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isApplyingClusterProjection ? 'Resolving…' : 'Use point cluster'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => void handleDetectProjectionFromGps()}
+                disabled={isDetectingProjection}
+                className="rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isDetectingProjection ? 'Locating…' : 'Use my GPS location'}
+              </button>
+            </div>
+          </div>
+          {(projectionError || projectionStatus) && (
+            <p
+              role={projectionError ? 'alert' : 'status'}
+              className={`text-[10.5px] sm:col-span-2 ${projectionError ? 'text-rose-300' : 'text-emerald-300'}`}
+            >
+              {projectionError ?? projectionStatus}
+            </p>
+          )}
           <div>
             <label htmlFor="a2ui-crs-state" className="mb-1 block text-[9.5px] font-semibold uppercase tracking-wider text-slate-400">
               State
@@ -522,6 +649,21 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
                 ? `${settings.projection.zoneName || 'Custom'} (EPSG:${settings.projection.epsg})`
                 : 'None selected'}
             </strong>
+          </div>
+
+          <div className="border-t border-white/[0.07] pt-3 sm:col-span-2">
+            <GlobalCrsPicker
+              currentEpsg={settings.projection?.epsg}
+              bbox={projectBboxWgs84 ?? null}
+              gpsPosition={gpsPosition ?? null}
+              onSelect={projection => {
+                updateSetting('projection', projection);
+                setProjectionError(null);
+                setProjectionStatus(
+                  `Applied ${projection.zoneName ?? 'custom CRS'} (EPSG:${projection.epsg ?? '—'}).`,
+                );
+              }}
+            />
           </div>
         </div>
       )}

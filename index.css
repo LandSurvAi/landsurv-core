@@ -9,6 +9,200 @@
 }
 
 @layer components {
+  /* Dense agent-panel typography: tighter metrics, optical sizing, and
+     tabular figures keep bearings, distances, and parcel IDs aligned. */
+  .panel-dense {
+    font-optical-sizing: auto;
+    font-feature-settings: "cv02" 1, "cv03" 1, "cv04" 1, "ss01" 1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.006em;
+    text-rendering: optimizeLegibility;
+  }
+
+  .panel-dense .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* White-edge agent surfaces: a quiet gray/white gradient frame that reads
+     like the command bar, with the colored chip left as the only accent. */
+  .panel-surface {
+    position: relative;
+    isolation: isolate;
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.038), rgba(255, 255, 255, 0.006));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.07),
+      0 10px 26px rgba(0, 0, 0, 0.18);
+  }
+
+  .panel-surface::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.08) 42%, rgba(255, 255, 255, 0.18));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  .light-theme .panel-surface {
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(248, 250, 252, 0.62));
+    box-shadow: inset 0 1px 0 #fff, 0 8px 20px rgba(15, 23, 42, 0.08);
+  }
+
+  .light-theme .panel-surface::after {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.26), rgba(15, 23, 42, 0.05));
+  }
+
+  /* Primary agent actions: bold analogous chord anchored on the existing
+     blue and red; violet is the blue + red midpoint. */
+  .action-pill {
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.24),
+      0 3px 10px rgba(0, 0, 0, 0.26);
+    transition: border-color 0.16s ease, filter 0.16s ease, transform 0.16s ease;
+  }
+
+  .action-pill:hover {
+    border-color: rgba(255, 255, 255, 0.78);
+    filter: brightness(1.06);
+  }
+
+  .action-pill:active {
+    transform: scale(0.97);
+  }
+
+  .action-pill:disabled {
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: none;
+    filter: none;
+  }
+
+  /* Black-hole controls: a recessed near-black core, thin white event horizon,
+     and a faint accent ring. Hover lifts the ring rather than flooding the fill. */
+  .black-hole-btn {
+    --bh-accent: #e2e8f0;
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background-color: #05080d;
+    background-image:
+      radial-gradient(120% 165% at 50% -38%, color-mix(in srgb, var(--bh-accent) 24%, transparent), transparent 60%),
+      radial-gradient(100% 120% at 50% 120%, rgba(0, 0, 0, 0.72), transparent 68%),
+      linear-gradient(180deg, #0b111a, #05080d);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.10),
+      inset 0 0 0 3px rgba(0, 0, 0, 0.36),
+      0 0 0 1px rgba(255, 255, 255, 0.035),
+      0 8px 18px -12px rgba(0, 0, 0, 0.9);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+    animation: black-hole-word-pulse 3.4s ease-in-out infinite;
+    transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease, filter 180ms ease;
+  }
+
+  /* The negative delays start every sibling on a different phase, so adjacent
+     controls never breathe together. */
+  .black-hole-btn:nth-child(3n + 1) { animation-delay: -0.2s; }
+  .black-hole-btn:nth-child(3n + 2) { animation-delay: -1.35s; }
+  .black-hole-btn:nth-child(3n) { animation-delay: -2.5s; }
+
+  @keyframes black-hole-word-pulse {
+    0%, 100% {
+      color: #ffffff;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+    }
+    50% {
+      color: color-mix(in srgb, var(--bh-accent) 66%, white 34%);
+      text-shadow:
+        0 0 12px color-mix(in srgb, var(--bh-accent) 42%, transparent),
+        0 1px 2px rgba(0, 0, 0, 0.55);
+    }
+  }
+
+  .black-hole-btn::before {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border: 1px solid color-mix(in srgb, var(--bh-accent) 18%, transparent);
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0.85;
+  }
+
+  .black-hole-btn:hover {
+    border-color: color-mix(in srgb, var(--bh-accent) 68%, white 32%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      inset 0 0 0 3px rgba(0, 0, 0, 0.28),
+      0 0 0 1px color-mix(in srgb, var(--bh-accent) 24%, transparent),
+      0 0 20px -8px color-mix(in srgb, var(--bh-accent) 46%, transparent),
+      0 8px 18px -12px rgba(0, 0, 0, 0.9);
+    filter: brightness(1.07);
+  }
+
+  .black-hole-btn:active {
+    transform: translateY(1px) scale(0.985);
+  }
+
+  .black-hole-btn:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--bh-accent) 75%, white 25%);
+    outline-offset: 2px;
+  }
+
+  .black-hole-btn:disabled {
+    opacity: 0.42;
+    filter: saturate(0.55);
+    animation: none;
+  }
+
+  .black-hole-btn--neutral { --bh-accent: #e2e8f0; }
+  .black-hole-btn--blue { --bh-accent: #60a5fa; }
+  .black-hole-btn--violet { --bh-accent: #a78bfa; }
+  .black-hole-btn--red { --bh-accent: #f87171; }
+  .black-hole-btn--cyan { --bh-accent: #67e8f9; }
+  .black-hole-btn--emerald { --bh-accent: #6ee7b7; }
+  .black-hole-btn--indigo { --bh-accent: #a5b4fc; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .black-hole-btn {
+      animation: none;
+      transition: none;
+    }
+    .black-hole-btn:hover {
+      transform: none;
+    }
+  }
+
+  .confidence-marquee-window {
+    mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  }
+
+  .confidence-marquee {
+    animation: confidence-marquee 22s linear infinite;
+    will-change: transform;
+  }
+
+  .confidence-marquee:hover {
+    animation-play-state: paused;
+  }
+
+  @keyframes confidence-marquee {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .confidence-marquee {
+      animation: none;
+    }
+  }
+
   /* Agent-card quick actions: quiet chrome, glyph carries the card accent. */
   .agent-card .agent-quick-chip svg {
     color: var(--color-start, currentColor);
@@ -145,6 +339,23 @@
     animation: fade-in-down 0.35s ease-out both;
   }
 
+  /* Header layer strip: unrolls from the toolbar rail instead of popping up
+     as a separate dialog. */
+  @keyframes layer-picker-unroll {
+    0%   { opacity: 0; transform: scaleY(0.9) translateY(-6px); }
+    100% { opacity: 1; transform: scaleY(1) translateY(0); }
+  }
+  .layer-picker-unroll {
+    transform-origin: top left;
+    animation: layer-picker-unroll 0.16s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .layer-picker-unroll {
+      animation: none;
+    }
+  }
+
   /* Small raised-tab bump shared by the command drawer handle and the agent
      chat socket. The lift is applied to an inner span so it never fights the
      host's own positioning transforms. */
@@ -268,6 +479,16 @@
     animation: thinking-red-text 1.15s ease-in-out infinite;
   }
 
+  /* Quick Thought: drift through overflowing copy instead of leaving it clipped. */
+  @keyframes quick-thought-drift {
+    from { transform: translateY(0); }
+    to   { transform: translateY(calc(-100% + 52px)); }
+  }
+  .quick-thought-drift {
+    animation: quick-thought-drift 18s ease-in-out 600ms infinite alternate;
+    will-change: transform;
+  }
+
   @keyframes command-status-pulse {
     0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.36), 0 0 5px rgba(52, 211, 153, 0.55); opacity: 0.9; }
     50%      { box-shadow: 0 0 0 3px rgba(52, 211, 153, 0), 0 0 7px rgba(52, 211, 153, 0.8); opacity: 1; }
@@ -289,7 +510,8 @@
     .command-thinking-sweep,
     .command-status-dot,
     .command-caret,
-    .animate-thinking-red-text {
+    .animate-thinking-red-text,
+    .quick-thought-drift {
       animation: none;
     }
     .command-rail-sheen,

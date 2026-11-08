@@ -24,7 +24,7 @@
  * PARCEL_DATA_NATIONWIDE.md for the licensed options.
  */
 
-import type { ParcelLabelTextData, SurveyLine } from '../types.ts';
+import type { CountyParcelIssue, ParcelLabelTextData, SurveyLine } from '../types.ts';
 import { queryEsriFeatures, fetchEsriJson, getServiceInfo, makePointConverter } from './esriRestClient.ts';
 
 export const PARCEL_LAYER_TAG = 'COUNTY-PARCEL';
@@ -578,6 +578,59 @@ export function findParcelServiceForJurisdiction(jurisdiction: {
 
   const statewide = PARCEL_STATEWIDE_SERVICES.find((s) => s.state === abbr);
   return statewide ? { service: statewide, match: 'statewide' } : null;
+}
+
+/**
+ * Ordered sources to try for a county: the curated county fabric first, then
+ * the statewide fabric. Deduped when the statewide layer is the only match.
+ */
+export function planParcelServiceAttempts(jurisdiction: {
+  state?: string;
+  county?: string;
+}): ParcelServiceMatch[] {
+  const attempts: ParcelServiceMatch[] = [];
+  const match = findParcelServiceForJurisdiction(jurisdiction);
+  if (match) attempts.push(match);
+  const statewide = findStatewideParcelService(jurisdiction.state);
+  if (statewide && !attempts.some(attempt => attempt.service.id === statewide.id)) {
+    attempts.push({ service: statewide, match: 'statewide' });
+  }
+  return attempts;
+}
+
+/** Turn a raw parcel fetch failure into a user-actionable category. */
+export function classifyParcelFetchIssue(message: string): CountyParcelIssue {
+  const text = String(message ?? '');
+  if (/timed?\s*out|timeout|aborted|took too long/i.test(text)) return 'timeout';
+  if (/\b(?:404|410|500|502|503|504)\b|server (?:error|unavailable)|service unavailable|bad gateway|internal server|layer not found/i.test(text)) {
+    return 'server';
+  }
+  if (/failed to fetch|network\s*error|load failed|\bcors\b|connection (?:refused|failed|reset)|err_(?:network|connection)/i.test(text)) {
+    return 'network';
+  }
+  if (/no parcels? found|no features|0 (?:parcels|features)|returned no|empty response/i.test(text)) return 'empty';
+  return 'unknown';
+}
+
+/** Plain-language recovery guidance for a failed County fetch. */
+export function parcelFetchGuidance(issue: CountyParcelIssue, jurisdictionLabel?: string): string {
+  const where = jurisdictionLabel?.trim() || 'this county';
+  switch (issue) {
+    case 'no-projection':
+      return 'Set the project EPSG in Project Settings so the cluster footprint can be queried.';
+    case 'no-service':
+      return `No parcel layer is registered for ${where} yet. Open County Parcels to add the county server or search nearby layers.`;
+    case 'timeout':
+      return `The ${where} GIS server did not respond in time. Retry, or open County Parcels to choose another server.`;
+    case 'network':
+      return `The ${where} GIS server could not be reached. Check your connection, then retry or use the statewide layer in County Parcels.`;
+    case 'server':
+      return `The ${where} GIS server is online but returned an error. Retry shortly, or open County Parcels to pick a different server.`;
+    case 'empty':
+      return `The ${where} server returned no parcels in this footprint. Confirm the cluster is inside the county, or open County Parcels to check coverage.`;
+    default:
+      return `Try again, or open County Parcels to choose a different county server for ${where}.`;
+  }
 }
 
 /** Statewide layer for a USPS abbreviation or full state name, if we have one. */

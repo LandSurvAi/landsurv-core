@@ -21,6 +21,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { type ContourGeneration, type InclusionBoundary } from '../types.ts';
 import { ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon } from './icons.tsx';
+import { DockModeControl, type DockMode } from './DockModeControl.tsx';
 
 interface ContourManagementPanelProps {
   generations: ContourGeneration[];
@@ -39,6 +40,8 @@ interface ContourManagementPanelProps {
   onClose?: () => void;
   isDocked?: boolean;
   onToggleDock?: () => void;
+  dockMode?: DockMode;
+  onDockModeChange?: (mode: DockMode) => void;
 }
 
 const GENERATION_COLORS = [
@@ -67,9 +70,13 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
   onDelete,
   onNewGeneration,
   onClose,
-  isDocked = false,
+  isDocked: isDockedProp = false,
   onToggleDock,
+  dockMode,
+  onDockModeChange,
 }) => {
+  const mode: DockMode = dockMode ?? (isDockedProp ? 'toolshelf' : 'floating');
+  const isDocked = mode !== 'floating';
   const [collapsed, setCollapsed] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -143,15 +150,19 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
             className="text-[11px] px-2 py-0.5 rounded bg-amber-600/80 hover:bg-amber-500 text-white font-medium"
             title="Generate new contours"
           >+ New</button>
-          {onToggleDock && (
-            <button
-              type="button"
-              onClick={onToggleDock}
-              className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-cyan-400 transition-colors"
-              title={isDocked ? 'Pop out Contour Generations to canvas' : 'Dock Contour Generations into Tool Station'}
-            >
-              {isDocked ? <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" /> : <ArrowDownOnSquareIcon className="w-3.5 h-3.5" />}
-            </button>
+          {(onDockModeChange || onToggleDock) && (
+            onDockModeChange ? (
+              <DockModeControl mode={mode} onChange={onDockModeChange} />
+            ) : (
+              <button
+                type="button"
+                onClick={onToggleDock}
+                className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-cyan-400 transition-colors"
+                title={isDocked ? 'Pop out Contour Generations to canvas' : 'Dock Contour Generations into Tool Station'}
+              >
+                {isDocked ? <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" /> : <ArrowDownOnSquareIcon className="w-3.5 h-3.5" />}
+              </button>
+            )
           )}
           <button onClick={() => setCollapsed(c => !c)} className="text-xs text-gray-400 hover:text-white" title={collapsed ? 'Expand' : 'Collapse'}>
             {collapsed ? '▾' : '▴'}

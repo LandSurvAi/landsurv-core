@@ -90,7 +90,7 @@ export const UploadShell: React.FC<UploadShellProps> = ({
                 color: accent,
               }}
             >
-              A2UI
+              AI
             </span>
           </div>
           {headerRight}

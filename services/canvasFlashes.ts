@@ -201,6 +201,20 @@ const FLASH_FIELD_TYPES: Record<A2UIInputFieldType, CanvasFlashFieldType> = {
 };
 
 /**
+ * A flash is the short path for a quick value, not a replacement for a full
+ * form. Keep it to one or two plain fields (for example a replacement point
+ * number plus its description); choices, checkboxes, and longer forms stay in
+ * Quick Thought and the chat.
+ */
+export function canMirrorInputFormAsFlash(form: A2UIInputFormSpec): boolean {
+  if (form.fields.length === 0 || form.fields.length > 2) return false;
+  return form.fields.every(field => {
+    const type = field.type ?? 'text';
+    return type === 'text' || type === 'number' || type === 'textarea';
+  });
+}
+
+/**
  * Mirror an agent's typed input request as a tiny surface beside the cursor.
  * The full chat form stays in place as the durable record; this is only the
  * short path to typing the values where the user is already working.

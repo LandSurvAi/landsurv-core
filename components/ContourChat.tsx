@@ -16,7 +16,7 @@ interface ContourChatProps {
   breaklineCount?: number;
   exclusionSegmentCount?: number;
   isFetchingEsri?: boolean;
-  onFetchEsriContours?: (serviceUrl: string, mode: 'inclusion' | 'description', descriptionText?: string) => void;
+  onFetchEsriContours?: (serviceUrl: string, mode: 'project' | 'inclusion' | 'description', descriptionText?: string) => void;
   autoOpenGisSelector?: boolean;
   onGisSelectorOpened?: () => void;
 }

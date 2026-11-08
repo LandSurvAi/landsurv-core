@@ -6,6 +6,8 @@ import { extractSymbolCadPrimitives, drawPrimitivesToDxfWriter } from './symbolC
 import { calculateCenterlineLength, calculateCurveGeometry, calculatePointFromStationOffset, formatStation } from './stationing.ts';
 import { applyAnnotationTextCase, resolveAnnotationCategoryTextStyle } from './annotationTextStyle.ts';
 import { buildParcelLabelLines, resolveEffectiveParcelTextStyle } from './parcelLabelFormatter.ts';
+import { boundaryReadingAngle, isBoundaryAnnotationLine } from './boundaryAnnotations.ts';
+import type { BearingDistanceMode } from '../services/annotationPreferences.ts';
 import {
     calculateLinearDimensionGeometry,
     calculateRadialDimensionGeometry,
@@ -660,6 +662,7 @@ export function generateDxf(
     dimensions: AnnotationDimension[] = [],
     hatches: CanvasHatch[] = [],
     customHatches: HatchDefinition[] = [],
+    annotationMode: BearingDistanceMode = 'both',
 ): string {
     const { coordinatePrecision } = settings;
     const { includePoints, includeLines, includeCenterlines, pointScale, steepSlopeFillStyle = 'solid' } = options;
@@ -809,6 +812,32 @@ export function generateDxf(
     }
 
     if (includeLines) {
+        // Boundary B&D labels read from inside their parcel. Group boundary
+        // linework by polyline so each closed tract gets its own centroid.
+        const boundaryCentroids = new Map<string, { x: number; y: number }>();
+        {
+            const sums = new Map<string, { x: number; y: number; count: number }>();
+            lines.forEach(line => {
+                if (!isBoundaryAnnotationLine(line)) return;
+                const p1 = pointMap.get(line.from);
+                const p2 = pointMap.get(line.to);
+                const fromPt = p1 ? { x: p1.x, y: p1.y } : line.fromPt ? { x: line.fromPt.x, y: line.fromPt.y } : null;
+                const toPt = p2 ? { x: p2.x, y: p2.y } : line.toPt ? { x: line.toPt.x, y: line.toPt.y } : null;
+                if (!fromPt || !toPt) return;
+                const key = line.polylineId || String(line.type);
+                const entry = sums.get(key) ?? { x: 0, y: 0, count: 0 };
+                entry.x += fromPt.x + toPt.x;
+                entry.y += fromPt.y + toPt.y;
+                entry.count += 2;
+                sums.set(key, entry);
+            });
+            sums.forEach((entry, key) => {
+                if (entry.count > 0) {
+                    boundaryCentroids.set(key, { x: entry.x / entry.count, y: entry.y / entry.count });
+                }
+            });
+        }
+
         lines.forEach(line => {
             // Contour lines are handled separately as joined 3D polylines below
             if (line.type?.startsWith('contour')) return;
@@ -884,30 +913,43 @@ export function generateDxf(
                     
                     d.drawArc(centerX, centerY, radius, startAngleDeg, endAngleDeg);
                     
-                    // Add curve annotations
-                    d.setActiveLayer('LINE_ANNOTATIONS');
-                    const midAngle = (startAngle + endAngle) / 2;
-                    const annotDistance = radius * 1.3;
-                    const annotX = centerX + annotDistance * Math.cos(midAngle);
-                    const annotY = centerY + annotDistance * Math.sin(midAngle);
-                    d.drawText(
-                        annotX,
-                        annotY,
-                        lineAnnotationTextHeight,
-                        0,
-                        applyAnnotationTextCase(`R=${line.curveRadius}' L=${line.arcLength}'`, boundaryTextStyle.textCase),
-                    );
+                    // Add curve annotations — boundary linework only.
+                    if (isBoundaryAnnotationLine(line)) {
+                        d.setActiveLayer('LINE_ANNOTATIONS');
+                        const midAngle = (startAngle + endAngle) / 2;
+                        const annotDistance = radius * 1.3;
+                        const annotX = centerX + annotDistance * Math.cos(midAngle);
+                        const annotY = centerY + annotDistance * Math.sin(midAngle);
+                        const curveLabel = annotationMode === 'bearing'
+                            ? line.tangentBearing
+                            : `R=${line.curveRadius}' L=${line.arcLength}'`;
+                        d.drawText(
+                            annotX,
+                            annotY,
+                            lineAnnotationTextHeight,
+                            0,
+                            applyAnnotationTextCase(curveLabel, boundaryTextStyle.textCase),
+                        );
+                    }
                 } else {
                     // Regular straight line
                     d.drawLine(fromPt.x, fromPt.y, toPt.x, toPt.y);
                 }
 
-                if (line.bearing && line.distance && fromPt && toPt && !line.isCurve) {
+                if (isBoundaryAnnotationLine(line) && line.bearing && line.distance && fromPt && toPt && !line.isCurve) {
                     d.setActiveLayer('LINE_ANNOTATIONS');
                     const midX = (fromPt.x + toPt.x) / 2;
                     const midY = (fromPt.y + toPt.y) / 2;
-                    const angle = Math.atan2(toPt.y - fromPt.y, toPt.x - fromPt.x) * 180 / Math.PI;
-                    const text = applyAnnotationTextCase(`${line.bearing} / ${line.distance}`, boundaryTextStyle.textCase);
+                    const edgeAngle = Math.atan2(toPt.y - fromPt.y, toPt.x - fromPt.x);
+                    const centroid = boundaryCentroids.get(line.polylineId || String(line.type));
+                    const rotation = centroid
+                        ? boundaryReadingAngle(edgeAngle, { x: midX, y: midY }, centroid)
+                        : edgeAngle;
+                    const angle = ((rotation * 180 / Math.PI) % 360 + 360) % 360;
+                    const textParts: string[] = [];
+                    if (annotationMode !== 'distance') textParts.push(line.bearing);
+                    if (annotationMode !== 'bearing') textParts.push(line.distance);
+                    const text = applyAnnotationTextCase(textParts.join(' / '), boundaryTextStyle.textCase);
                     d.drawText(midX, midY, lineAnnotationTextHeight, angle, text);
                 }
             }

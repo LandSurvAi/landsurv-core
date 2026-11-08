@@ -328,6 +328,7 @@ export const HELP_GROUPS: HelpGroup[] = [
     accent: 'cyan',
     entries: [
       { command: 'L / PLINE', description: 'Chained line and tangent-arc segments', note: 'A arc · L line' },
+      { command: 'B (BASELINE)', description: 'Centerline alignment with the same chained line / tangent-arc flow', note: 'shared with Stationing & CL' },
       { command: 'C / CIRCLE', description: 'Center + radius, or two tangents (TTR)', note: 'T toggles TTR' },
       { command: 'H / HATCH', description: 'Hatch by clicking inside an enclosed area or selecting a closed object', note: 'S object · A area' },
       { command: 'D / DIMALIGNED', description: 'Aligned dimension — pick two points, then the offset line', note: 'annotation' },
@@ -342,7 +343,7 @@ export const HELP_GROUPS: HelpGroup[] = [
     accent: 'emerald',
     entries: [
       { command: 'S / SELECT', description: 'Pick entities on the canvas' },
-      { command: 'B / BOX', description: 'Window or crossing box selection' },
+      { command: 'B / BOX', description: 'Window or crossing box selection while a selection command is active', note: 'SELECT + B' },
       { command: 'T / TRIM', description: 'Trim to a cutting edge' },
       { command: 'F / FILLET', description: 'Round a corner between two selected lines', note: 'radius' },
       { command: 'EX / EXTEND', description: 'Extend to a boundary' },
@@ -377,6 +378,22 @@ export const HELP_GROUPS: HelpGroup[] = [
     ],
   },
   {
+    title: 'Shortcuts',
+    accent: 'rose',
+    entries: [
+      { command: 'B', description: 'Start a baseline alignment', note: 'with SELECT off' },
+      { command: 'B (in SELECT)', description: 'Toggle window / crossing box selection', note: 'with SELECT on' },
+      { command: 'A / L', description: 'Arc / line submode for a live baseline or PLINE', note: 'after first point' },
+      { command: 'Space', description: 'Activate the CAD command line' },
+      { command: 'Shift + Space', description: 'Jump to the AI agent prompt' },
+      { command: 'Enter', description: 'Commit or finish the live command' },
+      { command: 'Esc', description: 'Cancel the live command' },
+      { command: 'Delete', description: 'Delete the selected entities', note: 'or Backspace' },
+      { command: 'Shift', description: 'Snap the rotation angle to 15°' },
+      { command: 'F / D / X', description: 'Bare-key FILLET, DIMALIGNED, and delete', note: 'no prefix needed' },
+    ],
+  },
+  {
     title: 'Utility',
     accent: 'amber',
     entries: [
@@ -384,9 +401,11 @@ export const HELP_GROUPS: HelpGroup[] = [
       { command: 'U / REDO', description: 'Undo and redo the last change' },
       { command: 'ALL / DS', description: 'Select all / deselect' },
       { command: 'DI', description: 'Distance and azimuth between two points', note: 'arrow pad' },
+      { command: 'ORTHO', description: 'Toggle orthogonal drawing', note: 'O in draw mode' },
       { command: 'PROP', description: 'Open the selection properties panel' },
       { command: 'KEY', description: 'Access key status' },
       { command: 'CLEAR', description: 'Clear this history' },
+      { command: 'HELP / ?', description: 'Open this command reference' },
     ],
   },
   {
@@ -395,18 +414,18 @@ export const HELP_GROUPS: HelpGroup[] = [
     entries: [
       { command: 'E,N', description: 'Absolute coordinate', note: 'feet' },
       { command: 'number', description: 'Distance, radius or spacing', note: 'current unit' },
-      { command: 'Shift', description: 'Snap the rotation angle to 15°' },
     ],
   },
 ];
 
 export const HELP_NOTES: string[] = [
+  'B starts the baseline chain when no selection is active; inside SELECT, B toggles box selection. Baselines are Centerline objects shared with Stationing & CL and use the same A arc / L line chain as PLINE.',
   'Bare-key shortcuts: F starts FILLET, D starts an aligned dimension, and X deletes the selection. Delete or Backspace also delete; EXPLODE is the full command for exploding polylines and hatches.',
   'Coordinates are E,N in feet. Typed distances, radii and spacings use the current linear unit.',
   'Angles are degrees, counter-clockwise positive. Hold Shift to snap to 15° increments.',
   'Use the buttons after a result to open it in the Text Editor, open Properties, or copy it.',
-  'AR shows a UCS-style X/Y manipulator: drag a handle for spacing, Shift-drag for quantity, Alt-drag for total span, or type any value. Drag the direction ring or type the angle. Other multi-input commands use the compact field editor.',
-  'POL is interactive: click a snapped center, then drag, click, or type the diameter. Scroll the mouse wheel or press [ / ] to change the side count; the anchored SIDES / DIA strip edits both live. POL 8 starts with eight sides.',
+  'AR shows a UCS-style X/Y manipulator: drag a handle for spacing, Shift-drag for quantity, Alt-drag for total span, or type any value. Drag the direction ring or type the angle.',
+  'POL is interactive: click a snapped center, then drag, click, or type the diameter. Scroll the mouse wheel or press [ / ] to change the side count; the anchored SIDES / DIA strip edits both live.',
 ];
 
 const COORDINATE_TOKEN = /^([+-]?\d+(?:\.\d+)?)\s*,\s*([+-]?\d+(?:\.\d+)?)$/;
@@ -1160,11 +1179,12 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
         status: 'info',
         message: [
           'Commands:',
-          'DRAW — L/PLINE (line), C (circle), D (aligned dimension — pick two points, then the offset line), REC (rectangle), POL (polygon: click center, drag/type radius, scroll or [ ] sides), P (point), I (inclusion).',
+          'DRAW — L/PLINE (chained line and tangent-arc segments), B (baseline: a Centerline alignment shared with Stationing & CL; with SELECT active, B toggles box select), C (circle), D (aligned dimension — pick two points, then the offset line), REC (rectangle), POL (polygon: click center, drag/type radius, scroll or [ ] sides), P (point), I (inclusion).',
           'MODIFY — S (select), B (box), T (trim), F (fillet — select exactly two straight lines, then type the radius; bare F opens the radius pad), EX (extend), CP (copy), OS (offset [distance]), M (move — bare M picks a snapped base point and destination with a live ghost preview, M dx,dy moves immediately), RO / R (rotate — bare RO or the R key picks a base point with snaps and a live ghost preview, then takes a clicked point or typed angle (Shift snaps to 15°); RO angle [pivot] rotates immediately), SC (scale — bare SC picks a snapped reference point with a live ghost preview, then takes a clicked point or typed factor; SC factor [pivot] scales immediately), MI (mirror — bare MI picks two snapped axis points with a live ghost preview, MI x1,y1 x2,y2 mirrors immediately), J (join), EXPLODE (explode), X / E / DEL (delete).',
           'ARRAYS — AR rows cols rowSpacing colSpacing (rectangular), PA count fillAngle [center] (polar; default selection center). Typing bare AR opens a UCS-style X/Y manipulator: drag a handle for spacing, Shift-drag for quantity, Alt-drag for span, or type any value. The direction ring sets the array angle. The unused axis keeps its preloaded 1 quantity / 0 spacing, so you only enter the axis you need. Typing bare PA opens the compact ring manipulator.',
           'SELECTION — run a modify/array command with nothing selected and it waits for picks: left-click entities, drag a window to box select, MMB pans, Enter applies, Esc cancels.',
-          'UTILITY — ZE (zoom extents), U (undo), REDO, ALL (select all), DS (deselect), DI x1,y1 x2,y2 (distance), KEY, CLEAR, PROP / PROPERTIES (selection properties panel).',
+          'SHORTCUTS — B baseline · A/L arc or line submode · Space CAD line · Shift+Space AI agent · Enter finish · Esc cancel · Shift 15° snap · F FILLET · D DIMALIGNED · X delete.',
+          'UTILITY — ZE (zoom extents), U (undo), REDO, ALL (select all), DS (deselect), DI x1,y1 x2,y2 (distance), ORTHO, KEY, CLEAR, HELP / ?, PROP / PROPERTIES (selection properties panel).',
           'Coords are E,N (feet). Typed distances/radii/spacings use the current linear unit; angles are degrees, counter-clockwise positive.',
           'LINKS — use the buttons after a result to open it in the Text Editor, open the Properties panel, or copy it.',
         ].join('\n'),

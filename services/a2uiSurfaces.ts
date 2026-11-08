@@ -313,6 +313,18 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
     keywords: ['annotate', 'annotations', 'labels', 'text styles', 'categories'],
   },
   {
+    id: 'workspace-stationing-controls',
+    title: 'Stationing Controls',
+    description: 'Control P/L auto station points, the station interval, and centerline annotations.',
+    category: 'workspace',
+    glyph: 'S',
+    accent: 'cyan',
+    audiences: ['workspace'],
+    agent: AgentType.CENTERLINE_STATIONING,
+    widgetType: 'stationing-controls',
+    keywords: ['stationing', 'baseline', 'centerline', 'stations', 'annotations', 'P/L'],
+  },
+  {
     id: 'workspace-drafting-style-library',
     title: 'Drafting Style Library',
     description: 'Author and manage drafting style examples for the Civil Drafter agent.',
@@ -323,6 +335,18 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
     agent: AgentType.CAD_MANAGER,
     widgetType: 'drafting-style-library',
     keywords: ['drafting style', 'style library', 'training', 'civil drafter'],
+  },
+  {
+    id: 'workspace-civil-drafter-context',
+    title: 'Civil Drafter Context',
+    description:
+      'Control retained conversation, point payloads, and vision imagery between drafting turns.',
+    category: 'workspace',
+    glyph: 'C',
+    accent: 'fuchsia',
+    audiences: ['workspace'],
+    agent: AgentType.CIVIL_DRAFTER,
+    keywords: ['context', 'tokens', 'history', 'vision', 'civil drafter'],
   },
   {
     id: 'workspace-layer-manager',
@@ -385,6 +409,30 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
     keywords: ['wms', 'web map service', 'offline maps', 'imagery'],
   },
   {
+    id: 'workspace-text-editor',
+    title: 'Text Editor',
+    description: 'Open project text, deed transcripts, and .md notes in the A2UI text surface.',
+    category: 'workspace',
+    glyph: 'T',
+    accent: 'cyan',
+    audiences: ['workspace'],
+    agent: AgentType.TEXT_EDITOR,
+    widgetType: 'text-editor',
+    keywords: ['text', 'editor', 'markdown', 'md', 'txt', 'deed text', 'notes', 'transcript'],
+  },
+  {
+    id: 'workspace-spreadsheet',
+    title: 'Spreadsheet',
+    description: 'Open a lightweight searchable grid for points, tables, and agent data.',
+    category: 'workspace',
+    glyph: '▦',
+    accent: 'emerald',
+    audiences: ['workspace'],
+    agent: AgentType.LSVZ_AGENT,
+    widgetType: 'spreadsheet',
+    keywords: ['spreadsheet', 'sheet', 'grid', 'table', 'csv', 'tsv', 'points', 'data'],
+  },
+  {
     id: 'workspace-file-manager',
     title: 'File Manager',
     description: 'Browse uploaded and generated project files, open in Text Editor, or mark DXF templates.',
@@ -421,6 +469,19 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
     keywords: ['cutsheet', 'cut sheet', 'stakeout', 'grade'],
   },
   {
+    id: 'workspace-gps-rover',
+    title: 'GPS Rover',
+    description:
+      'Live rover fix, stakeout navigation, point collection, and benchmark checks. Project location lives in the LSAI Agent toolset.',
+    category: 'workspace',
+    glyph: '⌖',
+    accent: 'sky',
+    audiences: ['workspace'],
+    agent: AgentType.GPS_STAKEOUT,
+    widgetType: 'gps-rover',
+    keywords: ['gps', 'rover', 'rtk', 'stakeout', 'collect', 'benchmark', 'calibration'],
+  },
+  {
     id: 'workspace-closure-report',
     title: 'Closure Reports',
     description: 'Inspect boundary and traverse closure precision, misclosure, and area calculations.',
@@ -431,6 +492,32 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
     agent: AgentType.DEED_READER,
     widgetType: 'closure-report',
     keywords: ['closure', 'closure report', 'precision', 'traverse'],
+  },
+  {
+    id: 'workspace-closure-investigation',
+    title: 'Closure investigation',
+    description:
+      'Compare parsed boundary calls with the source deed, inspect deterministic geometry findings, and review evidence-based closure hypotheses.',
+    category: 'workspace',
+    glyph: '⌕',
+    accent: 'cyan',
+    audiences: ['workspace'],
+    agent: AgentType.DEED_READER,
+    widgetType: 'closure-investigation',
+    keywords: ['closure', 'investigate', 'investigation', 'misclosure', 'deed evidence', 'hypothesis'],
+  },
+  {
+    id: 'workspace-tin-surfaces',
+    title: 'TIN Surfaces',
+    description:
+      'Create a surface from contours, import .tin/LandXML, inspect vertices and triangles, and export LandXML or native .tin.',
+    category: 'workspace',
+    glyph: '△',
+    accent: 'cyan',
+    audiences: ['workspace'],
+    agent: AgentType.CONTOURING_AGENT,
+    widgetType: 'tin-surfaces',
+    keywords: ['tin', 'surface', 'landxml', 'import tin', 'export tin', 'contour surface'],
   },
   {
     id: 'workspace-steep-slope-report',
@@ -503,6 +590,18 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
 
   // ── Dialogs and system ────────────────────────────────────────────────────
   {
+    id: 'point-entry',
+    title: 'Add Point',
+    description: 'Enter a survey point by number, coordinates, elevation, and description, or pick it on the canvas through PointAgent CACP.',
+    category: 'dialog',
+    glyph: 'P',
+    accent: 'emerald',
+    audiences: ['workspace'],
+    agent: AgentType.POINT_EDITOR,
+    widgetType: 'point-entry',
+    keywords: ['point', 'add point', 'point entry', 'point dialog', 'survey point', 'coordinates', 'cacp'],
+  },
+  {
     id: 'settings',
     title: 'Settings',
     description: 'Open the full settings dialog from any surface.',
@@ -535,7 +634,7 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
   {
     id: 'surface-console',
     title: 'Surface console',
-    description: 'Search and launch every A2UI surface available in this context.',
+    description: 'Search and launch every surface available in this context.',
     category: 'system',
     glyph: '⌘',
     accent: 'cyan',
@@ -811,7 +910,7 @@ export const PUBLIC_PAGE_GUIDES: Record<string, A2UIPageGuide> = {
     title: 'Page guide',
     eyebrow: 'LandSurv.ai',
     summary:
-      'Open live A2UI surfaces for protocol inspection, manifests, and page-specific guidance — without leaving this page or starting a project.',
+      'Open live surfaces for protocol inspection, manifests, and page-specific guidance — without leaving this page or starting a project.',
     highlights: [
       { label: 'Surface console', detail: 'Search every surface available in this context.' },
       { label: 'CACP manifests', detail: 'Inspect registered agents and their skill schemas.' },

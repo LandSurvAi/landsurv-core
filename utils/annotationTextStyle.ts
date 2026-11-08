@@ -59,3 +59,19 @@ export function resolveAnnotationTextSize(
 ): number {
     return scalingMode === 'world' ? baseSize * transformScale : baseSize;
 }
+
+/**
+ * Converts a fixed on-screen text height (CSS px) into world units for the
+ * current canvas transform. Use this for annotations drawn inside the
+ * world-space pass so their apparent size stays constant while zooming.
+ */
+export function screenTextHeightToWorld(
+    screenHeightPx: number,
+    transformScale: number,
+): number {
+    const height = Number(screenHeightPx);
+    const scale = Number(transformScale);
+    if (!Number.isFinite(height) || height <= 0) return 0;
+    if (!Number.isFinite(scale) || scale <= 0) return height;
+    return height / scale;
+}

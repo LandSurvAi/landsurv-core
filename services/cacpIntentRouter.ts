@@ -66,7 +66,8 @@ const AGENT_CAPABILITY_PHRASES: Partial<Record<AgentType, string[]>> = {
     'pipe', 'sewer', 'storm', 'drain', 'culvert', 'utility trench',
     'grading', 'subdivision', 'plan and profile', 'plan set', 'cross section',
     'easement plat', 'civil plan', 'construction plan',
-    'linework', 'polyline',
+    'linework', 'polyline', 'new linework', 'stream', 'streams', 'stream bed', 'stream beds',
+    'stream-bed', 'stream-beds', 'creek', 'creeks', 'watercourse', 'watercourses', 'drainageway',
     'breakline', 'breaklines', 'top of bank', 'toe of slope',
     'ditch', 'swale', 'tree line', 'fence line', 'connect the shots', 'connect the points',
   ],
@@ -95,6 +96,15 @@ const AGENT_CAPABILITY_PHRASES: Partial<Record<AgentType, string[]>> = {
   ],
   [AgentType.GPS_STAKEOUT]: [
     'gps', 'gnss', 'stake', 'stake out', 'stakeout', 'rtk', 'receiver', 'navigate to point',
+    'gps rover', 'rover', 'collect a point', 'collect point', 'rover fix',
+  ],
+  [AgentType.LSVZ_AGENT]: [
+    'project location', 'project footprint', 'project extent', 'where is the project',
+    'where does the project', 'where is my project', 'where are my points', 'point cluster',
+    'point clusters', 'multiple sites', 'what county', 'what state', 'what municipality',
+    'what township', 'which county', 'which state', 'what jurisdiction', 'jurisdiction of',
+    'drawing extent', 'point extent', 'linework extent', 'county gis tax lines', 'tax lines',
+    'parcel lines', 'flood lines', 'flood zones', 'soils',
   ],
   [AgentType.ZONING_AGENT]: [
     'zoning', 'setback', 'zoning district', 'land use', 'permitted use', 'ordinance',
@@ -244,6 +254,26 @@ export function routeIntent(request: string, currentAgent?: AgentType): IntentRo
     };
   }
 
+  // Linework authoring belongs to the Civil Drafter. Check this before generic
+  // scoring so a Point Editor request that also mentions "points" cannot tie
+  // or outrank the drafter on its own point-management vocabulary.
+  const authorsLinework =
+    /\b(?:draw|draft|trace|create|add|connect|plot|generate|author)\w*\b/i.test(request) &&
+    /\b(?:new\s+linework|linework|polyline|stream[\s-]?beds?|creeks?|watercourses?|breaklines?|top\s+of\s+bank|toe\s+of\s+slope|ditch(?:es)?|swales?|tree\s+line|fence\s+line)\b/i.test(request);
+  if (authorsLinework) {
+    return {
+      primary: {
+        agent: AgentType.CIVIL_DRAFTER,
+        displayName: 'Civil Drafter',
+        score: 99,
+        matchedOn: ['new linework'],
+      },
+      alternates: [],
+      isMismatched: currentAgent !== undefined && currentAgent !== AgentType.CIVIL_DRAFTER,
+      explanation: 'New linework request routed to Civil Drafter.',
+    };
+  }
+
   const manifests = agentRegistry.listCacpEnabled();
   const matches = manifests
     .map(m => scoreAgent(request, m))
@@ -283,7 +313,7 @@ export function shouldDefer(request: string, currentAgent: AgentType): IntentMat
  * asking a question. Only work requests are auto-handed-off: a Point Editor user
  * who asks "how many points are along the road?" must keep their Point Editor.
  */
-const HANDOFF_ACTION_VERB_RE = /\b(draw|draft|design|create|make|build|synthesi[sz]e|extract|trace|plot|place|generate|model|add|lay\s*out)\b/i;
+const HANDOFF_ACTION_VERB_RE = /\b(draw(?:ing)?|draft(?:ing)?|design(?:ing)?|creat(?:e|ing)|mak(?:e|ing)|build(?:ing)?|synthesi[sz](?:e|ing)|extract(?:ing)?|trac(?:e|ing)|plot(?:ting)?|plac(?:e|ing)|generat(?:e|ing)|model(?:ing|ling)?|add(?:ing)?|lay(?:ing)?\s*out)\b/i;
 
 /**
  * Enforced dispatch decision: the agent that should take this request before the

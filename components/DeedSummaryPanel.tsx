@@ -10,6 +10,7 @@ import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import type { BoundaryFile, SurveyPoint, DeedSummary } from '../types.ts';
 import { parseBearingToRadians, parseDistance, direct, directCurve, calculateClosure } from '../utils/cogo.ts';
 import { XMarkIcon } from './icons.tsx';
+import { findBoundaryFileForTract } from '../utils/boundaryTractFiles.ts';
 
 interface PobInput {
   mode: 'point' | 'coords';
@@ -518,7 +519,7 @@ const DeedSummaryPanel: React.FC<DeedSummaryPanelProps> = ({
         const claimedFileIds = new Set<string>();
         if (summary) {
           for (const t of summary.tracts) {
-            const matchingFile = files.find(f => f.sourceTractId === t.tractId);
+            const matchingFile = findBoundaryFileForTract(files, t, summary?.fileName);
             if (matchingFile) claimedFileIds.add(matchingFile.id);
             rows.push({
               key: matchingFile ? matchingFile.id : `tract:${t.tractId}`,

@@ -20,10 +20,13 @@
 //     PDF (one page per sheet, page size = that sheet's paper size).
 
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
-import type { SurveyPoint, SurveyLine, ProfilePoint, ProfileInfo } from '../types.ts';
+import type { SurveyPoint, SurveyLine, ProfilePoint, ProfileInfo, CanvasHatch } from '../types.ts';
+import { explodeHatchToLines } from '../utils/hatchExplode.ts';
+import { getHatchByName, type HatchDefinition } from '../services/hatchLibrary.ts';
 import jsPDF from 'jspdf';
 import { parseDxfForSymbol } from '../utils/dxfParser.ts';
 import { parseBearingToRadians } from '../utils/cogo.ts';
+import { boundaryReadingAngle, isBoundaryAnnotationLine } from '../utils/boundaryAnnotations.ts';
 import proj4 from 'proj4';
 import { useAppState, useErrorReporter } from '../contexts/AppStateContext';
 import { useCanvasState } from '../contexts/CanvasStateContext';
@@ -292,6 +295,39 @@ export function detectClusters(points: SurveyPoint[], lines: SurveyLine[]): Enti
 const typePseudoLayer = (t?: string): string | null => (t ? `*${t.toUpperCase()}` : null);
 const lineLayerKey = (l: SurveyLine): string => l.layer || typePseudoLayer(l.type) || '*DEFAULT';
 const pointLayerKey = (p: SurveyPoint): string => p.layer || '*POINTS';
+const hatchLayerKey = (h: CanvasHatch): string => h.layer || 'HATCH';
+
+/** Stable empty fallbacks so hatch plot memos do not recompute on every render. */
+const EMPTY_HATCHES: CanvasHatch[] = [];
+const EMPTY_HATCH_DEFS: HatchDefinition[] = [];
+
+/**
+ * Session-level paperspace basemap cache. Sheet View unmounts whenever the
+ * user leaves the tab, so component state alone would re-download every
+ * viewport's orthophoto on each visit. The keys include viewport id, center and
+ * scale, so an entry is only reused for the exact same plot view.
+ */
+const SHEET_BASEMAP_CACHE = new Map<string, string>();
+const SHEET_BASEMAP_CACHE_MAX = 24;
+
+function sheetBasemapCacheGet(key: string): string | undefined {
+    const hit = SHEET_BASEMAP_CACHE.get(key);
+    if (hit) {
+        SHEET_BASEMAP_CACHE.delete(key);
+        SHEET_BASEMAP_CACHE.set(key, hit);
+    }
+    return hit;
+}
+
+function sheetBasemapCacheSet(key: string, dataUrl: string): void {
+    SHEET_BASEMAP_CACHE.delete(key);
+    SHEET_BASEMAP_CACHE.set(key, dataUrl);
+    while (SHEET_BASEMAP_CACHE.size > SHEET_BASEMAP_CACHE_MAX) {
+        const oldest = SHEET_BASEMAP_CACHE.keys().next().value;
+        if (oldest === undefined) break;
+        SHEET_BASEMAP_CACHE.delete(oldest);
+    }
+}
 
 const typeDefaultColor: Record<string, string> = {
     'contour-major': '#b45309',
@@ -301,6 +337,7 @@ const typeDefaultColor: Record<string, string> = {
     'exclusion':     '#ef4444',
     'parcel':        '#0ea5e9',
     'flood':         '#06b6d4',
+    'bfe':           '#2563eb',
 };
 const typeDefaultWidth: Record<string, number> = {
     'contour-major': 1.0,
@@ -308,6 +345,7 @@ const typeDefaultWidth: Record<string, number> = {
     'breakline':     0.9,
     'parcel':        0.9,
     'flood':         0.8,
+    'bfe':           0.7,
 };
 
 const pickLineColor = (l: SurveyLine, cadLayerColors: Record<string, string>): string => {
@@ -385,7 +423,8 @@ export function resolveSheetRenderEntity(
     by: number,
     worldToPx: (e: number, n: number) => [number, number],
     worldFtPerInch: number,
-    renderPpi: number
+    renderPpi: number,
+    interiorCentroid?: { easting: number; northing: number },
 ): ResolvedRenderEntity | null {
     const chordLen = Math.hypot(bx - ax, by - ay);
     const sameEndPoints = chordLen < 1e-4 || Boolean(l.from && l.to && l.from === l.to);
@@ -413,12 +452,25 @@ export function resolveSheetRenderEntity(
         const [x2, y2] = worldToPx(bx, by);
 
         let annot: ResolvedStraightLine['annot'];
-        if (l.bearing && l.distance) {
+        if (isBoundaryAnnotationLine(l) && l.bearing && l.distance) {
             const midX = (x1 + x2) / 2;
             const midY = (y1 + y2) / 2;
-            let angleDeg = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
-            if (angleDeg > 90) angleDeg -= 180;
-            else if (angleDeg < -90) angleDeg += 180;
+            let angleDeg: number;
+            if (interiorCentroid) {
+                // Sheet pixels are Y-down, so the world reading angle is negated
+                // for the SVG/text rotation.
+                const worldAngle = Math.atan2(by - ay, bx - ax);
+                const readable = boundaryReadingAngle(
+                    worldAngle,
+                    { x: (ax + bx) / 2, y: (ay + by) / 2 },
+                    { x: interiorCentroid.easting, y: interiorCentroid.northing },
+                );
+                angleDeg = -readable * 180 / Math.PI;
+            } else {
+                angleDeg = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+                if (angleDeg > 90) angleDeg -= 180;
+                else if (angleDeg < -90) angleDeg += 180;
+            }
             const labelRot = l.labelRotation || 0;
             const offX = (l.labelOffset?.x || 0) / worldFtPerInch * renderPpi;
             const offY = -((l.labelOffset?.y || 0)) / worldFtPerInch * renderPpi;
@@ -548,7 +600,7 @@ export function resolveSheetRenderEntity(
 
     // Optional curve annotation for boundary calls
     let annot: ResolvedArc['annot'];
-    const isBoundaryCurve = !!(l.bearing || l.distance || l.type === 'parcel' || l.type === 'inclusion' || l.type === 'exclusion');
+    const isBoundaryCurve = isBoundaryAnnotationLine(l);
     if (isBoundaryCurve && (l.bearing || l.distance || (l.curveRadius && l.arcLength))) {
         const [cxPx, cyPx] = worldToPx(centerX, centerY);
         const vDx = xMid - cxPx;
@@ -592,6 +644,52 @@ export function resolveSheetRenderEntity(
         pathD,
         annot,
     };
+}
+
+/**
+ * Average endpoints of each boundary tract, keyed by polyline (or boundary
+ * type). Straight B&D labels use it to read from inside the parcel.
+ */
+export function buildBoundaryAnnotationCentroids(
+    lines: SurveyLine[],
+    ptIx: Map<string, SurveyPoint>,
+): Map<string, { easting: number; northing: number }> {
+    const sums = new Map<string, { easting: number; northing: number; count: number }>();
+    for (const l of lines) {
+        if (!isBoundaryAnnotationLine(l)) continue;
+
+        let a: { easting: number; northing: number } | null = null;
+        let b: { easting: number; northing: number } | null = null;
+        if (l.fromPt) a = { easting: l.fromPt.x, northing: l.fromPt.y };
+        else {
+            const p = ptIx.get(l.from);
+            if (p) a = { easting: p.easting, northing: p.northing };
+        }
+        if (l.toPt) b = { easting: l.toPt.x, northing: l.toPt.y };
+        else {
+            const p = ptIx.get(l.to);
+            if (p) b = { easting: p.easting, northing: p.northing };
+        }
+        if (!a || !b) continue;
+
+        const key = l.polylineId || String(l.type);
+        const entry = sums.get(key) ?? { easting: 0, northing: 0, count: 0 };
+        entry.easting += a.easting + b.easting;
+        entry.northing += a.northing + b.northing;
+        entry.count += 2;
+        sums.set(key, entry);
+    }
+
+    const centroids = new Map<string, { easting: number; northing: number }>();
+    sums.forEach((entry, key) => {
+        if (entry.count > 0) {
+            centroids.set(key, {
+                easting: entry.easting / entry.count,
+                northing: entry.northing / entry.count,
+            });
+        }
+    });
+    return centroids;
 }
 
 // ---------------------------------------------------------------------------
@@ -851,6 +949,10 @@ const saveSet = (projectName: string | undefined, set: SheetSet) => {
 interface SheetViewProps {
     points: SurveyPoint[];
     lines: SurveyLine[];
+    /** First-class CAD hatches — plotted in every plan viewport (live sheet + PDF). */
+    hatches?: CanvasHatch[];
+    /** Custom `.PAT` definitions from the CAD standard, needed to plot custom patterns. */
+    customHatches?: HatchDefinition[];
     projectName?: string;
     cadLayerColors?: Record<string, string>;
     /** Profile data from the Profile Agent — enables profile viewport type. */
@@ -862,6 +964,12 @@ interface SheetViewProps {
      * Signature: onSheetViewCommand(cmd, payload) → void
      */
     onSheetViewCommand?: (cmd: 'add_plan_viewport' | 'add_profile_viewport' | 'set_sheet_style', payload: Record<string, unknown>) => void;
+    /**
+     * Flood Agent notes queued for the active sheet titleblock. Append-only;
+     * the id makes the handoff idempotent when React re-runs the effect.
+     */
+    pendingNotes?: { id: string; text: string } | null;
+    onPendingNotesConsumed?: () => void;
 }
 
 
@@ -1074,8 +1182,10 @@ const ViewportBasemapCanvas: React.FC<ViewportBasemapCanvasProps> = React.memo((
     );
 });
 
-const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLayerColors, profileData, profileInfo, onSheetViewCommand }) => {
+const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHatches: customHatchesProp, projectName, cadLayerColors, profileData, profileInfo, onSheetViewCommand, pendingNotes, onPendingNotesConsumed }) => {
     const layerColors = cadLayerColors ?? {};
+    const plotHatches = hatches ?? EMPTY_HATCHES;
+    const customHatchDefs = customHatchesProp && customHatchesProp.length > 0 ? customHatchesProp : EMPTY_HATCH_DEFS;
     const { reportError } = useErrorReporter();
     const { settings } = useAppState();
     const { orientationTuple } = useCanvasState();
@@ -1111,6 +1221,22 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
             }),
         }));
     }, []);
+
+    // Flood Agent → paperspace notes handoff. Append once per queued id so a
+    // re-render cannot duplicate the note block in the titleblock.
+    const consumedSheetNoteIdsRef = useRef<Set<string>>(new Set());
+    useEffect(() => {
+        if (!pendingNotes || !pendingNotes.text.trim()) return;
+        if (consumedSheetNoteIdsRef.current.has(pendingNotes.id)) return;
+        consumedSheetNoteIdsRef.current.add(pendingNotes.id);
+        const incoming = pendingNotes.text.trim();
+        updateActiveSheet(s => {
+            const existing = s.tbFields.notes?.trim() ?? '';
+            const merged = existing ? `${existing}\n${incoming}` : incoming;
+            return { tbFields: { ...s.tbFields, notes: merged.slice(0, 4000) } };
+        });
+        onPendingNotesConsumed?.();
+    }, [pendingNotes, updateActiveSheet, onPendingNotesConsumed]);
 
     const addSheet = () => {
         const nextNum = (set.sheets.length + 1).toString().padStart(3, '0');
@@ -1321,8 +1447,59 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
         const setL = new Set<string>();
         for (const l of lines) setL.add(lineLayerKey(l));
         for (const p of points) setL.add(pointLayerKey(p));
+        for (const h of plotHatches) if (!h.hidden) setL.add(hatchLayerKey(h));
         return Array.from(setL).sort();
-    }, [points, lines]);
+    }, [points, lines, plotHatches]);
+
+    // ── Hatch plotting ────────────────────────────────────────────────────
+    // Hatches are first-class CanvasHatch entities. Paperspace plots the same
+    // 1:1 linework that HATCH → EXPLODE produces, so a plotted sheet matches
+    // the model-space drawing (and matches the CAD lines once exploded).
+    const plottedHatchLinework = useMemo(() => {
+        const map = new Map<string, SurveyLine[]>();
+        for (const h of plotHatches) {
+            if (h.hidden) continue;
+            if (!h.loops || h.loops.length === 0) continue;
+            map.set(h.id, explodeHatchToLines(h, { customHatches: customHatchDefs, maxSegments: 20000 }));
+        }
+        return map;
+    }, [plotHatches, customHatchDefs]);
+
+    const solidHatchIds = useMemo(() => {
+        const ids = new Set<string>();
+        for (const h of plotHatches) {
+            const name = (h.patternName || '').toUpperCase();
+            if (name === 'SOLID') { ids.add(h.id); continue; }
+            const def = getHatchByName(name, customHatchDefs);
+            if (def && def.lines.length === 0) ids.add(h.id);
+        }
+        return ids;
+    }, [plotHatches, customHatchDefs]);
+
+    /** Build viewport-space SVG path data for one hatch (boundary fill + pattern strokes). */
+    const hatchPathData = useCallback((hatch: CanvasHatch, worldToPx: (e: number, n: number) => [number, number]) => {
+        const loops = (hatch.loops ?? []).filter(l => l.vertices && l.vertices.length >= 3);
+        let boundaryPath = '';
+        for (const loop of loops) {
+            const [x0, y0] = worldToPx(loop.vertices[0].x, loop.vertices[0].y);
+            let d = `M${x0.toFixed(2)} ${y0.toFixed(2)}`;
+            for (let i = 1; i < loop.vertices.length; i++) {
+                const [x, y] = worldToPx(loop.vertices[i].x, loop.vertices[i].y);
+                d += `L${x.toFixed(2)} ${y.toFixed(2)}`;
+            }
+            boundaryPath += `${d}Z`;
+        }
+        let patternPath = '';
+        for (const seg of plottedHatchLinework.get(hatch.id) ?? []) {
+            const a = seg.fromPt;
+            const b = seg.toPt;
+            if (!a || !b) continue;
+            const [ax, ay] = worldToPx(a.x, a.y);
+            const [bx, by] = worldToPx(b.x, b.y);
+            patternPath += `M${ax.toFixed(2)} ${ay.toFixed(2)}L${bx.toFixed(2)} ${by.toFixed(2)}`;
+        }
+        return { boundaryPath, patternPath };
+    }, [plottedHatchLinework]);
 
     // ── Entity clusters (points & lines) & Model Space ──────────────────
     const entityClusters = useMemo(() => detectClusters(points, lines), [points, lines]);
@@ -1421,18 +1598,23 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
 
 
     // ── Basemap caching & fetching (Dumps on reload or when loading another file) ──
-    const [basemapCache, setBasemapCache] = useState<Record<string, string>>({});
-    const basemapCacheRef = useRef<Record<string, string>>({});
+    const [basemapCache, setBasemapCache] = useState<Record<string, string>>(() => Object.fromEntries(SHEET_BASEMAP_CACHE));
+    const basemapCacheRef = useRef<Record<string, string>>(basemapCache);
     const fetchingBasemapsRef = useRef<Set<string>>(new Set());
 
-    // Dump map cache when page reloads or when another file/project is loaded
+    // Reset this sheet's basemap references when the project changes. Do NOT
+    // wipe the shared map caches here: that IndexedDB store (utils/mapTileCache)
+    // is what makes reopening a drawing instant, it is shared with the
+    // model-space canvas, and this effect used to run on every mount and every
+    // point edit — forcing a full imagery re-download each time.
+    const lastBasemapProjectRef = useRef<string | undefined>(projectName);
     useEffect(() => {
-        void clearMapCache();
-        clearStaticMapsCache();
+        if (lastBasemapProjectRef.current === projectName) return;
+        lastBasemapProjectRef.current = projectName;
         basemapCacheRef.current = {};
         setBasemapCache({});
         fetchingBasemapsRef.current.clear();
-    }, [projectName, points]);
+    }, [projectName]);
 
     const getVpBasemapKey = (vp: Viewport) => {
         const cx = vp.centerE ?? ((extents ? (extents.minE + extents.maxE) / 2 : 0));
@@ -1455,8 +1637,17 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
         const minN = cy - halfH;
         const maxN = cy + halfH;
 
-        const cacheKey = `${vp.id}_${Math.round(cx)}_${Math.round(cy)}_${vp.scaleFt}_${Math.round(vp.wIn * 10)}_${Math.round(vp.hIn * 10)}`;
-        if (basemapCache[cacheKey] || fetchingBasemapsRef.current.has(cacheKey)) return;
+        const cacheKey = getVpBasemapKey(vp);
+        if (basemapCacheRef.current[cacheKey] || fetchingBasemapsRef.current.has(cacheKey)) return;
+
+        // Reuse the session cache from a previous visit to this tab before
+        // touching the network again.
+        const sessionCached = sheetBasemapCacheGet(cacheKey);
+        if (sessionCached) {
+            basemapCacheRef.current[cacheKey] = sessionCached;
+            setBasemapCache(prev => (prev[cacheKey] ? prev : { ...prev, [cacheKey]: sessionCached }));
+            return;
+        }
 
         fetchingBasemapsRef.current.add(cacheKey);
 
@@ -1517,8 +1708,9 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
                 reader.readAsDataURL(blob);
             });
 
+            sheetBasemapCacheSet(cacheKey, dataUrl);
             basemapCacheRef.current[cacheKey] = dataUrl;
-            setBasemapCache(prev => ({ ...prev, [cacheKey]: dataUrl }));
+            setBasemapCache(prev => (prev[cacheKey] === dataUrl ? prev : { ...prev, [cacheKey]: dataUrl }));
             return dataUrl;
         } catch (err) {
             console.warn('Failed to load USGS NAIP imagery for viewport:', err);
@@ -1526,7 +1718,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
         } finally {
             fetchingBasemapsRef.current.delete(cacheKey);
         }
-    }, [extents, points, settings?.projection?.epsg, basemapCache]);
+    }, [extents, points, settings?.projection?.epsg]);
 
     const debounceTimersRef = useRef<Record<string, number>>({});
 
@@ -1537,7 +1729,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
                 if (timerId) clearTimeout(timerId);
 
                 const cacheKey = getVpBasemapKey(vp);
-                if (basemapCache[cacheKey]) continue;
+                if (basemapCacheRef.current[cacheKey]) continue;
 
                 debounceTimersRef.current[vp.id] = window.setTimeout(() => {
                     fetchBasemapForVp(vp);
@@ -1549,7 +1741,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
                 clearTimeout(debounceTimersRef.current[key]);
             }
         };
-    }, [activeSheet.viewports, fetchBasemapForVp, basemapCache]);
+    }, [activeSheet.viewports, fetchBasemapForVp]);
 
     /** Change sheet size and re-suggest scale for auto-centered viewports. */
     const handleSheetSizeChange = (newSheetId: string) => {
@@ -1751,6 +1943,24 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
         const ptIx = new Map<string, SurveyPoint>();
         for (const p of points) ptIx.set(p.pointNumber, p);
         const hidden = new Set(vp.hiddenLayers);
+        const boundaryCentroids = buildBoundaryAnnotationCentroids(lines, ptIx);
+
+        // Hatches render beneath linework, like a native CAD hatch.
+        const hatchEls: React.ReactElement[] = [];
+        for (const h of plotHatches) {
+            if (h.hidden || hidden.has(hatchLayerKey(h))) continue;
+            const { boundaryPath, patternPath } = hatchPathData(h, worldToPx);
+            if (!boundaryPath) continue;
+            const color = h.color || layerColors[hatchLayerKey(h)] || '#374151';
+            const opacity = Math.max(0, Math.min(1, h.opacity ?? 0.45));
+            if (solidHatchIds.has(h.id)) {
+                hatchEls.push(<path key={`hatch-${h.id}`} d={boundaryPath} fill={color} fillOpacity={opacity} fillRule="evenodd" stroke="none" />);
+            } else if (patternPath) {
+                hatchEls.push(<path key={`hatch-${h.id}`} d={patternPath} fill="none" stroke={color} strokeOpacity={opacity} strokeWidth={0.7} strokeLinecap="round" />);
+            } else {
+                hatchEls.push(<path key={`hatch-${h.id}`} d={boundaryPath} fill={color} fillOpacity={opacity * 0.5} fillRule="evenodd" stroke="none" />);
+            }
+        }
 
         const lineEls: React.ReactElement[] = [];
         for (let i = 0; i < lines.length; i++) {
@@ -1777,7 +1987,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
                 bx = ax; by = ay;
             }
 
-            const resolved = resolveSheetRenderEntity(l, ax, ay, bx, by, worldToPx, worldFtPerInch, renderPpi);
+            const resolved = resolveSheetRenderEntity(l, ax, ay, bx, by, worldToPx, worldFtPerInch, renderPpi, boundaryCentroids.get(l.polylineId || String(l.type)));
             if (!resolved) continue;
 
             const stroke = pickLineColor(l, layerColors);
@@ -1872,7 +2082,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
         return (
             <svg width="100%" height="100%" viewBox={`0 0 ${wpx} ${hpx}`} style={{ display: 'block', width: '100%', height: '100%', background: vp.showBasemap ? 'transparent' : '#fff', position: 'relative', zIndex: 1 }}>
                 <g transform={rot !== 0 ? `rotate(${rot} ${(wpx / 2).toFixed(1)} ${(hpx / 2).toFixed(1)})` : undefined}>
-                    {lineEls}{pointEls}
+                    {hatchEls}{lineEls}{pointEls}
                 </g>
             </svg>
         );
@@ -1909,7 +2119,22 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
             const ptIx = new Map<string, SurveyPoint>();
             for (const p of points) ptIx.set(p.pointNumber, p);
             const hidden = new Set(vp.hiddenLayers);
+            const boundaryCentroids = buildBoundaryAnnotationCentroids(lines, ptIx);
             const parts: string[] = [];
+            for (const h of plotHatches) {
+                if (h.hidden || hidden.has(hatchLayerKey(h))) continue;
+                const { boundaryPath, patternPath } = hatchPathData(h, worldToPx);
+                if (!boundaryPath) continue;
+                const color = h.color || layerColors[hatchLayerKey(h)] || '#374151';
+                const opacity = Math.max(0, Math.min(1, h.opacity ?? 0.45));
+                if (solidHatchIds.has(h.id)) {
+                    parts.push(`<path d="${boundaryPath}" fill="${color}" fill-opacity="${opacity}" fill-rule="evenodd" stroke="none" />`);
+                } else if (patternPath) {
+                    parts.push(`<path d="${patternPath}" fill="none" stroke="${color}" stroke-opacity="${opacity}" stroke-width="1" stroke-linecap="round" />`);
+                } else {
+                    parts.push(`<path d="${boundaryPath}" fill="${color}" fill-opacity="${opacity * 0.5}" fill-rule="evenodd" stroke="none" />`);
+                }
+            }
             for (let i = 0; i < lines.length; i++) {
                 const l = lines[i];
                 if (hidden.has(lineLayerKey(l))) continue;
@@ -1934,7 +2159,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
                     bx = ax; by = ay;
                 }
 
-                const resolved = resolveSheetRenderEntity(l, ax, ay, bx, by, worldToPx, worldFtPerInch, pdfPpi);
+                const resolved = resolveSheetRenderEntity(l, ax, ay, bx, by, worldToPx, worldFtPerInch, pdfPpi, boundaryCentroids.get(l.polylineId || String(l.type)));
                 if (!resolved) continue;
 
                 const stroke = pickLineColor(l, layerColors);
@@ -2013,7 +2238,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, projectName, cadLa
             ${sbBlock}
         </svg>`;
         return { svg, widthPx: sheetPxW, heightPx: sheetPxH };
-    }, [set.tbLayout, points, lines, extents, layerColors, buildTbContext, getEffectiveVpRotation, basemapCache]);
+    }, [set.tbLayout, points, lines, extents, layerColors, buildTbContext, getEffectiveVpRotation, basemapCache, plotHatches, hatchPathData, solidHatchIds]);
 
     /** Rasterize an SVG to a PNG data URL via an offscreen canvas. */
     const svgToPng = (svg: string, w: number, h: number): Promise<string> => new Promise((resolve, reject) => {

@@ -1,18 +1,14 @@
 /**
- * Civil Drafter context-management controls.
+ * Civil Drafter context management — A2UI surface.
  *
- * A small draggable dialog that lets the user decide how much conversation
- * context the Civil Drafter carries between turns. This directly addresses the
- * "input exceeds maximum tokens" (400) failures that appear after several
- * back-to-back draw requests: with a large point database and vision imagery
- * attached each turn, the retained history grows until it overflows the model's
- * input window.
- *
- * The active config is published to `window.__civilDrafterContextConfig` (see
- * services/civilDrafterContextConfig.ts) so App.tsx can read it at send time.
+ * The surface is hosted by A2UISurfaceHost, so the host owns the window chrome,
+ * minimize/fullscreen controls, and close behavior. This component only owns
+ * the context-budget controls and publishes the active config through
+ * services/civilDrafterContextConfig.ts.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useState } from 'react';
+import { Check, Gauge, RotateCcw } from 'lucide-react';
 import {
   type CivilDrafterContextConfig,
   type CivilDrafterContextVolume,
@@ -23,33 +19,9 @@ import {
 } from '../services/civilDrafterContextConfig.ts';
 
 interface Props {
-  /** Close handler — the host renders this as a floating popover. */
-  onClose?: () => void;
   volume?: CivilDrafterContextVolume;
   modelName?: string;
 }
-
-const Toggle: React.FC<{
-  label: string;
-  hint: string;
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (v: boolean) => void;
-}> = ({ label, hint, checked, disabled, onChange }) => (
-  <div>
-    <label className={`flex items-center gap-2 ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={e => onChange(e.target.checked)}
-        className="accent-fuchsia-500"
-      />
-      <span className="text-gray-100">{label}</span>
-    </label>
-    <p className="text-[11px] text-gray-400 mt-0.5 pl-6">{hint}</p>
-  </div>
-);
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024) return `${bytes} B`;
@@ -65,219 +37,290 @@ const estimateModelWindow = (modelName?: string): number => {
   return 1_000_000;
 };
 
+const SwitchRow: React.FC<{
+  id: string;
+  label: string;
+  hint: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (value: boolean) => void;
+}> = ({ id, label, hint, checked, disabled, onChange }) => (
+  <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p id={`${id}-label`} className="text-[11px] font-semibold text-slate-100">
+          {label}
+        </p>
+        <p id={`${id}-hint`} className="mt-0.5 text-[10px] leading-snug text-slate-500">
+          {hint}
+        </p>
+      </div>
+      <button
+        id={id}
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-labelledby={`${id}-label`}
+        aria-describedby={`${id}-hint`}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/60 disabled:cursor-not-allowed disabled:opacity-40 ${
+          checked
+            ? 'border-fuchsia-400/60 bg-fuchsia-500/80'
+            : 'border-white/[0.12] bg-white/[0.06]'
+        }`}
+      >
+        <span
+          aria-hidden="true"
+          className={`absolute left-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white text-fuchsia-700 shadow-sm transition-transform ${
+            checked ? 'translate-x-4' : 'translate-x-0'
+          }`}
+        >
+          {checked ? <Check className="h-2.5 w-2.5" strokeWidth={3} /> : null}
+        </span>
+      </button>
+    </div>
+  </div>
+);
+
 export const CivilDrafterContextPanel: React.FC<Props> = ({
-  onClose,
   volume = EMPTY_CIVIL_DRAFTER_CONTEXT_VOLUME,
   modelName,
 }) => {
-  const [config, setConfig] = useState<CivilDrafterContextConfig>(() => loadCivilDrafterContextConfig());
-  const [collapsed, setCollapsed] = useState<boolean>(false);
+  const idPrefix = useId();
+  const [config, setConfig] = useState<CivilDrafterContextConfig>(() =>
+    loadCivilDrafterContextConfig(),
+  );
 
-  // Drag state
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
-  const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
-
-  const getDefaultPos = useCallback(() => ({
-    x: window.innerWidth - 336, // 320px panel + 16px right margin
-    y: 80,
-  }), []);
-
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button, input, select, textarea')) return;
-    e.preventDefault();
-    const current = pos ?? getDefaultPos();
-    dragState.current = { startX: e.clientX, startY: e.clientY, origX: current.x, origY: current.y };
-
-    const onMove = (ev: MouseEvent) => {
-      if (!dragState.current) return;
-      const dx = ev.clientX - dragState.current.startX;
-      const dy = ev.clientY - dragState.current.startY;
-      setPos({
-        x: Math.max(8, Math.min(window.innerWidth - 80, dragState.current.origX + dx)),
-        y: Math.max(60, Math.min(window.innerHeight - 40, dragState.current.origY + dy)),
-      });
-    };
-    const onUp = () => {
-      dragState.current = null;
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, [pos, getDefaultPos]);
-
-  // Publish on every change.
   useEffect(() => {
     setCivilDrafterContextConfig(config);
   }, [config]);
 
-  const update = <K extends keyof CivilDrafterContextConfig>(key: K, value: CivilDrafterContextConfig[K]) => {
-    setConfig(prev => ({ ...prev, [key]: value }));
+  const update = <K extends keyof CivilDrafterContextConfig>(
+    key: K,
+    value: CivilDrafterContextConfig[K],
+  ) => {
+    setConfig(previous => ({ ...previous, [key]: value }));
   };
 
-  const reset = () => setConfig({ ...DEFAULT_CIVIL_DRAFTER_CONTEXT_CONFIG, enabled: config.enabled });
+  const reset = () =>
+    setConfig({ ...DEFAULT_CIVIL_DRAFTER_CONTEXT_CONFIG, enabled: config.enabled });
 
-  const resolvedPos = pos ?? getDefaultPos();
   const controlsDisabled = !config.enabled;
   const fixedTokens = estimateTextTokens(volume.fixedTextChars);
   const retainedTokens = estimateTextTokens(volume.retainedTextChars);
   const estimatedTextTokens = fixedTokens + retainedTokens;
   const modelWindow = estimateModelWindow(modelName);
   const windowPercent = Math.min(100, (estimatedTextTokens / modelWindow) * 100);
-  const growthPercent = Math.min(100, Math.max(
-    windowPercent,
-    Math.log10(Math.max(retainedTokens, 1)) / Math.log10(modelWindow) * 100,
-  ));
-  const meterTone = windowPercent >= 85
-    ? 'bg-red-500'
-    : windowPercent >= 60
-      ? 'bg-amber-400'
-      : 'bg-fuchsia-500';
+  const growthPercent = Math.min(
+    100,
+    Math.max(
+      windowPercent,
+      (Math.log10(Math.max(retainedTokens, 1)) / Math.log10(modelWindow)) * 100,
+    ),
+  );
+  const meterTone =
+    windowPercent >= 85
+      ? 'bg-rose-400'
+      : windowPercent >= 60
+        ? 'bg-amber-400'
+        : 'bg-fuchsia-400';
+
+  const masterSwitchId = `${idPrefix}-enabled`;
+  const freshContextId = `${idPrefix}-fresh-context`;
+  const pointDatabaseId = `${idPrefix}-point-database`;
+  const visionId = `${idPrefix}-vision`;
+  const autoResetId = `${idPrefix}-auto-reset`;
 
   return (
-    <div
-      className="fixed z-[9500] bg-gray-900/95 border border-fuchsia-500/40 rounded-lg shadow-2xl text-sm text-gray-200 backdrop-blur-sm w-80"
-      style={{ left: resolvedPos.x, top: resolvedPos.y, zIndex: 9500 }}
-    >
-      <div
-        className="flex items-center justify-between px-3 py-2 border-b border-fuchsia-500/30 cursor-move select-none"
-        onMouseDown={handleDragStart}
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-fuchsia-300">🧠</span>
-          <span className="font-semibold text-fuchsia-200">Civil Drafter Context</span>
+    <div data-testid="civil-drafter-context-surface" className="space-y-3 text-slate-200">
+      <div className="flex items-start justify-between gap-3 border-b border-white/[0.06] pb-3">
+        <div className="min-w-0">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-fuchsia-400/25 bg-fuchsia-400/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.12em] text-fuchsia-300">
+            <Gauge className="h-3 w-3" />
+            Civil Drafter
+          </span>
+          <h2 className="mt-1.5 text-sm font-semibold text-white">Context budget</h2>
+          <p className="mt-1 text-[11px] leading-snug text-slate-400">
+            Keep each drafting request inside the model window by controlling conversation
+            history, point payloads, and vision imagery.
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setCollapsed(c => !c)}
-            className="text-xs text-gray-400 hover:text-white"
-            title={collapsed ? 'Expand' : 'Collapse'}
-          >{collapsed ? '▾' : '▴'}</button>
-          {onClose && (
-            <button onClick={onClose} className="text-xs text-gray-400 hover:text-white" title="Close">✕</button>
-          )}
-        </div>
+        <span className="shrink-0 rounded-full border border-emerald-400/20 bg-emerald-400/[0.08] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-emerald-300">
+          Applies next request
+        </span>
       </div>
 
-      {!collapsed && (
-        <div className="p-3 space-y-3 max-h-[70vh] overflow-y-auto">
-          <div className="rounded-md border border-fuchsia-500/30 bg-gray-950/60 p-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-fuchsia-200">Tracked context volume</span>
-              <span className="font-mono text-xs text-fuchsia-300">
-                ~{estimatedTextTokens.toLocaleString()} text tokens
-              </span>
-            </div>
-            <div className="mt-2 h-2 overflow-hidden rounded-full bg-gray-700" title={`Log-scaled growth; numeric usage is ${windowPercent.toFixed(1)}% of the estimated model text window`}>
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${meterTone}`}
-                style={{ width: `${growthPercent}%` }}
-              />
-            </div>
-            <div className="mt-1 flex justify-between text-[10px] text-gray-500">
-              <span>{windowPercent.toFixed(windowPercent < 1 ? 2 : 1)}% of ~{(modelWindow / 1000).toLocaleString()}k</span>
-              <span>{volume.retainedTurns} retained turn{volume.retainedTurns === 1 ? '' : 's'}</span>
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-              <span className="text-gray-400">Fixed file baseline</span>
-              <span className="text-right font-mono text-gray-200">~{fixedTokens.toLocaleString()} tok</span>
-              <span className="text-gray-400">Conversation growth</span>
-              <span className="text-right font-mono text-fuchsia-300">+~{retainedTokens.toLocaleString()} tok</span>
-              <span className="text-gray-400">Retained imagery</span>
-              <span className="text-right font-mono text-gray-200">
-                {volume.retainedImageCount} / {formatBytes(volume.retainedImageBytes)}
-              </span>
-              <span className="text-gray-400">Last request</span>
-              <span className="text-right font-mono text-gray-200">
-                ~{estimateTextTokens(volume.lastRequestTextChars).toLocaleString()} tok
-                {volume.lastRequestImageCount > 0 ? ` + ${volume.lastRequestImageCount} img` : ''}
-              </span>
-            </div>
-            {volume.resetCount > 0 && (
-              <p className="mt-2 text-[10px] text-emerald-400">
-                Context dropped {volume.resetCount} time{volume.resetCount === 1 ? '' : 's'} this session.
-              </p>
-            )}
-            <p className="mt-2 text-[10px] leading-tight text-gray-500">
-              Estimate only: text uses ~4 characters/token. The bar is log-scaled so early growth stays visible. Image bytes are separate because vision tokenization varies by model and resolution.
-            </p>
-          </div>
-
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={config.enabled}
-              onChange={e => update('enabled', e.target.checked)}
-              className="accent-fuchsia-500"
-            />
-            <span className="text-gray-100">Manage conversation context</span>
-          </label>
-          <p className="text-[11px] text-gray-400 -mt-1 pl-6">
-            When off, every request keeps the full prior conversation — after several draws the input can exceed the model's limit (a 400 error).
-          </p>
-
-          <div className="border-t border-gray-700/60 pt-3">
-            <Toggle
-              label="Fresh context on each draw"
-              hint='Clears conversation memory before every "draw"/"plot" request so each one runs clean. Recommended.'
-              checked={config.freshContextPerDraw}
-              disabled={controlsDisabled}
-              onChange={v => update('freshContextPerDraw', v)}
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-gray-300 mb-1">
-              Auto-reset after:{' '}
-              <span className="font-mono text-fuchsia-300">
-                {config.autoResetTurns === 0 ? 'Off' : `${config.autoResetTurns} turn${config.autoResetTurns === 1 ? '' : 's'}`}
-              </span>
-            </label>
-            <input
-              type="range"
-              min={0}
-              max={20}
-              step={1}
-              value={config.autoResetTurns}
-              onChange={e => update('autoResetTurns', parseInt(e.target.value, 10))}
-              disabled={controlsDisabled}
-              className="w-full accent-fuchsia-500 disabled:opacity-50"
-            />
-            <p className="text-[11px] text-gray-400 mt-1">
-              Clears conversation memory once this many turns accumulate. 0 keeps memory until a draw resets it (above).
-            </p>
-          </div>
-
-          <div className="border-t border-gray-700/60 pt-3">
-            <Toggle
-              label="Send point database each turn"
-              hint="The loaded file is already in the system prompt. Turn off to drop the large per-turn point block and shrink requests."
-              checked={config.includePointDatabase}
-              disabled={controlsDisabled}
-              onChange={v => update('includePointDatabase', v)}
-            />
-          </div>
-
-          <div>
-            <Toggle
-              label="Attach vision imagery on draw"
-              hint="Multi-zoom scene frames + aerial reference. Very token-heavy — turn off if requests still overflow."
-              checked={config.attachVisionImagery}
-              disabled={controlsDisabled}
-              onChange={v => update('attachVisionImagery', v)}
-            />
-          </div>
-
-          <div className="flex justify-between pt-1">
-            <button
-              onClick={reset}
-              className="text-xs text-gray-400 hover:text-white underline disabled:opacity-50"
-              disabled={controlsDisabled}
-            >Reset to defaults</button>
-            <span className="text-[11px] text-gray-500">Applies to next request</span>
-          </div>
+      <section
+        aria-labelledby={`${idPrefix}-budget-heading`}
+        className="rounded-xl border border-fuchsia-400/20 bg-fuchsia-400/[0.04] p-3"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <h3
+            id={`${idPrefix}-budget-heading`}
+            className="text-[10px] font-bold uppercase tracking-[0.14em] text-fuchsia-200"
+          >
+            Tracked context volume
+          </h3>
+          <span className="font-mono text-[11px] text-fuchsia-300">
+            ~{estimatedTextTokens.toLocaleString()} text tokens
+          </span>
         </div>
-      )}
+
+        <div
+          role="progressbar"
+          aria-label="Estimated context window usage"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(windowPercent)}
+          className="mt-2 h-2 overflow-hidden rounded-full bg-white/[0.08]"
+          title={`Estimated usage: ${windowPercent.toFixed(1)}% of the model text window`}
+        >
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${meterTone}`}
+            style={{ width: `${growthPercent}%` }}
+          />
+        </div>
+        <div className="mt-1 flex justify-between text-[10px] text-slate-500">
+          <span>
+            {windowPercent.toFixed(windowPercent < 1 ? 2 : 1)}% of ~
+            {(modelWindow / 1000).toLocaleString()}k
+          </span>
+          <span>
+            {volume.retainedTurns} retained turn{volume.retainedTurns === 1 ? '' : 's'}
+          </span>
+        </div>
+
+        <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10.5px]">
+          <dt className="text-slate-500">Fixed file baseline</dt>
+          <dd className="text-right font-mono text-slate-200">
+            ~{fixedTokens.toLocaleString()} tok
+          </dd>
+          <dt className="text-slate-500">Conversation growth</dt>
+          <dd className="text-right font-mono text-fuchsia-300">
+            +~{retainedTokens.toLocaleString()} tok
+          </dd>
+          <dt className="text-slate-500">Retained imagery</dt>
+          <dd className="text-right font-mono text-slate-200">
+            {volume.retainedImageCount} / {formatBytes(volume.retainedImageBytes)}
+          </dd>
+          <dt className="text-slate-500">Last request</dt>
+          <dd className="text-right font-mono text-slate-200">
+            ~{estimateTextTokens(volume.lastRequestTextChars).toLocaleString()} tok
+            {volume.lastRequestImageCount > 0
+              ? ` + ${volume.lastRequestImageCount} img`
+              : ''}
+          </dd>
+        </dl>
+
+        {volume.resetCount > 0 && (
+          <p className="mt-2 text-[10px] text-emerald-300">
+            Context dropped {volume.resetCount} time
+            {volume.resetCount === 1 ? '' : 's'} this session.
+          </p>
+        )}
+        <p className="mt-2 text-[10px] leading-snug text-slate-500">
+          Estimate only: text uses ~4 characters per token. The bar is log-scaled so early
+          growth stays visible. Image bytes are separate because vision tokenization varies
+          by model and resolution.
+        </p>
+      </section>
+
+      <section aria-labelledby={`${idPrefix}-retention-heading`} className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <h3
+            id={`${idPrefix}-retention-heading`}
+            className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400"
+          >
+            Retention
+          </h3>
+          <span className="text-[9.5px] text-slate-500">Host-managed</span>
+        </div>
+
+        <SwitchRow
+          id={masterSwitchId}
+          label="Manage conversation context"
+          hint="When off, every request keeps the full prior conversation and can exceed the model input limit."
+          checked={config.enabled}
+          onChange={value => update('enabled', value)}
+        />
+
+        <SwitchRow
+          id={freshContextId}
+          label="Fresh context on each draw"
+          hint='Clears conversation memory before every "draw" or "plot" request. Recommended.'
+          checked={config.freshContextPerDraw}
+          disabled={controlsDisabled}
+          onChange={value => update('freshContextPerDraw', value)}
+        />
+
+        <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
+          <div className="flex items-center justify-between gap-3">
+            <label htmlFor={autoResetId} className="text-[11px] font-semibold text-slate-100">
+              Auto-reset after
+            </label>
+            <output htmlFor={autoResetId} className="font-mono text-[11px] text-fuchsia-300">
+              {config.autoResetTurns === 0
+                ? 'Off'
+                : `${config.autoResetTurns} turn${config.autoResetTurns === 1 ? '' : 's'}`}
+            </output>
+          </div>
+          <input
+            id={autoResetId}
+            type="range"
+            min={0}
+            max={20}
+            step={1}
+            value={config.autoResetTurns}
+            onChange={event => update('autoResetTurns', parseInt(event.target.value, 10))}
+            disabled={controlsDisabled}
+            aria-describedby={`${autoResetId}-hint`}
+            className="mt-2 w-full accent-fuchsia-400 disabled:opacity-40"
+          />
+          <p id={`${autoResetId}-hint`} className="mt-1 text-[10px] leading-snug text-slate-500">
+            Clears conversation memory once this many turns accumulate. Off keeps memory
+            until a draw resets it.
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby={`${idPrefix}-payload-heading`} className="space-y-2">
+        <h3
+          id={`${idPrefix}-payload-heading`}
+          className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400"
+        >
+          Payload
+        </h3>
+        <SwitchRow
+          id={pointDatabaseId}
+          label="Send point database each turn"
+          hint="The loaded file is already in the system prompt. Turn off to drop the large per-turn point block."
+          checked={config.includePointDatabase}
+          disabled={controlsDisabled}
+          onChange={value => update('includePointDatabase', value)}
+        />
+        <SwitchRow
+          id={visionId}
+          label="Attach vision imagery on draw"
+          hint="Multi-zoom scene frames and aerial reference. Very token-heavy — turn off if requests still overflow."
+          checked={config.attachVisionImagery}
+          disabled={controlsDisabled}
+          onChange={value => update('attachVisionImagery', value)}
+        />
+      </section>
+
+      <div className="flex items-center justify-between gap-3 border-t border-white/[0.06] pt-3">
+        <button
+          type="button"
+          onClick={reset}
+          disabled={controlsDisabled}
+          className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.1] bg-white/[0.03] px-2.5 py-1.5 text-[10.5px] font-semibold text-slate-300 transition-colors hover:border-white/[0.2] hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400/60 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          Reset to defaults
+        </button>
+        <span className="text-[10px] text-slate-500">Applies to next request</span>
+      </div>
     </div>
   );
 };

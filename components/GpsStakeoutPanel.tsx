@@ -20,11 +20,8 @@ interface GpsStakeoutPanelProps {
   nextAvailablePointNumber: string;
   /** Optional initial tab — used so the home-screen "Stakeout" / "Collect" CTAs jump straight into the right view. */
   initialTab?: 'stakeout' | 'collect' | 'benchmark';
-  /**
-   * When true the tab bar is hidden — the panel is locked to its initialTab.
-   * Used for the independent floating Stakeout and Collect panels.
-   */
-  lockedTab?: boolean;
+  /** Increment to re-apply `initialTab` even when the dialog is already open. */
+  tabRequestId?: number;
 }
 
 interface StakeoutData {
@@ -36,9 +33,15 @@ interface StakeoutData {
 }
 
 const GpsStakeoutPanel: React.FC<GpsStakeoutPanelProps> = ({
-  isOverlay, currentPosition, projectedPosition, projectPoints, pointLists, onStorePoint, onStoreStakedPoint, settings, targetPointNumber, setTargetPointNumber, nextAvailablePointNumber, initialTab, lockedTab
+  isOverlay, currentPosition, projectedPosition, projectPoints, pointLists, onStorePoint, onStoreStakedPoint, settings, targetPointNumber, setTargetPointNumber, nextAvailablePointNumber, initialTab, tabRequestId
 }) => {
   const [activeTab, setActiveTab] = useState<'stakeout' | 'collect' | 'benchmark'>(initialTab ?? 'stakeout');
+
+  // The dialog stays mounted while floating, so re-apply a requested tab when
+  // another surface (A2UI / CACP) opens it again.
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab, tabRequestId]);
   // Keep the panel responsive to home-screen CTAs: when the parent passes a new
   // initialTab (e.g. user clicked Stakeout vs Collect on the home card), switch.
   useEffect(() => {
@@ -323,14 +326,12 @@ const GpsStakeoutPanel: React.FC<GpsStakeoutPanelProps> = ({
   
   const content = (
     <div className="w-full h-full flex flex-col">
-        {lockedTab && signalBar}
-        {!lockedTab && (
-          <div className="flex border-b border-gray-700 px-4 flex-shrink-0 light-theme:border-gray-300">
-              <TabButton tabName="stakeout" label="Stakeout" />
-              <TabButton tabName="collect" label="Collect" />
-              <TabButton tabName="benchmark" label="Benchmark" />
-          </div>
-        )}
+        {signalBar}
+        <div className="flex border-b border-gray-700 px-4 flex-shrink-0 light-theme:border-gray-300">
+            <TabButton tabName="stakeout" label="Stakeout" />
+            <TabButton tabName="collect" label="Collect" />
+            <TabButton tabName="benchmark" label="Benchmark" />
+        </div>
         <div className="p-4 flex-grow overflow-y-auto">
              {activeTab === 'collect' && (
                 <form onSubmit={handleStorePoint} className="mt-2 space-y-2 max-w-md mx-auto">

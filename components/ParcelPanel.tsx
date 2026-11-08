@@ -31,6 +31,8 @@ import {
   PencilSquareIcon,
   CrosshairsIcon
 } from './icons.tsx';
+import { DockModeControl, type DockMode } from './DockModeControl.tsx';
+import { SectionChip } from './common/SectionChip.tsx';
 
 export interface ParcelPanelProps {
   /** Number of inclusion-line segments currently drawn — used to enable/disable "Use inclusion area". */
@@ -84,6 +86,9 @@ export interface ParcelPanelProps {
   isDocked?: boolean;
   /** Toggle between docked in drawer and floating on canvas. */
   onToggleDock?: () => void;
+  /** Tri-state placement across chat, canvas, and the Tool Shelf. */
+  dockMode?: DockMode;
+  onDockModeChange?: (mode: DockMode) => void;
   /** Whether the panel is minimized (header only). */
   isMinimized?: boolean;
   /** Toggle minimized state. */
@@ -151,14 +156,18 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
   cadTextStyles = [],
   propertyOwnerCategory,
   onParcelLabelFormatterChange,
-  isDocked = true,
+  isDocked: isDockedProp = true,
   onToggleDock,
+  dockMode,
+  onDockModeChange,
   isMinimized = false,
   onToggleMinimize,
   onClose,
   reservedRight = 0,
   reservedBottom = 0,
 }) => {
+  const mode: DockMode = dockMode ?? (isDockedProp ? 'toolshelf' : 'floating');
+  const isDocked = mode !== 'floating';
   const [activeMode, setActiveMode] = useState<ParcelPanelMode>('query');
   const [services, setServices] = useState<ParcelGisServiceDef[]>(() => getAllParcelServices());
   const [selectedServiceId, setSelectedServiceIdRaw] = useState<string>(() => readInitialServiceId(projectEpsg));
@@ -679,56 +688,60 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
         fontFamily: "'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
       }}
       className={isDocked ? (
-        "w-full bg-gray-900/95 border-0 text-xs text-gray-200 select-none light-theme:bg-white light-theme:text-gray-800 flex flex-col overflow-hidden antialiased"
+        "panel-dense w-full bg-[#0a0f16] border-0 text-[11px] leading-snug text-slate-200 select-none light-theme:bg-white light-theme:text-gray-800 flex flex-col overflow-hidden antialiased"
       ) : (
-        `fixed z-30 max-w-[calc(100vw-1rem)] bg-gray-900/95 border border-orange-500/40 border-dashed rounded-xl shadow-2xl backdrop-blur-md text-xs text-gray-200 select-none light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-800 flex flex-col overflow-hidden antialiased transition-shadow ${
+        `panel-dense fixed z-30 max-w-[calc(100vw-1rem)] bg-[#0a0f16]/97 border border-white/[0.1] rounded-xl shadow-2xl shadow-black/60 backdrop-blur-md text-[11px] leading-snug text-slate-200 select-none light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-800 flex flex-col overflow-hidden antialiased transition-shadow ${
           isMinimized ? 'shadow-lg' : 'shadow-2xl'
         }`
       )}
     >
       {/* Header — drag handle with Welcome Screen styling */}
       <div
-        className={`flex items-center justify-between px-3.5 py-2.5 bg-gray-950/80 border-b border-gray-800/80 ${
+        className={`flex items-center justify-between gap-2 border-b border-white/[0.08] bg-[#070e18] px-3 py-1.5 ${
           isDocked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'
-        } light-theme:bg-gray-100/90 light-theme:border-gray-200 shrink-0 gap-2 select-none ${
+        } light-theme:bg-gray-50 light-theme:border-gray-200 shrink-0 select-none ${
           isMinimized && !isDocked ? 'rounded-xl border-b-0' : ''
         }`}
         style={{ touchAction: isDocked ? 'auto' : 'none' }}
         onMouseDown={isDocked ? undefined : handlePointerDown}
         onTouchStart={isDocked ? undefined : handlePointerDown}
       >
-        <div className="flex items-center gap-2 min-w-0 flex-1 mr-2 overflow-hidden">
-          {/* Accent bar */}
-          <div className="w-2.5 h-6 rounded-l-md bg-orange-500 shrink-0" />
-          <GisAgentIcon className="w-5 h-5 text-orange-400 shrink-0" />
-          <div className="flex items-baseline gap-1.5 shrink-0">
-            <h2 className="text-sm font-extrabold tracking-tight text-white light-theme:text-gray-900 whitespace-nowrap">
-              Boundary<span className="text-cyan-400">Agent</span>
-            </h2>
-            <span className="hidden sm:inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300 border border-orange-500/30 uppercase tracking-wider shrink-0 whitespace-nowrap">
-              GIS
-            </span>
-          </div>
-          <span className="text-xs font-semibold text-gray-300 truncate hidden xs:inline light-theme:text-gray-700">
-            County Parcels
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-cyan-400/25 bg-cyan-400/10 shadow-sm light-theme:border-cyan-200 light-theme:bg-cyan-50">
+            <GisAgentIcon className="h-3.5 w-3.5 text-cyan-300 light-theme:text-cyan-700" />
           </span>
+          <div className="min-w-0">
+            <h2 className="flex items-center gap-1.5 truncate text-xs font-semibold tracking-tight text-slate-100 light-theme:text-gray-900">
+              <span>Boundary <span className="text-cyan-300">Agent</span></span>
+              <span className="rounded border border-cyan-400/25 bg-cyan-400/10 px-1 py-0.5 font-mono text-[8px] font-bold uppercase tracking-wider text-cyan-200">
+                GIS
+              </span>
+            </h2>
+            <p className="truncate text-[9px] font-medium uppercase tracking-[0.12em] text-slate-500 light-theme:text-gray-500">
+              County parcels → canvas
+            </p>
+          </div>
         </div>
 
         {/* Window controls: Dock/Pop-out, Minimize, Close */}
         <div className="flex items-center gap-1 shrink-0">
-          {onToggleDock && (
-            <button
-              onClick={onToggleDock}
-              className="p-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-cyan-400 transition-colors light-theme:hover:bg-gray-200"
-              title={isDocked ? 'Pop out GIS dialog to a floating window on canvas' : 'Dock GIS dialog back into chat'}
-              aria-label={isDocked ? 'Pop out GIS dialog' : 'Dock GIS dialog'}
-            >
-              {isDocked ? (
-                <ArrowTopRightOnSquareIcon className="w-4 h-4" />
-              ) : (
-                <ArrowDownOnSquareIcon className="w-4 h-4" />
-              )}
-            </button>
+          {(onDockModeChange || onToggleDock) && (
+            onDockModeChange ? (
+              <DockModeControl mode={mode} onChange={onDockModeChange} />
+            ) : (
+              <button
+                onClick={onToggleDock}
+                className="p-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-cyan-400 transition-colors light-theme:hover:bg-gray-200"
+                title={isDocked ? 'Pop out GIS dialog to a floating window on canvas' : 'Dock GIS dialog back into chat'}
+                aria-label={isDocked ? 'Pop out GIS dialog' : 'Dock GIS dialog'}
+              >
+                {isDocked ? (
+                  <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+                ) : (
+                  <ArrowDownOnSquareIcon className="w-4 h-4" />
+                )}
+              </button>
+            )
           )}
           {onToggleMinimize && (
             <button
@@ -756,77 +769,84 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
         </div>
       </div>
 
-      {/* Multi-modal Tab Bar — rendered when not minimized */}
+      {/* Multi-modal Tab Bar — grouped segmented control */}
       {!isMinimized && (
-        <div className="flex items-center gap-1 px-3 pt-2 pb-1 border-b border-gray-800/80 bg-gray-950/40 shrink-0">
-          <button
-            type="button"
-            onClick={() => setActiveMode('query')}
-            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
-              activeMode === 'query'
-                ? 'bg-orange-500/20 text-orange-300 border border-orange-500/50 shadow-sm'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50 border border-transparent'
-            }`}
-          >
-            <CrosshairsIcon className="w-3.5 h-3.5" />
-            <span>Query</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveMode('labels')}
-            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
-              activeMode === 'labels'
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/50 shadow-sm'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50 border border-transparent'
-            }`}
-          >
-            <PencilSquareIcon className="w-3.5 h-3.5" />
-            <span>Labels</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveMode('parcels')}
-            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
-              activeMode === 'parcels'
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 shadow-sm'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50 border border-transparent'
-            }`}
-          >
-            <LayersIcon className="w-3.5 h-3.5" />
-            <span>Parcels</span>
-            {lastFetchedParcels.length > 0 && (
-              <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/40">
-                {lastFetchedParcels.length}
-              </span>
-            )}
-          </button>
+        <div className="flex shrink-0 items-center border-b border-white/[0.07] bg-black/20 px-2.5 py-1.5">
+          <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/[0.08] bg-black/20 p-0.5">
+            <button
+              type="button"
+              aria-pressed={activeMode === 'query'}
+              onClick={() => setActiveMode('query')}
+              className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-semibold transition-colors ${
+                activeMode === 'query'
+                  ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-100'
+                  : 'border-transparent text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
+              }`}
+            >
+              <CrosshairsIcon className="w-3.5 h-3.5" />
+              <span>Query</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={activeMode === 'labels'}
+              onClick={() => setActiveMode('labels')}
+              className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-semibold transition-colors ${
+                activeMode === 'labels'
+                  ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-100'
+                  : 'border-transparent text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
+              }`}
+            >
+              <PencilSquareIcon className="w-3.5 h-3.5" />
+              <span>Labels</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={activeMode === 'parcels'}
+              onClick={() => setActiveMode('parcels')}
+              className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-semibold transition-colors ${
+                activeMode === 'parcels'
+                  ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-100'
+                  : 'border-transparent text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
+              }`}
+            >
+              <LayersIcon className="w-3.5 h-3.5" />
+              <span>Parcels</span>
+              {lastFetchedParcels.length > 0 && (
+                <span className="ml-0.5 rounded-full border border-emerald-500/40 bg-emerald-950 px-1.5 py-0.2 font-mono text-[9px] font-bold text-emerald-300">
+                  {lastFetchedParcels.length}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
       )}
 
       {/* Main Content Area — split by active mode */}
       {!isMinimized && (
-        <div className={`flex-1 overflow-y-auto px-3.5 py-3 space-y-3 ${isDocked ? 'max-h-[60vh]' : ''}`}>
+        <div className={`flex-1 overflow-y-auto px-2.5 py-2 space-y-2 ${isDocked ? 'max-h-[60vh]' : ''}`}>
           {/* ========================================================= */}
           {/* MODE 1: QUERY & FETCH                                     */}
           {/* ========================================================= */}
           {activeMode === 'query' && (
-            <div className="space-y-3">
-              <div className="rounded-lg bg-orange-950/20 border border-orange-500/30 p-2.5">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-bold text-orange-300 flex items-center gap-1.5">
+            <div className="space-y-2">
+              <div className="panel-surface relative overflow-hidden rounded-lg border border-white/[0.08] bg-[#070e18]/80 py-2 pl-4 pr-2.5">
+                <SectionChip color="query" />
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="font-bold text-white flex items-center gap-1.5">
                     🏛️ Public County GIS Tax Boundaries
                   </span>
-                  <span className="text-[10px] text-gray-400 font-mono">ArcGIS REST</span>
+                  <span className="text-[10px] text-white/40 font-mono">ArcGIS REST</span>
                 </div>
-                <p className="text-[11px] text-gray-300 leading-relaxed light-theme:text-gray-600">
+                <p className="text-[11px] text-white/60 leading-relaxed light-theme:text-gray-600">
                   Fetch live parcel polygons directly from county GIS servers into your canvas linework.
                 </p>
               </div>
 
               {/* Project location — auto-detected from georeferenced points */}
-              <div className="rounded-lg border border-cyan-700/50 bg-cyan-950/20 p-2.5 space-y-1.5">
+              <div className="panel-surface relative overflow-hidden rounded-lg border border-cyan-700/40 bg-cyan-950/15 py-2 pl-4 pr-2.5 space-y-1">
+                <SectionChip color="location" />
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold text-cyan-300 flex items-center gap-1.5 min-w-0">
+                  <span className="font-bold text-white flex items-center gap-1.5 min-w-0">
                     <span aria-hidden="true">📍</span>
                     <span className="truncate">{jurisdiction ? jurisdiction.label : 'Project Location'}</span>
                   </span>
@@ -841,7 +861,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                   </button>
                 </div>
                 {jurisdictionStatus === 'detecting' && (
-                  <p className="text-[11px] text-gray-300 flex items-center gap-1.5">
+                  <p className="text-[11px] text-white/60 flex items-center gap-1.5">
                     <span className="w-3 h-3 border-2 border-cyan-300/30 border-t-cyan-300 rounded-full animate-spin" />
                     {jurisdiction?.state
                       ? 'Locating the county in ' + jurisdiction.state + '…'
@@ -849,7 +869,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                   </p>
                 )}
                 {jurisdictionStatus === 'found' && jurisdiction && (
-                  <p className="text-[11px] text-gray-300 leading-relaxed light-theme:text-gray-600">
+                  <p className="text-[11px] text-white/60 leading-relaxed light-theme:text-gray-600">
                     Auto-detected {jurisdiction.aoiSource === 'browser' ? 'from this device' : 'from the project coordinates'}.{' '}
                     {serviceMatch ? (
                       serviceMatch.service.id === selectedServiceId ? (
@@ -873,7 +893,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                 )}
                 {jurisdictionStatus === 'error' && (
                   <div className="space-y-1">
-                    <p className="text-[11px] text-amber-300 leading-relaxed">
+                    <p className="text-[11px] text-cyan-300 leading-relaxed">
                       {jurisdictionError ?? 'Could not resolve the project jurisdiction.'}
                     </p>
                     <div className="flex items-center gap-3">
@@ -898,15 +918,16 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
               </div>
 
               {/* County / state / custom service picker */}
-              <label className="block">
-                <span className="flex items-baseline justify-between text-xs font-semibold text-gray-300 mb-1 light-theme:text-gray-700">
+              <label className="panel-surface relative block overflow-hidden rounded-lg pl-3.5">
+                <SectionChip color="service" />
+                <span className="flex items-baseline justify-between text-xs font-semibold text-white/80 mb-1 light-theme:text-gray-700">
                   <span>Parcel GIS Service</span>
-                  <span className="text-[10px] font-normal text-gray-500">{services.length} available</span>
+                  <span className="text-[10px] font-normal text-white/35">{services.length} available</span>
                 </span>
                 <select
                   value={selectedServiceId}
                   onChange={e => setSelectedServiceId(e.target.value)}
-                  className="w-full px-2.5 py-1.5 bg-gray-800 border border-gray-700 rounded-md text-xs text-gray-200 focus:outline-none focus:border-orange-500 light-theme:bg-gray-100 light-theme:border-gray-300 light-theme:text-gray-800"
+                  className="w-full px-2.5 py-1.5 bg-gray-800 border border-gray-700 rounded-md text-xs text-gray-200 focus:outline-none focus:border-sky-500 light-theme:bg-gray-100 light-theme:border-gray-300 light-theme:text-gray-800"
                 >
                   {statewideServices.length > 0 && (
                     <optgroup label="Statewide (all counties)">
@@ -931,7 +952,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                   )}
                 </select>
                 {selectedService && (
-                  <span className="text-[10px] text-gray-500 mt-1 block truncate" title={selectedService.url}>
+                  <span className="text-[10px] text-white/35 mt-1 block truncate" title={selectedService.url}>
                     {selectedService.region} · {selectedService.url}
                   </span>
                 )}
@@ -975,10 +996,11 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
               </div>
 
               {showCustomServer && (
-                <div className="rounded-lg border border-orange-500/40 bg-orange-950/15 p-2.5 space-y-2">
-                  <p className="text-[11px] text-gray-300 leading-relaxed light-theme:text-gray-600">
+                <div className="panel-surface relative overflow-hidden rounded-lg border border-sky-500/30 bg-sky-950/10 py-2 pl-4 pr-2.5 space-y-2">
+                  <SectionChip color="custom" />
+                  <p className="text-[11px] text-white/60 leading-relaxed light-theme:text-gray-600">
                     Paste the county's ArcGIS REST layer URL (usually ends in{' '}
-                    <span className="font-mono text-orange-300">/FeatureServer/0</span>). A service root also works — we
+                    <span className="font-mono text-sky-300">/FeatureServer/0</span>). A service root also works — we
                     probe it and pick the parcel polygon layer. It is saved on this device.
                   </p>
                   <input
@@ -986,7 +1008,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                     value={customUrl}
                     onChange={e => setCustomUrl(e.target.value)}
                     placeholder="https://gis.examplecounty.gov/arcgis/rest/services/Parcels/FeatureServer/0"
-                    className="w-full px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-[11px] font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:border-orange-500"
+                    className="w-full px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-[11px] font-mono text-gray-200 placeholder-gray-600 focus:outline-none focus:border-sky-500"
                     onKeyDown={e => { if (e.key === 'Enter') handleCheckCustomServer(); }}
                   />
                   <div className="flex gap-2">
@@ -995,7 +1017,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                       value={customLabel}
                       onChange={e => setCustomLabel(e.target.value)}
                       placeholder="Label (optional) — e.g. York County, PA"
-                      className="flex-1 min-w-0 px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-[11px] text-gray-200 placeholder-gray-600 focus:outline-none focus:border-orange-500"
+                      className="flex-1 min-w-0 px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-[11px] text-gray-200 placeholder-gray-600 focus:outline-none focus:border-sky-500"
                     />
                     <button
                       type="button"
@@ -1003,7 +1025,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                       disabled={!customUrl.trim() || isProbing}
                       className={`px-3 py-1.5 rounded-md text-[11px] font-bold border transition-all flex items-center gap-1.5 ${
                         customUrl.trim() && !isProbing
-                          ? 'bg-orange-600 border-orange-400 text-white hover:bg-orange-500'
+                          ? 'bg-sky-600 border-sky-400 text-white hover:bg-sky-500'
                           : 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed'
                       }`}
                     >
@@ -1025,13 +1047,14 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                 </div>
               )}
               {discoverError && (
-                <div className="text-[11px] text-amber-300 bg-amber-950/40 border border-amber-800/60 rounded-md p-2">
+                <div className="text-[11px] text-cyan-300 bg-cyan-950/40 border border-cyan-800/60 rounded-md p-2">
                   {discoverError}
                 </div>
               )}
 
               {discoveries.length > 0 && (
-                <div className="rounded-lg border border-cyan-700/50 bg-gray-950/60 p-2 space-y-1.5">
+                <div className="panel-surface relative overflow-hidden rounded-lg border border-cyan-700/40 bg-gray-950/60 py-2 pl-4 pr-2 space-y-1.5">
+                  <SectionChip color="discovery" />
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-bold text-cyan-300">{discoveries.length} parcel layers near this area</span>
                     <button type="button" onClick={() => setDiscoveries([])} className="text-[10px] text-gray-500 hover:text-gray-300">Dismiss</button>
@@ -1040,8 +1063,8 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                     {discoveries.map(c => (
                       <div key={c.itemId || c.url} className="flex items-start gap-2 rounded-md bg-gray-900/70 border border-gray-800 px-2 py-1.5">
                         <div className="min-w-0 flex-1">
-                          <div className="text-[11px] font-semibold text-gray-200 truncate" title={c.title}>{c.title}</div>
-                          <div className="text-[10px] text-gray-500 truncate" title={c.url}>{c.publisher || 'unknown publisher'} · {c.url}</div>
+                          <div className="text-[11px] font-semibold text-white/90 truncate" title={c.title}>{c.title}</div>
+                          <div className="text-[10px] text-white/40 truncate" title={c.url}>{c.publisher || 'unknown publisher'} · {c.url}</div>
                         </div>
                         <button
                           type="button"
@@ -1058,8 +1081,9 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
               )}
 
               {/* Query Area Mode Selector */}
-              <div>
-                <span className="text-xs font-semibold text-gray-300 mb-1.5 block light-theme:text-gray-700">
+              <div className="panel-surface relative overflow-hidden rounded-lg border border-white/[0.06] bg-white/[0.015] p-2 pl-3.5">
+                <SectionChip color="area" />
+                <span className="text-xs font-semibold text-white/80 mb-1.5 block light-theme:text-gray-700">
                   Query Area
                 </span>
                 <div className="grid grid-cols-2 gap-2">
@@ -1079,7 +1103,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                     onClick={() => setQueryMode('project')}
                     className={`px-2.5 py-1.5 rounded-md text-xs font-semibold border transition-all ${
                       queryMode === 'project'
-                        ? 'bg-orange-600 border-orange-400 text-white shadow-sm'
+                        ? 'bg-sky-600 border-sky-400 text-white shadow-sm'
                         : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 light-theme:bg-gray-100 light-theme:border-gray-300 light-theme:text-gray-700'
                     }`}
                   >
@@ -1102,11 +1126,11 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
               {/* Inclusion area status hint */}
               {queryMode === 'inclusion' && (
                 hasInclusion ? (
-                  <div className="text-xs text-emerald-300/90 bg-emerald-950/40 border border-emerald-800/50 rounded-md p-2.5 flex items-center justify-between">
+                  <div className="text-xs text-emerald-300/90 bg-emerald-950/40 border border-emerald-800/50 rounded-md p-2 flex items-center justify-between">
                     <span>Inclusion area defined ({inclusionSegmentCount} segments). Ready to query.</span>
                   </div>
                 ) : (
-                  <div className="text-xs text-amber-300/90 bg-amber-950/40 border border-amber-800/50 rounded-md p-2.5">
+                  <div className="text-xs text-cyan-300/90 bg-cyan-950/40 border border-cyan-800/50 rounded-md p-2">
                     Draw an inclusion polygon on the canvas first (Drawing Tools → Inclusion).
                   </div>
                 )
@@ -1114,10 +1138,10 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
 
               {/* Project-points status hint */}
               {queryMode === 'project' && (
-                <div className={`text-xs rounded-md p-2.5 border ${
+                <div className={`text-xs rounded-md p-2 border ${
                   canQueryByProject
                     ? 'text-emerald-300/90 bg-emerald-950/40 border-emerald-800/50'
-                    : 'text-amber-300/90 bg-amber-950/40 border-amber-800/50'
+                    : 'text-cyan-300/90 bg-cyan-950/40 border-cyan-800/50'
                 }`}>
                   {canQueryByProject
                     ? `Project extent from ${projectPoints.length} georeferenced point${projectPoints.length === 1 ? '' : 's'} — no inclusion polygon or address needed.`
@@ -1155,7 +1179,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                   disabled={!canFetch}
                   className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 flex items-center justify-center gap-2 ${
                     canFetch
-                      ? 'bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white border border-orange-400/50'
+                      ? 'bg-sky-600 hover:bg-sky-500 text-white border border-sky-400/50'
                       : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed'
                   }`}
                 >
@@ -1166,7 +1190,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                     </>
                   ) : (
                     <>
-                      <GisAgentIcon className="w-4 h-4 text-orange-300" />
+                      <GisAgentIcon className="w-4 h-4 text-white" />
                       <span>Fetch Parcels</span>
                     </>
                   )}
@@ -1198,7 +1222,8 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
               )}
 
               {/* Quick Status Bar */}
-              <div className="pt-2 border-t border-gray-800/80 flex items-center justify-between text-xs text-gray-400">
+              <div className="relative border-t border-gray-800/80 pt-1.5 pl-2.5 flex items-center justify-between text-xs text-gray-400">
+                <SectionChip color="status" />
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-gray-300">{parcelLineCount}</span>
                   <span>segment{parcelLineCount === 1 ? '' : 's'} on canvas</span>
@@ -1220,15 +1245,16 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
           {/* MODE 2: LABELS & TYPOGRAPHY                               */}
           {/* ========================================================= */}
           {activeMode === 'labels' && (
-            <div className="space-y-3">
-              <div className="rounded-lg bg-cyan-950/20 border border-cyan-500/30 p-2.5">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-bold text-cyan-300 flex items-center gap-1.5">
+            <div className="space-y-2">
+              <div className="panel-surface relative overflow-hidden rounded-lg border border-teal-500/30 bg-teal-950/20 py-2 pl-4 pr-2.5">
+                <SectionChip color="labels" />
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="font-bold text-white flex items-center gap-1.5">
                     🏷️ Parcel Typography &amp; Formatting
                   </span>
-                  <span className="text-[10px] text-gray-400 font-mono">Canvas + DXF</span>
+                  <span className="text-[10px] text-white/40 font-mono">Canvas + DXF</span>
                 </div>
-                <p className="text-[11px] text-gray-300 leading-relaxed light-theme:text-gray-600">
+                <p className="text-[11px] text-white/60 leading-relaxed light-theme:text-gray-600">
                   Control how tax parcel boundary labels appear on the canvas and in CAD exports.
                 </p>
               </div>
@@ -1290,8 +1316,9 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
               )}
 
               {/* Label Content Options */}
-              <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-2.5 space-y-2">
-                <span className="text-xs font-bold text-gray-300 uppercase tracking-wider block">
+              <div className="panel-surface relative overflow-hidden rounded-lg border border-gray-800 bg-gray-950/40 p-2 pl-3.5 space-y-2">
+                <SectionChip color="fields" />
+                <span className="text-xs font-bold text-white/85 uppercase tracking-wider block">
                   Label Content Fields
                 </span>
                 <div className="grid grid-cols-2 gap-2">
@@ -1300,7 +1327,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                       type="checkbox"
                       checked={parcelLabelFormatter.includeParcelId}
                       onChange={e => onParcelLabelFormatterChange({ ...parcelLabelFormatter, includeParcelId: e.target.checked })}
-                      className="rounded border-gray-700 text-orange-500 focus:ring-0"
+                      className="rounded border-gray-700 text-sky-500 focus:ring-0"
                     />
                     <span>Parcel ID</span>
                   </label>
@@ -1309,7 +1336,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                       type="checkbox"
                       checked={parcelLabelFormatter.includeOwner}
                       onChange={e => onParcelLabelFormatterChange({ ...parcelLabelFormatter, includeOwner: e.target.checked })}
-                      className="rounded border-gray-700 text-orange-500 focus:ring-0"
+                      className="rounded border-gray-700 text-sky-500 focus:ring-0"
                     />
                     <span>Owner Name</span>
                   </label>
@@ -1318,7 +1345,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                       type="checkbox"
                       checked={parcelLabelFormatter.includeDeedBookPage}
                       onChange={e => onParcelLabelFormatterChange({ ...parcelLabelFormatter, includeDeedBookPage: e.target.checked })}
-                      className="rounded border-gray-700 text-orange-500 focus:ring-0"
+                      className="rounded border-gray-700 text-sky-500 focus:ring-0"
                     />
                     <span>Deed Book/Page</span>
                   </label>
@@ -1327,7 +1354,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                       type="checkbox"
                       checked={parcelLabelFormatter.includeBlockUnit}
                       onChange={e => onParcelLabelFormatterChange({ ...parcelLabelFormatter, includeBlockUnit: e.target.checked })}
-                      className="rounded border-gray-700 text-orange-500 focus:ring-0"
+                      className="rounded border-gray-700 text-sky-500 focus:ring-0"
                     />
                     <span>Block / Unit</span>
                   </label>
@@ -1341,7 +1368,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                       checked={parcelLabelFormatter.prependOwnerPrefix}
                       disabled={!parcelLabelFormatter.includeOwner}
                       onChange={e => onParcelLabelFormatterChange({ ...parcelLabelFormatter, prependOwnerPrefix: e.target.checked })}
-                      className="rounded border-gray-700 text-orange-500 focus:ring-0"
+                      className="rounded border-gray-700 text-sky-500 focus:ring-0"
                     />
                     <span>Prefix</span>
                   </label>
@@ -1358,8 +1385,9 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
               </div>
 
               {/* Typography Settings */}
-              <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-2.5 space-y-2">
-                <span className="text-xs font-bold text-gray-300 uppercase tracking-wider block">
+              <div className="panel-surface relative overflow-hidden rounded-lg border border-gray-800 bg-gray-950/40 p-2 pl-3.5 space-y-2">
+                <SectionChip color="typography" />
+                <span className="text-xs font-bold text-white/85 uppercase tracking-wider block">
                   Font &amp; Layout
                 </span>
                 <div className="grid grid-cols-2 gap-2">
@@ -1425,14 +1453,15 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                   value={parcelLabelFormatter.lineSpacing ?? 1.2}
                   disabled={typographyLockedByCad}
                   onChange={e => onParcelLabelFormatterChange({ ...parcelLabelFormatter, lineSpacing: Number(e.target.value) })}
-                  className="w-full accent-orange-500"
+                  className="w-full accent-sky-500"
                 />
               </div>
 
               {/* Live Preview Box */}
-              <div className="rounded-lg border border-gray-700/80 bg-gray-950 p-2.5">
+              <div className="panel-surface relative overflow-hidden rounded-lg border border-gray-700/80 bg-gray-950 p-2 pl-3.5">
+                <SectionChip color="preview" />
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[10px] uppercase tracking-wider text-cyan-400 font-bold">
+                  <span className="text-[10px] uppercase tracking-wider text-white/85 font-bold">
                     Live Sample Preview
                   </span>
                   <span className="text-[10px] text-gray-500 font-mono">
@@ -1451,7 +1480,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                   {buildParcelLabelLines(sampleParcel, parcelLabelFormatter)
                     .map(line => applyAnnotationTextCase(line, effectiveParcelTextStyle.textCase))
                     .map((line, idx) => (
-                      <div key={idx} className={idx === 0 ? 'text-orange-300 font-semibold' : 'text-gray-300 text-[11px]'}>
+                      <div key={idx} className={idx === 0 ? 'text-sky-300 font-semibold' : 'text-gray-300 text-[11px]'}>
                         {line}
                       </div>
                     ))}
@@ -1464,20 +1493,21 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
           {/* MODE 3: PARCELS LIST / RESULTS                            */}
           {/* ========================================================= */}
           {activeMode === 'parcels' && (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {lastFetchedParcels.length === 0 ? (
-                <div className="p-6 text-center space-y-3 rounded-lg border border-dashed border-gray-800 bg-gray-950/30">
-                  <div className="inline-flex items-center justify-center p-3 rounded-full bg-orange-950/30 text-orange-400 border border-orange-500/20">
-                    <LayersIcon className="w-6 h-6" />
+                <div className="relative overflow-hidden p-5 text-center space-y-2.5 rounded-lg border border-dashed border-gray-800 bg-gray-950/30">
+                  <SectionChip color="parcels" />
+                  <div className="inline-flex items-center justify-center p-2 rounded-full bg-emerald-950/30 text-emerald-400 border border-emerald-500/20">
+                    <LayersIcon className="w-5 h-5" />
                   </div>
-                  <h4 className="text-sm font-bold text-gray-200">No Parcels Fetched Yet</h4>
-                  <p className="text-xs text-gray-400 max-w-xs mx-auto">
+                  <h4 className="text-sm font-bold text-white/90">No Parcels Fetched Yet</h4>
+                  <p className="text-xs text-white/50 max-w-xs mx-auto">
                     Fetch county tax parcels from the Query tab by selecting a county and defining an area.
                   </p>
                   <button
                     type="button"
                     onClick={() => setActiveMode('query')}
-                    className="px-3 py-1.5 rounded-md text-xs font-semibold bg-orange-600 hover:bg-orange-500 text-white transition-colors"
+                    className="px-3 py-1.5 rounded-md text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition-colors"
                   >
                     Go to Query Tab →
                   </button>
@@ -1485,7 +1515,7 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
               ) : (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-gray-300">
+                    <span className="text-xs font-semibold text-white/80">
                       {lastFetchedParcels.length} Total Parcels
                     </span>
                     <button
@@ -1518,11 +1548,12 @@ export const ParcelPanel: React.FC<ParcelPanelProps> = ({
                   </div>
 
                   {/* Parcels list */}
-                  <ul className="divide-y divide-gray-800/80 rounded-lg border border-gray-800 bg-gray-950/50 max-h-72 overflow-y-auto">
+                  <ul className="relative divide-y divide-gray-800/80 overflow-hidden rounded-lg border border-gray-800 bg-gray-950/50 pl-2.5 max-h-72 overflow-y-auto">
+                    <SectionChip color="parcels" />
                     {filteredParcels.slice(0, 100).map((p, i) => (
                       <li key={`${p.parcelId ?? 'parcel'}-${i}`} className="p-2 hover:bg-gray-900/60 transition-colors">
                         <div className="flex items-center justify-between gap-2 mb-1">
-                          <span className="font-mono text-xs font-bold text-orange-300 bg-orange-950/40 px-1.5 py-0.5 rounded border border-orange-500/20 truncate">
+                          <span className="font-mono text-xs font-bold text-sky-300 bg-sky-950/40 px-1.5 py-0.5 rounded border border-sky-500/20 truncate">
                             {p.parcelId || 'Unnamed Parcel'}
                           </span>
                           {p.coordinates && p.coordinates.length > 0 && (

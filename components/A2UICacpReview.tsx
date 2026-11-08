@@ -272,7 +272,7 @@ export const A2UICacpReview: React.FC<A2UICacpReviewProps> = ({
       </div>
 
       <p className="border-t border-white/[0.07] px-3 py-2 text-[9px] text-slate-500">
-        Policy is evaluated again on every re-dispatch. A2UI never bypasses the CACP gate.
+        Policy is evaluated again on every re-dispatch. This surface never bypasses the CACP gate.
       </p>
     </div>
   );

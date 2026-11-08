@@ -361,7 +361,8 @@ export function generateContours(
     breaklines: SurveyLine[],
     inclusionLines?: SurveyLine[],
     exclusionLines?: SurveyLine[],
-    elevationFilter?: ElevationFilterOptions
+    elevationFilter?: ElevationFilterOptions,
+    lineLayers?: IsoPathLineLayers
 ): { lines: SurveyLine[], labels: ContourLabel[], elevationReport: ElevationFilterReport } {
     if (surveyPoints.length < 3) return { lines: [], labels: [], elevationReport: emptyElevationReport() };
 
@@ -520,6 +521,8 @@ export function generateContours(
 
     for (const [elev, paths] of contourPaths.entries()) {
         const isMajor = Math.abs(elev % majorInterval) < 1e-6 || Math.abs(elev % majorInterval - majorInterval) < 1e-6;
+        const layer = isMajor ? lineLayers?.majorLayer : lineLayers?.minorLayer;
+        const lineType = isMajor ? lineLayers?.majorLineType : lineLayers?.minorLineType;
         for (const path of paths) {
             const smoothedPath = smoothing > 0 ? chaikinSmooth(path, smoothing) : path;
             const renderedPaths = inclPoly && inclPoly.length >= 3
@@ -534,7 +537,9 @@ export function generateContours(
                     to: '',
                     fromPt: { x: p1.x, y: p1.y, z: elev },
                     toPt: { x: p2.x, y: p2.y, z: elev },
-                    type: isMajor ? 'contour-major' : 'contour-minor'
+                    type: isMajor ? 'contour-major' : 'contour-minor',
+                    ...(layer ? { layer } : {}),
+                    ...(lineType ? { lineType } : {}),
                 });
 
                 if (showLabels && isMajor) {
@@ -922,13 +927,27 @@ export function generateTinContoursAsIsoPaths(
     return { isoPaths, labels, elevationReport };
 }
 
+export interface IsoPathLineLayers {
+    majorLayer?: string;
+    minorLayer?: string;
+    majorLineType?: string;
+    minorLineType?: string;
+}
+
 /**
  * Convert IsoPath[] back to individual SurveyLine segments for canvas rendering.
- * Optionally tags each segment with the ContourGeneration id.
+ * Optionally tags each segment with the ContourGeneration id and the CACP-
+ * resolved major/minor CAD layers.
  */
-export function isoPathsToSurveyLines(isoPaths: IsoPath[], contourGenId?: string): SurveyLine[] {
+export function isoPathsToSurveyLines(
+    isoPaths: IsoPath[],
+    contourGenId?: string,
+    layers?: IsoPathLineLayers,
+): SurveyLine[] {
     const lines: SurveyLine[] = [];
     for (const path of isoPaths) {
+        const layer = path.isMajor ? layers?.majorLayer : layers?.minorLayer;
+        const lineType = path.isMajor ? layers?.majorLineType : layers?.minorLineType;
         for (let i = 0; i < path.vertices.length - 1; i++) {
             const v1 = path.vertices[i];
             const v2 = path.vertices[i + 1];
@@ -939,6 +958,8 @@ export function isoPathsToSurveyLines(isoPaths: IsoPath[], contourGenId?: string
                 toPt: { x: v2.x, y: v2.y, z: path.elevation },
                 type: path.isMajor ? 'contour-major' : 'contour-minor',
                 source: 'survey',
+                ...(layer ? { layer } : {}),
+                ...(lineType ? { lineType } : {}),
                 ...(contourGenId ? { contourGenId } : {}),
             });
         }

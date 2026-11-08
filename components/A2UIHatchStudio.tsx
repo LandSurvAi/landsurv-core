@@ -19,6 +19,7 @@ import {
   type HatchDefinition,
 } from '../services/hatchLibrary.ts';
 import { HatchPreviewCanvas } from './CadManager/HatchManagerPanel.tsx';
+import { DecimalInput } from './DecimalInput.tsx';
 import type { A2UIHatchStudioSpec } from '../types.ts';
 
 export interface A2UIHatchStudioProps {
@@ -160,14 +161,13 @@ export const A2UIHatchStudio: React.FC<A2UIHatchStudioProps> = ({
               <span className="text-[9.5px] uppercase tracking-wider text-slate-400 block mb-0.5">
                 Scale ({scale}×)
               </span>
-              <input
-                type="number"
-                step="0.25"
-                min="0.05"
-                max="100"
+              <DecimalInput
+                min={0.05}
+                max={100}
                 value={scale}
-                onChange={e => setScale(Math.max(0.05, parseFloat(e.target.value) || 1))}
+                onValueChange={setScale}
                 className="w-full rounded border border-white/10 bg-[#050b14] px-2 py-1 font-mono text-xs text-white"
+                aria-label="Hatch scale"
               />
             </label>
 

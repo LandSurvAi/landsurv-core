@@ -3,6 +3,7 @@ import { type ProjectionSetting } from '../types.ts';
 import { projectionStates, projectionZones } from '../utils/projections.ts';
 import { XMarkIcon, GlobeAltIcon } from './icons.tsx';
 import GlobalCrsPicker from './GlobalCrsPicker.tsx';
+import { detectProjectionFromBrowser } from '../utils/autoProjection.ts';
 
 interface ProjectionSelectionModalProps {
   onConfirm: (projection: ProjectionSetting) => void;
@@ -20,6 +21,8 @@ const ProjectionSelectionModal: React.FC<ProjectionSelectionModalProps> = ({
   const [state, setState] = useState<string | null>(null);
   const [zone, setZone] = useState<number | null>(null);
   const [availableZones, setAvailableZones] = useState<{ name: string; epsg: number; }[]>([]);
+  const [isLocating, setIsLocating] = useState(false);
+  const [locateError, setLocateError] = useState<string | null>(null);
 
   useEffect(() => {
     if (state) {
@@ -46,6 +49,26 @@ const ProjectionSelectionModal: React.FC<ProjectionSelectionModalProps> = ({
     }
   };
 
+  const handleUseMyLocation = async () => {
+    setIsLocating(true);
+    setLocateError(null);
+    try {
+      const detected = await detectProjectionFromBrowser();
+      onConfirm(detected.projection);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/denied|permission/i.test(message)) {
+        setLocateError('Location permission denied. Allow location access or select a zone manually.');
+      } else if (/timed?\s*out/i.test(message)) {
+        setLocateError('Location lookup timed out. Try again or select a zone manually.');
+      } else {
+        setLocateError(`Could not detect a projection: ${message}`);
+      }
+    } finally {
+      setIsLocating(false);
+    }
+  };
+
   return (
     <div 
       className="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[9990] flex items-center justify-center p-4 animate-fade-in"
@@ -64,6 +87,28 @@ const ProjectionSelectionModal: React.FC<ProjectionSelectionModalProps> = ({
         </header>
         <main className="p-6 space-y-4">
           <p className="text-gray-300 light-theme:text-gray-700">A State Plane Coordinate System is required to plot GIS data. Please select a projection for this session.</p>
+
+          <div className="rounded-lg border border-teal-700/50 bg-teal-950/30 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-teal-300">Set projection from GPS</p>
+                <p className="mt-0.5 text-[11px] text-gray-400 light-theme:text-gray-600">
+                  Uses your current location to pick the local State Plane zone or the nearest projected EPSG code.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleUseMyLocation()}
+                disabled={isLocating}
+                className="rounded-md bg-teal-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-gray-500"
+              >
+                {isLocating ? 'Locating…' : 'Use my GPS location'}
+              </button>
+            </div>
+            {locateError && (
+              <p role="alert" className="mt-2 text-[11px] text-red-400">{locateError}</p>
+            )}
+          </div>
 
           <div className="flex gap-2" role="tablist" aria-label="Projection system type">
             <button

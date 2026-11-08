@@ -137,9 +137,9 @@ const CacpManifestModal: React.FC<CacpManifestModalProps> = ({ agent, onClose })
                 onClose();
               }}
               className="rounded px-2 py-1 text-xs text-gray-400 hover:text-emerald-200"
-              title="Open this manifest in the global A2UI surface stack"
+              title="Open this manifest in a floating window"
             >
-              Pop out
+              Floating
             </button>
             <button
               onClick={() => setView('pretty')}

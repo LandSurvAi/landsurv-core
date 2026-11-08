@@ -26,6 +26,9 @@ import {
   ArrowDownOnSquareIcon
 } from './icons.tsx';
 import BearingDmsInput from './BearingDmsInput.tsx';
+import { DockModeControl, type DockMode } from './DockModeControl.tsx';
+import { SectionChip } from './common/SectionChip.tsx';
+import { findBoundaryFileForTract } from '../utils/boundaryTractFiles.ts';
 
 export interface BoundaryEditorProps {
     boundaryFiles: BoundaryFile[];
@@ -36,6 +39,10 @@ export interface BoundaryEditorProps {
     onAddCall: (fileId: string) => void;
     /** Pulse the Add Call Row button as the next step for a manual boundary. */
     isAddCallRowPulsing?: boolean;
+    /** Open a tract's source description in the app's full text editor. */
+    onOpenDescription?: (tractId: string, snippet?: string) => void;
+    /** Open the separate alignment/POB dialog (floating by default). */
+    onOpenAlignmentTools?: () => void;
     /** Remove a call (also removes the matching SurveyLine). */
     onRemoveCall: (fileId: string, callId: string) => void;
     /** Run a closure report on the selected boundary file. */
@@ -93,6 +100,8 @@ export interface BoundaryEditorProps {
     onAlignToGIS?: (fileId: string) => void;
 
     // Docking Props
+    dockMode?: DockMode;
+    onDockModeChange?: (mode: DockMode) => void;
     isDocked?: boolean;
     onToggleDock?: () => void;
     isMinimized?: boolean;
@@ -150,38 +159,36 @@ const RotatingScanStatus: React.FC = () => {
 };
 
 // Confidence pill — shown in the editor header while the parsed deed is in
-// its amber pre-commit state.
+// its sky pre-commit state.
 const ConfidencePill: React.FC<{ confidence: NonNullable<BoundaryFile['deedConfidence']> }> = ({ confidence }) => {
-    const [open, setOpen] = useState(false);
     const cfg = ({
-        high:   { dot: 'bg-emerald-400', text: 'text-emerald-200', border: 'border-emerald-500/50', bg: 'bg-emerald-900/30', label: 'High confidence' },
-        medium: { dot: 'bg-yellow-400',  text: 'text-yellow-200',  border: 'border-yellow-500/50',  bg: 'bg-yellow-900/30',  label: 'Medium confidence' },
-        low:    { dot: 'bg-rose-400',    text: 'text-rose-200',    border: 'border-rose-500/50',    bg: 'bg-rose-900/30',    label: 'Low confidence' },
-    }[confidence.level]) || { dot: 'bg-yellow-400', text: 'text-yellow-200', border: 'border-yellow-500/50', bg: 'bg-yellow-900/30', label: 'Medium confidence' };
+        high:   { dot: 'bg-emerald-400', text: 'text-emerald-200', label: 'High confidence' },
+        medium: { dot: 'bg-sky-400', text: 'text-sky-200', label: 'Medium confidence' },
+        low:    { dot: 'bg-rose-400', text: 'text-rose-200', label: 'Low confidence' },
+    }[confidence.level]) || { dot: 'bg-sky-400', text: 'text-sky-200', label: 'Medium confidence' };
+    const sourceLabel = confidence.source === 'ai' ? 'AI self-rated' : 'derived from uncertainty count';
+    const tickerItems = [sourceLabel, ...confidence.reasons];
 
     return (
-        <div className="pt-0.5">
-            <button
-                type="button"
-                onClick={() => setOpen(o => !o)}
-                className={`relative overflow-hidden w-full flex items-center gap-2 pl-6 pr-3.5 py-2 rounded-xl border border-l-0 border-dashed ${cfg.border} ${cfg.bg} hover:brightness-110 transition shadow-sm`}
-                title={`${cfg.label} (${confidence.source === 'ai' ? 'AI self-rated' : 'derived from uncertainty count'})`}
-            >
-                <span className={`absolute inset-y-0 left-0 w-3 ${cfg.bar} rounded-l-xl`} aria-hidden="true" />
-                <span className={`inline-block w-2.5 h-2.5 rounded-full ${cfg.dot} shadow-sm shrink-0`} />
-                <span className={`text-xs font-black ${cfg.text}`}>{cfg.label}</span>
-                <span className="text-xs text-gray-200 font-medium ml-1">
-                    ({confidence.source === 'ai' ? 'AI self-rated' : 'derived'})
-                </span>
-                <span className="ml-auto text-xs font-bold text-cyan-300 hover:text-cyan-200 underline">
-                    {confidence.reasons.length > 0 ? (open ? 'hide details ▲' : 'why? details ▼') : ''}
-                </span>
-            </button>
-            {open && confidence.reasons.length > 0 && (
-                <ul className={`mt-1.5 ml-4 list-disc list-inside text-xs ${cfg.text} space-y-1 bg-gray-950/80 p-2.5 rounded-lg border border-dashed border-gray-700 font-semibold shadow-inner`}>
-                    {confidence.reasons.map((r, i) => <li key={i}>{r}</li>)}
-                </ul>
-            )}
+        <div
+            className="mt-1.5 flex min-w-0 items-center gap-2 overflow-hidden rounded-md border border-white/[0.08] bg-black/30 px-2 py-1"
+            title={`${cfg.label} · ${tickerItems.join(' · ')}`}
+        >
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${cfg.dot}`} />
+            <span className={`shrink-0 text-[9px] font-black uppercase tracking-[0.12em] ${cfg.text}`}>{cfg.label}</span>
+            <div className="confidence-marquee-window relative min-w-0 flex-1 overflow-hidden">
+                <div className={`flex w-max items-center ${confidence.reasons.length > 0 ? 'confidence-marquee' : ''}`}>
+                    {[0, 1].map(copy => (
+                        <div key={copy} className="flex shrink-0 items-center gap-5 pr-5" aria-hidden={copy === 1 || undefined}>
+                            {tickerItems.map((item, i) => (
+                                <span key={`${copy}-${i}`} className="whitespace-nowrap text-[9px] font-medium text-white/55">
+                                    {item}
+                                </span>
+                            ))}
+                        </div>
+                    ))}
+                </div>
+            </div>
         </div>
     );
 };
@@ -246,6 +253,8 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
     onShowRotatedBearingsChange,
     reservedRight = 0,
     reservedBottom = 0,
+    onOpenDescription,
+    onOpenAlignmentTools,
     summary,
     pendingFileName,
     computingTractIds,
@@ -253,7 +262,9 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
     onComputeAll,
     onParseNow,
     onAlignToGIS,
-    isDocked = false,
+    dockMode,
+    onDockModeChange,
+    isDocked: isDockedProp = false,
     onToggleDock,
     isMinimized: controlledMinimized,
     onToggleMinimize,
@@ -262,6 +273,8 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
     freeDeedsUnlimited = false,
     onUpgrade,
 }) => {
+    const mode: DockMode = dockMode ?? (isDockedProp ? 'toolshelf' : 'floating');
+    const isDocked = mode !== 'floating';
     const [internalMinimized, setInternalMinimized] = useState(false);
     const isMinimized = controlledMinimized !== undefined ? controlledMinimized : internalMinimized;
     const toggleMinimize = useCallback(() => {
@@ -274,6 +287,9 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
 
     const [isSummaryCollapsed, setIsSummaryCollapsed] = useState(false);
     const [showToolsDrawer, setShowToolsDrawer] = useState(false);
+    // The deed summary/lite-scan now lives in chat as an A2UI surface. The panel
+    // is deliberately traverse-only so it stays compact.
+    const showEmbeddedIntake = false;
     const [internalSelectedFileId, setInternalSelectedFileId] = useState<string>('');
 
     const selectedFileId = controlledSelectedFileId !== undefined
@@ -395,7 +411,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
     const handlePointerDown = useCallback((e: React.MouseEvent | React.TouchEvent) => {
         if (isDocked) return;
         const target = e.target as HTMLElement;
-        if (target.closest('button, input, select, a, textarea')) return;
+        if (target.closest('button, input, select, a, textarea, [data-no-drag]')) return;
 
         const isTouch = 'touches' in e;
         const point = isTouch ? (e as React.TouchEvent).touches[0] : (e as React.MouseEvent);
@@ -549,7 +565,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
 
     const singleTract = tractList.length === 1 ? tractList[0] : undefined;
     const matchingSingleFile = singleTract
-        ? boundaryFiles.find(f => f.sourceTractId === singleTract.tractId || f.name.toLowerCase().includes(singleTract.tractId.toLowerCase()) || f.calls.some(c => Boolean(c.bearing && c.distance)))
+        ? findBoundaryFileForTract(boundaryFiles, singleTract, summary?.fileName)
         : undefined;
     const isSingleComputed = !!(matchingSingleFile && matchingSingleFile.calls.some(c => Boolean(c.bearing && c.distance)));
     const isSingleBusy = !!(singleTract && computingTractIds?.has(singleTract.tractId));
@@ -676,6 +692,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
 
     const currentPos = pos ?? getDefaultPos();
     const maxPanelHeight = Math.max(200, window.innerHeight - reservedBottom - panelTopLimit - panelEdgeGap);
+    const fileActionButtonClass = 'black-hole-btn black-hole-btn--neutral inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-[10px] font-semibold text-white/80 transition-colors';
 
     return (
         <div
@@ -690,34 +707,102 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                 fontFamily: "'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
             }}
             className={isDocked ? (
-                "w-full bg-gray-900/95 border-0 text-xs text-gray-200 select-none light-theme:bg-white light-theme:text-gray-800 flex flex-col overflow-hidden antialiased"
+                "panel-dense flex h-full w-full min-h-0 bg-[#0a0f16] border-0 text-[11px] leading-snug text-slate-200 select-none light-theme:bg-white light-theme:text-gray-800 flex-col overflow-hidden antialiased"
             ) : (
-                `fixed z-30 max-w-[calc(100vw-1rem)] bg-gray-900/95 border border-gray-700/80 rounded-xl shadow-2xl backdrop-blur-md text-xs text-gray-200 select-none light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-800 flex flex-col overflow-hidden antialiased transition-shadow ${
+                `panel-dense fixed z-30 max-w-[calc(100vw-1rem)] bg-[#0a0f16]/97 border border-white/[0.1] rounded-xl shadow-2xl shadow-black/60 backdrop-blur-md text-[11px] leading-snug text-slate-200 select-none light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-800 flex flex-col overflow-hidden antialiased transition-shadow ${
                     isMinimized ? 'shadow-lg' : 'shadow-2xl'
                 }`
             )}
         >
-            {/* Header — drag handle with Welcome Screen styling */}
+            {/* Header — brand + window controls only. File selection and file
+                actions live in the Boundary file bar below, with the deed. */}
             <div
-                className={`flex items-center justify-between px-3.5 py-2.5 bg-gray-950/80 border-b border-gray-800/80 ${isDocked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'} light-theme:bg-gray-100/90 light-theme:border-gray-200 shrink-0 gap-2 select-none ${
+                className={`flex items-center justify-between gap-2 border-b border-white/[0.08] bg-[#070e18] px-3 py-1.5 ${isDocked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'} light-theme:border-gray-200 light-theme:bg-gray-50 shrink-0 select-none ${
                     isMinimized && !isDocked ? 'rounded-xl border-b-0' : ''
                 }`}
                 style={{ touchAction: isDocked ? 'auto' : 'none' }}
                 onMouseDown={isDocked ? undefined : handlePointerDown}
                 onTouchStart={isDocked ? undefined : handlePointerDown}
             >
-                <div className="flex items-center gap-2 min-w-0 flex-1 mr-2 overflow-hidden">
-                    <CourthouseIcon className="w-5 h-5 text-emerald-400 shrink-0" />
-                    <div className="flex items-baseline gap-1.5 shrink-0">
-                        <h2 className="text-sm font-extrabold tracking-tight text-white light-theme:text-gray-900 whitespace-nowrap">
-                            Boundary<span className="text-cyan-400">Agent</span>
+                <div className="flex min-w-0 items-center gap-2">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-emerald-400/25 bg-emerald-400/10 shadow-sm light-theme:border-emerald-200 light-theme:bg-emerald-50">
+                        <CourthouseIcon className="h-3.5 w-3.5 text-emerald-300 light-theme:text-emerald-700" />
+                    </span>
+                    <div className="min-w-0">
+                        <h2 className="truncate text-xs font-semibold tracking-tight text-slate-100 light-theme:text-gray-900">
+                            Boundary Agent
                         </h2>
+                        <p className="truncate text-[9px] font-medium uppercase tracking-[0.12em] text-slate-500 light-theme:text-gray-500">
+                            Deed → traverse → CAD
+                        </p>
                     </div>
+                </div>
 
-                    {/* Boundary file selector / tract switcher */}
-                    {boundaryFiles.length > 0 && selectedFile && (
-                        <div className="min-w-0 flex-1 max-w-[180px] overflow-hidden ml-1">
-                            {isRenaming ? (
+                <div className="flex shrink-0 items-center gap-1" data-no-drag>
+                    {(onDockModeChange || onToggleDock) && (
+                        onDockModeChange ? (
+                            <DockModeControl mode={mode} onChange={onDockModeChange} />
+                        ) : (
+                            <button
+                                onClick={onToggleDock}
+                                className="rounded-md border border-white/[0.07] p-1.5 text-slate-400 transition-colors hover:border-white/[0.16] hover:bg-white/[0.04] hover:text-cyan-300 light-theme:border-gray-300 light-theme:text-gray-500 light-theme:hover:bg-gray-100"
+                                title={isDocked ? 'Pop out boundary dialog to a floating window on canvas' : 'Dock boundary dialog into Boundary Agent chat'}
+                                aria-label={isDocked ? 'Pop out boundary dialog' : 'Dock boundary dialog'}
+                            >
+                                {isDocked ? (
+                                    <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
+                                ) : (
+                                    <ArrowDownOnSquareIcon className="h-3.5 w-3.5" />
+                                )}
+                            </button>
+                        )
+                    )}
+                    <button
+                        onClick={toggleMinimize}
+                        className="rounded-md border border-white/[0.07] p-1.5 text-slate-400 transition-colors hover:border-white/[0.16] hover:bg-white/[0.04] hover:text-slate-100 light-theme:border-gray-300 light-theme:text-gray-500 light-theme:hover:bg-gray-100"
+                        title={isDocked ? 'Minimize in chat' : (isMinimized ? 'Expand dialog' : 'Minimize dialog')}
+                        aria-label={isDocked ? 'Minimize in chat' : (isMinimized ? 'Expand dialog' : 'Minimize dialog')}
+                    >
+                        {isMinimized && !isDocked ? (
+                            <ChevronDownIcon className="h-3.5 w-3.5" />
+                        ) : (
+                            <ChevronUpIcon className="h-3.5 w-3.5" />
+                        )}
+                    </button>
+                    {onClose && (
+                        <button
+                            onClick={onClose}
+                            className="rounded-md border border-white/[0.07] p-1.5 text-slate-400 transition-colors hover:border-rose-400/30 hover:bg-rose-500/10 hover:text-rose-300 light-theme:border-gray-300 light-theme:text-gray-500 light-theme:hover:bg-rose-50"
+                            title="Close boundary dialog"
+                        >
+                            <XMarkIcon className="h-3.5 w-3.5" />
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {/* Boundary file bar — the selector and file actions stay together,
+                directly above the deed they affect, instead of crowding the
+                window header. */}
+            {!isMinimized && (boundaryFiles.length > 0 || onLoadFile) && (
+                <div className="panel-surface relative mx-2 mb-0.5 mt-1.5 shrink-0 overflow-hidden rounded-lg border border-white/[0.08] bg-[#070e18]/80 py-1.5 pl-3.5 pr-2.5 shadow-sm light-theme:border-gray-200 light-theme:bg-gray-50">
+                    <SectionChip color="file" />
+                    <div className="flex items-center justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                            <FolderIcon className="h-3.5 w-3.5 shrink-0 text-cyan-300 light-theme:text-cyan-700" />
+                            <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/70 light-theme:text-gray-600">
+                                Boundary file
+                            </span>
+                        </div>
+                        {selectedFile && (
+                            <span className="shrink-0 font-mono text-[9.5px] font-semibold text-white/40 light-theme:text-gray-500">
+                                {selectedFile.calls.length} call{selectedFile.calls.length === 1 ? '' : 's'} · {selectedFile.hidden ? 'hidden' : 'visible'}
+                            </span>
+                        )}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {boundaryFiles.length > 0 && selectedFile && (
+                            isRenaming ? (
                                 <input
                                     autoFocus
                                     value={renameValue}
@@ -730,13 +815,16 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                         if (e.key === 'Enter') e.currentTarget.blur();
                                         if (e.key === 'Escape') setIsRenaming(false);
                                     }}
-                                    className="bg-gray-950 border border-cyan-500 text-cyan-200 rounded-lg px-2.5 py-1 text-xs w-full focus:outline-none focus:ring-1 focus:ring-cyan-500 shadow-sm"
+                                    className="h-7 min-w-[150px] flex-1 rounded-md border border-cyan-400/60 bg-[#060d17] px-2 text-[11px] font-semibold text-cyan-200 outline-none transition-colors focus:border-cyan-300 focus:ring-1 focus:ring-cyan-400/20 light-theme:bg-white light-theme:text-cyan-800"
+                                    aria-label="Boundary name"
                                 />
                             ) : (
                                 <select
                                     value={selectedFileId}
                                     onChange={e => setSelectedFileId(e.target.value)}
-                                    className="bg-gray-900 hover:bg-gray-850 border border-gray-700/80 hover:border-gray-600 text-gray-200 rounded-lg px-2.5 py-1 text-xs w-full min-w-0 truncate focus:outline-none focus:ring-1 focus:ring-cyan-500 font-medium cursor-pointer shadow-sm transition-colors light-theme:bg-gray-200 light-theme:border-gray-300 light-theme:text-gray-900"
+                                    className="h-7 min-w-[150px] flex-1 truncate rounded-md border border-white/[0.1] bg-[#060d17] px-2 text-[11px] font-medium text-slate-200 outline-none transition-colors hover:border-white/[0.18] focus:border-cyan-400/60 focus:ring-1 focus:ring-cyan-400/20 light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-900"
+                                    aria-label="Select boundary file"
+                                    title="Select the boundary file this deed edits"
                                 >
                                     {boundaryFiles.map(f => (
                                         <option key={f.id} value={f.id}>
@@ -744,33 +832,29 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                         </option>
                                     ))}
                                 </select>
-                            )}
-                        </div>
-                    )}
-                </div>
-
-                {/* Header Action Tools */}
-                <div className="flex items-center gap-1.5 shrink-0">
-                    {/* File actions button group */}
-                    <div className="flex items-center gap-0.5 bg-gray-900/80 border border-gray-800 rounded-lg p-0.5 shadow-sm light-theme:bg-gray-200/80 light-theme:border-gray-300">
+                            )
+                        )}
                         {onToggleVisibility && selectedFile && (
                             <button
                                 onClick={() => onToggleVisibility(selectedFile.id)}
-                                className="p-1.5 rounded-md hover:bg-gray-800 text-gray-400 hover:text-white transition-colors light-theme:hover:bg-gray-300"
+                                className={fileActionButtonClass}
                                 title={selectedFile.hidden ? 'Show boundary overlay on canvas' : 'Hide boundary overlay on canvas'}
+                                aria-label={selectedFile.hidden ? 'Show boundary overlay' : 'Hide boundary overlay'}
                             >
                                 {selectedFile.hidden
-                                    ? <EyeSlashIcon className="w-3.5 h-3.5 text-gray-500" />
-                                    : <EyeIcon className="w-3.5 h-3.5 text-cyan-400" />}
+                                    ? <EyeSlashIcon className="h-3.5 w-3.5" />
+                                    : <EyeIcon className="h-3.5 w-3.5 text-cyan-300" />}
+                                <span>{selectedFile.hidden ? 'Show' : 'Hide'}</span>
                             </button>
                         )}
                         {onRenameFile && selectedFile && !isRenaming && (
                             <button
                                 onClick={() => { setRenameValue(selectedFile.name); setIsRenaming(true); }}
-                                className="p-1.5 rounded-md hover:bg-gray-800 text-gray-400 hover:text-amber-300 transition-colors light-theme:hover:bg-gray-300"
-                                title="Rename boundary"
+                                className={fileActionButtonClass}
+                                title="Rename this boundary"
                             >
-                                <PencilSquareIcon className="w-3.5 h-3.5" />
+                                <PencilSquareIcon className="h-3.5 w-3.5" />
+                                <span>Rename</span>
                             </button>
                         )}
                         {onLoadFile && (
@@ -778,75 +862,129 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                 <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleLoadCSV} />
                                 <button
                                     onClick={() => fileInputRef.current?.click()}
-                                    className="p-1.5 rounded-md hover:bg-gray-800 text-gray-400 hover:text-blue-400 transition-colors light-theme:hover:bg-gray-300"
-                                    title="Import boundary from CSV"
+                                    className={fileActionButtonClass}
+                                    title="Import boundary calls from CSV"
                                 >
-                                    <FolderIcon className="w-3.5 h-3.5" />
+                                    <FolderIcon className="h-3.5 w-3.5" />
+                                    <span>Import</span>
                                 </button>
                             </>
                         )}
                         {onSaveToFileManager && selectedFile && (
                             <button
                                 onClick={() => onSaveToFileManager(selectedFile)}
-                                className="p-1.5 rounded-md hover:bg-gray-800 text-gray-400 hover:text-emerald-400 transition-colors light-theme:hover:bg-gray-300"
-                                title="Save boundary to CSV file"
+                                className={fileActionButtonClass}
+                                title="Save boundary to the File Manager"
                             >
-                                <ArrowUpTrayIcon className="w-3.5 h-3.5" />
+                                <ArrowUpTrayIcon className="h-3.5 w-3.5" />
+                                <span>Save</span>
                             </button>
                         )}
                     </div>
 
-                    <div className="w-px h-4 bg-gray-800 mx-0.5 light-theme:bg-gray-300" />
-
-                    {/* Window control group: Dock/Pop-out, Minimize, Close */}
-                    <div className="flex items-center gap-1">
-                        {onToggleDock && (
-                            <button
-                                onClick={onToggleDock}
-                                className="p-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-cyan-400 transition-colors light-theme:hover:bg-gray-200"
-                                title={isDocked ? 'Pop out boundary dialog to a floating window on canvas' : 'Dock boundary dialog into Boundary Agent chat'}
-                                aria-label={isDocked ? 'Pop out boundary dialog' : 'Dock boundary dialog'}
-                            >
-                                {isDocked ? (
-                                    <ArrowTopRightOnSquareIcon className="w-4 h-4" />
-                                ) : (
-                                    <ArrowDownOnSquareIcon className="w-4 h-4" />
+                    {selectedFile && (
+                        <>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                {onInvestigateClosure && (
+                                    <button
+                                        onClick={() => onInvestigateClosure(selectedFile.id)}
+                                        disabled={selectedFile.calls.length === 0}
+                                        className="black-hole-btn black-hole-btn--blue inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                        title="Compare the parsed calls with the deed text and propose fixes"
+                                    >
+                                        Investigate
+                                    </button>
                                 )}
-                            </button>
-                        )}
-                        <button
-                            onClick={toggleMinimize}
-                            className="p-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-white transition-colors light-theme:hover:bg-gray-200"
-                            title={isDocked ? 'Minimize in chat' : (isMinimized ? 'Expand dialog' : 'Minimize dialog')}
-                            aria-label={isDocked ? 'Minimize in chat' : (isMinimized ? 'Expand dialog' : 'Minimize dialog')}
-                        >
-                            {isMinimized && !isDocked ? (
-                                <ChevronDownIcon className="w-4 h-4" />
-                            ) : (
-                                <ChevronUpIcon className="w-4 h-4" />
+
+                                {selectedFile.calls.some(c => Boolean(c.bearing && c.distance)) ? (
+                                    onDrawToLinework && (
+                                        <button
+                                            onClick={() => onDrawToLinework(selectedFile.id)}
+                                            className="black-hole-btn black-hole-btn--violet inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white"
+                                            title="Commit boundary calls to canvas as CAD linework"
+                                        >
+                                            <span>Draft to CAD</span>
+                                            <span aria-hidden="true">▶</span>
+                                        </button>
+                                    )
+                                ) : isAnyBusy ? (
+                                    <button
+                                        disabled
+                                        className="black-hole-btn black-hole-btn--violet inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white/50"
+                                    >
+                                        <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-emerald-200/40 border-t-emerald-100" />
+                                        Extracting…
+                                    </button>
+                                ) : tractList.length > 0 ? (
+                                    <button
+                                        onClick={() => {
+                                            if (tractList[0] && onComputeTract) {
+                                                onComputeTract(tractList[0].tractId, null);
+                                            } else {
+                                                onComputeAll?.();
+                                            }
+                                        }}
+                                        className="black-hole-btn black-hole-btn--violet inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white"
+                                        title="Extract and plot the deed boundary on canvas"
+                                    >
+                                        <span>Compute &amp; Plot</span>
+                                        <span aria-hidden="true">▶</span>
+                                    </button>
+                                ) : (
+                                    <button
+                                        disabled
+                                        className="black-hole-btn black-hole-btn--violet inline-flex cursor-not-allowed items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white/40"
+                                        title="Enter at least one call with bearing and distance first"
+                                    >
+                                        <span>Draft to CAD</span>
+                                        <span aria-hidden="true">▶</span>
+                                    </button>
+                                )}
+
+                                <button
+                                    onClick={() => onOpenAlignmentTools ? onOpenAlignmentTools() : setShowToolsDrawer(p => !p)}
+                                    className="black-hole-btn black-hole-btn--red inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold text-white"
+                                    title="Open the floating alignment, POB, and shift tools"
+                                >
+                                    <span>Alignment tools</span>
+                                    <span className="text-[9px]">↗</span>
+                                </button>
+
+                                {onDrawToLinework && boundaryFiles.length > 1 && (
+                                    <button
+                                        onClick={() => boundaryFiles.forEach(bf => onDrawToLinework(bf.id))}
+                                        className="black-hole-btn black-hole-btn--violet px-2 py-1 rounded-md text-[10px] font-semibold text-white"
+                                        title={`Draft all ${boundaryFiles.length} boundaries to CAD`}
+                                    >
+                                        Draft All ({boundaryFiles.length})
+                                    </button>
+                                )}
+                                {onAlignToGIS && selectedFile.calls.some(c => Boolean(c.bearing && c.distance)) && (
+                                    <button
+                                        onClick={() => onAlignToGIS(selectedFile.id)}
+                                        className="black-hole-btn black-hole-btn--cyan px-2 py-1 rounded-md text-[10px] font-semibold text-white"
+                                        title="Match deed against county GIS parcel and align to centroid"
+                                    >
+                                        Align to GIS
+                                    </button>
+                                )}
+                            </div>
+                            {selectedFile.deedConfidence && (
+                                <ConfidencePill confidence={selectedFile.deedConfidence} />
                             )}
-                        </button>
-                        {onClose && (
-                            <button
-                                onClick={onClose}
-                                className="p-1.5 rounded-lg hover:bg-rose-950/60 text-gray-400 hover:text-rose-400 transition-colors light-theme:hover:bg-rose-100"
-                                title="Close boundary dialog"
-                            >
-                                <XMarkIcon className="w-4 h-4" />
-                            </button>
-                        )}
-                    </div>
+                        </>
+                    )}
                 </div>
-            </div>
+            )}
 
             {/* Free-deed allowance strip: keeps the 5 free deeds visible while the
                 user works, and turns into an upgrade prompt once they are spent. */}
             {!isMinimized && !freeDeedsUnlimited && freeDeedsRemaining !== null && (
                 <div
-                    className={`shrink-0 flex items-center justify-between gap-2 border-b px-3.5 py-2 light-theme:text-gray-900 ${
+                    className={`shrink-0 flex items-center justify-between gap-2 border-b px-3 py-1.5 light-theme:text-gray-900 ${
                         freeDeedsRemaining > 0
                             ? 'border-emerald-500/30 bg-emerald-950/30 light-theme:bg-emerald-50'
-                            : 'border-amber-500/40 bg-amber-950/30 light-theme:bg-amber-50'
+                            : 'border-sky-500/40 bg-sky-950/30 light-theme:bg-sky-50'
                     }`}
                 >
                     <div className="flex items-center gap-2 min-w-0">
@@ -854,7 +992,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                             className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider ${
                                 freeDeedsRemaining > 0
                                     ? 'bg-emerald-400/20 text-emerald-300 border border-emerald-500/40 light-theme:text-emerald-800'
-                                    : 'bg-amber-400/20 text-amber-200 border border-amber-500/40 light-theme:text-amber-800'
+                                    : 'bg-sky-400/20 text-sky-200 border border-sky-500/40 light-theme:text-sky-800'
                             }`}
                         >
                             🎁 Free deeds
@@ -878,7 +1016,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                     {freeDeedsRemaining <= 0 && onUpgrade && (
                         <button
                             onClick={onUpgrade}
-                            className="shrink-0 rounded-md bg-gradient-to-br from-amber-400 via-amber-500 to-orange-600 px-2.5 py-1 text-[11px] font-extrabold text-gray-900 shadow-sm hover:from-amber-300 hover:via-amber-400 hover:to-orange-500 transition-colors active:scale-95"
+                            className="shrink-0 rounded-md bg-gradient-to-br from-sky-400 via-sky-500 to-rose-600 px-2.5 py-1 text-[11px] font-extrabold text-gray-900 shadow-sm hover:from-sky-300 hover:via-sky-400 hover:to-rose-500 transition-colors active:scale-95"
                             title="Unlock unlimited AI deed drafting"
                         >
                             Unlock unlimited →
@@ -889,36 +1027,36 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
 
             {/* Dialog Content Area */}
             {!isMinimized && (
-                <div className={`flex-1 overflow-y-auto px-3.5 py-3 space-y-3 ${isDocked ? 'max-h-[50vh] sm:max-h-[55vh]' : ''}`}>
+                <div className="flex-1 min-h-0 overflow-y-auto px-2 py-1.5 space-y-1.5">
                     {/* ========================================================= */}
                     {/* INTEGRATED DEED SUMMARY & LITE-SCAN BANNER                */}
                     {/* ========================================================= */}
                     {/* Pre-parse Lite-Scan State */}
-                    {!summary && pendingFileName && boundaryFiles.length === 0 && (
-                        <div className="relative overflow-hidden rounded-xl border border-gray-700/80 bg-gray-950/80 shadow-xl light-theme:bg-gray-50 light-theme:border-gray-200">
-                            <div className="h-1 w-full bg-gradient-to-r from-amber-400 via-sky-400 to-emerald-500" />
+                    {showEmbeddedIntake && !summary && pendingFileName && boundaryFiles.length === 0 && (
+                        <div className="panel-surface relative overflow-hidden rounded-xl border border-gray-700/80 bg-gray-950/80 shadow-xl light-theme:bg-gray-50 light-theme:border-gray-200">
+                            <div className="h-1 w-full bg-gradient-to-r from-sky-400 via-sky-400 to-emerald-500" />
                             <div
-                                className="pointer-events-none absolute inset-x-0 h-10 bg-gradient-to-b from-transparent via-amber-400/10 to-transparent"
+                                className="pointer-events-none absolute inset-x-0 h-10 bg-gradient-to-b from-transparent via-sky-400/10 to-transparent"
                                 style={{ animation: 'lsvz-scan-beam 2.4s linear infinite' }}
                             />
                             <div className="p-4">
                                 <div className="flex items-start gap-3">
                                     <div className="relative shrink-0 mt-0.5">
                                         <div className="w-10 h-12 rounded-lg bg-gray-900 border border-gray-700/80 flex flex-col items-center justify-center gap-1 overflow-hidden light-theme:bg-white light-theme:border-gray-300">
-                                            <div className="w-6 h-0.5 rounded-full bg-amber-400" />
+                                            <div className="w-6 h-0.5 rounded-full bg-sky-400" />
                                             <div className="w-6 h-px rounded-full bg-gray-600" />
                                             <div className="w-6 h-px rounded-full bg-gray-600" />
                                             <div className="w-4 h-px rounded-full bg-gray-700" />
                                             <div className="w-6 h-px rounded-full bg-gray-600" />
                                         </div>
                                         <span
-                                            className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-amber-400 ring-2 ring-gray-950"
+                                            className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-sky-400 ring-2 ring-gray-950"
                                             style={{ animation: 'lsvz-pulse-dot 1.6s ease-in-out infinite' }}
                                         />
                                     </div>
                                     <div className="min-w-0 flex-1">
                                         <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider font-extrabold bg-amber-400/20 text-amber-300 border border-amber-500/30">
+                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider font-extrabold bg-sky-400/20 text-sky-300 border border-sky-500/30">
                                                 Boundary Agent
                                             </span>
                                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider font-bold bg-sky-400/15 text-sky-300 border border-sky-500/30">
@@ -934,7 +1072,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
 
                                 <div className="mt-3 h-1 rounded-full bg-gray-800 overflow-hidden light-theme:bg-gray-200">
                                     <div
-                                        className="h-full w-1/3 bg-gradient-to-r from-amber-500/0 via-amber-400 to-amber-500/0"
+                                        className="h-full w-1/3 bg-gradient-to-r from-sky-500/0 via-sky-400 to-sky-500/0"
                                         style={{ animation: 'lsvz-bar-slide 1.6s ease-in-out infinite' }}
                                     />
                                 </div>
@@ -944,7 +1082,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                         <span className="text-[11px] text-gray-400">Taking longer than expected?</span>
                                         <button
                                             onClick={onParseNow}
-                                            className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700"
+                                            className="black-hole-btn black-hole-btn--neutral px-2.5 py-1 rounded-md text-[11px] font-semibold text-white/80"
                                         >
                                             Parse Full Deed Now ▶
                                         </button>
@@ -955,15 +1093,15 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                     )}
 
                     {/* Integrated Deed Document Summary & Multi-Tract Card */}
-                    {Boolean(summary && (summary.grantor || summary.owner || summary.parcelId || summary.book || tractList.length > 0)) && (
-                        <div className="relative overflow-hidden rounded-xl border border-l-0 border-dashed border-cyan-400/80 bg-gray-950/90 pl-6 pr-4 py-3.5 shadow-lg light-theme:bg-gray-50 light-theme:border-cyan-500">
-                            <span className="absolute inset-y-0 left-0 w-3 bg-cyan-400 rounded-l-xl shadow-sm" aria-hidden="true" />
-                            <div className="flex items-center justify-between mb-2.5">
-                                <div className="flex items-center gap-2.5">
-                                    <span className="text-xs font-black uppercase tracking-wider text-cyan-300 light-theme:text-cyan-700">
+                    {showEmbeddedIntake && Boolean(summary && (summary.grantor || summary.owner || summary.parcelId || summary.book || tractList.length > 0)) && (
+                        <div className="panel-surface relative overflow-hidden rounded-xl border border-white/[0.08] bg-[#070e18]/90 py-2 pl-4 pr-3 shadow-lg light-theme:bg-gray-50 light-theme:border-cyan-200">
+                            <SectionChip color="summary" />
+                            <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-300 light-theme:text-cyan-700">
                                         Deed Summary
                                     </span>
-                                    <span className="px-2.5 py-0.5 rounded-full bg-cyan-950 text-cyan-200 border border-cyan-400/50 text-[10px] font-mono font-bold">
+                                    <span className="px-2 py-0.5 rounded-md bg-cyan-400/10 text-cyan-200 border border-cyan-400/25 text-[9.5px] font-mono font-semibold">
                                         {tractList.length === 1 ? '1 description detected' : `${tractList.length} tracts detected`}
                                     </span>
                                 </div>
@@ -972,7 +1110,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                         <button
                                             onClick={onComputeAll}
                                             disabled={isAnyBusy}
-                                            className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-amber-600 hover:bg-amber-500 text-white shadow-sm transition-colors disabled:opacity-50 active:scale-95"
+                                            className="black-hole-btn black-hole-btn--violet px-2.5 py-1 rounded-md text-[11px] font-bold text-white transition-colors disabled:opacity-50"
                                             title="Parse and compute every tract from this deed at once"
                                         >
                                             {isAnyBusy ? 'Extracting…' : 'Compute All Tracts ▶'}
@@ -982,7 +1120,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                         <button
                                             onClick={() => onComputeTract(singleTract!.tractId, null)}
                                             disabled={isSingleBusy}
-                                            className="px-3.5 py-1 rounded-lg text-xs font-black bg-amber-600 hover:bg-amber-500 text-white shadow-md transition-all disabled:opacity-50 active:scale-95 border border-amber-400/50"
+                                            className="black-hole-btn black-hole-btn--violet px-3 py-1 rounded-lg text-xs font-black text-white transition-all disabled:opacity-50"
                                             title="Parse and plot this deed boundary on the canvas"
                                         >
                                             {isSingleBusy ? 'Extracting Calls…' : 'Compute & Plot ▶'}
@@ -990,7 +1128,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                     )}
                                     <button
                                         onClick={() => setIsSummaryCollapsed(c => !c)}
-                                        className="text-xs font-bold text-gray-300 hover:text-white transition-colors"
+                                        className="rounded-md border border-white/[0.08] px-2 py-0.5 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.16] hover:text-white light-theme:border-gray-300 light-theme:text-gray-600 light-theme:hover:text-gray-900"
                                     >
                                         {isSummaryCollapsed ? 'Expand ▲' : 'Collapse ▼'}
                                     </button>
@@ -1000,37 +1138,37 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                             {!isSummaryCollapsed && (
                                 <div className="space-y-2.5 pt-1">
                                     {/* Document Metadata Pill Strip */}
-                                    <div className="flex flex-wrap gap-2 text-xs text-gray-200 pb-2.5 border-b border-gray-750 light-theme:text-gray-700">
+                                    <div className="flex flex-wrap gap-1.5 text-xs text-slate-200 pb-2 border-b border-white/[0.07] light-theme:text-gray-700 light-theme:border-gray-200">
                                         {summary!.grantor && (
-                                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-gray-900 border border-gray-700">
-                                                <span className="text-[10px] text-gray-400 uppercase tracking-wider font-extrabold">Grantor:</span>
+                                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-white/[0.03] border border-white/[0.08]">
+                                                <span className="text-[10px] text-white/50 uppercase tracking-wider font-extrabold">Grantor:</span>
                                                 <span className="font-bold text-white light-theme:text-gray-900">{summary!.grantor}</span>
                                             </span>
                                         )}
                                         {summary!.owner && (
-                                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-gray-900 border border-gray-700">
-                                                <span className="text-[10px] text-gray-400 uppercase tracking-wider font-extrabold">Grantee:</span>
+                                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-white/[0.03] border border-white/[0.08]">
+                                                <span className="text-[10px] text-white/50 uppercase tracking-wider font-extrabold">Grantee:</span>
                                                 <span className="font-bold text-white light-theme:text-gray-900">{summary!.owner}</span>
                                             </span>
                                         )}
                                         {summary!.parcelId && (
-                                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-cyan-950 border border-cyan-500/60 shadow-sm">
+                                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-cyan-400/10 border border-cyan-400/30 shadow-sm">
                                                 <span className="text-[10px] text-cyan-300 uppercase tracking-wider font-extrabold">Parcel:</span>
                                                 <span className="font-mono text-cyan-200 font-black">{summary!.parcelId}</span>
                                             </span>
                                         )}
                                         {summary!.book && (
-                                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-gray-900 border border-gray-700">
-                                                <span className="text-[10px] text-gray-400 uppercase tracking-wider font-extrabold">Book/Page:</span>
+                                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-white/[0.03] border border-white/[0.08]">
+                                                <span className="text-[10px] text-white/50 uppercase tracking-wider font-extrabold">Book/Page:</span>
                                                 <span className="font-mono text-white font-bold">{summary!.book}{summary!.page ? ` / ${summary!.page}` : ''}</span>
                                             </span>
                                         )}
                                     </div>
 
                                     {/* Multi-Tract List */}
-                                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                                    <div className="space-y-1.5">
                                         {tractList.map((t) => {
-                                            const matchingFile = boundaryFiles.find(f => f.sourceTractId === t.tractId || f.name.toLowerCase().includes(t.tractId.toLowerCase()) || (tractList.length === 1 && f.calls.some(c => Boolean(c.bearing && c.distance))));
+                                            const matchingFile = findBoundaryFileForTract(boundaryFiles, t, summary?.fileName);
                                             const isComputed = !!(matchingFile && matchingFile.calls.some(c => Boolean(c.bearing && c.distance)));
                                             const isDrafted = matchingFile ? ((matchingFile.drawnPointIds?.length ?? 0) > 0 || (matchingFile.drawnLineIds?.length ?? 0) > 0) : false;
                                             const isSelected = matchingFile && matchingFile.id === selectedFileId;
@@ -1039,20 +1177,20 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                             return (
                                                 <div
                                                     key={t.tractId}
-                                                    className={`flex flex-col gap-1.5 p-3 rounded-lg border text-xs transition-colors ${
+                                                    className={`flex flex-col gap-1 p-2 rounded-lg border text-xs transition-colors ${
                                                         isSelected
-                                                            ? 'bg-cyan-950/70 border-cyan-400 text-white shadow-md'
-                                                            : 'bg-gray-900/90 border-gray-700 text-gray-200 hover:bg-gray-850'
+                                                            ? 'bg-cyan-400/10 border-cyan-400/40 text-white shadow-md'
+                                                            : 'bg-white/[0.02] border-white/[0.08] text-slate-200 hover:bg-white/[0.04]'
                                                     }`}
                                                 >
                                                     <div className="flex items-center justify-between gap-2">
                                                         <div 
-                                                            className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
+                                                            className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer"
                                                             onClick={() => {
                                                                 if (matchingFile) setSelectedFileId(matchingFile.id);
                                                             }}
                                                         >
-                                                            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${isDrafted ? 'bg-emerald-400 ring-2 ring-emerald-500/50' : isComputed ? 'bg-cyan-400 ring-2 ring-cyan-500/40' : isBusy ? 'bg-amber-400 animate-pulse' : 'bg-amber-400'}`} />
+                                                            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${isDrafted ? 'bg-emerald-400 ring-2 ring-emerald-500/50' : isComputed ? 'bg-cyan-400 ring-2 ring-cyan-500/40' : isBusy ? 'bg-sky-400 animate-pulse' : 'bg-sky-400'}`} />
                                                             <span className="font-black text-white text-sm truncate light-theme:text-gray-900">
                                                                 {t.tractId}
                                                             </span>
@@ -1075,40 +1213,50 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
 
                                                         <div className="flex items-center gap-2 shrink-0">
                                                             {isBusy ? (
-                                                                <span className="text-amber-300 font-black text-xs flex items-center gap-1.5 bg-amber-950/90 px-2.5 py-1 rounded border border-amber-500/50 shadow-sm">
-                                                                    <span className="w-2.5 h-2.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                                                                <span className="text-sky-300 font-black text-xs flex items-center gap-1.5 bg-sky-950/90 px-2.5 py-1 rounded border border-sky-500/50 shadow-sm">
+                                                                    <span className="w-2.5 h-2.5 border-2 border-sky-400 border-t-transparent rounded-full animate-spin" />
                                                                     Extracting…
                                                                 </span>
                                                             ) : !isComputed && onComputeTract ? (
                                                                 <button
                                                                     onClick={() => onComputeTract(t.tractId, null)}
-                                                                    className="px-3 py-1 rounded-md text-xs font-black bg-amber-600 hover:bg-amber-500 text-white shadow-md border border-amber-400/50 transition-all active:scale-95"
+                                                                    className="black-hole-btn black-hole-btn--violet px-3 py-1 rounded-md text-xs font-black text-white transition-all"
                                                                 >
                                                                     Compute &amp; Plot ▶
                                                                 </button>
                                                             ) : isComputed && !isSelected ? (
                                                                 <button
                                                                     onClick={() => matchingFile && setSelectedFileId(matchingFile.id)}
-                                                                    className="px-3 py-1 rounded-md text-xs font-bold bg-gray-800 hover:bg-gray-700 text-cyan-300 hover:text-white border border-gray-600 transition-colors"
+                                                                    className="black-hole-btn black-hole-btn--neutral px-3 py-1 rounded-md text-xs font-bold text-white/80 transition-colors"
                                                                 >
                                                                     Select
                                                                 </button>
                                                             ) : null}
                                                             {isComputed && isSelected && (
-                                                                <span className="text-cyan-200 text-xs font-black bg-cyan-950 border border-cyan-400/60 px-2.5 py-0.5 rounded-full shadow-sm">
+                                                                <span className="text-cyan-200 text-[10px] font-semibold bg-cyan-400/10 border border-cyan-400/30 px-2 py-0.5 rounded-md shadow-sm">
                                                                     ● Active ({matchingFile.calls.length} calls)
                                                                 </span>
                                                             )}
                                                             {isDrafted && (
-                                                                <span className="text-emerald-300 text-xs font-black bg-emerald-950 border border-emerald-400/60 px-2.5 py-0.5 rounded-full shadow-sm">✓ Drafted</span>
+                                                                <span className="text-emerald-300 text-[10px] font-semibold bg-emerald-400/10 border border-emerald-400/30 px-2 py-0.5 rounded-md shadow-sm">✓ Drafted</span>
                                                             )}
                                                         </div>
                                                     </div>
 
                                                     {t.snippet && (
-                                                        <div className="text-xs text-gray-200 bg-gray-950/90 px-3 py-1.5 rounded-md border border-gray-750 font-mono italic leading-relaxed truncate max-w-full" title={t.snippet}>
-                                                            &ldquo;{t.snippet}&rdquo;
-                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onOpenDescription?.(t.tractId, t.snippet)}
+                                                            disabled={!onOpenDescription}
+                                                            className={`group flex w-full min-w-0 items-center gap-2 rounded-md border border-white/[0.08] bg-gray-950/90 px-2 py-1 text-left font-mono text-[11px] italic leading-relaxed text-gray-200 transition-colors ${onOpenDescription ? 'hover:border-cyan-400/40 hover:bg-cyan-400/[0.06] hover:text-white' : 'cursor-default'}`}
+                                                            title={onOpenDescription ? 'Open this description in the Text Editor' : t.snippet}
+                                                            aria-label={onOpenDescription ? `Open ${t.tractId} description in the Text Editor` : undefined}
+                                                        >
+                                                            <span className="min-w-0 flex-1 truncate">&ldquo;{t.snippet}&rdquo;</span>
+                                                            {onOpenDescription && (
+                                                                <PencilSquareIcon className="h-3 w-3 shrink-0 text-slate-500 transition-colors group-hover:text-cyan-300" />
+                                                            )}
+                                                        </button>
                                                     )}
                                                 </div>
                                             );
@@ -1119,14 +1267,9 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                         </div>
                     )}
 
-                    {/* Confidence Pill */}
-                    {selectedFile?.deedConfidence && (
-                        <ConfidencePill confidence={selectedFile.deedConfidence} />
-                    )}
-
                     {/* Quick All-Boundaries Drawer */}
                     {boundaryFiles.length > 1 && (
-                        <div className="border border-gray-800 rounded-lg bg-gray-950/40 overflow-hidden">
+                        <div className="panel-surface relative border border-white/[0.08] rounded-lg bg-[#070e18]/60 overflow-hidden">
                             <button
                                 onClick={() => setShowAllBoundaries(p => !p)}
                                 className="w-full px-3 py-1.5 flex items-center justify-between text-[11px] text-gray-400 hover:text-gray-200 hover:bg-gray-900/60"
@@ -1135,7 +1278,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                 <span>{showAllBoundaries ? '▾' : '▸'}</span>
                             </button>
                             {showAllBoundaries && (
-                                <div className="max-h-36 overflow-y-auto px-2 pb-2 space-y-1">
+                                <div className="px-2 pb-2 space-y-1">
                                     {boundaryFiles.map(f => {
                                         const isActive = f.id === selectedFile?.id;
                                         return (
@@ -1175,20 +1318,21 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                     {/* TRAVERSE CALLS SPREADSHEET TABLE                          */}
                     {/* ========================================================= */}
                     {selectedFile && (
-                        <div className="space-y-3">
-                            <div className="rounded-xl border border-dashed border-gray-600 bg-gray-950/80 overflow-hidden shadow-lg light-theme:bg-white light-theme:border-gray-300">
-                                <div className="max-h-72 overflow-y-auto overflow-x-auto">
+                        <div className="space-y-2">
+                            <div className="panel-surface relative rounded-xl border border-white/[0.08] bg-[#070e18]/80 overflow-hidden shadow-lg light-theme:bg-white light-theme:border-gray-300">
+                                <SectionChip color="table" />
+                                <div className="overflow-x-auto">
                                     <table className="w-full border-collapse">
                                         <thead>
-                                            <tr className="text-white bg-gray-900 border-b border-gray-700 sticky top-0 z-10 light-theme:bg-gray-100 light-theme:border-gray-250">
-                                                <th className="w-7 py-2.5 px-1"></th>
-                                                <th className="text-center py-2.5 px-1 font-black text-[10px] uppercase tracking-wider text-gray-200 w-8">#</th>
-                                                <th className="text-left py-2.5 px-2.5 font-black text-[10px] uppercase tracking-wider text-cyan-200 w-[235px]">Bearing (N/S · DMS · E/W)</th>
-                                                <th className="text-left py-2.5 px-2 font-black text-[10px] uppercase tracking-wider text-cyan-200 w-28">Distance (ft)</th>
-                                                <th className="text-center py-2.5 px-1 font-black text-[10px] uppercase tracking-wider text-gray-200 w-12">From</th>
-                                                <th className="text-center py-2.5 px-1 font-black text-[10px] uppercase tracking-wider text-gray-200 w-12">To</th>
-                                                <th className="text-center py-2.5 px-1 font-black text-[10px] uppercase tracking-wider text-gray-200 w-12">Status</th>
-                                                <th className="w-8 py-2.5 px-1"></th>
+                                            <tr className="text-white bg-[#070e18] border-b border-white/[0.1] sticky top-0 z-10 light-theme:bg-gray-100 light-theme:border-gray-200">
+                                                <th className="w-7 py-1.5 px-1"></th>
+                                                <th className="text-center py-1.5 px-1 font-black text-[10px] uppercase tracking-wider text-white/85 w-8">#</th>
+                                                <th className="text-left py-1.5 px-2.5 font-black text-[10px] uppercase tracking-wider text-white/85 w-[235px]">Bearing (N/S · DMS · E/W)</th>
+                                                <th className="text-left py-1.5 px-2 font-black text-[10px] uppercase tracking-wider text-white/85 w-28">Distance (ft)</th>
+                                                <th className="text-center py-1.5 px-1 font-black text-[10px] uppercase tracking-wider text-white/85 w-12">From</th>
+                                                <th className="text-center py-1.5 px-1 font-black text-[10px] uppercase tracking-wider text-white/85 w-12">To</th>
+                                                <th className="text-center py-1.5 px-1 font-black text-[10px] uppercase tracking-wider text-white/85 w-12">Status</th>
+                                                <th className="w-8 py-1.5 px-1"></th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -1213,7 +1357,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                                             onComputeAll?.();
                                                                         }
                                                                     }}
-                                                                    className="mt-1 px-4 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white shadow-md transition-all active:scale-95"
+                                                                    className="black-hole-btn black-hole-btn--violet mt-1 px-4 py-1.5 rounded-lg text-xs font-bold text-white transition-all"
                                                                 >
                                                                     Compute &amp; Plot Boundary ▶
                                                                 </button>
@@ -1241,7 +1385,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                                 <td className="text-center px-1">
                                                                     <button
                                                                         onClick={() => toggleExpanded(call.id)}
-                                                                        className={`p-1 rounded hover:bg-gray-800 transition-colors ${isCurve ? 'text-cyan-400 font-bold' : 'text-gray-500'} hover:text-amber-300`}
+                                                                        className={`p-1 rounded hover:bg-gray-800 transition-colors ${isCurve ? 'text-cyan-400 font-bold' : 'text-gray-500'} hover:text-sky-300`}
                                                                         title={isCurve ? 'Edit curve data' : 'Add curve data'}
                                                                     >
                                                                         {isOpen ? <ChevronDownIcon className="w-3.5 h-3.5" /> : <ChevronRightIcon className="w-3.5 h-3.5" />}
@@ -1269,7 +1413,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                                         className={`w-full h-7 bg-gray-950 border rounded-lg px-2.5 py-0.5 font-mono text-xs font-bold shadow-inner focus:outline-none focus:ring-2 transition-all light-theme:bg-white light-theme:text-gray-900 ${
                                                                             editValues[`${call.id}.distance`] !== undefined
                                                                                 ? distValid
-                                                                                    ? 'border-amber-400 ring-amber-400/50 text-amber-200'
+                                                                                    ? 'border-sky-400 ring-sky-400/50 text-sky-200'
                                                                                     : 'border-red-400 ring-red-400/50 text-red-200'
                                                                                 : 'border-gray-600 hover:border-gray-500 text-white light-theme:border-gray-400'
                                                                         }`}
@@ -1295,7 +1439,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                                     {brValid && distValid ? (
                                                                         <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-black border border-emerald-400/50" title="Bearing and distance are valid">✓</span>
                                                                     ) : (
-                                                                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-400/50" title="Incomplete call">
+                                                                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-400/50" title="Incomplete call">
                                                                             {!brValid && !distValid ? 'empty' : !brValid ? 'brg?' : 'dist?'}
                                                                         </span>
                                                                     )}
@@ -1319,7 +1463,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                             {/* Curve details drawer */}
                                                             {isOpen && (
                                                                 <tr className={`border-t border-gray-800 ${idx % 2 === 0 ? 'bg-gray-900/60' : 'bg-gray-950/60'}`}>
-                                                                    <td colSpan={8} className="px-4 py-2.5">
+                                                                    <td colSpan={8} className="px-4 py-1.5">
                                                                         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
                                                                             <label className="flex items-center gap-1.5 text-gray-200 font-bold cursor-pointer">
                                                                                 <input
@@ -1387,16 +1531,11 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                 </div>
 
                                 {/* Add-row Action Bar */}
-                                <div className="flex items-center justify-between px-3.5 py-2.5 border-t border-gray-800 bg-gray-900/80 light-theme:bg-gray-100">
-                                    <span className="text-xs text-gray-300 flex items-center gap-1.5 font-medium">
-                                        <kbd className="px-1.5 py-0.5 text-[10px] font-mono font-bold bg-gray-800 border border-gray-600 rounded text-cyan-300 shadow-sm">Tab</kbd>
-                                        <kbd className="px-1.5 py-0.5 text-[10px] font-mono font-bold bg-gray-800 border border-gray-600 rounded text-cyan-300 shadow-sm">Space</kbd>
-                                        auto-advances bearing fields
-                                    </span>
+                                <div className="flex items-center justify-start px-3 py-2 border-t border-white/[0.08] bg-[#070e18]/70 light-theme:bg-gray-100">
                                     <button
                                         onClick={() => onAddCall(selectedFile.id)}
                                         title={isAddCallRowPulsing ? 'Start here — add your first call row' : undefined}
-                                        className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-cyan-950 hover:bg-cyan-900 text-cyan-200 hover:text-white border border-cyan-500/70 shadow-sm transition-all active:scale-95 ${isAddCallRowPulsing ? 'animate-add-call-row-pulse' : ''}`}
+                                        className={`black-hole-btn black-hole-btn--cyan flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white transition-all ${isAddCallRowPulsing ? 'animate-add-call-row-pulse' : ''}`}
                                     >
                                         <PlusIcon className="w-3.5 h-3.5" />
                                         <span>Add Call Row</span>
@@ -1408,24 +1547,21 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                             {/* CLOSURE & ACCURACY SUMMARY CARD                           */}
                             {/* ========================================================= */}
                             {closure && (
-                                <div className={`relative overflow-hidden rounded-xl border border-l-0 border-dashed ${closure.misclosureDistance < 0.05 ? 'border-emerald-400/80' : 'border-amber-400/80'} bg-gray-950/90 pl-6 pr-4 py-3.5 shadow-md light-theme:bg-gray-50 light-theme:border-emerald-500`}>
-                                    <span
-                                        className={`absolute inset-y-0 left-0 w-3 ${closure.misclosureDistance < 0.05 ? 'bg-emerald-400' : 'bg-amber-400'} rounded-l-xl shadow-sm`}
-                                        aria-hidden="true"
-                                    />
+                                <div className="panel-surface relative overflow-hidden rounded-xl border border-white/[0.08] bg-[#070e18]/80 py-2 pl-4 pr-3 shadow-sm light-theme:bg-gray-50 light-theme:border-gray-200">
+                                    <SectionChip color={closure.misclosureDistance < 0.05 ? 'closureOk' : 'closureWarn'} />
                                     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                                         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs">
                                             <div>
-                                                <span className="text-[10px] text-gray-400 uppercase tracking-wider font-extrabold block">Calculated Area</span>
-                                                <span className="text-cyan-300 font-mono font-black text-sm light-theme:text-cyan-700">{formatArea(closure.area)}</span>
+                                                <span className="text-[10px] text-white/50 uppercase tracking-wider font-extrabold block">Calculated Area</span>
+                                                <span className="text-white font-mono font-black text-sm light-theme:text-gray-900">{formatArea(closure.area)}</span>
                                             </div>
                                             <div>
-                                                <span className="text-[10px] text-gray-400 uppercase tracking-wider font-extrabold block">Precision Ratio</span>
-                                                <span className="text-cyan-300 font-mono font-black text-sm light-theme:text-cyan-700">{closure.precision}</span>
+                                                <span className="text-[10px] text-white/50 uppercase tracking-wider font-extrabold block">Precision Ratio</span>
+                                                <span className="text-white font-mono font-black text-sm light-theme:text-gray-900">{closure.precision}</span>
                                             </div>
                                             <div>
-                                                <span className="text-[10px] text-gray-400 uppercase tracking-wider font-extrabold block">Linear Misclosure</span>
-                                                <span className={`font-mono font-black text-sm ${closure.misclosureDistance < 0.05 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                                <span className="text-[10px] text-white/50 uppercase tracking-wider font-extrabold block">Linear Misclosure</span>
+                                                <span className={`font-mono font-black text-sm ${closure.misclosureDistance < 0.05 ? 'text-emerald-400' : 'text-sky-400'}`}>
                                                     {closure.misclosureDistance.toFixed(4)} ft
                                                 </span>
                                             </div>
@@ -1433,19 +1569,10 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
 
                                         {/* Closure & Legal Action Buttons */}
                                         <div className="flex items-center gap-2">
-                                            {onInvestigateClosure && (
-                                                <button
-                                                    onClick={() => onInvestigateClosure(selectedFile.id)}
-                                                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 border border-amber-400/60 shadow-sm transition-colors active:scale-95"
-                                                    title="Compare with deed text, identify errors, and propose fixes"
-                                                >
-                                                    Investigate
-                                                </button>
-                                            )}
                                             {onGenerateClosureReport && (
                                                 <button
                                                     onClick={() => onGenerateClosureReport(selectedFile.id)}
-                                                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30 border border-emerald-400/60 shadow-sm transition-colors active:scale-95"
+                                                    className="black-hole-btn black-hole-btn--emerald px-3 py-1.5 rounded-lg text-xs font-bold text-white transition-colors"
                                                     title="Generate printable closure report"
                                                 >
                                                     Closure Report
@@ -1454,7 +1581,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                             {onWriteLegal && (
                                                 <button
                                                     onClick={() => onWriteLegal(selectedFile.id)}
-                                                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-500/20 text-indigo-200 hover:bg-indigo-500/30 border border-indigo-400/60 shadow-sm transition-colors active:scale-95"
+                                                    className="black-hole-btn black-hole-btn--indigo px-3 py-1.5 rounded-lg text-xs font-bold text-white transition-colors"
                                                     title="Generate metes-and-bounds legal description"
                                                 >
                                                     Write Legal
@@ -1465,110 +1592,12 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                 </div>
                             )}
 
-                            {/* Silhouette/preview investigation: a parse too incomplete
-                                for a closure summary is exactly when the calls need
-                                checking against the deed - before anything is drafted. */}
-                            {!closure && selectedFile.calls.length > 0 && onInvestigateClosure && (
-                                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-amber-400/60 bg-amber-500/10 px-4 py-2.5">
-                                    <span className="text-xs text-amber-200">
-                                        Preview only — this traverse has no closure summary yet. Investigate the parsed calls against the deed before drafting.
-                                    </span>
-                                    <button
-                                        onClick={() => onInvestigateClosure(selectedFile.id)}
-                                        className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500/20 text-amber-100 hover:bg-amber-500/30 border border-amber-400/60 shadow-sm transition-colors active:scale-95"
-                                        title="Compare the preview calls with the deed text and propose fixes"
-                                    >
-                                        Investigate
-                                    </button>
-                                </div>
-                            )}
-
-                            {/* ========================================================= */}
-                            {/* PRIMARY DRAFTING & TOOLBAR                                */}
-                            {/* ========================================================= */}
-                            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-gray-800/80 light-theme:border-gray-200">
-                                <div className="flex flex-wrap items-center gap-2">
-                                    {selectedFile && selectedFile.calls.some(c => Boolean(c.bearing && c.distance)) ? (
-                                        <>
-                                            {onDrawToLinework && (
-                                                <button
-                                                    onClick={() => onDrawToLinework(selectedFile.id)}
-                                                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-500 shadow-md shadow-emerald-950/40 transition-all active:scale-95"
-                                                    title="Commit boundary calls to canvas as CAD linework"
-                                                >
-                                                    <span>Draft to CAD</span>
-                                                    <span>▶</span>
-                                                </button>
-                                            )}
-                                            {onDrawToLinework && boundaryFiles.length > 1 && (
-                                                <button
-                                                    onClick={() => boundaryFiles.forEach(bf => onDrawToLinework(bf.id))}
-                                                    className="px-3 py-2 rounded-lg font-semibold text-xs text-emerald-300 bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-700/60 transition-colors"
-                                                    title={`Draft all ${boundaryFiles.length} boundaries to CAD`}
-                                                >
-                                                    Draft All ({boundaryFiles.length})
-                                                </button>
-                                            )}
-                                        </>
-                                    ) : isAnyBusy ? (
-                                        <button
-                                            disabled
-                                            className="flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-xs text-amber-200 bg-amber-950/80 border border-amber-600/50 cursor-wait shadow-sm"
-                                        >
-                                            <div className="w-3.5 h-3.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
-                                            <span>Extracting Geometry…</span>
-                                        </button>
-                                    ) : tractList.length > 0 ? (
-                                        <button
-                                            onClick={() => {
-                                                if (tractList[0] && onComputeTract) {
-                                                    onComputeTract(tractList[0].tractId, null);
-                                                } else {
-                                                    onComputeAll?.();
-                                                }
-                                            }}
-                                            className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-bold text-xs text-white bg-amber-600 hover:bg-amber-500 shadow-md shadow-amber-950/40 transition-all active:scale-95"
-                                            title="Extract and plot the deed boundary on canvas"
-                                        >
-                                            <span>Compute &amp; Plot Boundary</span>
-                                            <span>▶</span>
-                                        </button>
-                                    ) : (
-                                        <button
-                                            disabled
-                                            className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-bold text-xs text-gray-500 bg-gray-800 border border-gray-750 opacity-60 cursor-not-allowed"
-                                            title="Enter at least one call with bearing and distance first"
-                                        >
-                                            <span>Draft to CAD</span>
-                                            <span>▶</span>
-                                        </button>
-                                    )}
-                                    {onAlignToGIS && selectedFile && selectedFile.calls.some(c => Boolean(c.bearing && c.distance)) && (
-                                        <button
-                                            onClick={() => onAlignToGIS(selectedFile.id)}
-                                            className="px-3 py-2 rounded-lg font-semibold text-xs text-cyan-300 bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-700/60 transition-colors"
-                                            title="Match deed against county GIS parcel and align to centroid"
-                                        >
-                                            Align to GIS
-                                        </button>
-                                    )}
-                                </div>
-
-                                <button
-                                    onClick={() => setShowToolsDrawer(p => !p)}
-                                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-gray-300 bg-gray-800 hover:bg-gray-700 border border-gray-700 transition light-theme:bg-gray-200 light-theme:text-gray-700"
-                                >
-                                    <span>Tools, POB &amp; Alignment</span>
-                                    <span>{showToolsDrawer ? '▾' : '▸'}</span>
-                                </button>
-                            </div>
-
                             {/* ========================================================= */}
                             {/* COLLAPSIBLE TOOLS, POB & ALIGNMENT DRAWER                 */}
                             {/* ========================================================= */}
-                            {showToolsDrawer && (
-                                <div className="relative overflow-hidden rounded-xl border border-l-0 border-dashed border-blue-400/80 bg-gray-950/90 pl-6 pr-4 py-4 space-y-4 shadow-lg light-theme:bg-gray-50 light-theme:border-blue-500">
-                                    <span className="absolute inset-y-0 left-0 w-3 bg-blue-500 rounded-l-xl shadow-sm" aria-hidden="true" />
+                            {showToolsDrawer && !onOpenAlignmentTools && (
+                                <div className="panel-surface relative overflow-hidden rounded-xl border border-white/[0.08] bg-[#070e18]/90 pl-4 pr-3 py-1.5 space-y-2.5 shadow-lg light-theme:bg-gray-50 light-theme:border-blue-200">
+                                    <SectionChip color="tools" />
                                     
                                     {/* POB Grid */}
                                     {onPobChange && (
@@ -1577,7 +1606,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                 <MapPinIcon className="w-4 h-4 text-emerald-400" />
                                                 <span>Point of Beginning (POB)</span>
                                             </div>
-                                            <div className="grid grid-cols-3 gap-2.5">
+                                            <div className="grid grid-cols-3 gap-2">
                                                 <div className="space-y-1">
                                                     <span className="text-[10px] text-gray-300 font-extrabold uppercase tracking-wider block">Point #</span>
                                                     <input
@@ -1649,19 +1678,19 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                         <div className="space-y-2 pt-2.5 border-t border-gray-800">
                                             <div className="flex items-center justify-between">
                                                 <div className="flex items-center gap-1.5 text-xs font-black text-gray-100 uppercase tracking-wider">
-                                                    <AdjustmentsHorizontalIcon className="w-4 h-4 text-amber-400" />
+                                                    <AdjustmentsHorizontalIcon className="w-4 h-4 text-sky-400" />
                                                     <span>Coordinate Shift &amp; Rotation</span>
                                                 </div>
                                                 {(selectedFile.translationE || selectedFile.translationN || selectedFile.rotationDeg) && (
                                                     <button
                                                         onClick={() => onTransformChange(selectedFile.id, { translationE: null, translationN: null, rotationDeg: null })}
-                                                        className="text-xs font-bold text-amber-300 hover:text-amber-200 transition-colors underline"
+                                                        className="text-xs font-bold text-sky-300 hover:text-sky-200 transition-colors underline"
                                                     >
                                                         Reset Shift
                                                     </button>
                                                 )}
                                             </div>
-                                            <div className="grid grid-cols-3 gap-2.5">
+                                            <div className="grid grid-cols-3 gap-2">
                                                 <div className="space-y-1">
                                                     <span className="text-[10px] text-gray-300 font-extrabold uppercase tracking-wider block">ΔE (East Shift)</span>
                                                     <input
@@ -1673,7 +1702,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                             onTransformChange(selectedFile.id, { translationE: v === '' ? null : parseFloat(v) });
                                                         }}
                                                         placeholder="0.00"
-                                                        className="w-full h-8 px-2.5 rounded-lg bg-gray-950 border border-gray-600 focus:border-amber-400 text-amber-300 font-mono font-bold text-xs shadow-inner focus:outline-none"
+                                                        className="w-full h-8 px-2.5 rounded-lg bg-gray-950 border border-gray-600 focus:border-sky-400 text-sky-300 font-mono font-bold text-xs shadow-inner focus:outline-none"
                                                     />
                                                 </div>
                                                 <div className="space-y-1">
@@ -1687,7 +1716,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                             onTransformChange(selectedFile.id, { translationN: v === '' ? null : parseFloat(v) });
                                                         }}
                                                         placeholder="0.00"
-                                                        className="w-full h-8 px-2.5 rounded-lg bg-gray-950 border border-gray-600 focus:border-amber-400 text-amber-300 font-mono font-bold text-xs shadow-inner focus:outline-none"
+                                                        className="w-full h-8 px-2.5 rounded-lg bg-gray-950 border border-gray-600 focus:border-sky-400 text-sky-300 font-mono font-bold text-xs shadow-inner focus:outline-none"
                                                     />
                                                 </div>
                                                 <div className="space-y-1">
@@ -1701,7 +1730,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                             onTransformChange(selectedFile.id, { rotationDeg: v === '' ? null : parseFloat(v) });
                                                         }}
                                                         placeholder="0.00°"
-                                                        className="w-full h-8 px-2.5 rounded-lg bg-gray-950 border border-gray-600 focus:border-amber-400 text-amber-300 font-mono font-bold text-xs shadow-inner focus:outline-none"
+                                                        className="w-full h-8 px-2.5 rounded-lg bg-gray-950 border border-gray-600 focus:border-sky-400 text-sky-300 font-mono font-bold text-xs shadow-inner focus:outline-none"
                                                     />
                                                 </div>
                                             </div>
@@ -1728,7 +1757,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                 {onAlignCornersToPoints && (
                                                     <button
                                                         onClick={() => onAlignCornersToPoints(selectedFile.id)}
-                                                        className="px-3.5 py-2 rounded-lg text-xs font-extrabold bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-400/50 shadow-md transition-all active:scale-95"
+                                                        className="black-hole-btn black-hole-btn--indigo px-3 py-2 rounded-lg text-xs font-extrabold text-white transition-all"
                                                         title="Align corners: click a corner of the deed on canvas, then the found survey point it belongs on"
                                                     >
                                                         ⌖ Align Corners to Found Points
@@ -1737,7 +1766,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                 {onAlignToOtherBoundary && boundaryFiles.length >= 2 && (
                                                     <button
                                                         onClick={() => onAlignToOtherBoundary(selectedFile.id)}
-                                                        className="px-3.5 py-2 rounded-lg text-xs font-extrabold bg-blue-600 hover:bg-blue-500 text-white border border-blue-400/50 shadow-md transition-all active:scale-95"
+                                                        className="black-hole-btn black-hole-btn--blue px-3 py-2 rounded-lg text-xs font-extrabold text-white transition-all"
                                                     >
                                                         ↔ Align to Other Deed
                                                     </button>
@@ -1758,7 +1787,7 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                     {selectedPointNumber && (
                                                         <button
                                                             onClick={() => onAssociatePoints(selectedFile.id, [selectedPointNumber])}
-                                                            className="px-3 py-1.5 rounded-lg text-xs font-extrabold bg-amber-600/80 text-white hover:bg-amber-500 border border-amber-400/60 shadow-sm"
+                                                            className="black-hole-btn black-hole-btn--cyan px-3 py-1.5 rounded-lg text-xs font-extrabold text-white"
                                                         >
                                                             + Selected (#{selectedPointNumber})
                                                         </button>
@@ -1770,14 +1799,14 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
                                                             onAssociatePoints(selectedFile.id, ids);
                                                             setAssociateInput('');
                                                         }}
-                                                        className="px-3.5 py-1.5 rounded-lg text-xs font-extrabold bg-blue-600 hover:bg-blue-500 text-white border border-blue-400/50 shadow-md transition-all active:scale-95"
+                                                        className="black-hole-btn black-hole-btn--blue px-3 py-1.5 rounded-lg text-xs font-extrabold text-white transition-all"
                                                     >
                                                         Add Points
                                                     </button>
                                                     {onBestFitToPoints && (selectedFile.associatedPointIds?.length ?? 0) >= 1 && (
                                                         <button
                                                             onClick={() => onBestFitToPoints(selectedFile.id)}
-                                                            className="px-3.5 py-1.5 rounded-lg text-xs font-extrabold bg-sky-600 hover:bg-sky-500 text-white border border-sky-400/50 shadow-md transition-all active:scale-95"
+                                                            className="black-hole-btn black-hole-btn--cyan px-3 py-1.5 rounded-lg text-xs font-extrabold text-white transition-all"
                                                         >
                                                             Best Fit ({selectedFile.associatedPointIds?.length} pts)
                                                         </button>

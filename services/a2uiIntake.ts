@@ -37,6 +37,8 @@ export type A2UICustomActionId =
   | 'open-cad-standards'
   | 'cad-manager-chat'
   | 'civil-drafter-existing-points'
+  | 'civil-drafter-auto-draft'
+  | 'civil-drafter-context'
   | 'civil-drafter-sample-raw'
   | 'raw-crawler-example'
   | 'centerline-example'
@@ -261,19 +263,20 @@ export function buildA2UIIntakeGreeting(
 
     case AgentType.CIVIL_DRAFTER:
       if (ptCount > 0) {
-        detail = `Welcome to the drawing canvas! I see <strong>${ptCount.toLocaleString()} point${ptCount === 1 ? '' : 's'}</strong> already on the canvas. Would you like to upload a new point/RAW file or PDF plan sheet, or should we draft directly from the points already on the canvas?`;
+        detail = `Welcome to the drawing canvas! I see <strong>${ptCount.toLocaleString()} point${ptCount === 1 ? '' : 's'}</strong> already on the canvas. Set up <strong>Auto Draft</strong> for a guided one-shot drafting run, tune how much context I carry, upload a point/PDF file, or draft directly from the points already here.`;
         questionOptions = [
+          'Set up Auto Draft',
+          'Set up context',
           'Yes, upload a point or PDF file',
           'Draft from existing canvas points',
-          'Load sample .RAW survey',
         ];
       } else {
         detail =
-          'Welcome to the drawing canvas! Would you like to upload a survey point file (<strong>.raw</strong>, <strong>.csv</strong>, <strong>.txt</strong>) or a PDF plan sheet so I can generate linework for you?';
+          'Welcome to the drawing canvas! Set up <strong>Auto Draft</strong> for a guided one-shot drafting run, tune how much context I carry, or upload a survey point file (<strong>.raw</strong>, <strong>.csv</strong>, <strong>.txt</strong>) or PDF plan sheet to begin.';
         questionOptions = [
+          'Set up Auto Draft',
+          'Set up context',
           'Yes, upload a point or PDF file',
-          'Load sample .RAW survey',
-          'Draft from canvas geometry',
         ];
       }
       break;
@@ -481,7 +484,7 @@ const DECLINE_REPLY_RE =
   /^(?:n|no|nope|nah|no\s+thanks|no\s+thank\s+you|not\s+now|later|skip|cancel|never\s*mind|continue\s+on\s+canvas|work\s+on\s+canvas(?:\s+first)?|work\s+in\s+chat(?:\s+on\s+canvas|\s+without\s+a\s+file)?|draft\s+from\s+canvas\s+geometry|continue\s+without\s+uploading|ask\s+a\s+(?:zoning|title)\s+question\s+in\s+chat|ask\s+about\s+compliance\s+checks)[\s.!]*$/i;
 
 const EXPLICIT_UPLOAD_CMD_RE =
-  /^(?:(?:please\s+|can\s+i\s+|i\s+want\s+to\s+|let'?s\s+)?(?:upload|import|load|attach|add)\s+(?:a\s+|some\s+|more\s+|my\s+|new\s+|the\s+)?(?:points?|point\s+files?|csv|txt|files?|data|deeds?|legal\s+descriptions?|dxf|dwg|gis|geojson|raw|raw\s+files?|plans?|plan\s+sheets?|pdfs?|centerlines?|cl|images?|photos?|pictures?|standards?|cad\s+standards?)|upload|add\s+data|open\s+upload|show\s+upload(?:\s+options)?)[\s.!]*$/i;
+  /^(?:(?:yes,?\s+)?(?:please\s+|can\s+i\s+|i\s+want\s+to\s+|let'?s\s+)?(?:upload|import|load|attach|add)\s+(?:a\s+|some\s+|more\s+|my\s+|new\s+|the\s+)?(?:points?|point\s+files?|point\s+or\s+pdf\s+files?|csv|txt|files?|data|deeds?|legal\s+descriptions?|dxf|dwg|gis|geojson|raw|raw\s+files?|plans?|plan\s+sheets?|pdfs?|centerlines?|cl|images?|photos?|pictures?|standards?|cad\s+standards?)|upload|add\s+data|open\s+upload|show\s+upload(?:\s+options)?)[\s.!]*$/i;
 
 /**
  * Inspects a user chat message and determines whether it is answering an A2UI
@@ -550,7 +553,7 @@ export function classifyA2UIIntakeReply(
       action: 'custom-action',
       customActionId: 'open-cad-standards',
       replyText:
-        'Opening the <strong>CAD Manager workspace</strong> as an A2UI surface so you can author layers, description keys, linetypes, and symbols. Pop it out or dock it into the agent tool shelf.',
+        'Opening the <strong>CAD Manager workspace</strong> as an interactive surface so you can author layers, description keys, linetypes, and symbols. Pop it out or dock it into the agent tool shelf.',
       suggestedQuestions: getDefaultSuggestedQuestions(AgentType.CAD_MANAGER),
     };
   }
@@ -562,6 +565,26 @@ export function classifyA2UIIntakeReply(
       replyText:
         'Ready! Tell me which field codes or descriptions you want to standardize, or ask about layers and linetypes in your active standard. Type <strong>"upload standards"</strong> anytime to load a file.',
       suggestedQuestions: getDefaultSuggestedQuestions(AgentType.CAD_MANAGER),
+    };
+  }
+
+  if (/^set\s+up\s+auto\s+draft$/i.test(trimmed)) {
+    return {
+      action: 'custom-action',
+      customActionId: 'civil-drafter-auto-draft',
+      replyText:
+        'I have opened <strong>Auto Draft</strong> in the tool shelf. Pick the site location, confirm what to draft, and run it when ready.',
+      suggestedQuestions: getDefaultSuggestedQuestions(AgentType.CIVIL_DRAFTER),
+    };
+  }
+
+  if (/^set\s+up\s+context$/i.test(trimmed)) {
+    return {
+      action: 'custom-action',
+      customActionId: 'civil-drafter-context',
+      replyText:
+        'I have opened <strong>Civil Drafter Context</strong> as an A2UI surface so you can tune retained conversation, point payloads, and vision imagery before the next draft.',
+      suggestedQuestions: getDefaultSuggestedQuestions(AgentType.CIVIL_DRAFTER),
     };
   }
 

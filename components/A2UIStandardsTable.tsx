@@ -273,7 +273,7 @@ export const A2UIStandardsTable: React.FC<A2UIStandardsTableProps> = ({
   const handleAddRow = () => {
     const base: StandardDefinition = effectiveStandard ?? {
       name: 'Custom CAD Standard',
-      description: 'Created in A2UI Standards Sheet',
+      description: 'Created in the Standards Sheet',
       codes: [],
       layers: [],
       linetypes: [],
