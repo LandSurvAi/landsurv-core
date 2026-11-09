@@ -2,6 +2,15 @@
 
 const releases = [
     {
+        version: "26.11.09.02",
+        date: "November 9, 2026",
+        highlights: [
+            "🔑 Every Deed Is Now Accounted For — Including Keyholders: Keyholder and app-exempt deed runs are written to the same processing ledger as free deeds, marked as unmetered with a keyholder or exempt entitlement, and carry the deed, device fingerprint, IP and operator identity. Keyholder runs no longer look like a free deed was spent: the five-deed allowance and key checks are unchanged.",
+            "👤 DevOps Deed Processing Shows Who Ran the Deed: The console's Deed Processing view now has keyholder/exempt badges, unmetered totals and an Unmetered column plus Email/User columns. If an event has no browser identity, the validated key owner's email/user is used; older events fall back to the device's latest identity and are labeled as device-derived.",
+            "🧪 Coverage added for keyholder consume/track attribution, unmetered ledger accounting and ledger-only tracking, so `/api/deeds/track` records a run without granting entitlement or changing counters.",
+        ],
+    },
+    {
         version: "26.11.09.01",
         date: "November 9, 2026",
         highlights: [

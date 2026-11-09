@@ -59,6 +59,7 @@ export const WORKSPACE_TOOL_LABELS: Record<A2UIWorkspaceToolId, string> = {
   'symbol-manager': 'Symbol Manager',
   'linetype-manager': 'Linetype Manager',
   'hatch-manager': 'Hatch Manager',
+  'raster-underlay': 'Image & PDF Underlays',
   'annotate-manager': 'Annotate Manager',
   'stationing-controls': 'Stationing Controls',
   'drafting-style-library': 'Drafting Style Library',

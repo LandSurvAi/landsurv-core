@@ -4,6 +4,7 @@ import { DownloadIcon, ArrowUpTrayIcon, XMarkIcon, EraserIcon, ChevronDownIcon, 
 import { PointEditorC3DSync } from './PointEditorC3DSync.tsx';
 import { expandGoogleMapsShortLink, isGoogleMapsShortLink, parseGoogleMapsLatLon } from '../utils/googleMaps.ts';
 import { decodePlusCode } from '../utils/plusCode.ts';
+import { derivePointWorkflow } from '../services/pointWorkflow.ts';
 import { useErrorReporter } from '../contexts/AppStateContext';
 
 // C3D Sync Icon
@@ -110,6 +111,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
   const [sortKey, setSortKey] = useState<PointSortKey>('pn');
   const [sortAscending, setSortAscending] = useState(true);
   const allPoints = useMemo(() => pointLists.flatMap(list => list.points), [pointLists]);
+  const pointWorkflow = useMemo(() => derivePointWorkflow(pointLists), [pointLists]);
   const visiblePointCount = useMemo(
     () => pointLists.filter(list => list.isVisible).reduce((total, list) => total + list.points.length, 0),
     [pointLists]
@@ -710,6 +712,57 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
             >
               Hide all
             </button>
+          </div>
+          <div
+            data-testid="point-workflow-progress"
+            data-complete={pointWorkflow.isComplete ? 'true' : undefined}
+            className={`mt-2 rounded-lg border px-2 py-1.5 ${
+              pointWorkflow.isComplete
+                ? 'border-emerald-400/25 bg-emerald-400/[0.05]'
+                : 'border-cyan-400/20 bg-cyan-400/[0.04]'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span
+                className={`text-[9px] font-bold uppercase tracking-[0.14em] ${
+                  pointWorkflow.isComplete ? 'text-emerald-300' : 'text-cyan-300'
+                }`}
+              >
+                Point workflow
+              </span>
+              <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-slate-500">
+                {pointWorkflow.progressLabel}
+              </span>
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+              {pointWorkflow.steps.map((step, index) => (
+                <span key={step.id} className="inline-flex items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border font-mono text-[8px] font-bold ${
+                      step.status === 'complete'
+                        ? 'border-emerald-400/50 bg-emerald-400/20 text-emerald-200'
+                        : step.status === 'current'
+                          ? 'border-cyan-300/50 bg-cyan-400/15 text-cyan-100'
+                          : 'border-white/15 text-slate-500 light-theme:border-gray-300'
+                    }`}
+                  >
+                    {step.status === 'complete' ? '✓' : index + 1}
+                  </span>
+                  <span
+                    className={`text-[10px] ${
+                      step.status === 'current'
+                        ? 'font-semibold text-slate-100 light-theme:text-gray-800'
+                        : step.status === 'complete'
+                          ? 'text-slate-300 light-theme:text-gray-600'
+                          : 'text-slate-500 light-theme:text-gray-500'
+                    }`}
+                  >
+                    {step.label}
+                  </span>
+                </span>
+              ))}
+            </div>
           </div>
         </div>
         {photoTarget && (

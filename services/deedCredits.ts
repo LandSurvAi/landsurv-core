@@ -11,6 +11,10 @@
  *   - `consumeFreeDeed()` spends one deed atomically on the server. When the
  *     backend is unreachable it degrades to a local counter so offline users are
  *     not blocked mid-project; those snapshots are marked `unverified`.
+ *   - `consumeFreeDeed()` also sends the best available self-reported email and
+ *     user id so the DevOps ledger can attribute a free deed to a person.
+ *   - `trackDeedProcessing()` records a deed that was processed outside the free
+ *     allowance (for example by a key holder) without changing the allowance.
  *   - Callers with a LandSurv key are not metered (the server confirms this and
  *     returns `unlimited: true`).
  */
@@ -22,6 +26,8 @@ export const FREE_DEED_LIMIT = 5;
 
 const CACHE_KEY = 'landsurv_deed_credits_v1';
 const LOCAL_COUNTER_KEY = 'landsurv_deed_credits_local_v1';
+// Keep in sync with components/SignatureForm.tsx.
+const LEGAL_AGREEMENT_STORAGE_KEY = 'landsurv-legal-agreement-v1';
 const REQUEST_TIMEOUT_MS = 8000;
 
 export type DeedCreditSource = 'server' | 'cache' | 'offline';
@@ -41,9 +47,18 @@ export interface DeedCreditSnapshot {
   fingerprintRequired?: boolean;
 }
 
+export interface DeedIdentity {
+  email: string | null;
+  userId: string | null;
+}
+
 export interface ConsumeDeedCreditOptions {
   deedName?: string | null;
   fileType?: string | null;
+  /** Optional override; otherwise the best available browser identity is used. */
+  email?: string | null;
+  /** Optional override; otherwise the best available browser identity is used. */
+  userId?: string | null;
 }
 
 export interface ConsumeDeedCreditOutcome {
@@ -196,6 +211,53 @@ export function clearLocalDeedCreditCounter(): void {
   }
 }
 
+function readStoredJson<T>(storage: Storage, key: string): T | null {
+  try {
+    const raw = storage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeIdentityEmail(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const email = value.trim().toLowerCase();
+  if (email.length < 3 || email.length > 254) return null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+}
+
+function normalizeIdentityUserId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const userId = value.trim();
+  if (!userId || userId.length > 128) return null;
+  return userId;
+}
+
+/**
+ * Best-effort identity for deed attribution. The legal signature is required
+ * before a deed can be submitted, so its email is usually available; an
+ * authenticated account or a previous purchase email is used as a fallback.
+ * This is self-reported data for the DevOps ledger, not an auth credential.
+ */
+export function resolveDeedIdentity(): DeedIdentity {
+  const storage = safeStorage();
+  if (!storage) return { email: null, userId: null };
+
+  const signature = readStoredJson<{ email?: unknown }>(storage, LEGAL_AGREEMENT_STORAGE_KEY);
+  const account = readStoredJson<{ id?: unknown; email?: unknown }>(storage, 'user');
+
+  const email = normalizeIdentityEmail(account?.email)
+    ?? normalizeIdentityEmail(signature?.email)
+    ?? normalizeIdentityEmail(storage.getItem('landsurv_last_purchased_email'))
+    ?? normalizeIdentityEmail(storage.getItem('landsurv_customer_email'));
+
+  const userId = normalizeIdentityUserId(account?.id)
+    ?? normalizeIdentityUserId(storage.getItem('landsurv_user_id'));
+
+  return { email, userId };
+}
+
 /** Active LandSurv key, if the browser has one. Sent so the server skips metering. */
 export function readStoredLandSurvKey(): string | null {
   const storage = safeStorage();
@@ -300,6 +362,11 @@ export async function refreshDeedCreditStatus(): Promise<DeedCreditSnapshot> {
 export async function consumeFreeDeed(options: ConsumeDeedCreditOptions = {}): Promise<ConsumeDeedCreditOutcome> {
   const fingerprintId = await resolveFingerprintId();
   const serviceKey = readStoredLandSurvKey();
+  const detectedIdentity = resolveDeedIdentity();
+  const identity = {
+    email: normalizeIdentityEmail(options.email) ?? detectedIdentity.email,
+    userId: normalizeIdentityUserId(options.userId) ?? detectedIdentity.userId,
+  };
 
   if (!fingerprintId) {
     const snapshot = buildSnapshot({
@@ -319,6 +386,8 @@ export async function consumeFreeDeed(options: ConsumeDeedCreditOptions = {}): P
       fingerprintId,
       deedName: options.deedName ?? null,
       fileType: options.fileType ?? null,
+      ...(identity.email ? { email: identity.email } : {}),
+      ...(identity.userId ? { userId: identity.userId } : {}),
       ...(serviceKey ? { serviceKey } : {}),
     },
   );
@@ -370,6 +439,36 @@ export async function consumeFreeDeed(options: ConsumeDeedCreditOptions = {}): P
   });
   writeCachedDeedCreditSnapshot(snapshot);
   return { allowed: true, snapshot, reason: 'unverified-offline' };
+}
+
+/**
+ * Record a deed processed without spending a free deed, such as one handled by
+ * a key holder. Best-effort only: this never changes the allowance or blocks the
+ * deed if the ledger is unreachable.
+ */
+export async function trackDeedProcessing(
+  options: ConsumeDeedCreditOptions = {},
+): Promise<boolean> {
+  const fingerprintId = await resolveFingerprintId();
+  if (!fingerprintId) return false;
+
+  const serviceKey = readStoredLandSurvKey();
+  const detectedIdentity = resolveDeedIdentity();
+  const identity = {
+    email: normalizeIdentityEmail(options.email) ?? detectedIdentity.email,
+    userId: normalizeIdentityUserId(options.userId) ?? detectedIdentity.userId,
+  };
+
+  const { ok, data } = await postJson<{ tracked?: boolean }>('/api/deeds/track', {
+    fingerprintId,
+    deedName: options.deedName ?? null,
+    fileType: options.fileType ?? null,
+    ...(identity.email ? { email: identity.email } : {}),
+    ...(identity.userId ? { userId: identity.userId } : {}),
+    ...(serviceKey ? { serviceKey } : {}),
+  });
+
+  return ok && data?.tracked === true;
 }
 
 /** Short label used in the badge and welcome card. */

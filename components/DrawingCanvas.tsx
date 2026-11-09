@@ -41,6 +41,7 @@ import {
     type ParcelCadTextStyle,
     type ParcelLabelFormatter,
     type CanvasHatch,
+    type RasterUnderlay,
     type CanvasTextAnnotation,
     type AnnotationTextStyle,
     type GisFeature,
@@ -265,6 +266,7 @@ export interface DrawingCanvasHandles {
   zoomExtents: () => void;
   /** Open/close the header Draw menu. */
   toggleDrawingToolsMenu: () => void;
+  closeDrawingToolsMenu: () => void;
   /** Arm the canvas add-point tool from the A2UI point-entry surface. */
   startPointPlacement: (options: { pointNumber?: string; elevation?: string; description?: string }) => void;
   /** Zoom canvas to a specific bounding box in project coordinates. */
@@ -334,6 +336,10 @@ import {
 } from '../utils/cadTransforms.ts';
 import { orderConnectedChain, offsetOrderedChain, offsetCircleRadius, resolveArcGeometry, type ChainSegment, type OffsetEntitySegment } from '../utils/offsetGeometry';
 import { createLayerValueLookup, resolveCadEntityColor, resolveCadEntityLinetype } from '../utils/cadEntityStyle.ts';
+import { underlayContainsWorldPoint, underlayCorners, underlayImageToWorld } from '../utils/rasterUnderlay.ts';
+
+/** Stable empty default: a fresh `[]` here would retrigger the underlay image effect on every render. */
+const EMPTY_RASTER_UNDERLAYS: RasterUnderlay[] = [];
 
 interface SymbolGeometry {
     vx: number;
@@ -537,6 +543,11 @@ interface DrawingCanvasProps {
     onUpdateHatch?: (id: string, patch: Partial<CanvasHatch>) => void;
     onDeleteHatch?: (id: string) => void;
     onOpenHatchManager?: () => void;
+    /** Imported image / PDF plan underlays rendered beneath linework. */
+    rasterUnderlays?: RasterUnderlay[];
+    selectedRasterUnderlayId?: string | null;
+    onSelectRasterUnderlay?: (id: string | null) => void;
+    onUpdateRasterUnderlay?: (id: string, patch: Partial<RasterUnderlay>) => void;
     /** Double-click on generated linework opens its source generation tool. */
     onOpenGeneration?: (generationId: string) => void;
     onAddPoint?: (point: SurveyPoint) => void;
@@ -692,6 +703,8 @@ interface DrawingCanvasProps {
         onAuthor: () => void;
         onGis: () => void;
     };
+    /** Tracked workflow progress/reminder for the command bar quick thought. */
+    workflowThought?: import('./WorkflowQuickThought.tsx').WorkflowQuickThoughtNotice | null;
     /** Reports the command bar height so overlay drawers can rest on its top edge. */
     onCommandBarHeightChange?: (height: number) => void;
     /** Pixels the command bar extends right, underneath the open agent tool shelf. */
@@ -1194,6 +1207,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         isC3DConnected, isGridVisible, tinShading, agentDrawMode, onCycleAgentDrawMode, agentAnnotMode, onCycleAgentAnnotMode, onAddBoundaryCall, onConvertSelectionToBoundary, onComputeCurrentClosure,
         dimensions, onAddDimension, onUpdateDimension, onDeleteDimension, onClearDimensions, onAddPoint, nextAvailablePointNumber, dimensionScale, setDimensionScale, symbolScale, setSymbolScale,
         hatches = [], onAddHatch, onUpdateHatch, onDeleteHatch, onOpenHatchManager, onOpenGeneration,
+        rasterUnderlays = EMPTY_RASTER_UNDERLAYS, selectedRasterUnderlayId, onSelectRasterUnderlay, onUpdateRasterUnderlay,
         customAnnotations = [], annotationScale = 1, setAnnotationScale,
         textAnnotations = [], annotationTextStyles, activeTextStyleName,
         parcelLabels, mapAreaLabels, annotationCategories,
@@ -2052,6 +2066,45 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
 
     const pointMap = useMemo(() => new Map(points.map(p => [p.pointNumber, p])), [points]);
+
+    // Decoded raster underlays, cached by id + data URL so panning does not
+    // recreate image elements. `rasterUnderlayImages` feeds the draw pass.
+    const rasterUnderlayImageCacheRef = useRef<Map<string, { image: HTMLImageElement; dataUrl: string }>>(new Map());
+    const [rasterUnderlayImages, setRasterUnderlayImages] = useState<Map<string, HTMLImageElement>>(new Map());
+    useEffect(() => {
+        let cancelled = false;
+        const cache = rasterUnderlayImageCacheRef.current;
+        const liveIds = new Set(rasterUnderlays.map(u => u.id));
+        for (const id of Array.from(cache.keys())) {
+            if (!liveIds.has(id)) cache.delete(id);
+        }
+        const pending: Promise<void>[] = [];
+        for (const underlay of rasterUnderlays) {
+            const cached = cache.get(underlay.id);
+            if (cached && cached.dataUrl === underlay.dataUrl) continue;
+            pending.push(new Promise<void>(resolve => {
+                const image = new Image();
+                image.onload = () => {
+                    cache.set(underlay.id, { image, dataUrl: underlay.dataUrl });
+                    resolve();
+                };
+                image.onerror = () => resolve();
+                image.src = underlay.dataUrl;
+            }));
+        }
+        const publish = () => {
+            if (cancelled) return;
+            const next = new Map<string, HTMLImageElement>();
+            cache.forEach((entry, id) => next.set(id, entry.image));
+            setRasterUnderlayImages(next);
+        };
+        if (pending.length === 0) {
+            publish();
+            return;
+        }
+        void Promise.all(pending).then(publish);
+        return () => { cancelled = true; };
+    }, [rasterUnderlays]);
 
     // Reused across frames so panning a large point cloud does not allocate a
     // fresh typed array and bucket grid on every animation frame.
@@ -6129,6 +6182,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         startTextPlacement,
         startTextEdit,
         finishDrawing,
+        closeDrawingToolsMenu: () => setIsDrawingToolsMenuOpen(false),
         toggleDrawingToolsMenu: () => {
             if (isDrawingToolsMenuOpen) {
                 setIsDrawingToolsMenuOpen(false);
@@ -7013,6 +7067,71 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 }
             });
         });
+
+        // Raster / PDF underlays: similarity-transformed imagery beneath linework.
+        for (const underlay of rasterUnderlays) {
+            if (!underlay.visible) continue;
+            const image = rasterUnderlayImages.get(underlay.id);
+            if (!image) continue;
+            const theta = (underlay.transform.rotationDeg * Math.PI) / 180;
+            const underlayScale = underlay.transform.scale;
+            ctx.save();
+            ctx.globalAlpha = Math.max(0, Math.min(1, underlay.opacity));
+            // Use translate/rotate/scale rather than transform(): the floating-
+            // origin wrapper subtracts its world origin in translate(), keeping
+            // the bitmap in the same frame as the dashed footprint. Direct
+            // transform() coordinates bypass that shift and offset the image.
+            ctx.translate(underlay.transform.originEasting, underlay.transform.originNorthing);
+            ctx.rotate(theta);
+            ctx.scale(underlayScale, -underlayScale);
+            ctx.drawImage(image, 0, 0, underlay.imageWidth, underlay.imageHeight);
+            ctx.restore();
+
+            if (underlay.id !== selectedRasterUnderlayId) continue;
+            // Selected underlay: dashed footprint, image anchors, and the
+            // associated project points tied to them.
+            const px = 1 / Math.max(1e-9, transform.scale);
+            const corners = underlayCorners(underlay);
+            ctx.save();
+            ctx.strokeStyle = 'rgba(251, 191, 36, 0.95)';
+            ctx.lineWidth = 1.5 * px;
+            ctx.setLineDash([6 * px, 4 * px]);
+            ctx.beginPath();
+            corners.forEach((corner, index) => {
+                if (index === 0) ctx.moveTo(corner.easting, corner.northing);
+                else ctx.lineTo(corner.easting, corner.northing);
+            });
+            ctx.closePath();
+            ctx.stroke();
+            ctx.setLineDash([]);
+            for (const anchor of underlay.anchors ?? []) {
+                if (anchor.imagePointSet === false) continue;
+                const anchorWorld = underlayImageToWorld(underlay.transform, anchor.imageX, anchor.imageY);
+                ctx.beginPath();
+                ctx.moveTo(anchorWorld.easting, anchorWorld.northing);
+                ctx.lineTo(anchor.easting, anchor.northing);
+                ctx.strokeStyle = 'rgba(34, 211, 238, 0.55)';
+                ctx.lineWidth = 1 * px;
+                ctx.setLineDash([4 * px, 4 * px]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.beginPath();
+                ctx.arc(anchorWorld.easting, anchorWorld.northing, 5 * px, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(251, 191, 36, 0.95)';
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
+                ctx.lineWidth = 1 * px;
+                ctx.stroke();
+                if (anchor.pointNumber) {
+                    ctx.beginPath();
+                    ctx.arc(anchor.easting, anchor.northing, 4 * px, 0, Math.PI * 2);
+                    ctx.strokeStyle = 'rgba(34, 211, 238, 0.95)';
+                    ctx.lineWidth = 1.5 * px;
+                    ctx.stroke();
+                }
+            }
+            ctx.restore();
+        }
 
         // Build a fast lookup of user-defined linetypes (from the CAD Manager standard).
         // Keys are upper-cased AND stripped of non-alphanumerics so "FENCE_LINE",
@@ -11403,7 +11522,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         ctx.restore(); // --- End screen-space pass ---
-    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, contourLabelSlide, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id]);
+    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, contourLabelSlide, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id, rasterUnderlays, selectedRasterUnderlayId, rasterUnderlayImages]);
 
     // Throttled draw using requestAnimationFrame to prevent flickering during rapid updates
     const scheduleDraw = useCallback(() => {
@@ -13948,6 +14067,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         return transformSelectedLines(translationTransform(dE, dN), false);
     }, [selectedEntityCount, transformSelectedLines]);
 
+    // Direct canvas grab for the selected underlay (locked underlays ignore it).
+    const underlayDragRef = useRef<{ id: string; lastEasting: number; lastNorthing: number } | null>(null);
+    const [isDraggingUnderlay, setIsDraggingUnderlay] = useState(false);
+    const beginRasterUnderlayDrag = useCallback((underlay: RasterUnderlay, easting: number, northing: number): boolean => {
+        if (underlay.locked || !underlay.visible) return false;
+        if (!underlayContainsWorldPoint(underlay, easting, northing)) return false;
+        underlayDragRef.current = { id: underlay.id, lastEasting: easting, lastNorthing: northing };
+        setIsDraggingUnderlay(true);
+        onSelectRasterUnderlay?.(underlay.id);
+        return true;
+    }, [onSelectRasterUnderlay]);
+
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
         // Middle-drag panning stays live even while a command prompt is open.
         if (e.button === 1) {
@@ -14044,6 +14175,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         if (e.button !== 0) return;
+
+        // A selected, unlocked image/PDF underlay can be grabbed directly.
+        if (drawingMode === 'none' && !isSelectionMode && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
+            const selectedUnderlay = rasterUnderlays.find(u => u.id === selectedRasterUnderlayId);
+            const underlayCanvas = canvasRef.current;
+            if (selectedUnderlay && underlayCanvas) {
+                const underlayRect = underlayCanvas.getBoundingClientRect();
+                const underlayWorld = screenToWorld(e.clientX - underlayRect.left, e.clientY - underlayRect.top);
+                if (beginRasterUnderlayDrag(selectedUnderlay, underlayWorld.easting, underlayWorld.northing)) {
+                    e.preventDefault();
+                    return;
+                }
+            }
+        }
 
         // TEXT tool — the next click sets the insertion point and opens the
         // in-place editor. Nothing is added to the drawing until it commits.
@@ -15812,9 +15957,33 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         document.body.classList.add('panning');
         setIsPanning(true);
         lastMousePos.current = { x: e.clientX, y: e.clientY };
-    }, [contourLabelSlide, isZoomBoxMode, drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, hatches, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, polylineTangentExit, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter]);
+    }, [contourLabelSlide, isZoomBoxMode, drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, hatches, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, polylineTangentExit, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter, rasterUnderlays, selectedRasterUnderlayId, beginRasterUnderlayDrag]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
+        const underlayDrag = underlayDragRef.current;
+        if (underlayDrag) {
+            const dragCanvas = canvasRef.current;
+            if (dragCanvas) {
+                const dragRect = dragCanvas.getBoundingClientRect();
+                const world = screenToWorld(e.clientX - dragRect.left, e.clientY - dragRect.top);
+                const dE = world.easting - underlayDrag.lastEasting;
+                const dN = world.northing - underlayDrag.lastNorthing;
+                underlayDrag.lastEasting = world.easting;
+                underlayDrag.lastNorthing = world.northing;
+                const underlay = rasterUnderlays.find(u => u.id === underlayDrag.id);
+                if (underlay) {
+                    onUpdateRasterUnderlay?.(underlay.id, {
+                        transform: {
+                            ...underlay.transform,
+                            originEasting: underlay.transform.originEasting + dE,
+                            originNorthing: underlay.transform.originNorthing + dN,
+                        },
+                    });
+                }
+            }
+            return;
+        }
+
         if (zoomBox) {
             const canvas = canvasRef.current;
             if (!canvas) return;
@@ -16265,9 +16434,15 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 shiftHoverAnchorRef.current = null;
             }
         }
-    }, [zoomBox, isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview, inlineOsnapOverride, runningOsnaps, findNearestSurveyPoint, resolveOsnapAtScreen, contourLabelSlide, onMoveContourLabel, findContourLabelAtScreenPoint, hoveredContourLabelIndex]);
+    }, [zoomBox, isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview, inlineOsnapOverride, runningOsnaps, findNearestSurveyPoint, resolveOsnapAtScreen, contourLabelSlide, onMoveContourLabel, findContourLabelAtScreenPoint, hoveredContourLabelIndex, rasterUnderlays, onUpdateRasterUnderlay]);
 
     const handleMouseUp = useCallback((e: React.MouseEvent) => {
+        if (underlayDragRef.current) {
+            underlayDragRef.current = null;
+            setIsDraggingUnderlay(false);
+            return;
+        }
+
         if (zoomBox) {
             const canvas = canvasRef.current;
             if (!canvas) {
@@ -17389,7 +17564,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     shiftHoverAnchorRef.current = null;
                 }
             }}
-            style={{ cursor: isPanning ? 'grabbing' : (contourLabelSlide || hoveredContourLabelIndex !== null ? 'move' : (isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (isZoomBoxMode || drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))))), overflow: 'visible', isolation: 'isolate' }}
+            style={{ cursor: isDraggingUnderlay ? 'move' : isPanning ? 'grabbing' : (contourLabelSlide || hoveredContourLabelIndex !== null ? 'move' : (isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (isZoomBoxMode || drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))))), overflow: 'visible', isolation: 'isolate' }}
         >
             <CanvasFlashLayer />
             <canvas
@@ -19077,6 +19252,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 Open Hatch Manager…
                                             </button>
                                         )}
+
                                         
                                         <div className="border-t border-white/[0.07]"></div>
 
@@ -20537,6 +20713,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 chatToolDialogs={props.chatToolDialogs}
                 agentChatOpenSignal={props.agentChatOpenSignal}
                 boundaryQuickActions={props.boundaryQuickActions}
+                workflowThought={props.workflowThought}
                 textScale={props.settings.commandBar?.textScale ?? 1.15}
                 showShortcutHints={props.settings.commandBar?.showShortcutHints ?? true}
                 showStatusBadges={props.settings.commandBar?.showStatusBadges ?? true}

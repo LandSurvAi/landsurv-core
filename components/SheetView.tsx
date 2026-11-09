@@ -1013,6 +1013,16 @@ interface SheetViewProps {
         title?: string;
     } | null;
     onPendingNotesConsumed?: () => void;
+    /**
+     * Latest compiled soil-limitations block. `undefined` means nothing has been
+     * compiled this session (leave persisted sheets alone); `null` means the
+     * report was cleared, so any soil-limitations block should be removed.
+     */
+    soilLimitationsNotes?: {
+        id: string;
+        text: string;
+        title?: string;
+    } | null;
 }
 
 
@@ -1037,6 +1047,11 @@ function wrapSheetNoteText(text: string, maxChars: number): string[] {
         if (current) lines.push(current);
     }
     return lines;
+}
+
+/** Soil-limitation blocks are tagged by the App queue id / default title. */
+function isSoilLimitationsNotesBlock(block: SheetNotesBlock): boolean {
+    return block.id.startsWith('soil-limits-') || /SOIL LIMITATIONS/i.test(block.title || '');
 }
 
 function escapeSheetNoteXml(value: string): string {
@@ -1292,7 +1307,7 @@ const SheetView: React.FC<SheetViewProps> = ({
     mapAreaLabels = [], textAnnotations = [], pointLayers, annotationCategories = [],
     annotationTextStyles = [], activeTextStyleName, annotationScale = 1,
     parcelLabelFormatter, parcelCadTextStyles = [],
-    onSheetViewCommand, pendingNotes, onPendingNotesConsumed,
+    onSheetViewCommand, pendingNotes, onPendingNotesConsumed, soilLimitationsNotes,
 }) => {
     const layerColors = cadLayerColors ?? {};
     const plotHatches = hatches ?? EMPTY_HATCHES;
@@ -1363,6 +1378,36 @@ const SheetView: React.FC<SheetViewProps> = ({
         });
         onPendingNotesConsumed?.();
     }, [pendingNotes, updateActiveSheet, onPendingNotesConsumed]);
+
+    // Sheet sets are persisted in localStorage, so a soil-limitations block from
+    // an earlier run outlives the report that produced it. Track the latest
+    // compiled report and rewrite (or remove) every soil block in the set. This
+    // also applies on mount, so a persisted sheet is corrected as soon as the
+    // current report is available.
+    const appliedSoilNotesSignatureRef = useRef<string | null | undefined>(undefined);
+    useEffect(() => {
+        if (soilLimitationsNotes === undefined) return;
+        const body = (soilLimitationsNotes?.text ?? '').trim().slice(0, 20000);
+        const signature = soilLimitationsNotes === null ? 'cleared' : body;
+        if (appliedSoilNotesSignatureRef.current === signature) return;
+        appliedSoilNotesSignatureRef.current = signature;
+
+        setSet(prev => {
+            let changed = false;
+            const sheets = prev.sheets.map(sheet => {
+                const block = sheet.notesBlock;
+                if (!block || !isSoilLimitationsNotesBlock(block)) return sheet;
+                if (!body) {
+                    changed = true;
+                    return { ...sheet, notesBlock: null };
+                }
+                if (block.body === body) return sheet;
+                changed = true;
+                return { ...sheet, notesBlock: { ...block, body } };
+            });
+            return changed ? { ...prev, sheets } : prev;
+        });
+    }, [soilLimitationsNotes]);
 
     const addSheet = () => {
         const nextNum = (set.sheets.length + 1).toString().padStart(3, '0');

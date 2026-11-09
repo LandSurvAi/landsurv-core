@@ -301,6 +301,18 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
     keywords: ['hatch', 'hatches', 'patterns', 'fill'],
   },
   {
+    id: 'workspace-raster-underlay',
+    title: 'Image & PDF Underlays',
+    description: 'Import a plan PDF or raster scan, place two anchor pairs, and align the image to project points.',
+    category: 'workspace',
+    glyph: '🖼',
+    accent: 'amber',
+    audiences: ['workspace'],
+    agent: AgentType.CAD_MANAGER,
+    widgetType: 'raster-underlay',
+    keywords: ['underlay', 'image underlay', 'pdf underlay', 'raster', 'scan', 'georeference', 'align image', 'anchor points', 'plan sheet'],
+  },
+  {
     id: 'workspace-annotate-manager',
     title: 'Annotate Manager',
     description: 'Manage custom point annotation rules, street labels, and annotation categories.',

@@ -94,7 +94,7 @@ const REQUEST_VERB_RE =
   /\b(?:show|open|inspect|browse|list|view|display|review|pull\s+up|what(?:'s| is)|which|any)\b/i;
 
 const ACTION_OR_HOWTO_VERB_RE =
-  /\b(?:add|create|enter|place|drop|show|open|inspect|browse|list|view|display|review|pull\s+up|bring\s+up|launch|edit|adjust|change|configure|set(?:\s+up)?|turn\s+(?:on|off)|enable|disable|toggle|switch|update|manage|import|export|hatch|bhatch|fill|shade|cross[- ]?hatch|how\s+(?:do\s+i|to|can\s+i)|where\s+(?:do\s+i|can\s+i|is|are))\b/i;
+  /\b(?:add|create|enter|place|drop|show|open|inspect|browse|list|view|display|review|pull\s+up|bring\s+up|launch|edit|adjust|change|configure|set(?:\s+up)?|turn\s+(?:on|off)|enable|disable|toggle|switch|update|manage|import|georeferenc\w*|export|hatch|bhatch|fill|shade|cross[- ]?hatch|how\s+(?:do\s+i|to|can\s+i)|where\s+(?:do\s+i|can\s+i|is|are))\b/i;
 
 const MANIFEST_RE = /\b(?:manifests?|skills?|schemas?|capabilit(?:y|ies))\b/i;
 const CACCP_RE = /\bcacp\b/i;
@@ -297,6 +297,19 @@ const WORKSPACE_TOOL_RULES: readonly WorkspaceToolRule[] = [
       'Open Linetype Manager',
       'Open Symbol Manager',
       'Open CAD Standards spreadsheet editor',
+    ],
+  },
+  {
+    tool: 'raster-underlay',
+    agent: AgentType.CAD_MANAGER,
+    pattern:
+      /\b(?:georeferenc\w*|underlay\s+(?:manager|panel|surface)|(?:image|raster|pdf|scan(?:ned)?|plan)\s+(?:underlays?|overlays?|alignment)|align\s+(?:an?\s+|the\s+)?(?:image|pdf|scan(?:ned)?|raster|plan)\s+to\s+(?:project\s+|control\s+)?(?:points?|coordinates?))/i,
+    replyText:
+      'Here is the live <strong>Image &amp; PDF Underlays</strong> surface. Import a plan PDF or raster scan, click two image anchors, associate each with a project point, and the underlay scales and rotates into place.',
+    suggestedQuestions: [
+      'Open Hatch Manager',
+      'Open CAD Standards spreadsheet editor',
+      'Show CACP manifests',
     ],
   },
   {

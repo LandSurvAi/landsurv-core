@@ -37,6 +37,8 @@ interface AgentToolDockProps {
   requestedTabToken?: number;
   /** Hide the tab strip when the toolbar already switches between the docked tools. */
   hideToolTabs?: boolean;
+  /** Reports which docked tool is actually visible (drives workflow "away" detection). */
+  onActiveTabChange?: (tabId: string | null) => void;
   onClose: () => void;
 }
 
@@ -48,6 +50,7 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
   requestedTabId,
   requestedTabToken,
   hideToolTabs = false,
+  onActiveTabChange,
   onClose,
 }) => {
   const effectiveAgent = activeAgent || AgentType.LSVZ_AGENT;
@@ -97,6 +100,10 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
 
   const activeDockedItem =
     dockedItems.find(i => i.id === selectedTabId) ?? dockedItems[0] ?? null;
+
+  useEffect(() => {
+    onActiveTabChange?.(activeDockedItem?.id ?? null);
+  }, [activeDockedItem?.id, onActiveTabChange]);
 
   return (
     <div className="flex flex-col h-full bg-[#0a0f16] text-gray-200 light-theme:bg-gray-100 light-theme:text-gray-800">

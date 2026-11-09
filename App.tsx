@@ -44,6 +44,11 @@ import FieldbookPanel from './components/FieldbookPanel.tsx';
 import { CadManagerPage } from './components/CadManager/CadManagerPage.tsx';
 import { StandardsEditor } from './components/CadManager/StandardsEditor.tsx';
 import { HatchManagerPanel } from './components/CadManager/HatchManagerPanel.tsx';
+import { A2UIRasterUnderlay } from './components/A2UIRasterUnderlay.tsx';
+import type { WorkflowQuickThoughtNotice } from './components/WorkflowQuickThought.tsx';
+import { createRasterUnderlay } from './utils/rasterUnderlay.ts';
+import { derivePointWorkflow } from './services/pointWorkflow.ts';
+import { deriveRasterUnderlayWorkflow } from './services/rasterUnderlayWorkflow.ts';
 import LinetypeManagerPanel from './components/CadManager/LinetypeManagerPanel.tsx';
 import { ALL_BUILT_IN_HATCHES, resolveHatchForFeatureOrCode, type HatchDefinition, type HatchPatternLine } from './services/hatchLibrary.ts';
 import { traceEnclosingLoopAtPoint, resolveHatchFromSelectedEntities, computePolygonAreaAbs, type TracedHatchRegion } from './utils/hatchBoundaryTracer.ts';
@@ -309,7 +314,7 @@ import { generateContours, generateProfile, generateContoursAsIsoPaths, isoPaths
 import { generateContourLabelsFromIsoPaths, generateContourLabelsFromLines, strikeContourLabels } from './utils/contourLabels.ts';
 import { DEFAULT_CONTOUR_LINE_LAYERS, resolveContourLineLayersViaCacp, type ContourLineLayerAssignment } from './services/contourLayerResolver.ts';
 // FIX: Import `CustomSymbol`, `ContourSettings` and `ContourLabel` to be used with new features.
-import { type ChatMessage, MessageRole, type SurveyPoint, type SurveyLine, type CutSheetRow, type CutSheetInfo, AgentType, type SessionFile, type SessionState, type Centerline, JobInfo, Settings, PdfHighlight, type PointList, WmsService, ActiveWmsLayer, DxfExportOptions, VisualPanel, type OfflineMapArea, type ChatMessageAction, SettingsContext, AgentContext, UIContext, HighlightContext, Chat, Modality, Part, ProjectionSetting, type CustomSymbol, type AnnotationRule, type ContourSettings, type ContourLabel, type StreetLabel, type ProfilePoint, type ProfileInfo, type ClosureReport, type GisFeature, type DeedMetadata, type TitleSearchData, type BoundaryFile, type BoundaryFileCall, type AnnotationDimension, type CanvasHatch, type HatchBoundaryLoop, type EsriServiceInfo, type InclusionBoundary, type DraftingStyleEntry, type ContourGeneration, type GenerationBlock, type IsoPath, type ParcelLabel, type MapAreaFeature, type MapAreaLabel, type SoilMapUnit, type AnnotationCategoryStyle, type AnnotationTextStyle, type CanvasTextAnnotation, DEFAULT_ANNOTATION_TEXT_STYLES, type DeedSummary, type AppNotification, type TinSurface, type SteepSlopeBand, type SteepSlopeRunResult, DEFAULT_ANNOTATION_CATEGORIES, type ParcelLabelFormatter, type ParcelCadTextStyle, DEFAULT_PARCEL_LABEL_FORMATTER, type StandardsComplianceCheckSelection, type StandardsComplianceReport, type ComplianceSourceMode, type SessionSaveOptions } from './types.ts';
+import { type ChatMessage, MessageRole, type SurveyPoint, type SurveyLine, type CutSheetRow, type CutSheetInfo, AgentType, type SessionFile, type SessionState, type Centerline, JobInfo, Settings, PdfHighlight, type PointList, WmsService, ActiveWmsLayer, DxfExportOptions, VisualPanel, type OfflineMapArea, type ChatMessageAction, SettingsContext, AgentContext, UIContext, HighlightContext, Chat, Modality, Part, ProjectionSetting, type CustomSymbol, type AnnotationRule, type ContourSettings, type ContourLabel, type StreetLabel, type ProfilePoint, type ProfileInfo, type ClosureReport, type GisFeature, type DeedMetadata, type TitleSearchData, type BoundaryFile, type BoundaryFileCall, type AnnotationDimension, type CanvasHatch, type RasterUnderlay, type RasterAsset, type ToolWorkflowId, type HatchBoundaryLoop, type EsriServiceInfo, type InclusionBoundary, type DraftingStyleEntry, type ContourGeneration, type GenerationBlock, type IsoPath, type ParcelLabel, type MapAreaFeature, type MapAreaLabel, type SoilMapUnit, type AnnotationCategoryStyle, type AnnotationTextStyle, type CanvasTextAnnotation, DEFAULT_ANNOTATION_TEXT_STYLES, type DeedSummary, type AppNotification, type TinSurface, type SteepSlopeBand, type SteepSlopeRunResult, DEFAULT_ANNOTATION_CATEGORIES, type ParcelLabelFormatter, type ParcelCadTextStyle, DEFAULT_PARCEL_LABEL_FORMATTER, type StandardsComplianceCheckSelection, type StandardsComplianceReport, type ComplianceSourceMode, type SessionSaveOptions } from './types.ts';
 import { DEFAULT_PARCEL_CAD_TEXT_STYLES } from './utils/parcelLabelFormatter.ts';
 // FIX: Corrected import of startGeminiChat. Renamed import 'startChat' to 'startGeminiChat' to match export.
 import { startGeminiChat, selectContextSources, getModelForAgent, getAutoModelForAgent, summarizeDeed, investigateDeedClosure, isClaudeModel, isOpenAIModel, isGrokModel, extractZoningDistrictsFromMap, runVisualStandardsComplianceAudit, processAndCorrectCoordinates, AUTO_FAST_MODEL, type DeedClosureReview, type DeedClosureHypothesis } from './services/geminiService.ts';
@@ -432,6 +437,7 @@ import { useUsageTimer } from './hooks/useUsageTimer.ts';
 import {
   consumeFreeDeed,
   refreshDeedCreditStatus,
+  trackDeedProcessing,
   FREE_DEED_LIMIT,
   type DeedCreditSnapshot,
 } from './services/deedCredits.ts';
@@ -623,6 +629,7 @@ const A2UI_DOCK_TITLES: Record<string, string> = {
     'symbol-manager': 'Symbol Manager',
     'linetype-manager': 'Linetype Manager',
     'hatch-manager': 'Hatch Manager',
+    'raster-underlay': 'Image & PDF Underlays',
     'annotate-manager': 'Annotate Manager',
     'stationing-controls': 'Stationing Controls',
     'drafting-style-library': 'Drafting Style Library',
@@ -760,6 +767,7 @@ interface DrawingCanvasHandles {
   redraw: () => void;
   finishDrawing: () => void;
   toggleDrawingToolsMenu: () => void;
+  closeDrawingToolsMenu: () => void;
   startPointPlacement: (options: { pointNumber?: string; elevation?: string; description?: string }) => void;
   cancelDeleteMode: () => void;
   confirmDelete: () => void;
@@ -1508,6 +1516,13 @@ const AppContent = () => {
     mode?: 'titleblock' | 'sheet-notes';
     title?: string;
   } | null>(null);
+  // Latest compiled soil-limitations block. Sheet View uses it to refresh an
+  // already-placed soil block so sheet text never lags the current report.
+  const [soilLimitationsSheetNotes, setSoilLimitationsSheetNotes] = useState<{
+    id: string;
+    text: string;
+    title: string;
+  } | null | undefined>(undefined);
   // Closed FEMA polygons kept for live hatch + annotation rebuilding.
   const [lastFloodAreas, setLastFloodAreas] = useState<MapAreaFeature[]>([]);
   // FIRMETTE (v26.05.19.1) � cached FEMA NFHL map image stored in session.
@@ -1769,6 +1784,41 @@ const AppContent = () => {
     (key: string): DockMode => toolDockModes[key] ?? 'toolshelf',
     [toolDockModes],
   );
+  // The Point Editor and Underlay flows are tracked from first input to a
+  // completed, saved result. Quick Thought uses this state to notice when the
+  // user has stepped away from a workflow panel and to offer a one-click return.
+  const [pointWorkflowStarted, setPointWorkflowStarted] = useState(false);
+  const [pointWorkflowPanelSeen, setPointWorkflowPanelSeen] = useState(false);
+  const [dismissedPointWorkflowKey, setDismissedPointWorkflowKey] = useState<string | null>(null);
+  const [rasterUnderlayWorkflowStarted, setRasterUnderlayWorkflowStarted] = useState(false);
+  const [rasterUnderlayWorkflowPanelSeen, setRasterUnderlayWorkflowPanelSeen] = useState(false);
+  const [dismissedRasterUnderlayWorkflowKey, setDismissedRasterUnderlayWorkflowKey] = useState<string | null>(null);
+  /** The most recently engaged workflow owns the single Quick Thought slot. */
+  const [activeTrackedWorkflow, setActiveTrackedWorkflow] = useState<ToolWorkflowId | null>(null);
+  const [activeToolShelfTabId, setActiveToolShelfTabId] = useState<string | null>(null);
+  const pointWorkflowSnapshot = useMemo(() => derivePointWorkflow(pointLists), [pointLists]);
+  const rasterUnderlaySurfaceKey = `${AgentType.CAD_MANAGER}:raster-underlay`;
+  const isPointWorkflowPanelActive =
+    isToolShelfVisible && activeVisualPanel === 'canvas' && activeToolShelfTabId === 'pointEditor';
+  const isRasterUnderlayWorkflowPanelActive =
+    activeVisualPanel === 'canvas' &&
+    (floatingA2UIKey === rasterUnderlaySurfaceKey ||
+      (isToolShelfVisible &&
+        activeToolShelfTabId === 'a2ui-chat-tool' &&
+        dockedA2UIKey === rasterUnderlaySurfaceKey));
+  useEffect(() => {
+    if (!isPointWorkflowPanelActive) return;
+    setPointWorkflowPanelSeen(true);
+    if (pointWorkflowStarted) setActiveTrackedWorkflow('points');
+  }, [isPointWorkflowPanelActive, pointWorkflowStarted]);
+  useEffect(() => {
+    if (!isRasterUnderlayWorkflowPanelActive) return;
+    setRasterUnderlayWorkflowPanelSeen(true);
+    if (rasterUnderlayWorkflowStarted) setActiveTrackedWorkflow('underlays');
+  }, [isRasterUnderlayWorkflowPanelActive, rasterUnderlayWorkflowStarted]);
+  const handleToolShelfActiveTabChange = useCallback((tabId: string | null) => {
+    setActiveToolShelfTabId(tabId);
+  }, []);
   const dockedTools = useMemo(() => {
     const next: Record<string, boolean> = {};
     for (const key of Object.keys(toolDockModes)) next[key] = toolDockModes[key] === 'toolshelf';
@@ -1815,7 +1865,10 @@ const AppContent = () => {
       current?.a2ui && `${current.a2ui.agent}:${current.a2ui.widgetType}` === key ? null : current
     );
     setIsToolShelfVisible(true);
-  }, [setIsToolShelfVisible]);
+    // Bring the incoming surface forward instead of leaving whichever docked
+    // tool tab was previously selected.
+    requestToolShelfTab('a2ui-chat-tool');
+  }, [requestToolShelfTab, setIsToolShelfVisible]);
   const handleToggleA2UIDock = useCallback((message: ChatMessage) => {
     const payload = message.a2ui;
     if (!payload) return;
@@ -1953,6 +2006,14 @@ const AppContent = () => {
   // Hatches live in App state rather than CanvasStateContext; register them so
   // add/edit/delete participate in the same automatic undo/redo stack.
   useHistorySlice('hatches', hatches, setHatches);
+
+  // Imported image / PDF plan underlays (anchor-aligned rasters beneath linework)
+  const [rasterUnderlays, setRasterUnderlays] = useState<RasterUnderlay[]>([]);
+  const [selectedRasterUnderlayId, setSelectedRasterUnderlayId] = useState<string | null>(null);
+  const rasterUnderlayWorkflowSnapshot = useMemo(
+    () => deriveRasterUnderlayWorkflow(rasterUnderlays),
+    [rasterUnderlays],
+  );
 
   // --- UI STATE: Layout and Resizing ---
   // REFACTORING NOTE: Layout and resizing state moved to UIStateContext (see top of component)
@@ -2114,6 +2175,36 @@ const AppContent = () => {
 
 
   const canvas2dRef = useRef<DrawingCanvasHandles>(null);
+
+  const handleAddRasterUnderlay = useCallback((asset: RasterAsset) => {
+    const viewport = canvas2dRef.current?.getViewportBboxWorld?.();
+    const center = canvas2dRef.current?.getViewCenterWorld?.() ?? { easting: 0, northing: 0 };
+    const worldWidth = viewport
+      ? Math.max(1, Math.abs(viewport.maxE - viewport.minE) * 0.5)
+      : Math.max(1, asset.imageWidth);
+    const underlay = createRasterUnderlay(asset, center, worldWidth);
+    setRasterUnderlays(prev => [...prev, underlay]);
+    setSelectedRasterUnderlayId(underlay.id);
+    setRasterUnderlayWorkflowStarted(true);
+    setDismissedRasterUnderlayWorkflowKey(null);
+    setActiveTrackedWorkflow('underlays');
+  }, []);
+
+  const handleUpdateRasterUnderlay = useCallback((id: string, patch: Partial<RasterUnderlay>) => {
+    setRasterUnderlays(prev => prev.map(underlay => {
+      if (underlay.id !== id) return underlay;
+      return {
+        ...underlay,
+        ...patch,
+        transform: patch.transform ? { ...underlay.transform, ...patch.transform } : underlay.transform,
+      };
+    }));
+  }, []);
+
+  const handleDeleteRasterUnderlay = useCallback((id: string) => {
+    setRasterUnderlays(prev => prev.filter(underlay => underlay.id !== id));
+    setSelectedRasterUnderlayId(prev => (prev === id ? null : prev));
+  }, []);
   const cutSheetRef = useRef<CutSheetPanelHandles>(null);
   const [canvasTransform, setCanvasTransform] = useState<{ scale: number; offsetX: number; offsetY: number } | null>(null);
 
@@ -3069,6 +3160,8 @@ const AppContent = () => {
   const [c3dDrawings, setC3dDrawings] = useState<Array<{ name: string; fullPath: string; isActive: boolean; layerCount: number }>>([]);
   const [c3dActiveDrawing, setC3dActiveDrawing] = useState<string | null>(null);
   const [c3dDrawingsMenuOpen, setC3dDrawingsMenuOpen] = useState(false);
+  const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false);
+  const insertMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Escape dismisses header dropdowns and the mobile navigation drawer.
   useEffect(() => {
@@ -3091,6 +3184,10 @@ const AppContent = () => {
         setIsMobileMenuOpen(false);
         closed = true;
       }
+      if (isInsertMenuOpen) {
+        setIsInsertMenuOpen(false);
+        closed = true;
+      }
       if (closed) {
         event.preventDefault();
         event.stopPropagation();
@@ -3099,7 +3196,19 @@ const AppContent = () => {
 
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [c3dDrawingsMenuOpen, isHistoryPanelOpen, isQuickHistoryOpen, isMobileMenuOpen, setIsMobileMenuOpen]);
+  }, [c3dDrawingsMenuOpen, isHistoryPanelOpen, isQuickHistoryOpen, isMobileMenuOpen, isInsertMenuOpen, setIsMobileMenuOpen]);
+
+  // Clicking elsewhere in the workspace dismisses the Insert menu.
+  useEffect(() => {
+    if (!isInsertMenuOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (insertMenuRef.current && !insertMenuRef.current.contains(event.target as Node)) {
+        setIsInsertMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [isInsertMenuOpen]);
 
   // Persisted per-browser baseline for sync conflict detection.
   const c3dSyncBaselineKey = 'landsurv_c3d_sync_baseline';
@@ -4228,6 +4337,14 @@ const AppContent = () => {
     setIsSettingsVisible(false);
     setIsChatPanelVisible(false);
     setIsToolShelfVisible(false);
+    setPointWorkflowStarted(false);
+    setPointWorkflowPanelSeen(false);
+    setDismissedPointWorkflowKey(null);
+    setRasterUnderlayWorkflowStarted(false);
+    setRasterUnderlayWorkflowPanelSeen(false);
+    setDismissedRasterUnderlayWorkflowKey(null);
+    setActiveTrackedWorkflow(null);
+    setActiveToolShelfTabId(null);
 
     setRawChat(null);
     setDeedChat(null);
@@ -4293,6 +4410,8 @@ const AppContent = () => {
     pendingTractPobRef.current = null;
     setDimensions([]);
     setHatches([]);
+    setRasterUnderlays([]);
+    setSelectedRasterUnderlayId(null);
     setAreaLabels([]);
     setLastFloodAreas([]);
     setLastSoilAreas([]);
@@ -4761,11 +4880,16 @@ const AppContent = () => {
    * the upgrade dialog explains what happened and how to keep going.
    */
   const ensureDeedCredit = useCallback(async (file: SessionFile): Promise<boolean> => {
-    if (isDeedMeterExempt) return true;
-
     const fileType = file.fileData
       ? (file.fileData.startsWith('data:application/pdf') ? 'pdf' : 'image')
       : 'text';
+
+    if (isDeedMeterExempt) {
+      // Key holders are not metered, but their deeds still belong in the DevOps
+      // ledger. Best-effort: never delay or block the deed.
+      void trackDeedProcessing({ deedName: file.name, fileType });
+      return true;
+    }
 
     const outcome = await consumeFreeDeed({ deedName: file.name, fileType });
     setDeedCreditSnapshot(outcome.snapshot);
@@ -11690,9 +11814,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
       }
 
-      let reportData = soilReportData;
+      // Reuse tabular SSURGO attributes only when they still cover every map
+      // unit in this run; otherwise a new AOI would report last run's data.
       const mukeys = units.map(unit => unit.mukey).filter(Boolean);
-      if (!reportData && mukeys.length > 0) {
+      let reportData = soilReportData;
+      const reportDataCoversUnits = mukeys.length === 0
+        || (reportData != null && mukeys.every(mukey => Boolean(reportData![mukey])));
+      if (!reportDataCoversUnits) {
         const { fetchSoilReport } = await import('./services/soilsService.ts');
         reportData = await fetchSoilReport(mukeys);
         setSoilReportData(reportData);
@@ -11717,6 +11845,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         const message = report.boundaryPresent
           ? 'No SSURGO soil map units intersect the active AOI boundary.'
           : 'SSURGO returned no soil polygons for the report area.';
+        // Keep the compiled state current so a sheet block from an earlier run
+        // is removed instead of showing stale limitations.
+        setSoilLimitationsReport(report);
         setError(message);
         setTimeout(() => setError(null), 8000);
         return { ok: false, message, report };
@@ -11819,6 +11950,31 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     showView('sheetview');
     logActionToFieldbook('Queued a compact PA E&S soil-limitations block on the active paper-space sheet.');
   }, [handleCompileSoilLimitations, logActionToFieldbook, showView]);
+
+  /**
+   * Build the current limitations block once per compiled report. Sheet View
+   * consumes this to refresh blocks already on paper space (including sheets
+   * restored from localStorage) instead of leaving a previous run's text.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    if (!soilLimitationsReport) {
+      // undefined = nothing compiled yet this session; null = cleared, so the
+      // sheet should drop its soil-limitations block.
+      setSoilLimitationsSheetNotes(prev => (prev === undefined ? undefined : null));
+      return;
+    }
+    void (async () => {
+      const { buildSoilLimitationsSheetNotes } = await import('./services/soilLimitationsReport.ts');
+      if (cancelled) return;
+      setSoilLimitationsSheetNotes({
+        id: soilLimitationsReport.generatedAt,
+        text: buildSoilLimitationsSheetNotes(soilLimitationsReport),
+        title: 'SOIL LIMITATIONS — PA E&S TABLE E.1',
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [soilLimitationsReport]);
 
   // --- STREET LABELS (v26.05.19.4) -----------------------------------------
   // Fetches named road centerlines within the active inclusion boundary bbox
@@ -13720,9 +13876,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   /**
    * Standard presentation for an A2UI surface launched outside the chat feed.
    * It gets the same Floating, Chat, and Toolshelf placement lifecycle
-   * as a surface that originated in an agent message.
+   * as a surface that originated in an agent message. Pass `toolshelf` when
+   * the surface should open there instead of floating over the canvas.
    */
-  const openStandaloneA2UISurface = useCallback((message: ChatMessage) => {
+  const openStandaloneA2UISurface = useCallback((
+    message: ChatMessage,
+    initialMode: 'floating' | 'toolshelf' = 'floating',
+  ) => {
     const payload = message.a2ui;
     if (!payload) return;
     const key = `${payload.agent}:${payload.widgetType}`;
@@ -13732,11 +13892,39 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     closeA2UISurface(`fullscreen-${payload.kind}-${payload.widgetType}`);
 
     setStandaloneA2UIMessage(message);
+    if (initialMode === 'toolshelf') {
+      setDockedA2UIKey(key);
+      setDockedA2UIFallback(message);
+      setFloatingA2UIKey(null);
+      setFloatingA2UIFallback(null);
+      setIsToolShelfVisible(true);
+      requestToolShelfTab('a2ui-chat-tool');
+      return;
+    }
     setDockedA2UIKey(null);
     setDockedA2UIFallback(null);
     setFloatingA2UIKey(key);
     setFloatingA2UIFallback(message);
-  }, []);
+  }, [requestToolShelfTab, setIsToolShelfVisible]);
+
+  /** Open the Image & PDF Underlays workspace surface through the A2UI host. */
+  const openRasterUnderlaySurface = useCallback(() => {
+    setRasterUnderlayWorkflowStarted(true);
+    setRasterUnderlayWorkflowPanelSeen(true);
+    setDismissedRasterUnderlayWorkflowKey(null);
+    setActiveTrackedWorkflow('underlays');
+    openStandaloneA2UISurface({
+      role: MessageRole.MODEL,
+      text: 'Image & PDF underlays — import a plan scan, place two anchor pairs, and align it to project points.',
+      a2ui: {
+        kind: 'workspace-tool',
+        agent: AgentType.CAD_MANAGER,
+        widgetType: 'raster-underlay',
+        workspaceTool: 'raster-underlay',
+        status: 'expanded',
+      },
+    }, 'toolshelf');
+  }, [openStandaloneA2UISurface]);
 
   /** Open the shared Stationing Controls A2UI surface from the baseline tool or Stationing & CL panel. */
   const openStationingControlsSurface = useCallback(() => {
@@ -14070,10 +14258,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           }
           switch (a2uiResolution.customActionId) {
             case 'manual-points':
+              setPointWorkflowStarted(true);
+              setPointWorkflowPanelSeen(true);
+              setDismissedPointWorkflowKey(null);
+              setActiveTrackedWorkflow('points');
               setIsToolShelfVisible(true);
               toggleToolDock('pointEditor', true);
               break;
             case 'open-point-tools':
+              setPointWorkflowStarted(true);
+              setPointWorkflowPanelSeen(true);
+              setDismissedPointWorkflowKey(null);
+              setActiveTrackedWorkflow('points');
               setIsToolShelfVisible(true);
               toggleToolDock('pointEditor', true);
               break;
@@ -20518,6 +20714,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setError(`${skipped.length} duplicate point${skipped.length === 1 ? ' was' : 's were'} skipped (point numbers already on the canvas).`);
         setTimeout(() => setError(null), 4000);
     }
+    setPointWorkflowStarted(true);
+    setDismissedPointWorkflowKey(null);
+    setActiveTrackedWorkflow('points');
     logActionToFieldbook(`Uploaded and added ${accepted.length} points from file: ${fileName}${skipped.length > 0 ? ` (${skipped.length} duplicates skipped)` : ''}`);
     setPointLists(prevLists => {
         const workingListIndex = prevLists.findIndex(l => l.id === 'working');
@@ -20553,6 +20752,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   // Handler to start Point Editor with an empty session (no file upload)
   const handlePointEditorSessionStart = useCallback(() => {
     try {
+        setPointWorkflowStarted(true);
+        setDismissedPointWorkflowKey(null);
+        setActiveTrackedWorkflow('points');
         startSession();
         logActionToFieldbook('Started a new blank Point Editor session.');
         
@@ -22540,6 +22742,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, [pushHistory, logActionToFieldbook]);
 
   const handleAddPoint = useCallback((newPoint: SurveyPoint) => {
+      if (activeAgent === AgentType.POINT_EDITOR) {
+        setPointWorkflowStarted(true);
+        setActiveTrackedWorkflow('points');
+      }
+      setDismissedPointWorkflowKey(null);
       try {
         addPointAtProjected(newPoint);
       } catch (err) {
@@ -22547,7 +22754,132 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setError(message);
         setTimeout(() => setError(null), 3000);
       }
-  }, [addPointAtProjected]);
+  }, [activeAgent, addPointAtProjected]);
+
+  /** Re-open the Point Workspace where the user left the tracked workflow. */
+  const handleReturnToPointWorkflow = useCallback(() => {
+    if (activeAgent !== AgentType.POINT_EDITOR) {
+      handleAgentChange(AgentType.POINT_EDITOR);
+    }
+    setPointWorkflowStarted(true);
+    setActiveTrackedWorkflow('points');
+    setIsToolShelfVisible(true);
+    toggleToolDock('pointEditor', true);
+    requestToolShelfTab('pointEditor');
+  }, [
+    activeAgent,
+    handleAgentChange,
+    requestToolShelfTab,
+    setIsToolShelfVisible,
+    toggleToolDock,
+  ]);
+
+  // A compact, dismissible reminder that travels with the workflow all the way
+  // to completion. It only takes over the Quick Thought slot while the Point
+  // Workspace is not the visible tool, or once the flow is finished.
+  const pointWorkflowThought = useMemo<WorkflowQuickThoughtNotice | undefined>(() => {
+    if (!pointWorkflowStarted) return undefined;
+    if (activeTrackedWorkflow !== 'points') return undefined;
+    if (activeVisualPanel !== 'canvas' || isPointWorkflowPanelActive) return undefined;
+    const snapshot = pointWorkflowSnapshot;
+    const attention: WorkflowQuickThoughtNotice['attention'] = snapshot.isComplete
+      ? 'complete'
+      : pointWorkflowPanelSeen
+        ? 'away'
+        : 'active';
+    const key = `${attention}:${snapshot.totalPoints}:${snapshot.unsavedPoints}`;
+    if (dismissedPointWorkflowKey === key) return undefined;
+    const pointWord = snapshot.totalPoints === 1 ? 'point' : 'points';
+    const summary = snapshot.isComplete
+      ? `${snapshot.totalPoints.toLocaleString()} ${pointWord} saved across your lists. The point workflow is complete.`
+      : snapshot.totalPoints === 0
+        ? 'Pick up where you left off — add your first point to start the workflow.'
+        : attention === 'away'
+          ? `You stepped away from the Point Workspace. ${snapshot.unsavedPoints} point${snapshot.unsavedPoints === 1 ? ' is' : 's are'} still unsaved.`
+          : `${snapshot.unsavedPoints} point${snapshot.unsavedPoints === 1 ? ' is' : 's are'} waiting in Unsaved Points. Open the Point Workspace to name a list and save them.`;
+    return {
+      key,
+      title: 'Point workflow',
+      attention,
+      progressLabel: snapshot.progressLabel,
+      summary,
+      steps: snapshot.steps,
+      actionLabel: snapshot.isComplete
+        ? 'Review points'
+        : attention === 'away'
+          ? 'Return to Point Workspace'
+          : 'Open Point Workspace',
+      onAction: handleReturnToPointWorkflow,
+      onDismiss: () => setDismissedPointWorkflowKey(key),
+    };
+  }, [
+    activeTrackedWorkflow,
+    activeVisualPanel,
+    dismissedPointWorkflowKey,
+    handleReturnToPointWorkflow,
+    isPointWorkflowPanelActive,
+    pointWorkflowPanelSeen,
+    pointWorkflowSnapshot,
+    pointWorkflowStarted,
+  ]);
+
+  /** Re-open the Image & PDF Underlays workspace where the user left the tracked workflow. */
+  const handleReturnToRasterUnderlayWorkflow = useCallback(() => {
+    setRasterUnderlayWorkflowStarted(true);
+    setActiveTrackedWorkflow('underlays');
+    openRasterUnderlaySurface();
+  }, [openRasterUnderlaySurface]);
+
+  // Same tracked-flow reminder as the Point Workspace, driven by underlay
+  // import/alignment state instead of point lists.
+  const rasterUnderlayWorkflowThought = useMemo<WorkflowQuickThoughtNotice | undefined>(() => {
+    if (!rasterUnderlayWorkflowStarted) return undefined;
+    if (activeTrackedWorkflow !== 'underlays') return undefined;
+    if (activeVisualPanel !== 'canvas' || isRasterUnderlayWorkflowPanelActive) return undefined;
+    const snapshot = rasterUnderlayWorkflowSnapshot;
+    const attention: WorkflowQuickThoughtNotice['attention'] = snapshot.isComplete
+      ? 'complete'
+      : rasterUnderlayWorkflowPanelSeen
+        ? 'away'
+        : 'active';
+    const key = `${attention}:${snapshot.totalUnderlays}:${snapshot.alignedUnderlays}`;
+    if (dismissedRasterUnderlayWorkflowKey === key) return undefined;
+    const underlayWord = snapshot.totalUnderlays === 1 ? 'underlay' : 'underlays';
+    const remainingLabel = `${snapshot.remainingUnderlays} ${
+      snapshot.remainingUnderlays === 1 ? 'underlay still needs' : 'underlays still need'
+    } two anchor pairs`;
+    const summary = snapshot.isComplete
+      ? `${snapshot.totalUnderlays} plan ${underlayWord} aligned to project points. The underlay workflow is complete.`
+      : snapshot.totalUnderlays === 0
+        ? 'Pick up where you left off — import a plan PDF or image to start the underlay workflow.'
+        : attention === 'away'
+          ? `You stepped away from the Underlay Workspace. ${remainingLabel}.`
+          : `Open the Underlay Workspace and pin two anchor pairs on each plan. ${remainingLabel}.`;
+    return {
+      key,
+      title: 'Underlay workflow',
+      attention,
+      progressLabel: snapshot.progressLabel,
+      summary,
+      steps: snapshot.steps,
+      actionLabel: snapshot.isComplete
+        ? 'Review underlays'
+        : attention === 'away'
+          ? 'Return to Underlays'
+          : 'Open Underlay Workspace',
+      onAction: handleReturnToRasterUnderlayWorkflow,
+      onDismiss: () => setDismissedRasterUnderlayWorkflowKey(key),
+    };
+  }, [
+    activeTrackedWorkflow,
+    activeVisualPanel,
+    dismissedRasterUnderlayWorkflowKey,
+    handleReturnToRasterUnderlayWorkflow,
+    isRasterUnderlayWorkflowPanelActive,
+    rasterUnderlayWorkflowPanelSeen,
+    rasterUnderlayWorkflowSnapshot,
+    rasterUnderlayWorkflowStarted,
+  ]);
 
   /** Duplicate check shared by the A2UI point-entry surface and CACP numbering. */
   const isPointNumberTakenFromSurface = useCallback((pointNumber: string) => {
@@ -23333,6 +23665,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         deedBatchJob: deedBatchJob ?? undefined,
         dimensions,
         hatches: hatches.length > 0 ? hatches : undefined,
+        rasterUnderlays: rasterUnderlays.length > 0 ? rasterUnderlays : undefined,
         tinSurfaces: tinSurfaces.length > 0 ? tinSurfaces : undefined,
         steepSlopeRuns: steepSlopeRuns.length > 0 ? steepSlopeRuns : undefined,
         inclusionBoundaries,
@@ -23424,6 +23757,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             showRotatedBearings,
             parcelLabelFormatter,
             canvasTransform: canvas2dRef.current?.getTransform() ?? canvasTransform ?? undefined,
+            workflows: {
+                active: activeTrackedWorkflow,
+                points: {
+                    started: pointWorkflowStarted,
+                    panelSeen: pointWorkflowPanelSeen,
+                    dismissedKey: dismissedPointWorkflowKey,
+                },
+                underlays: {
+                    started: rasterUnderlayWorkflowStarted,
+                    panelSeen: rasterUnderlayWorkflowPanelSeen,
+                    dismissedKey: dismissedRasterUnderlayWorkflowKey,
+                },
+            },
         }
     };
 
@@ -23461,7 +23807,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     profileData, profileInfo, APP_VERSION, lineLabelScale, draftingStyleLibrary,
     soilMapUnits, soilsChatHistory, standardsComplianceChatHistory, standardsComplianceControlFile,
     standardsComplianceSubjectFile, standardsComplianceSourceMode, standardsComplianceChecks, standardsComplianceLastReport,
-    cadManagerContext.state, deedBatchJob,
+    cadManagerContext.state, deedBatchJob, activeTrackedWorkflow, pointWorkflowStarted, pointWorkflowPanelSeen,
+    dismissedPointWorkflowKey, rasterUnderlayWorkflowStarted, rasterUnderlayWorkflowPanelSeen,
+    dismissedRasterUnderlayWorkflowKey,
     setIsSessionSaveModalOpen
   ]);
 
@@ -23566,6 +23914,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 }
                 setDimensions(sessionState.dimensions || []);
                 setHatches(sessionState.hatches || []);
+                setRasterUnderlays(sessionState.rasterUnderlays || []);
+                setSelectedRasterUnderlayId(null);
                 if (sessionState.tinSurfaces) {
                   setTinSurfaces(sessionState.tinSurfaces);
                 }
@@ -23728,6 +24078,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 if (uiState.showRotatedBearings !== undefined) setShowRotatedBearings(uiState.showRotatedBearings);
                 if (uiState.parcelLabelFormatter) setParcelLabelFormatter({ ...DEFAULT_PARCEL_LABEL_FORMATTER, ...uiState.parcelLabelFormatter });
                 setCanvasTransform(uiState.canvasTransform || null);
+                const savedWorkflows = uiState.workflows;
+                setPointWorkflowStarted(savedWorkflows?.points?.started ?? false);
+                setPointWorkflowPanelSeen(savedWorkflows?.points?.panelSeen ?? false);
+                setDismissedPointWorkflowKey(savedWorkflows?.points?.dismissedKey ?? null);
+                setRasterUnderlayWorkflowStarted(savedWorkflows?.underlays?.started ?? false);
+                setRasterUnderlayWorkflowPanelSeen(savedWorkflows?.underlays?.panelSeen ?? false);
+                setDismissedRasterUnderlayWorkflowKey(savedWorkflows?.underlays?.dismissedKey ?? null);
+                setActiveTrackedWorkflow(savedWorkflows?.active ?? null);
 
                 if (uiState.activeTextEditorFile && activeVisualPanel === 'texteditor') {
                     const allFiles = [sessionState.rawFile, sessionState.deedFile, sessionState.dxfFile, sessionState.clFile, ...(sessionState.planFiles || []), ...(sessionState.generatedFiles || [])].filter(f => f !== null) as SessionFile[];
@@ -24967,6 +25325,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               onExport={handleExportTinSurface}
             />
           );
+        case 'raster-underlay':
+          return (
+            <A2UIRasterUnderlay
+              underlays={rasterUnderlays}
+              selectedId={selectedRasterUnderlayId}
+              points={points}
+              onSelect={setSelectedRasterUnderlayId}
+              onAdd={handleAddRasterUnderlay}
+              onUpdate={handleUpdateRasterUnderlay}
+              onDelete={handleDeleteRasterUnderlay}
+            />
+          );
         case 'legal-writer':
           return legalWriterState ? (
             <LegalWriterPanel
@@ -25014,6 +25384,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               parcelCadTextStyles={parcelCadTextStyles}
               pendingNotes={pendingSheetNotes}
               onPendingNotesConsumed={() => setPendingSheetNotes(null)}
+              soilLimitationsNotes={soilLimitationsSheetNotes}
             />
           );
         case 'road-paint-studio':
@@ -25089,6 +25460,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       applySymbolVisibilityCommand,
       isC3DConnected,
       handleReturnA2UIToChat,
+      rasterUnderlays,
+      selectedRasterUnderlayId,
+      handleAddRasterUnderlay,
+      handleUpdateRasterUnderlay,
+      handleDeleteRasterUnderlay,
       cadManagerState.standard,
       cadManagerContext,
       customAnnotations,
@@ -26785,10 +27161,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               <A2UISurface
                 payload={dockedA2UIPayload}
                 presentation="docked"
-                dockMode="toolshelf"
-                onDock={() => setIsToolShelfVisible(true)}
-                onPopOut={() => dockedA2UIMessage && handleSetA2UIDockMode(dockedA2UIMessage, 'floating')}
-                onChat={handleReturnA2UIToChat}
                 cadManagerContent={cadManagerA2UIContent}
               />
             </div>
@@ -27536,6 +27908,46 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                     >
                                         Draw
                                     </button>
+                                    <div ref={insertMenuRef} className="relative">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setIsLayerPanelOpen(false);
+                                                canvas2dRef.current?.closeDrawingToolsMenu();
+                                                setIsInsertMenuOpen(open => !open);
+                                            }}
+                                            className={`p-2 rounded-full transition-colors text-xs font-medium ${isInsertMenuOpen ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
+                                            title="Insert — place an image or PDF under the drawing"
+                                            aria-label="Open Insert menu"
+                                            aria-haspopup="menu"
+                                            aria-expanded={isInsertMenuOpen}
+                                        >
+                                            Insert
+                                        </button>
+                                        {isInsertMenuOpen && (
+                                            <div className="absolute left-0 top-full z-50 mt-1 w-64 overflow-hidden rounded-lg border border-gray-700 bg-gray-800 shadow-xl" role="menu">
+                                                <div className="border-b border-gray-700 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                                                    Insert
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    role="menuitem"
+                                                    onClick={() => {
+                                                        setIsInsertMenuOpen(false);
+                                                        openRasterUnderlaySurface();
+                                                    }}
+                                                    className="flex w-full items-start gap-2.5 px-2.5 py-2.5 text-left text-gray-200 transition-colors hover:bg-gray-700"
+                                                    title="Import an image or PDF plan and align it to project points"
+                                                >
+                                                    <svg viewBox="0 0 24 24" className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-300" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l5-5 4 4 3-3 6 6"/><circle cx="8.5" cy="8.5" r="1.5"/></svg>
+                                                    <span className="flex min-w-0 flex-col gap-0.5">
+                                                        <span className="text-[12px] font-medium">Image &amp; PDF Underlays…</span>
+                                                        <span className="text-[10px] leading-snug text-gray-400">Place a plan beneath the linework and align it to two point pairs.</span>
+                                                    </span>
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
                                     <button
                                         onClick={() => handleOpenSpreadsheetEditor()}
                                         className="p-2 rounded-full transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
@@ -27735,6 +28147,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 }
                                                 : undefined
                                         }
+                                        workflowThought={pointWorkflowThought ?? rasterUnderlayWorkflowThought}
                                         keyInfo={{
                                             label: activeKeyStatusLabel,
                                             detail: activeKeyStatusDetail,
@@ -27843,6 +28256,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onUpdateHatch={handleUpdateHatch}
                                         onDeleteHatch={handleDeleteHatch}
                                         onOpenHatchManager={() => showView('hatchmanager')}
+                                        rasterUnderlays={rasterUnderlays}
+                                        selectedRasterUnderlayId={selectedRasterUnderlayId}
+                                        onSelectRasterUnderlay={setSelectedRasterUnderlayId}
+                                        onUpdateRasterUnderlay={handleUpdateRasterUnderlay}
                                         onAddPoint={handleAddPoint}
                                         onOpenPointDialog={openPointEntrySurface}
                                         nextAvailablePointNumber={nextAvailablePointNumber}
@@ -28502,6 +28919,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                       parcelCadTextStyles={parcelCadTextStyles}
                                       pendingNotes={pendingSheetNotes}
                                       onPendingNotesConsumed={() => setPendingSheetNotes(null)}
+                                      soilLimitationsNotes={soilLimitationsSheetNotes}
                                     />
                                 ) : activeVisualPanel === 'draftstylelib' ? (
                                     <DraftingStyleLibrary
@@ -28546,6 +28964,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                           requestedTabId={toolShelfTabRequest?.tabId}
                           requestedTabToken={toolShelfTabRequest?.token}
                           hideToolTabs={activeAgent === AgentType.DEED_READER}
+                          onActiveTabChange={handleToolShelfActiveTabChange}
                           onClose={toggleToolShelf}
                         />
                       </AgentToolShelf>
@@ -29125,10 +29544,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               <A2UISurface
                 payload={floatingA2UIMessage.a2ui}
                 presentation="floating"
-                dockMode="floating"
-                onDock={() => handleSetA2UIDockMode(floatingA2UIMessage, 'toolshelf')}
-                onPopOut={() => handleSetA2UIDockMode(floatingA2UIMessage, 'floating')}
-                onChat={() => handleSetA2UIDockMode(floatingA2UIMessage, 'chat')}
                 cadManagerContent={floatingA2UIMessage.a2ui.kind === 'cad-manager' ? cadManagerA2UIContent : undefined}
               />
             </FloatingPanel>
@@ -29971,6 +30386,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               else if (definition.id === 'workspace-spreadsheet') {
                 openSpreadsheetSurface(createBlankSpreadsheetSpec());
               }
+              else if (definition.id === 'workspace-raster-underlay') openRasterUnderlaySurface();
               else if (definition.widgetType === 'closure-investigation') {
                 const latestBoundary = boundaryFiles[boundaryFiles.length - 1];
                 if (latestBoundary) void handleInvestigateClosure(latestBoundary.id);

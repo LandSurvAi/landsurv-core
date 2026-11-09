@@ -11,6 +11,7 @@ import { A2UISurface } from './A2UISurface';
 import { A2UIQuickThoughtSurface } from './A2UIQuickThoughtSurface';
 import { AGENT_SIDEBAR_LAYOUT_EVENT } from '../utils/layoutEvents.ts';
 import { A2UIScoutActivity } from './A2UIScoutActivity';
+import { WorkflowQuickThought, type WorkflowQuickThoughtNotice } from './WorkflowQuickThought';
 import { DockModeControl, type DockMode } from './DockModeControl';
 import {
   decomposeMessageForQuickThought,
@@ -154,6 +155,8 @@ interface CanvasTerminalProps {
     onAuthor: () => void;
     onGis: () => void;
   };
+  /** Tracked workflow status/reminder shown in Quick Thought when its panel is away. */
+  workflowThought?: WorkflowQuickThoughtNotice | null;
   /** Key of the A2UI surface currently docked in the agent tool shelf. */
   dockedA2UIKey?: string | null;
   /** Key of the A2UI surface currently floating on the canvas. */
@@ -219,6 +222,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   isAgentChatOpen = false,
   onToggleAgentChat,
   boundaryQuickActions,
+  workflowThought,
   dockedA2UIKey,
   floatingA2UIKey,
   standaloneA2UIMessage,
@@ -617,6 +621,8 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     !hasPendingPrompt &&
     Boolean(latestAgentPreview);
   const hasQuickThought = hasPendingPrompt || hasCompletedAgentThought;
+  const hasWorkflowThoughtNotice =
+    Boolean(workflowThought) && !isBottomAgentChatOpen && !isAgentChatOpen;
   const pendingOptions = lastMessage?.questionOptions ?? quickThoughtBreakdown.options ?? [];
   const thoughtKey = lastMessage
     ? `${effectiveAgent}:${messages.length}:${lastMessage.role}:${lastMessage.quickThoughtText ?? ''}:${lastMessage.quickThoughtLabel ?? ''}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}:${quickThoughtBreakdown.kind ?? ''}:${latestAgentPreview}:${liveScoutActivity?.id ?? ''}`
@@ -624,12 +630,18 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       ? `scout:${liveScoutActivity.id}`
       : null;
   const quickThoughtLabel =
-    lastMessage?.quickThoughtLabel?.trim() ||
-    (lastMessage?.quickThoughtText
-      ? 'Handoff'
-      : hasCompletedAgentThought
-        ? 'Answer'
-        : 'Needs input');
+    hasWorkflowThoughtNotice && workflowThought
+      ? workflowThought.attention === 'complete'
+        ? 'Workflow complete'
+        : workflowThought.attention === 'away'
+          ? 'Workflow paused'
+          : 'Workflow step'
+      : lastMessage?.quickThoughtLabel?.trim() ||
+        (lastMessage?.quickThoughtText
+          ? 'Handoff'
+          : hasCompletedAgentThought
+            ? 'Answer'
+            : 'Needs input');
   const isThoughtDismissed = thoughtKey !== null && dismissedThoughtKey === thoughtKey;
 
   const setHoverReveal = useCallback((key: string | null) => {
@@ -689,10 +701,10 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const isQuickThoughtHoverRevealed =
     thoughtKey !== null && hoverRevealedThoughtKey === thoughtKey;
   const isQuickThoughtVisible =
-    hasQuickThought &&
+    (hasQuickThought || hasWorkflowThoughtNotice) &&
     !isBottomAgentChatOpen &&
     !isAgentChatOpen &&
-    (!isThoughtDismissed || isQuickThoughtHoverRevealed);
+    (hasWorkflowThoughtNotice || !isThoughtDismissed || isQuickThoughtHoverRevealed);
 
   useEffect(() => () => clearQuickThoughtHideTimer(), [clearQuickThoughtHideTimer]);
 
@@ -2580,6 +2592,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   data-no-drag
                   data-testid="dismiss-agent-notification"
                   onClick={() => {
+                    workflowThought?.onDismiss?.();
                     if (thoughtKey) setDismissedThoughtKey(thoughtKey);
                     setHoverReveal(null);
                     clearQuickThoughtHideTimer();
@@ -2593,11 +2606,14 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
               </div>
 
               <div className="px-3 pb-3">
+                {hasWorkflowThoughtNotice && workflowThought && (
+                  <WorkflowQuickThought notice={workflowThought} />
+                )}
                 <div
                   ref={thoughtTextRef}
                   data-testid="agent-thought-text"
                   title={thoughtText}
-                  className="max-h-[52px] overflow-y-auto overscroll-contain text-[12px] leading-[1.5] text-white/70 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  className={`max-h-[52px] overflow-y-auto overscroll-contain text-[12px] leading-[1.5] text-white/70 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${hasQuickThought ? '' : 'hidden'}`}
                 >
                   <div
                     className={isThoughtOverflowing ? 'quick-thought-drift' : undefined}
@@ -2607,9 +2623,9 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   </div>
                 </div>
 
-                <A2UIScoutActivity variant="inline" />
+                {hasQuickThought && <A2UIScoutActivity variant="inline" />}
 
-                {lastMessage && (
+                {lastMessage && hasQuickThought && (
                   <A2UIQuickThoughtSurface
                     breakdown={quickThoughtBreakdown}
                     message={lastMessage}

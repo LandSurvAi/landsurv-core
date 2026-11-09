@@ -225,6 +225,7 @@ export type A2UIWorkspaceToolId =
   | 'symbol-manager'
   | 'linetype-manager'
   | 'hatch-manager'
+  | 'raster-underlay'
   | 'annotate-manager'
   | 'drafting-style-library'
   | 'layer-manager'
@@ -2319,6 +2320,60 @@ export interface HatchBoundaryLoop {
  * Persisted in `.lsvz` (`SessionState.hatches`), controllable via CACP skills,
  * and exported as a native `AcDbHatch` entity in DXF exports.
  */
+/** A rasterized PDF page or image imported for placement on the drawing canvas. */
+export interface RasterAsset {
+    name: string;
+    kind: 'image' | 'pdf';
+    /** PNG/JPEG data URL holding the rasterized pixels. */
+    dataUrl: string;
+    imageWidth: number;
+    imageHeight: number;
+    /** 1-based source PDF page, when kind === 'pdf'. */
+    pageNumber?: number;
+    pageCount?: number;
+}
+
+/** One correspondence between a source-image pixel and a project point. */
+export interface RasterUnderlayAnchor {
+    /** Pixel coordinate in the underlay raster (origin top-left, y down). */
+    imageX: number;
+    imageY: number;
+    /** False until the user actually clicks the image; guards the (0,0) default. */
+    imagePointSet?: boolean;
+    /** Associated project point number, when the anchor was tied to a point. */
+    pointNumber?: string;
+    easting: number;
+    northing: number;
+}
+
+/**
+ * Similarity transform from source-image pixels to project coordinates:
+ * E = originE + scale * (px cosθ + py sinθ)
+ * N = originN + scale * (px sinθ - py cosθ)
+ * (image y grows downward, project northing grows upward).
+ */
+export interface RasterUnderlayTransform {
+    /** Project coordinate of the image's top-left pixel. */
+    originEasting: number;
+    originNorthing: number;
+    /** Project units per source pixel. */
+    scale: number;
+    /** Counter-clockwise rotation of the image in project space, degrees. */
+    rotationDeg: number;
+}
+
+/** Image/PDF underlay rendered beneath survey linework. */
+export interface RasterUnderlay extends RasterAsset {
+    id: string;
+    opacity: number;
+    visible: boolean;
+    /** Locked underlays cannot be grabbed/moved on the canvas. */
+    locked: boolean;
+    transform: RasterUnderlayTransform;
+    /** Up to two image↔point pairs used to fit scale and rotation. */
+    anchors: RasterUnderlayAnchor[];
+}
+
 export interface CanvasHatch {
     id: string;
     name?: string;
@@ -2475,6 +2530,15 @@ export interface RoadCorridorRun {
     createdAt: string;
 }
 
+export type ToolWorkflowId = 'points' | 'underlays';
+
+/** Resumable progress for a multi-step tool workflow saved in the .lsvz UI state. */
+export interface ToolWorkflowProgress {
+    started: boolean;
+    panelSeen: boolean;
+    dismissedKey: string | null;
+}
+
 export interface SessionState {
     version: string;
     savedAt: string;
@@ -2499,6 +2563,8 @@ export interface SessionState {
     dimensions?: AnnotationDimension[];
     /** First-class CAD hatch entities placed on the drawing canvas. */
     hatches?: CanvasHatch[];
+    /** Imported image / PDF plan underlays (scale + rotation via anchor pairs). */
+    rasterUnderlays?: RasterUnderlay[];
     tinSurfaces?: TinSurface[];
     /** Saved contour generation objects (v26.05.19.3). Each ContourGeneration
      *  stores its own IsoPaths (mathematical representation), display settings,
@@ -2679,6 +2745,12 @@ export interface SessionState {
         parcelLabelFormatter?: ParcelLabelFormatter;
         /** 2D Canvas Viewport: scale and pan offset persisted so reloads remain exactly at the saved zoom/pan. */
         canvasTransform?: { scale: number; offsetX: number; offsetY: number };
+        /** In-progress Point Editor and Image & PDF Underlay workflows, so a saved project resumes the same nudges. */
+        workflows?: {
+            active: ToolWorkflowId | null;
+            points: ToolWorkflowProgress;
+            underlays: ToolWorkflowProgress;
+        };
     }
 }
 

@@ -450,6 +450,7 @@ function getDefinitionGlyph(definitionId: string): string | undefined {
     settings: '⚙',
     help: '?',
     'workspace-cad-manager': '⚙',
+    'workspace-raster-underlay': '🖼',
     'workspace-text-editor': 'T',
     'workspace-spreadsheet': '▦',
     'point-entry': 'P',
