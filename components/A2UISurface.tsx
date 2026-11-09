@@ -74,6 +74,7 @@ export const WORKSPACE_TOOL_LABELS: Record<A2UIWorkspaceToolId, string> = {
   'legal-writer': 'Legal Description Writer',
   'sheet-view': 'Sheet View (24×36 Plot Layout)',
   'roading-panel': 'Roading Studio',
+  'road-paint-studio': 'Road Paint Studio',
   'tin-surfaces': 'TIN Surfaces',
   'legend': 'Legend',
 };

@@ -239,6 +239,7 @@ export type A2UIWorkspaceToolId =
   | 'legal-writer'
   | 'sheet-view'
   | 'roading-panel'
+  | 'road-paint-studio'
   | 'tin-surfaces'
   | 'legend';
 
@@ -835,7 +836,7 @@ export interface SurveyLine {
   fillPath?: Array<{ x: number, y: number, z: number }>;
   bearing?: string;
   distance?: string;
-  type?: 'baseline' | 'breakline' | 'inclusion' | 'exclusion' | 'shrinkwrap-preview' | 'contour-major' | 'contour-minor' | 'parcel' | 'flood' | 'bfe' | 'soils' | 'steep-slope' | 'tin-edge';
+  type?: 'baseline' | 'breakline' | 'inclusion' | 'exclusion' | 'shrinkwrap-preview' | 'contour-major' | 'contour-minor' | 'parcel' | 'flood' | 'bfe' | 'soils' | 'steep-slope' | 'tin-edge' | 'road-paint';
   fromPt?: { x: number, y: number, z: number };
   toPt?: { x: number, y: number, z: number };
   // Curve parameters (for closure calculations and plotting)
@@ -870,6 +871,8 @@ export interface SurveyLine {
   bfeElevation?: number;
   /** Vertical datum reported by FEMA for the BFE (e.g. NAVD88). */
   bfeDatum?: string;
+  /** Pavement-marking metadata when this line is a road paint band. */
+  roadPaint?: RoadPaintStripeMeta;
 }
 
 /**
@@ -981,6 +984,12 @@ export interface ContourLabel {
   angle: number;
   /** Generation that produced this label. Labels placed manually omit it. */
   contourGenId?: string;
+  /**
+   * Index of the source IsoPath this label was generated on. Used to slide the
+   * label along the correct contour without hopping to a same-elevation line.
+   * Manually placed labels omit it and resolve by nearest matching contour.
+   */
+  pathIndex?: number;
 }
 
 /**
@@ -996,6 +1005,8 @@ export interface StreetLabel {
   text: string;
   /** Counter-clockwise rotation in degrees to align label with road bearing. */
   angle: number;
+  /** Set when this label is a road paint station callout (so paint clears stay scoped). */
+  roadPaint?: { marking: RoadPaintMarkingId; centerlineId: string };
 }
 
 /**
@@ -1506,6 +1517,62 @@ export interface SessionFile {
     pdfLayerNames?: string[];
     /** Distinct stroke dash patterns actually drawn on the selected pages — the closest browser-readable proxy for CAD linetypes. */
     pdfDashPatterns?: ('solid' | 'dashed' | 'dotted' | 'dash-dot')[];
+}
+
+/** Pavement marking presets understood by the road paint tools. */
+export type RoadPaintMarkingId = 'EP' | 'WL' | 'SWL' | 'DYL';
+
+/** Which side of the centerline receives a single stripe. */
+export type RoadPaintSide = 'left' | 'right' | 'both';
+
+/**
+ * Input for the Civil Drafter road paint skills. Paint is drawn as a real
+ * 4-inch-wide band following the centerline, not as a CAD lineweight: double
+ * yellow is two yellow bands 8 in each side of the CL, and a single white line
+ * is one white band 8 in to the selected side.
+ */
+export interface RoadPaintSpec {
+  marking: RoadPaintMarkingId;
+  /** Existing Stationing & CL alignment to follow. */
+  centerlineId?: string;
+  /** Alignment name when the caller knows it instead of the id. */
+  centerlineName?: string;
+  /** Ordered points used to create the alignment when no centerline exists. */
+  pointNumbers?: string[];
+  /** Stripe center distance from the centerline, in inches. */
+  offsetIn?: number;
+  /** Side for a single stripe. Defaults to 'right'. */
+  side?: RoadPaintSide;
+  /** Painted band width in inches. Defaults to 4. */
+  widthIn?: number;
+  /** Center-to-center spacing of the two DYL stripes, in inches. Defaults to 8. */
+  separationIn?: number;
+  startStation?: number | string;
+  endStation?: number | string;
+  /** Maximum spacing between paint band samples along the alignment, in feet. */
+  stationStepFt?: number;
+  /** Station callout spacing, in feet. */
+  labelIntervalFt?: number;
+  lineType?: string;
+  color?: string;
+  layer?: string;
+  annotate?: boolean;
+  /** Replace earlier paint for the same marking/alignment instead of stacking. */
+  replaceExisting?: boolean;
+}
+
+/** Per-band metadata stored on each generated SurveyLine. */
+export interface RoadPaintStripeMeta {
+  marking: RoadPaintMarkingId;
+  centerlineId: string;
+  centerlineName?: string;
+  /** Stripe center offset from the centerline, in inches (+ right, − left). */
+  offsetIn: number;
+  widthIn: number;
+  stripeIndex: number;
+  stripeCount: number;
+  startStation: number;
+  endStation: number;
 }
 
 export interface CenterlinePI {

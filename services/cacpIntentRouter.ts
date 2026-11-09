@@ -275,23 +275,29 @@ export function routeIntent(request: string, currentAgent?: AgentType): IntentRo
     };
   }
 
-  // Roading is experimental and off by default. While it is disabled, road
-  // drawing belongs to the Civil Drafter rather than falling through to an
-  // unrelated agent or leaving the current agent to improvise.
+  // One drafting path for existing roads: Civil Drafter's reviewed chains.
+  // Roading's existing synthesis skips the turn's multi-take retake loop, which
+  // is why the same request could produce a dashed CL with gappy corridor edges.
+  // Roading is kept for proposed design/corridor/typical-section work.
+  const isProposedRoadDesignRequest =
+    /\b(?:design|proposed|proposal|typical\s+section|profile|cross[\s-]?section|grading|cul[\s-]?de[\s-]?sac|turnaround|widening)\b/i.test(
+      request,
+    );
   const isRoadDrawingRequest =
     /\b(?:draw|draft|trace|design|model|synthesi[sz]e|extract|create|build|plot|generate)\w*\b/i.test(request) &&
     /\b(?:road|roads|roadway|street|corridor|pavement|curb|gutter|sidewalk|right[\s-]?of[\s-]?way|centerline|cul[\s-]?de[\s-]?sac)\b/i.test(request);
-  if (!isExperimentalAgentEnabled(AgentType.ROADING_AGENT) && isRoadDrawingRequest) {
+  if (isRoadDrawingRequest && !isProposedRoadDesignRequest) {
     return {
       primary: {
         agent: AgentType.CIVIL_DRAFTER,
         displayName: 'Civil Drafter',
         score: 95,
-        matchedOn: ['road drawing (Roading experimental off)'],
+        matchedOn: ['existing-road drawing'],
       },
       alternates: [],
       isMismatched: currentAgent !== undefined && currentAgent !== AgentType.CIVIL_DRAFTER,
-      explanation: 'Roading Agent is experimental and disabled; road drawing routed to Civil Drafter.',
+      explanation:
+        'Existing-road drafting routed to Civil Drafter (reviewed chains path); Roading is reserved for proposed design.',
     };
   }
 

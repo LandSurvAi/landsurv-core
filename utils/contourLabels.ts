@@ -34,7 +34,7 @@ export interface StrikeContourLabelsResult {
   removedLabels: ContourLabel[];
 }
 
-function normalizeLabelAngle(degrees: number): number {
+export function normalizeLabelAngle(degrees: number): number {
   let angle = degrees;
   while (angle <= -180) angle += 360;
   while (angle > 180) angle -= 360;
@@ -99,7 +99,8 @@ export function generateContourLabelsFromIsoPaths(
   const minPathLength = Math.max(0, options.minPathLength ?? 20);
   const labels: ContourLabel[] = [];
 
-  for (const path of isoPaths) {
+  for (let pathIndex = 0; pathIndex < isoPaths.length; pathIndex++) {
+    const path = isoPaths[pathIndex];
     if (!Number.isFinite(path.elevation) || path.vertices.length < 2) continue;
     if (options.majorOnly && !path.isMajor) continue;
 
@@ -134,6 +135,7 @@ export function generateContourLabelsFromIsoPaths(
           y: a.y + t * (b.y - a.y),
           text: formatContourElevation(path.elevation),
           angle: normalizeLabelAngle(Math.atan2(b.y - a.y, b.x - a.x) * (180 / Math.PI)),
+          pathIndex,
         });
         break;
       }
@@ -224,5 +226,128 @@ export function strikeContourLabels(options: StrikeContourLabelsOptions): Strike
     added: added.length,
     removed: 0,
     removedLabels: [],
+  };
+}
+
+/** Build chained contour paths from rendered contour segments. */
+export function buildContourPathsFromLines(lines: SurveyLine[]): IsoPath[] {
+  return surveyLinesToIsoPaths(lines.filter(line =>
+    !line.hidden
+    && line.fromPt
+    && line.toPt
+    && isContourLine(line)
+  ));
+}
+
+/** One projected position on a contour path. */
+export interface ContourPathProjection {
+  x: number;
+  y: number;
+  angle: number;
+  distance: number;
+}
+
+/**
+ * Project a world point onto the closest segment of a polyline. The returned
+ * label angle follows the local tangent and is normalized so text never reads
+ * upside-down.
+ */
+export function projectPointToContourPath(
+  point: Point2D,
+  vertices: ReadonlyArray<{ x: number; y: number }>,
+): ContourPathProjection | null {
+  if (vertices.length < 2) return null;
+
+  let best: ContourPathProjection | null = null;
+  for (let i = 0; i < vertices.length - 1; i++) {
+    const a = vertices[i];
+    const b = vertices[i + 1];
+    const vx = b.x - a.x;
+    const vy = b.y - a.y;
+    const lengthSq = vx * vx + vy * vy;
+    if (lengthSq < 1e-12) continue;
+
+    const t = Math.max(0, Math.min(1,
+      ((point.x - a.x) * vx + (point.y - a.y) * vy) / lengthSq,
+    ));
+    const x = a.x + t * vx;
+    const y = a.y + t * vy;
+    const distance = Math.hypot(point.x - x, point.y - y);
+    if (!best || distance < best.distance) {
+      best = {
+        x,
+        y,
+        distance,
+        angle: normalizeLabelAngle(Math.atan2(vy, vx) * (180 / Math.PI)),
+      };
+    }
+  }
+  return best;
+}
+
+export interface ResolveContourLabelPathOptions {
+  /** Exact source paths when the label came from a stored generation. */
+  isoPaths?: IsoPath[] | null;
+  /** Paths reconstructed from drawn contour lines, used for manual/ESRI labels. */
+  fallbackPaths?: IsoPath[] | null;
+}
+
+/**
+ * Find the contour path a label belongs to. Generated labels carry a stable
+ * pathIndex; older or manually placed labels fall back to the nearest path,
+ * preferring one whose elevation matches the displayed text.
+ */
+export function resolveContourLabelPath(
+  label: ContourLabel,
+  options: ResolveContourLabelPathOptions = {},
+): IsoPath | null {
+  const direct = options.isoPaths ?? null;
+  if (direct && direct.length > 0
+    && label.pathIndex !== undefined
+    && label.pathIndex >= 0
+    && label.pathIndex < direct.length) {
+    return direct[label.pathIndex];
+  }
+
+  const paths = direct ?? options.fallbackPaths ?? [];
+  if (paths.length === 0) return null;
+
+  const labelText = label.text.trim();
+  let bestPath: IsoPath | null = null;
+  let bestDistance = Infinity;
+  let bestMatchesElevation = false;
+
+  for (const path of paths) {
+    if (path.vertices.length < 2) continue;
+    const projection = projectPointToContourPath({ x: label.x, y: label.y }, path.vertices);
+    if (!projection) continue;
+
+    const matchesElevation = formatContourElevation(path.elevation) === labelText;
+    if (
+      !bestPath
+      || (matchesElevation && !bestMatchesElevation)
+      || (matchesElevation === bestMatchesElevation && projection.distance < bestDistance)
+    ) {
+      bestPath = path;
+      bestDistance = projection.distance;
+      bestMatchesElevation = matchesElevation;
+    }
+  }
+
+  return bestPath;
+}
+
+/** Slide a label to the closest point on its contour path. */
+export function slideContourLabelAlongPath(
+  label: ContourLabel,
+  pointer: Point2D,
+  path: IsoPath,
+): Pick<ContourLabel, 'x' | 'y' | 'angle'> | null {
+  const projected = projectPointToContourPath(pointer, path.vertices);
+  if (!projected) return null;
+  return {
+    x: projected.x,
+    y: projected.y,
+    angle: projected.angle,
   };
 }

@@ -290,8 +290,8 @@ export function buildRoadContextBlock(args: {
     'Road corridor context',
     ...roadLines,
     ...parcelLines,
-    'Treat each road as a linear corridor captured in cross sections and most reliably defined by its centerline. Estimate corridor width from opposing edge-point spans, offset the centerline by half that width to predict edge locations, and connect points that share the same side of the corridor.',
-    'Use this context to place road centerlines and edge-of-pavement lines in a way that follows the road corridor and avoids criss-crossing the road bed.',
+    'Treat each road as a linear corridor captured in cross sections. The CL row is an internal reference for cross-section order and width, not a deliverable line. Estimate corridor width from opposing edge-point spans, use half that width to predict edge locations, and connect points that share the same side of the corridor.',
+    'Use this context to place pavement edges, curbs, shoulders and paint lines in a way that follows the road corridor and avoids criss-crossing the road bed. Do not emit a centerline/baseline unless the user explicitly requests one.',
   ].join('\n');
 }
 
@@ -400,7 +400,7 @@ function buildDraftStages(args: {
 }): DraftStage[] {
   const { hasImagery, footprints, femaBlock, buildingReviewChecklist } = args;
   const imageryNote = hasImagery
-    ? 'Aerial imagery (including NAIP when available) + roadmap context is attached — treat it as the primary visual reference. Verify the alignment, orientation and shape of EVERY feature you draw against the imagery before output, and adjust point chaining when the imagery disagrees.'
+    ? 'Aerial imagery (including NAIP when available) and roadmap context are attached as context. Field survey shots and GIS/parcel geometry are the control; use the imagery to confirm pavement width, canopy, driveways and visible edges, but do NOT move surveyed geometry to match the imagery.'
     : '';
 
   const footprintRef = footprints.length > 0
@@ -419,23 +419,26 @@ function buildDraftStages(args: {
   return [
     {
       id: 'draft_roads',
-      narration: 'Drawing roads: edges of pavement, centerlines, curbs…',
+      narration: 'Drawing roads: paint lines, edges of pavement, curbs…',
       attachImages: true,
       task: [
         '**STAGE 1 OF 5 — DRAW ROADS NOW**',
         '',
-        'Treat the attached imagery and the road-corridor context as the primary guide for road geometry.',
-        'MENTAL MODEL — A road is a linear CORRIDOR, not a loose cloud of points. Surveyors capture it as CROSS SECTIONS: at each station they shoot a set of points across the road (e.g. left EP, CL, right EP), then move down the road and shoot the next section. The corridor is most reliably defined by its CENTERLINE running down its length.',
-        'Draft ALL road linework first, connecting existing points by description:',
+        'Use field road shots, parcel/frontage and the road-corridor context as the geometry control. Use the attached imagery only to confirm pavement width, canopy and driveways; never move a shot-derived line to match the imagery.',
+        'MENTAL MODEL — A road is a linear CORRIDOR, not a loose cloud of points. Surveyors capture it as CROSS SECTIONS: at each station they shoot a set of points across the road (e.g. left EP, CL, right EP), then move down the road and shoot the next section. The shot rows define the corridor; CL shots are one internal cross-section reference, not a mandatory output.',
+        'Draft ALL shot-supported road linework first, connecting existing points by description:',
         '  EP / EOP / EDGE  → edge-of-pavement polylines (layer "EP")',
-        '  CL               → road centerlines (layer "CL")',
+        '  DYL / DBL        → double-yellow paint (layer "L-ROAD-PAINT-Y", lineType "CONTINUOUS")',
+        '  WL / SWL         → white paint (layer "L-ROAD-PAINT-W", lineType "CONTINUOUS")',
+        '  CL / CTR         → REFERENCE ONLY — use for cross-section order; do not output a baseline/centerline unless explicitly requested',
         '  CURB / TC / BC   → curb lines (layer "CURB")',
         '  SHLD / SH        → shoulder lines (layer "SHOULDER")',
-        'PREFER THE CENTERLINE: when CL shots exist, chain them first to establish the corridor spine and its direction of travel. Every other corridor line (EP, CURB, SHOULDER) runs roughly PARALLEL to that centerline on one side or the other.',
-        'DEDUCE THE CORRIDOR WIDTH: measure the perpendicular distance between opposing edge points (left EP to right EP across the centerline) at the sections where both exist. Average those spans to estimate a typical road width, then offset the centerline by width ÷ 2 to predict where each edge should fall. Use that predicted edge band to decide which points belong to the same side and in what order to connect them.',
-        'Use the survey points to trace each road corridor in travel/station order, not as a freeform sketch. Connect points that lie on the SAME side of the corridor and at similar offset from the centerline; do not connect a point on the left edge to the next point on the right edge.',
-        'Follow the road centerline / pavement edges in a single corridor; do not let lines cross the road bed or criss-cross through the middle of the roadway.',
-        'NEVER connect opposite edges of a road to each other or jump across the traveled way. A line that crosses the centerline from one edge to the other is almost always wrong.',
+        'PAINT FIRST: when DYL/DBL or WL/SWL shots exist, chain them in station order and emit paint linework on the paint layers. Paint points are deliverable linework — do not skip them because a centerline is easier.',
+        'NO BASELINE BY DEFAULT: do not emit a CL, C-ROAD-CNTR, centerline, or baseline chain for a road drawing. Use CL shots only to order the corridor and measure width. Only emit a baseline/centerline when the user explicitly asks for a centerline, baseline, alignment, or stationing.',
+        'DEDUCE THE CORRIDOR WIDTH: measure the perpendicular distance between opposing edge points (left EP to right EP across the CL reference) at the sections where both exist. Average those spans to estimate a typical road width, then use half that width to predict where each edge should fall. Use that predicted edge band to decide which points belong to the same side and in what order to connect them. Do not draw a new centerline from that width.',
+        'Use the survey points to trace each road corridor in travel/station order, not as a freeform sketch. Connect points that lie on the SAME side of the corridor and at similar offset from the CL reference; do not connect a point on the left edge to the next point on the right edge.',
+        'Follow the shot rows and pavement edges in a single corridor; do not let lines cross the road bed or criss-cross through the middle of the roadway.',
+        'NEVER connect opposite edges of a road to each other or jump across the traveled way. A line that crosses the reference centerline from one edge to the other is almost always wrong.',
         'When there are named roads in context, use them to infer road alignment and label placement; if the road is clearly named, draft the corridor with that orientation in mind.',
         'Road labels are handled automatically later, so this stage should only emit geometry.',
         imageryNote,

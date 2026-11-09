@@ -737,7 +737,13 @@ export function generateContoursAsIsoPaths(
                         const dy = p2.y - p1.y;
                         let angle = Math.atan2(dy, dx) * (180 / Math.PI);
                         if (angle < -90 || angle > 90) angle += 180;
-                        labels.push({ x: midX, y: midY, text: elev.toFixed(0), angle });
+                        labels.push({
+                            x: midX,
+                            y: midY,
+                            text: elev.toFixed(0),
+                            angle,
+                            pathIndex: isoPaths.length - renderedPaths.length + renderedPaths.indexOf(renderedPath),
+                        });
                         lastLabelPos[elev] = { x: midX, y: midY };
                         break; // one label per path per elevation
                     }
@@ -914,7 +920,13 @@ export function generateTinContoursAsIsoPaths(
                         const dy = p2.y - p1.y;
                         let angle = Math.atan2(dy, dx) * (180 / Math.PI);
                         if (angle < -90 || angle > 90) angle += 180;
-                        labels.push({ x: midX, y: midY, text: elev.toFixed(0), angle });
+                        labels.push({
+                            x: midX,
+                            y: midY,
+                            text: elev.toFixed(0),
+                            angle,
+                            pathIndex: isoPaths.length - renderedPaths.length + renderedPaths.indexOf(renderedPath),
+                        });
                         lastLabelPos[elev] = { x: midX, y: midY };
                         break;
                     }

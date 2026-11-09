@@ -2,6 +2,15 @@
 
 const releases = [
     {
+        version: "26.11.09.01",
+        date: "November 9, 2026",
+        highlights: [
+            "🛣️ Civil Drafter Rejects a Road That Pinches to a Point: The multi-take reviewer now checks the original pavement lines before they are merged, and three or more near-parallel edges converging on one point become a hard defect that holds the take for retake. A real T or four-way crossing is still accepted, and the review identifies the converging edges instead of treating the fan as a normal junction.",
+            "📍 Missing Pavement Inside a Parcel Corridor Is Now Flagged: Road-coded shots left off every pavement edge but inside the parcel-guided corridor are reported with their coordinates. The retake prompt carries those remaining shots and tells the drafter to synthesize the missing curve through them; parcel lines remain guidance only and are never used as snap targets.",
+            "〰️ Surveyed Bends Recover as Curves: Road-end repair now follows the actual shot sequence with tangent and lateral continuity instead of jumping to the farthest shot, so a bend is rebuilt as a curved polyline through the surveyed points. Existing gap stitching and no-parcel-snap behavior are unchanged.",
+        ],
+    },
+    {
         version: "26.11.08.01",
         date: "November 8, 2026",
         highlights: [

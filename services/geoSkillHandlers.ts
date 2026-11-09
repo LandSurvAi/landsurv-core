@@ -10,14 +10,25 @@ import { AgentType, type SurveyLine, type PointList, type Settings } from '../ty
 import { geoAiService, type BoundingBox } from './geoAiService';
 import { extractAuthoritativeRoads, synthesizeDrivewayToHouse, projectBboxToWgs84 } from './roadExtractionService';
 import { fetchOsmBuildings } from './osmBuildingsService';
+import {
+  extractRoadGrounding,
+  formatRoadTakeSummary,
+  runRoadTakeReview,
+  type GroundingWay,
+  type RoadTakeReport,
+} from '../utils/roadTakeReview';
+import { ROAD_CENTERLINE_LINETYPE } from '../utils/roadStyles';
 
 export interface UseGeoSkillsOptions {
   settings: Settings;
   setLines: React.Dispatch<React.SetStateAction<SurveyLine[]>>;
   setPointLists?: React.Dispatch<React.SetStateAction<PointList[]>>;
   pointListsRef: React.MutableRefObject<PointList[]>;
+  linesRef?: React.MutableRefObject<SurveyLine[]>;
   logActionToFieldbook: (msg: string) => void;
   canvas2dRef?: React.RefObject<any>;
+  /** Publish the imagery-free multi-take review to the Civil Drafter HUD. */
+  onRoadTakeReview?: (report: RoadTakeReport) => void;
 }
 
 function respond(
@@ -138,8 +149,10 @@ export function useGeoSkills({
   setLines,
   setPointLists,
   pointListsRef,
+  linesRef,
   logActionToFieldbook,
   canvas2dRef,
+  onRoadTakeReview,
 }: UseGeoSkillsOptions): void {
   const settingsRef = useRef(settings);
   useEffect(() => {
@@ -147,6 +160,35 @@ export function useGeoSkills({
   }, [settings]);
 
   useEffect(() => {
+    // Imagery-free multi-take review for road linework that arrives through a
+    // CACP skill rather than the chat JSON path. The skill commits straight to
+    // the canvas, so without this the user sees a single unreviewed take.
+    const reviewRoadTake = (candidate: SurveyLine[], osmWays: GroundingWay[]): SurveyLine[] => {
+      try {
+        const canvasGrounding = extractRoadGrounding(linesRef?.current ?? []);
+        const review = runRoadTakeReview(candidate, {
+          parcelLines: canvasGrounding.parcelLines,
+          osmWays: [...(canvasGrounding.osmWays ?? []), ...osmWays],
+        }, {
+          maxTakes: 3,
+          inferUnlabeledRoads: true,
+          surveyPoints: pointListsRef.current.flatMap(list => list.points),
+        });
+        logActionToFieldbook(formatRoadTakeSummary(review.report));
+        for (const repair of review.report.repairs) {
+          logActionToFieldbook(`  • ${repair}`);
+        }
+        if (review.report.remaining.length > 0) {
+          logActionToFieldbook(`  ! Take still needs a redraw: ${review.report.remaining.slice(0, 5).join(' | ')}`);
+        }
+        onRoadTakeReview?.(review.report);
+        return review.changed ? review.lines : candidate;
+      } catch (reviewErr) {
+        console.warn('[GeoRoadTakeReview] review pass failed:', reviewErr);
+        return candidate;
+      }
+    };
+
     // -----------------------------------------------------------------------
     // Handler: geo_extract_features (SamGeo)
     // -----------------------------------------------------------------------
@@ -343,7 +385,13 @@ export function useGeoSkills({
         });
 
         if (roadResult.lines.length > 0) {
-          setLines(prev => [...prev, ...roadResult.lines]);
+          const osmGrounding: GroundingWay[] = roadResult.roadCenterlines.map((vertices, index) => ({
+            name: roadResult.roadNames[index] || `OSM road ${index + 1}`,
+            vertices: vertices.map(vertex => ({ easting: vertex.easting, northing: vertex.northing })),
+            source: 'osm' as const,
+          }));
+          const reviewedLines = reviewRoadTake(roadResult.lines, osmGrounding);
+          setLines(prev => [...prev, ...reviewedLines]);
           const roadNameLabel = roadResult.roadNames.length > 0 ? roadResult.roadNames.join(', ') : 'road corridor';
           logActionToFieldbook(
             `Civil Drafter: Extracted authoritative road corridor (${roadNameLabel}) onto layer "${targetLayer}".`
@@ -400,13 +448,18 @@ export function useGeoSkills({
               layer: targetLayer,
               color: '#facc15',
               polylineId,
-              lineType: 'CENTERLINE',
+              lineType: ROAD_CENTERLINE_LINETYPE,
             });
           }
         }
 
         if (newRoadLines.length > 0) {
-          setLines(prev => [...prev, ...newRoadLines]);
+          const visionGrounding: GroundingWay[] = result.roads.map((road, index) => ({
+            name: `SAM road ${index + 1}`,
+            vertices: road.coordinates.map(vertex => ({ easting: vertex.x, northing: vertex.y })),
+          }));
+          const reviewedLines = reviewRoadTake(newRoadLines, visionGrounding);
+          setLines(prev => [...prev, ...reviewedLines]);
         }
 
         const engineLabel = result.engine === 'local' ? 'Local SAM-Road Worker' : result.engine === 'cloud' ? 'Cloud Run' : 'Client Vision Analysis';
@@ -431,5 +484,5 @@ export function useGeoSkills({
       unsubFeatures();
       unsubRoads();
     };
-  }, [setLines, pointListsRef, logActionToFieldbook, canvas2dRef]);
+  }, [setLines, pointListsRef, linesRef, logActionToFieldbook, canvas2dRef, onRoadTakeReview]);
 }

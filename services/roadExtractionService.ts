@@ -6,6 +6,7 @@ import proj4 from 'proj4';
 import type { SurveyPoint, SurveyLine } from '../types';
 import { smoothSplinePoints, isPointRelevantForCorridor } from '../utils/civilDrafterVision';
 import { isPavementPixel } from '../utils/geoRasterSegmentation';
+import { ROAD_CENTERLINE_LINETYPE } from '../utils/roadStyles';
 
 export type BoundingBoxInput = {
   minE?: number;
@@ -498,7 +499,7 @@ export async function extractAuthoritativeRoads(
         toPt: { x: clPts[i + 1].easting, y: clPts[i + 1].northing, z: clPts[i + 1].elevation },
         layer: clLayer,
         polylineId: clPolyId,
-        lineType: 'CENTERLINE',
+        lineType: ROAD_CENTERLINE_LINETYPE,
       });
     }
     for (let i = 0; i < leftPts.length - 1; i++) {
@@ -752,7 +753,7 @@ export async function extractAuthoritativeRoads(
           toPt: { x: clPt.easting, y: clPt.northing, z: elev },
           layer: clLayer,
           polylineId: clPolyId,
-          lineType: 'CENTERLINE',
+          lineType: ROAD_CENTERLINE_LINETYPE,
         });
 
         // Near frontage edge line (surveyed curb directly through control points)
@@ -986,7 +987,7 @@ export function synthesizeDrivewayToHouse(
       toPt: { x: clPts[i + 1].easting, y: clPts[i + 1].northing, z: clPts[i + 1].elevation },
       layer: clLayer,
       polylineId: clPolyId,
-      lineType: 'CENTERLINE',
+      lineType: ROAD_CENTERLINE_LINETYPE,
     });
   }
 

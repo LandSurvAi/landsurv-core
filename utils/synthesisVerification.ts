@@ -34,7 +34,7 @@
  */
 
 import { formatBearing, inverse } from './cogo.ts';
-import { isPavementPixel } from './geoRasterSegmentation.ts';
+import { isPavementPixel, isVegetationPixel } from './geoRasterSegmentation.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -74,7 +74,7 @@ export interface DraftVertex {
   northing: number;
 }
 
-export type PavementRole = 'edge' | 'centerline' | 'unknown';
+export type PavementRole = 'edge' | 'centerline' | 'paint' | 'unknown';
 
 /** The minimal SurveyLine surface the verifier needs. Extra fields survive. */
 export interface DraftLineLike {
@@ -150,6 +150,10 @@ export interface SynthesisQaReport {
   featuresAudited: number;
   repairs: string[];
   pavementCoverage: number;
+  /** Share of the evidence image classified as tree canopy / vegetation. */
+  vegetationCoverage?: number;
+  /** Why the imagery could not be used, in plain drafting language. */
+  reason?: string;
   evidenceLabel?: string;
   /** Annotated before/after raster for the Gimbal HUD. */
   overlayDataUrl?: string;
@@ -167,6 +171,8 @@ export interface SynthesisVerifyOptions {
   mapTiles?: SynthesisMapTile[];
   backgroundImage?: SynthesisBackgroundImage | null;
   maxIterations?: number;
+  /** Hard cap on image-only displacement; larger moves are left for human/model review. */
+  maxSnapFt?: number;
   /** Override the pavement classifier (used by tests / custom imagery). */
   pavementPixelTest?: (r: number, g: number, b: number) => boolean;
   /** Generate the annotated overlay for the HUD (default true in a browser). */
@@ -190,6 +196,8 @@ export interface PavementField {
   /** Largest interior distance — half-width of the widest paved area. */
   maxInside: number;
   coverage: number;
+  /** Share of opaque image pixels classified as tree canopy / vegetation. */
+  vegetationCoverage: number;
   pxPerFtE: number;
   pxPerFtN: number;
 }
@@ -232,11 +240,13 @@ function chamferTransform(field: Float32Array, width: number, height: number): v
 export function buildPavementField(
   evidence: RasterEvidence,
   pixelTest: (r: number, g: number, b: number) => boolean = isPavementPixel,
+  vegetationTest: (r: number, g: number, b: number) => boolean = isVegetationPixel,
 ): PavementField {
   const { width, height, data } = evidence;
   const n = width * height;
   const mask = new Uint8Array(n);
   let pavementCount = 0;
+  let vegetationCount = 0;
 
   for (let i = 0; i < n; i++) {
     const o = i * 4;
@@ -245,6 +255,8 @@ export function buildPavementField(
     if (pixelTest(data[o], data[o + 1], data[o + 2])) {
       mask[i] = 1;
       pavementCount++;
+    } else if (vegetationTest(data[o], data[o + 1], data[o + 2])) {
+      vegetationCount++;
     }
   }
 
@@ -282,6 +294,7 @@ export function buildPavementField(
     signed,
     maxInside,
     coverage: pavementCount / Math.max(1, n),
+    vegetationCoverage: vegetationCount / Math.max(1, n),
     pxPerFtE: width / spanE,
     pxPerFtN: height / spanN,
   };
@@ -674,6 +687,10 @@ function simplifyPixelPath(points: Array<{ x: number; y: number }>, epsilon: num
 const PAVEMENT_LAYER_RE = /(ROAD|DRIVEWAY|DRIVE|PAVE|PAV\b|PVMT|CURB|GUTTER|SIDEWALK|WALK|LANE|EOP|\bEP\b|\bER\b|EDGE|SHOULDER|SHLD|C-ROAD|L-ROAD|L-DRIVEWAY)/i;
 const CENTERLINE_RE = /(CNTR|CENTER|C-ROAD-CNTR|DRIVEWAY-CL|\bCL\b)/i;
 
+export function isRoadPaintLayer(layer: string | undefined, polylineId?: string): boolean {
+  return /ROAD[-_ ]?PAINT/i.test(`${layer ?? ''} ${polylineId ?? ''}`);
+}
+
 export function isPavementLayer(layer: string | undefined, polylineId?: string): boolean {
   const value = `${layer ?? ''} ${polylineId ?? ''}`;
   if (!value.trim()) return false;
@@ -681,11 +698,16 @@ export function isPavementLayer(layer: string | undefined, polylineId?: string):
   if (/(BOUNDARY|L-DEED|PROPERTY|CONTOUR|TOPO|UTIL|FEMA|FLOOD|SOILS|TREE|VEG)/i.test(value)) {
     return false;
   }
+  // Paint stripes are markings on the pavement, not pavement edges. Pixel QA
+  // still ignores them, but the road reviewer treats them as a separate paint
+  // role so DYL/WL runs are stitched rather than discarded.
+  if (isRoadPaintLayer(layer, polylineId)) return false;
   return PAVEMENT_LAYER_RE.test(value);
 }
 
 export function pavementRoleFor(layer: string | undefined, polylineId?: string): PavementRole {
   const value = `${layer ?? ''} ${polylineId ?? ''}`;
+  if (isRoadPaintLayer(layer, polylineId)) return 'paint';
   if (CENTERLINE_RE.test(value)) return 'centerline';
   if (isPavementLayer(layer, polylineId)) return 'edge';
   return 'unknown';
@@ -981,9 +1003,15 @@ export function auditSynthesisFeatures(
     return { usable: true, score: 100, defects: [], featuresAudited: 0, pavementCoverage: field.coverage };
   }
   if (field.coverage < 0.01 || field.coverage > 0.97 || field.maxInside < 2) {
+    const vegetationPct = Math.round(field.vegetationCoverage * 100);
+    const reason = field.vegetationCoverage >= 0.25
+      ? `the background image at the drafted road is ${vegetationPct}% tree canopy/vegetation — the pavement is not visible, so image synthesis is pointless here; use the field shots, parcel frontage and OSM ways instead`
+      : field.coverage > 0.97
+        ? 'the background image is almost entirely pavement-classified — it cannot distinguish the road from its surroundings'
+        : 'background imagery does not contain a reliable pavement mask';
     return {
       usable: false,
-      reason: 'background imagery does not contain a reliable pavement mask',
+      reason,
       score: 0,
       defects: [],
       featuresAudited: features.length,
@@ -1077,6 +1105,7 @@ function snapFeatureToEvidence(
   feature: DraftFeature,
   field: PavementField,
   bounds: SynthesisBounds,
+  maxSnapFt = 40,
 ): SnapOutcome | null {
   if (feature.isClosed || feature.role === 'unknown') return null;
   const method = feature.role === 'centerline' ? 'snap_center' : 'snap_edge';
@@ -1145,12 +1174,27 @@ function snapFeatureToEvidence(
     : afterCost > beforeCost + 0.25;
   if (!improved) return null;
 
-  // Mean displacement in feet, for the fieldbook log.
+  // Mean displacement in feet, for the fieldbook log. Compare each original
+  // vertex with the nearest point on the repaired polyline, not by array index:
+  // image simplification may return fewer vertices, and index comparison would
+  // report a phantom 80-ft move for a legitimate 2-ft edge snap.
   let moved = 0;
-  for (let i = 0; i < Math.min(feature.vertices.length, vertices.length); i++) {
-    moved += distance(feature.vertices[i], vertices[i]);
+  let worstMoved = 0;
+  for (const original of feature.vertices) {
+    let nearest = Infinity;
+    for (let i = 0; i < vertices.length - 1; i++) {
+      nearest = Math.min(nearest, pointToSegmentDistance(original, vertices[i], vertices[i + 1]));
+    }
+    moved += nearest;
+    if (nearest > worstMoved) worstMoved = nearest;
   }
-  moved /= Math.max(1, Math.min(feature.vertices.length, vertices.length));
+  moved /= Math.max(1, feature.vertices.length);
+
+  // An image is evidence, not a survey. Without this guard the nearest pavement
+  // pixel can be on another road/feature and produce a catastrophic "repair"
+  // (the 146-ft edge move seen in the Gimbal HUD). Beyond the cap, leave the
+  // field geometry untouched and let the take review/retake handle it.
+  if (moved > maxSnapFt || worstMoved > maxSnapFt * 1.5) return null;
 
   return {
     vertices,
@@ -1213,6 +1257,7 @@ function repairFeature(
   field: PavementField,
   bounds: SynthesisBounds,
   defects: SynthesisDefect[],
+  maxSnapFt: number,
 ): FeatureRepairOutcome {
   const repairs: SynthesisRepair[] = [];
   let vertices = feature.vertices;
@@ -1255,7 +1300,7 @@ function repairFeature(
   // 3. Image-truth snap. This is the pass that pulls a line out of the middle
   //    of a road bed and onto the painted/visible edge (or centreline).
   const candidate: DraftFeature = { ...feature, vertices };
-  const snap = snapFeatureToEvidence(candidate, field, bounds);
+  const snap = snapFeatureToEvidence(candidate, field, bounds, maxSnapFt);
   if (snap && snap.accepted) {
     vertices = snap.vertices;
     changed = true;
@@ -1612,6 +1657,7 @@ export function verifySynthesizedLineworkWithEvidence<T extends DraftLineLike>(
   evidence: RasterEvidence,
   opts: {
     maxIterations?: number;
+    maxSnapFt?: number;
     pavementPixelTest?: (r: number, g: number, b: number) => boolean;
     renderOverlay?: boolean;
   } = {},
@@ -1635,7 +1681,9 @@ export function verifySynthesizedLineworkWithEvidence<T extends DraftLineLike>(
         featuresAudited: features.length,
         repairs: [],
         pavementCoverage: field.coverage,
+        vegetationCoverage: field.vegetationCoverage,
         evidenceLabel: evidence.label,
+        reason: before.reason,
         durationMs: Date.now() - startedAt,
       },
     };
@@ -1664,7 +1712,7 @@ export function verifySynthesizedLineworkWithEvidence<T extends DraftLineLike>(
         });
         continue;
       }
-      const outcome = repairFeature(feature, field, bounds, bestAudit.defects);
+      const outcome = repairFeature(feature, field, bounds, bestAudit.defects, opts.maxSnapFt ?? 40);
       repairedFeatures.push(outcome.feature);
       repairs.push(...outcome.repairs);
     }
@@ -1717,6 +1765,7 @@ export function verifySynthesizedLineworkWithEvidence<T extends DraftLineLike>(
         featuresAudited: features.length,
         repairs: [],
         pavementCoverage: field.coverage,
+        vegetationCoverage: field.vegetationCoverage,
         evidenceLabel: evidence.label,
         durationMs: Date.now() - startedAt,
       },
@@ -1740,6 +1789,7 @@ export function verifySynthesizedLineworkWithEvidence<T extends DraftLineLike>(
       featuresAudited: features.length,
       repairs: repairText,
       pavementCoverage: field.coverage,
+      vegetationCoverage: field.vegetationCoverage,
       evidenceLabel: evidence.label,
       overlayDataUrl: overlay ?? undefined,
       durationMs: Date.now() - startedAt,
@@ -1776,6 +1826,7 @@ export function verifySynthesizedLinework<T extends DraftLineLike>(
         featuresAudited: 0,
         repairs: [],
         pavementCoverage: 0,
+        reason: 'no readable background imagery at the drafted road — synthesis skipped',
         durationMs: 0,
       },
     };
@@ -1783,6 +1834,7 @@ export function verifySynthesizedLinework<T extends DraftLineLike>(
 
   return verifySynthesizedLineworkWithEvidence(lines, evidence, {
     maxIterations: opts.maxIterations,
+    maxSnapFt: opts.maxSnapFt,
     pavementPixelTest: opts.pavementPixelTest,
     renderOverlay: opts.renderOverlay,
   });
@@ -1791,7 +1843,7 @@ export function verifySynthesizedLinework<T extends DraftLineLike>(
 /** One-line fieldbook summary of a QA pass. */
 export function formatSynthesisQaSummary(report: SynthesisQaReport): string {
   if (report.status === 'unverified') {
-    return 'Gimbal Synthesis QA: imagery could not be verified (no readable pavement evidence) — linework left unchanged.';
+    return `Gimbal Synthesis QA: ${report.reason ?? 'imagery could not be verified (no readable pavement evidence)'} — synthesis skipped, linework kept from the field take.`;
   }
   if (report.status === 'clean') {
     return `Gimbal Synthesis QA: linework verified against background imagery (${report.scoreBefore}% → ${report.scoreAfter}%, ${report.featuresAudited} feature${report.featuresAudited === 1 ? '' : 's'}).`;

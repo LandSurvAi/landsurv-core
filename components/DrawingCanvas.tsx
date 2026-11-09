@@ -11,6 +11,8 @@ import {
     type SurveyPoint,
     type SurveyLine,
     type ContourLabel,
+    type ContourGeneration,
+    type IsoPath,
     type StreetLabel,
     type Centerline,
     type CustomSymbol,
@@ -70,6 +72,7 @@ import { fetchImageBlobViaProxy } from '../utils/corsProxy.ts';
 import { getCachedBitmap, planMapTiles, mapWithConcurrency, decodeImageCached, trackTileLoad, subscribeTileActivity, getPendingTileCount, type PlannedTile } from '../utils/mapTileCache.ts';
 import { WebGpuBasemap, GpuLineBatch, parseCssColor, isWebGpuEnabled, WEBGPU_PREF_EVENT, type BasemapLayer, type BasemapSource, type WorldQuad } from '../utils/webgpuBasemap.ts';
 import { buildParcelLabelLines, resolveParcelTextStyle } from '../utils/parcelLabelFormatter.ts';
+import { buildContourPathsFromLines, resolveContourLabelPath, slideContourLabelAlongPath } from '../utils/contourLabels.ts';
 import { applyAnnotationTextCase, resolveAnnotationCategoryTextStyle, resolveCanvasTextStyle } from '../utils/annotationTextStyle.ts';
 import { categoryEffectiveHeightPx, resolveAnnotationMask } from '../utils/annotationSizing.ts';
 import { createCanvasTextAnnotation } from '../services/annotationStudio.ts';
@@ -383,6 +386,10 @@ interface DrawingCanvasProps {
     points: SurveyPoint[];
     lines: SurveyLine[];
     contourLabels: ContourLabel[];
+    /** Stored contour generations supply the exact path a label slides along. */
+    contourGenerations?: ContourGeneration[];
+    /** Move one contour label to a new point on its source contour. */
+    onMoveContourLabel?: (index: number, patch: Pick<ContourLabel, 'x' | 'y' | 'angle'>) => void;
     /** Named road labels placed on the plan (v26.05.19.4). */
     streetLabels?: StreetLabel[];
     centerlines: Centerline[];
@@ -1179,7 +1186,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const { 
         initialTransform,
         onTransformChange,
-        points, lines, contourLabels, centerlines, customSymbols, enabledBuiltinSymbolIds, pointLayers, attributeScale, setAttributeScale, lineLabelScale, setLineLabelScale, lineThickness, setLineThickness, contourLabelScale, onLayerColorChange, activeAgent, settings, zoomTarget, onZoomComplete,
+        points, lines, contourLabels, contourGenerations = [], onMoveContourLabel, centerlines, customSymbols, enabledBuiltinSymbolIds, pointLayers, attributeScale, setAttributeScale, lineLabelScale, setLineLabelScale, lineThickness, setLineThickness, contourLabelScale, onLayerColorChange, activeAgent, settings, zoomTarget, onZoomComplete,
         onUpdatePointLabelOffset, onAddLine, onDeleteLine, onDeletePoints, onDeleteCenterline, onUpsertCenterline, onOpenStationingSettings, canUndo, canRedo, onUndo, onRedo, wmsServices, activeWmsLayers, offlineMapAreas, onRedrawAndShowAll, onOpenDxfExportModal,
         onUpdatePointAnnotationOffset,
         isLayerPanelOpen, setIsLayerPanelOpen, onLayerToggle, activeAccent, currentPosition, projectedPosition, onZoomToPoint,
@@ -1235,6 +1242,46 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     }, [addNotification]);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const contourLabelHitBoxesRef = useRef<Map<number, { x: number; y: number; w: number; h: number }>>(new Map());
+    const [hoveredContourLabelIndex, setHoveredContourLabelIndex] = useState<number | null>(null);
+    const [contourLabelSlide, setContourLabelSlide] = useState<{
+        index: number;
+        path: IsoPath;
+        original: ContourLabel;
+    } | null>(null);
+    const contourPathsFromLines = useMemo(() => buildContourPathsFromLines(lines), [lines]);
+    const contourPathsByGeneration = useMemo(() => {
+        const byGeneration = new Map<string, IsoPath[]>();
+        for (const generation of contourGenerations) byGeneration.set(generation.id, generation.isoPaths);
+        return byGeneration;
+    }, [contourGenerations]);
+    const findContourLabelAtScreenPoint = useCallback((screenX: number, screenY: number): number | null => {
+        for (const [index, box] of contourLabelHitBoxesRef.current) {
+            if (screenX >= box.x && screenX <= box.x + box.w
+                && screenY >= box.y && screenY <= box.y + box.h) {
+                return index;
+            }
+        }
+        return null;
+    }, []);
+
+    useEffect(() => {
+        if (!contourLabelSlide) return;
+        const cancelSlide = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            onMoveContourLabel?.(contourLabelSlide.index, {
+                x: contourLabelSlide.original.x,
+                y: contourLabelSlide.original.y,
+                angle: contourLabelSlide.original.angle,
+            });
+            setContourLabelSlide(null);
+            setTerminalIncoming({ text: 'CONTOUR LABEL: slide cancelled.', tone: 'ok' });
+        };
+        window.addEventListener('keydown', cancelSlide);
+        return () => window.removeEventListener('keydown', cancelSlide);
+    }, [contourLabelSlide, onMoveContourLabel]);
+
     const isChatResizingRef = useRef(isChatResizing);
     isChatResizingRef.current = isChatResizing;
     const wasChatResizingRef = useRef(false);
@@ -7554,6 +7601,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     || (isLightTheme ? '#111827' : '#FFFFFF');
                 let lineWidth = scaledLineWidth;
                 let isDashed = false;
+                let isContourLinework = false;
 
                 if (line.type === 'breakline') {
                     strokeStyle = '#FF69B4'; // Hot Pink
@@ -7574,16 +7622,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     strokeStyle = isLightTheme ? '#0E7490' : '#22D3EE';
                     lineWidth = Math.max(scaledLineWidth * 1.35, minScreenPixelWidth);
                 } else if (line.type?.startsWith('contour')) {
-                     // Use fully opaque colors — combining low alpha with a 1px
-                     // stroke previously made contours fade to invisible. Width
-                     // (not transparency) distinguishes major from minor.
-                     // Dark-theme colors are kept bright enough to read on the
-                     // bare canvas, so contours stay visible when the steep-slope
-                     // fill backdrop is hidden (previously they vanished without
-                     // the green fill behind them).
-                     const majorColor = isLightTheme ? '#4B5563' : '#CBD5E1';
-                     const minorColor = isLightTheme ? '#6B7280' : '#94A3B8';
+                     // Muted slate contours, dashed so they read as background
+                     // topography. The intermediate run is a touch lighter than
+                     // the index run so the two classes remain distinguishable.
+                     const majorColor = '#475569';
+                     const minorColor = '#64748B';
                      strokeStyle = line.type === 'contour-major' ? majorColor : minorColor;
+                     isContourLinework = true;
+                     isDashed = true;
                      // Floor at 1 CSS pixel so contours never disappear when
                      // zoomed out. Major contours render slightly thicker.
                      lineWidth = Math.max(
@@ -7607,6 +7653,31 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     strokeStyle = isLightTheme ? 'rgba(29, 78, 216, 0.9)' : 'rgba(96, 165, 250, 0.9)';
                     lineWidth = Math.max(scaledLineWidth * 0.75, minScreenPixelWidth);
                     isDashed = true;
+                } else if (line.type === 'road-paint') {
+                    const paintColor = line.color || (line.layer?.includes('PAINT-Y') ? '#FFD400' : '#FFFFFF');
+                    if (line.fillPath && line.fillPath.length >= 3) {
+                        ctx.beginPath();
+                        ctx.moveTo(line.fillPath[0].x, line.fillPath[0].y);
+                        for (let i = 1; i < line.fillPath.length; i++) {
+                            ctx.lineTo(line.fillPath[i].x, line.fillPath[i].y);
+                        }
+                        ctx.closePath();
+                        ctx.fillStyle = paintColor;
+                        ctx.fill();
+
+                        // Real paint is 4 in wide, which is sub-pixel when zoomed
+                        // out. Keep a minimum-screen-width core so the stripe is
+                        // still legible without falsifying the exported geometry.
+                        ctx.strokeStyle = paintColor;
+                        ctx.lineWidth = Math.max(1.2, minScreenPixelWidth * 1.4);
+                        ctx.beginPath();
+                        ctx.moveTo(p1Coords.x, p1Coords.y);
+                        ctx.lineTo(p2Coords.x, p2Coords.y);
+                        ctx.stroke();
+                        return;
+                    }
+                    strokeStyle = paintColor;
+                    lineWidth = Math.max(scaledLineWidth * 1.2, minScreenPixelWidth);
                 } else if (line.type === 'steep-slope') {
                     const explicitColor = line.color;
                     strokeStyle = explicitColor
@@ -7654,9 +7725,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         lineWidth,
                     );
                 } else {
-                    // Apply line pattern: CAD lineType takes precedence, then special types (exclusion), then solid
+                    // Apply line pattern: contours are always dashed; other
+                    // CAD lineTypes take precedence over the special-type fallback.
                     let dashPattern: number[] = [];
-                    if (effectiveLineTypeName) {
+                    if (isContourLinework) {
+                        const dashSize = 6 * inverseScale;
+                        dashPattern = [dashSize, dashSize * 0.55];
+                    } else if (effectiveLineTypeName) {
                         // CAD linetype from CAD Manager standard (with per-entity CELTSCALE)
                         dashPattern = getLinetypePattern(effectiveLineTypeName, inverseScale, line.lineTypeScale);
                     } else if (isDashed) {
@@ -10211,6 +10286,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         // viewport zoom or paper annotations will grow/shrink as the user zooms.
         // Draw contour labels
         if (contourLabels) {
+            contourLabelHitBoxesRef.current.clear();
             // Category style for contour labels (v26.05.19.15)
             const clCat = annotationCategories?.find(c => c.id === 'contour-labels');
             const clStyle = resolveAnnotationCategoryTextStyle(clCat, props.parcelCadTextStyles);
@@ -10223,7 +10299,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 ctx.font = `${clStyle.fontItalic ? 'italic ' : ''}${clStyle.fontBold ? 'bold ' : ''}${screenTextSize}px ${clStyle.fontFamily}`;
                 ctx.fillStyle = clColor;
 
-                contourLabels.forEach(label => {
+                contourLabels.forEach((label, labelIndex) => {
                     const pt = worldToScreen(label.x, label.y);
                     const screenX = pt.x;
                     const screenY = pt.y;
@@ -10236,12 +10312,45 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ctx.translate(screenX, screenY);
                     ctx.rotate(-label.angle * Math.PI / 180);
                 
-                    const textWidth = ctx.measureText(label.text).width;
+                    const displayText = applyAnnotationTextCase(label.text, clStyle.textCase);
+                    const textWidth = ctx.measureText(displayText).width;
                     ctx.clearRect(-textWidth / 2 - 2, -screenTextSize / 2, textWidth + 4, screenTextSize);
-                
+
+                    const halfW = textWidth / 2 + 3;
+                    const halfH = screenTextSize / 2 + 2;
+                    const rotation = -label.angle * Math.PI / 180;
+                    const cos = Math.cos(rotation);
+                    const sin = Math.sin(rotation);
+                    let minX = Infinity;
+                    let minY = Infinity;
+                    let maxX = -Infinity;
+                    let maxY = -Infinity;
+                    for (const [localX, localY] of [[-halfW, -halfH], [halfW, -halfH], [halfW, halfH], [-halfW, halfH]]) {
+                        const rotatedX = screenX + localX * cos - localY * sin;
+                        const rotatedY = screenY + localX * sin + localY * cos;
+                        minX = Math.min(minX, rotatedX);
+                        minY = Math.min(minY, rotatedY);
+                        maxX = Math.max(maxX, rotatedX);
+                        maxY = Math.max(maxY, rotatedY);
+                    }
+                    contourLabelHitBoxesRef.current.set(labelIndex, {
+                        x: minX,
+                        y: minY,
+                        w: maxX - minX,
+                        h: maxY - minY,
+                    });
+
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
-                    ctx.fillText(applyAnnotationTextCase(label.text, clStyle.textCase), 0, 0);
+                    ctx.fillText(displayText, 0, 0);
+                    if (contourLabelSlide?.index === labelIndex) {
+                        ctx.save();
+                        ctx.strokeStyle = '#22d3ee';
+                        ctx.lineWidth = 1.25;
+                        ctx.setLineDash([4, 3]);
+                        ctx.strokeRect(-halfW, -halfH, halfW * 2, halfH * 2);
+                        ctx.restore();
+                    }
                     ctx.restore();
                 });
             }
@@ -11294,7 +11403,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         ctx.restore(); // --- End screen-space pass ---
-    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id]);
+    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, contourLabelSlide, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id]);
 
     // Throttled draw using requestAnimationFrame to prevent flickering during rapid updates
     const scheduleDraw = useCallback(() => {
@@ -13849,6 +13958,17 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
 
+        // A contour label in slide mode is placed by the next left click.
+        if (contourLabelSlide) {
+            if (e.button === 0) {
+                e.preventDefault();
+                setContourLabelSlide(null);
+                setTerminalIncoming({ text: 'CONTOUR LABEL: placed.', tone: 'ok' });
+                requestAnimationFrame(() => drawRef.current?.());
+            }
+            return;
+        }
+
         // ZOOM box: the next left drag defines the view window.
         if (isZoomBoxMode) {
             if (e.button !== 0) return;
@@ -15692,7 +15812,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         document.body.classList.add('panning');
         setIsPanning(true);
         lastMousePos.current = { x: e.clientX, y: e.clientY };
-    }, [isZoomBoxMode, drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, hatches, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, polylineTangentExit, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter]);
+    }, [contourLabelSlide, isZoomBoxMode, drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, hatches, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, polylineTangentExit, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
         if (zoomBox) {
@@ -15713,6 +15833,33 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const my = e.clientY - rect.top;
             setShiftBoxSelect(prev => prev ? { ...prev, endX: mx, endY: my } : prev);
             return;
+        }
+
+        if (contourLabelSlide) {
+            const slideCanvas = canvasRef.current;
+            if (slideCanvas) {
+                const slideRect = slideCanvas.getBoundingClientRect();
+                const pointer = screenToWorld(e.clientX - slideRect.left, e.clientY - slideRect.top);
+                const next = slideContourLabelAlongPath(
+                    contourLabelSlide.original,
+                    { x: pointer.easting, y: pointer.northing },
+                    contourLabelSlide.path,
+                );
+                if (next) onMoveContourLabel?.(contourLabelSlide.index, next);
+            }
+            return;
+        }
+
+        const hoverCanvas = canvasRef.current;
+        if (hoverCanvas) {
+            const hoverRect = hoverCanvas.getBoundingClientRect();
+            const hoveredLabel = findContourLabelAtScreenPoint(
+                e.clientX - hoverRect.left,
+                e.clientY - hoverRect.top,
+            );
+            if (hoveredLabel !== hoveredContourLabelIndex) {
+                setHoveredContourLabelIndex(hoveredLabel);
+            }
         }
 
         // OFFSET ghost preview — mostly redrawn only when the picked side flips.
@@ -16118,7 +16265,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 shiftHoverAnchorRef.current = null;
             }
         }
-    }, [zoomBox, isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview, inlineOsnapOverride, runningOsnaps, findNearestSurveyPoint, resolveOsnapAtScreen]);
+    }, [zoomBox, isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview, inlineOsnapOverride, runningOsnaps, findNearestSurveyPoint, resolveOsnapAtScreen, contourLabelSlide, onMoveContourLabel, findContourLabelAtScreenPoint, hoveredContourLabelIndex]);
 
     const handleMouseUp = useCallback((e: React.MouseEvent) => {
         if (zoomBox) {
@@ -17060,6 +17207,32 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const clickX = e.clientX - rect.left;
         const clickY = e.clientY - rect.top;
 
+        // Double-click a contour elevation to slide it along its contour.
+        const contourLabelIndex = findContourLabelAtScreenPoint(clickX, clickY);
+        if (contourLabelIndex !== null && onMoveContourLabel) {
+            const label = contourLabels[contourLabelIndex];
+            if (label) {
+                const generationPaths = label.contourGenId
+                    ? contourPathsByGeneration.get(label.contourGenId) ?? null
+                    : null;
+                const path = resolveContourLabelPath(label, {
+                    isoPaths: generationPaths,
+                    fallbackPaths: contourPathsFromLines,
+                });
+                if (path) {
+                    setContourLabelSlide({ index: contourLabelIndex, path, original: { ...label } });
+                    setHoveredContourLabelIndex(null);
+                    setIsSelectionMode(false);
+                    setTerminalIncoming({
+                        text: 'CONTOUR LABEL: slide along the contour — click to place, Esc to cancel.',
+                        tone: 'ok',
+                    });
+                    requestAnimationFrame(() => drawRef.current?.());
+                    return;
+                }
+            }
+        }
+
         // Double-click text to edit it in place, before line/hatch picking.
         const clickedText = findTextAnnotationAtScreenPoint(clickX, clickY);
         if (clickedText) {
@@ -17163,7 +17336,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setSelectedLineIds(matchingIds);
         setIsSelectionMode(true);
         requestAnimationFrame(() => drawRef.current?.());
-    }, [findLineNearClick, findHatchAtScreenPoint, findTextAnnotationAtScreenPoint, openTextEditorForAnnotation, lines, hatches, pointMap, isCopyingSelection, isOffsetMode, onOpenGeneration]);
+    }, [findLineNearClick, findHatchAtScreenPoint, findTextAnnotationAtScreenPoint, openTextEditorForAnnotation, findContourLabelAtScreenPoint, contourLabels, contourPathsByGeneration, contourPathsFromLines, onMoveContourLabel, lines, hatches, pointMap, isCopyingSelection, isOffsetMode, onOpenGeneration]);
 
     // Live rotation angle for the ROTATE prompt (base point already picked).
     const rotateAnglePreview = (() => {
@@ -17216,7 +17389,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     shiftHoverAnchorRef.current = null;
                 }
             }}
-            style={{ cursor: isPanning ? 'grabbing' : (isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (isZoomBoxMode || drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default'))))))), overflow: 'visible', isolation: 'isolate' }}
+            style={{ cursor: isPanning ? 'grabbing' : (contourLabelSlide || hoveredContourLabelIndex !== null ? 'move' : (isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (isZoomBoxMode || drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))))), overflow: 'visible', isolation: 'isolate' }}
         >
             <CanvasFlashLayer />
             <canvas

@@ -20,7 +20,12 @@
 //     PDF (one page per sheet, page size = that sheet's paper size).
 
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
-import type { SurveyPoint, SurveyLine, ProfilePoint, ProfileInfo, CanvasHatch } from '../types.ts';
+import type {
+    SurveyPoint, SurveyLine, ProfilePoint, ProfileInfo, CanvasHatch,
+    ContourLabel, StreetLabel, ParcelLabel, MapAreaLabel, CanvasTextAnnotation,
+    AnnotationCategoryStyle, AnnotationTextStyle, ParcelLabelFormatter, ParcelCadTextStyle,
+} from '../types.ts';
+import { buildSheetAnnotations, type SheetPointLayers } from '../utils/sheetAnnotations.ts';
 import { explodeHatchToLines } from '../utils/hatchExplode.ts';
 import { getHatchByName, type HatchDefinition } from '../services/hatchLibrary.ts';
 import { LegendBlock } from './LegendBlock.tsx';
@@ -334,8 +339,8 @@ function sheetBasemapCacheSet(key: string, dataUrl: string): void {
 }
 
 const typeDefaultColor: Record<string, string> = {
-    'contour-major': '#b45309',
-    'contour-minor': '#d97706',
+    'contour-major': '#475569',
+    'contour-minor': '#64748B',
     'breakline':     '#eab308',
     'inclusion':     '#10b981',
     'exclusion':     '#ef4444',
@@ -354,6 +359,9 @@ const typeDefaultWidth: Record<string, number> = {
 
 const pickLineColor = (l: SurveyLine, cadLayerColors: Record<string, string>): string => {
     const t = l.type || '';
+    // Contours keep their muted index/intermediate palette even when the CAD
+    // layer has a brighter color assigned.
+    if (t.startsWith('contour') && typeDefaultColor[t]) return typeDefaultColor[t];
     if (typeDefaultColor[t] && !l.layer) return typeDefaultColor[t];
     if (l.layer && cadLayerColors[l.layer]) return cadLayerColors[l.layer];
     if (typeDefaultColor[t]) return typeDefaultColor[t];
@@ -369,6 +377,7 @@ const pickPointColor = (p: SurveyPoint, cadLayerColors: Record<string, string>):
 };
 
 export function getSvgDashArray(l: SurveyLine): string | undefined {
+    if (l.type?.startsWith('contour')) return '6 3';
     if (l.type === 'exclusion' || l.type === 'shrinkwrap-preview') return '5 4';
     if (!l.lineType || l.lineType === 'CONTINUOUS') return undefined;
     const lt = l.lineType.toUpperCase();
@@ -974,6 +983,19 @@ interface SheetViewProps {
     /** Profile data from the Profile Agent — enables profile viewport type. */
     profileData?:  ProfilePoint[];
     profileInfo?:  ProfileInfo | null;
+    /** Drawing-space annotations that must also plot on paper. */
+    contourLabels?: ContourLabel[];
+    streetLabels?: StreetLabel[];
+    parcelLabels?: ParcelLabel[];
+    mapAreaLabels?: MapAreaLabel[];
+    textAnnotations?: CanvasTextAnnotation[];
+    pointLayers?: SheetPointLayers;
+    annotationCategories?: AnnotationCategoryStyle[];
+    annotationTextStyles?: AnnotationTextStyle[];
+    activeTextStyleName?: string;
+    annotationScale?: number;
+    parcelLabelFormatter?: ParcelLabelFormatter;
+    parcelCadTextStyles?: ParcelCadTextStyle[];
     /**
      * CACP command bus — Sheet View registers itself here so the Civil Drafter
      * and Auto Draft orchestrator can push viewports/styles programmatically.
@@ -1264,7 +1286,14 @@ const ViewportBasemapCanvas: React.FC<ViewportBasemapCanvasProps> = React.memo((
     );
 });
 
-const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHatches: customHatchesProp, projectName, cadLayerColors, profileData, profileInfo, onSheetViewCommand, pendingNotes, onPendingNotesConsumed }) => {
+const SheetView: React.FC<SheetViewProps> = ({
+    points, lines, hatches, customHatches: customHatchesProp, projectName, cadLayerColors,
+    profileData, profileInfo, contourLabels = [], streetLabels = [], parcelLabels = [],
+    mapAreaLabels = [], textAnnotations = [], pointLayers, annotationCategories = [],
+    annotationTextStyles = [], activeTextStyleName, annotationScale = 1,
+    parcelLabelFormatter, parcelCadTextStyles = [],
+    onSheetViewCommand, pendingNotes, onPendingNotesConsumed,
+}) => {
     const layerColors = cadLayerColors ?? {};
     const plotHatches = hatches ?? EMPTY_HATCHES;
     const customHatchDefs = customHatchesProp && customHatchesProp.length > 0 ? customHatchesProp : EMPTY_HATCH_DEFS;
@@ -1931,6 +1960,26 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
         // prop when it receives a CACP 'sheet_view_command' message.
     }, [onSheetViewCommand]);
 
+    // ── Shared paper annotation source ────────────────────────────────────
+    const annotationSourceForVp = (vp: Viewport) => ({
+        points,
+        contourLabels,
+        lines,
+        streetLabels,
+        parcelLabels,
+        mapAreaLabels,
+        textAnnotations,
+        pointLayers,
+        coordinatePrecision: settings.coordinatePrecision,
+        textSizePt: vp.style.textSizePt,
+        annotationScale,
+        annotationCategories,
+        annotationTextStyles,
+        activeTextStyleName,
+        parcelLabelFormatter,
+        parcelCadTextStyles,
+    });
+
     // ── Profile SVG renderer ───────────────────────────────────────────────
     const buildProfileVpSvg = (vp: Viewport, renderPpi = effectivePpi): React.ReactElement => {
         const wpx = vp.wIn * renderPpi;
@@ -2116,7 +2165,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
                     />
                 );
                 if (resolved.annot) {
-                    const fontPx = Math.max(4, Math.min(12, (2 / worldFtPerInch) * renderPpi));
+                    const fontPx = Math.max(2.5, (vp.style.textSizePt / 72) * renderPpi * 1.15);
                     lineEls.push(
                         <text
                             key={`ca-${l.id ?? i}`}
@@ -2143,7 +2192,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
                     />
                 );
                 if (resolved.annot) {
-                    const fontPx = Math.max(4, Math.min(12, (2 / worldFtPerInch) * renderPpi));
+                    const fontPx = Math.max(2.5, (vp.style.textSizePt / 72) * renderPpi * 1.15);
                     lineEls.push(
                         <text
                             key={`bd-${l.id ?? i}`}
@@ -2162,24 +2211,71 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
         const pointEls: React.ReactElement[] = [];
         if (!vp.hidePoints) {
             for (const p of points) {
-                if (hidden.has(pointLayerKey(p))) continue;
+                if (p.hidden || hidden.has(pointLayerKey(p))) continue;
                 const [x, y] = worldToPx(p.easting, p.northing);
                 if (x < -10 || x > wpx + 10 || y < -10 || y > hpx + 10) continue;
                 const color = pickPointColor(p, layerColors);
                 pointEls.push(
-                    <g key={p.pointNumber}>
-                        <circle cx={x} cy={y} r={1.5} fill={color} stroke="#000" strokeOpacity={0.4} strokeWidth={0.3} />
-                        <text x={x + 3} y={y - 3} fontSize={5} fill="#111" fontFamily="monospace">{p.pointNumber}</text>
-                    </g>
+                    <circle key={p.pointNumber} cx={x} cy={y} r={1.5} fill={color} stroke="#000" strokeOpacity={0.4} strokeWidth={0.3} />
                 );
             }
         }
+
+        // Annotations live on the same world coordinates as the linework, so
+        // they pan, zoom, rotate, and plot exactly with their source feature.
+        const annotationEls = buildSheetAnnotations(annotationSourceForVp(vp)).map((annotation, index) => {
+            const [worldX, worldY] = worldToPx(annotation.x, annotation.y);
+            const fontPx = Math.max(1, (annotation.fontPt / 72) * renderPpi);
+            const offsetX = (annotation.offsetXPt / 72) * renderPpi;
+            const offsetY = -(annotation.offsetYPt / 72) * renderPpi;
+            const lineHeight = fontPx * annotation.lineSpacing;
+            const firstLineY = annotation.baseline === 'middle'
+                ? -((annotation.lines.length - 1) * lineHeight) / 2
+                : 0;
+            const approxWidth = Math.max(0, ...annotation.lines.map(line => line.length * fontPx * 0.56));
+            const mask = annotation.mask;
+            const maskPad = mask ? (mask.paddingPt / 72) * renderPpi : 0;
+            const maskX = annotation.anchor === 'middle' ? -approxWidth / 2 - maskPad : -maskPad;
+            const maskY = firstLineY - fontPx * 0.65 - maskPad;
+            const maskH = (annotation.lines.length - 1) * lineHeight + fontPx * 1.3 + maskPad * 2;
+
+            return (
+                <g
+                    key={`annotation-${index}-${annotation.id}`}
+                    transform={`translate(${(worldX + offsetX).toFixed(2)} ${(worldY + offsetY).toFixed(2)}) rotate(${(-annotation.angleDeg).toFixed(2)})`}
+                >
+                    {mask && (
+                        <rect x={maskX} y={maskY} width={approxWidth + maskPad * 2} height={maskH}
+                            fill={mask.color} fillOpacity={mask.opacity} />
+                    )}
+                    {annotation.lines.map((line, lineIndex) => (
+                        <text
+                            key={`line-${lineIndex}`}
+                            x={0}
+                            y={firstLineY + lineIndex * lineHeight}
+                            textAnchor={annotation.anchor}
+                            dominantBaseline={annotation.baseline}
+                            fontSize={fontPx}
+                            fontFamily={annotation.fontFamily}
+                            fontStyle={annotation.italic ? 'italic' : 'normal'}
+                            fontWeight={annotation.bold ? 700 : 400}
+                            fill={annotation.color}
+                            stroke={mask ? 'none' : '#fff'}
+                            strokeWidth={mask ? 0 : fontPx * 0.16}
+                            paintOrder="stroke fill"
+                        >
+                            {line}
+                        </text>
+                    ))}
+                </g>
+            );
+        });
 
         const rot = getEffectiveVpRotation(vp);
         return (
             <svg width="100%" height="100%" viewBox={`0 0 ${wpx} ${hpx}`} style={{ display: 'block', width: '100%', height: '100%', background: vp.showBasemap ? 'transparent' : '#fff', position: 'relative', zIndex: 1 }}>
                 <g transform={rot !== 0 ? `rotate(${rot} ${(wpx / 2).toFixed(1)} ${(hpx / 2).toFixed(1)})` : undefined}>
-                    {hatchEls}{lineEls}{pointEls}
+                    {hatchEls}{lineEls}{pointEls}{annotationEls}
                 </g>
             </svg>
         );
@@ -2269,7 +2365,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
                 } else if (resolved.kind === 'arc') {
                     parts.push(`<path d="${resolved.pathD}" stroke="${stroke}" stroke-width="${sw}" fill="none"${dashAttr} />`);
                     if (resolved.annot) {
-                        const fontPx = Math.max(5, Math.min(12, (2 / worldFtPerInch) * pdfPpi));
+                        const fontPx = Math.max(2.5, (vp.style.textSizePt / 72) * pdfPpi * 1.15);
                         const txt = escapeXml(resolved.annot.text);
                         parts.push(
                             `<text transform="translate(${resolved.annot.x.toFixed(2)} ${resolved.annot.y.toFixed(2)}) rotate(${resolved.annot.angleDeg.toFixed(2)})" text-anchor="middle" dominant-baseline="middle" font-size="${fontPx.toFixed(2)}" font-style="italic" font-weight="600" font-family="Arial, sans-serif" fill="#374151" stroke="#fff" stroke-width="${(fontPx * 0.18).toFixed(2)}" paint-order="stroke fill">${txt}</text>`
@@ -2278,7 +2374,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
                 } else {
                     parts.push(`<line x1="${resolved.x1.toFixed(2)}" y1="${resolved.y1.toFixed(2)}" x2="${resolved.x2.toFixed(2)}" y2="${resolved.y2.toFixed(2)}" stroke="${stroke}" stroke-width="${sw}"${dashAttr} />`);
                     if (resolved.annot) {
-                        const fontPx = Math.max(5, Math.min(12, (2 / worldFtPerInch) * pdfPpi));
+                        const fontPx = Math.max(2.5, (vp.style.textSizePt / 72) * pdfPpi * 1.15);
                         const txt = escapeXml(resolved.annot.text);
                         parts.push(
                             `<text transform="translate(${resolved.annot.x.toFixed(2)} ${resolved.annot.y.toFixed(2)}) rotate(${resolved.annot.angleDeg.toFixed(2)})" text-anchor="middle" dominant-baseline="middle" font-size="${fontPx.toFixed(2)}" font-style="italic" font-weight="600" font-family="Arial, sans-serif" fill="#374151" stroke="#fff" stroke-width="${(fontPx * 0.18).toFixed(2)}" paint-order="stroke fill">${txt}</text>`
@@ -2288,13 +2384,36 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
             }
             if (!vp.hidePoints) {
                 for (const p of points) {
-                    if (hidden.has(pointLayerKey(p))) continue;
+                    if (p.hidden || hidden.has(pointLayerKey(p))) continue;
                     const [x, y] = worldToPx(p.easting, p.northing);
                     if (x < -20 || x > wpx + 20 || y < -20 || y > hpx + 20) continue;
                     const color = pickPointColor(p, layerColors);
                     parts.push(`<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2.5" fill="${color}" stroke="#000" stroke-opacity="0.4" stroke-width="0.5" />`);
-                    parts.push(`<text x="${(x + 4).toFixed(2)}" y="${(y - 4).toFixed(2)}" font-size="8" fill="#111" font-family="monospace">${escapeXml(p.pointNumber)}</text>`);
                 }
+            }
+            for (const [index, annotation] of buildSheetAnnotations(annotationSourceForVp(vp)).entries()) {
+                const [worldX, worldY] = worldToPx(annotation.x, annotation.y);
+                const fontPx = Math.max(1, (annotation.fontPt / 72) * pdfPpi);
+                const x = worldX + (annotation.offsetXPt / 72) * pdfPpi;
+                const y = worldY - (annotation.offsetYPt / 72) * pdfPpi;
+                const lineHeight = fontPx * annotation.lineSpacing;
+                const firstLineY = annotation.baseline === 'middle'
+                    ? -((annotation.lines.length - 1) * lineHeight) / 2
+                    : 0;
+                const approxWidth = Math.max(0, ...annotation.lines.map(line => line.length * fontPx * 0.56));
+                const mask = annotation.mask;
+                const maskPad = mask ? (mask.paddingPt / 72) * pdfPpi : 0;
+                const maskX = annotation.anchor === 'middle' ? -approxWidth / 2 - maskPad : -maskPad;
+                const maskY = firstLineY - fontPx * 0.65 - maskPad;
+                const maskH = (annotation.lines.length - 1) * lineHeight + fontPx * 1.3 + maskPad * 2;
+                const anchorAttr = annotation.anchor === 'middle' ? ' text-anchor="middle"' : '';
+                const maskSvg = mask
+                    ? `<rect x="${maskX.toFixed(2)}" y="${maskY.toFixed(2)}" width="${(approxWidth + maskPad * 2).toFixed(2)}" height="${maskH.toFixed(2)}" fill="${mask.color}" fill-opacity="${mask.opacity}" />`
+                    : '';
+                const textSvg = annotation.lines.map((line, lineIndex) => (
+                    `<text x="0" y="${(firstLineY + lineIndex * lineHeight).toFixed(2)}"${anchorAttr} dominant-baseline="${annotation.baseline}" font-size="${fontPx.toFixed(2)}" font-family="${escapeXml(annotation.fontFamily)}" font-style="${annotation.italic ? 'italic' : 'normal'}" font-weight="${annotation.bold ? 700 : 400}" fill="${annotation.color}" stroke="${mask ? 'none' : '#fff'}" stroke-width="${mask ? 0 : (fontPx * 0.16).toFixed(2)}" paint-order="stroke fill">${escapeXml(line)}</text>`
+                )).join('');
+                parts.push(`<g transform="translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${(-annotation.angleDeg).toFixed(2)})">${maskSvg}${textSvg}</g>`);
             }
             const bKey = getVpBasemapKey(vp);
             const basemapUrl = vp.showBasemap ? (basemapCacheRef.current[bKey] || basemapCache[bKey]) : null;
@@ -2346,7 +2465,7 @@ const SheetView: React.FC<SheetViewProps> = ({ points, lines, hatches, customHat
             ${legendBlock}
         </svg>`;
         return { svg, widthPx: sheetPxW, heightPx: sheetPxH };
-    }, [set.tbLayout, points, lines, extents, layerColors, buildTbContext, getEffectiveVpRotation, basemapCache, plotHatches, hatchPathData, solidHatchIds]);
+    }, [set.tbLayout, points, lines, extents, layerColors, buildTbContext, getEffectiveVpRotation, basemapCache, plotHatches, hatchPathData, solidHatchIds, contourLabels, streetLabels, parcelLabels, mapAreaLabels, textAnnotations, pointLayers, settings.coordinatePrecision, annotationScale, annotationCategories, annotationTextStyles, activeTextStyleName, parcelLabelFormatter, parcelCadTextStyles]);
 
     /** Rasterize an SVG to a PNG data URL via an offscreen canvas. */
     const svgToPng = (svg: string, w: number, h: number): Promise<string> => new Promise((resolve, reject) => {

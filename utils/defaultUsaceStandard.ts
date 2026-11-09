@@ -43,8 +43,8 @@ export const USACE_AEC_STANDARD: StandardDefinition = {
     { code: 'FNC',   description: 'Fence',                      pointLayer: '-',           lineLayer: 'V-SITE-FNCE',  lineType: 'FENCELINE',   category: 'Boundary' },
 
     // ── Topography / Contours ───────────────────────────────────────────────
-    { code: 'CONTM', description: 'Major Contour',              pointLayer: '-',           lineLayer: 'C-TOPO-MAJR',  lineType: 'CONTINUOUS',  category: 'Topography' },
-    { code: 'CONTN', description: 'Minor Contour',              pointLayer: '-',           lineLayer: 'C-TOPO-MINR',  lineType: 'CONTINUOUS',  category: 'Topography' },
+    { code: 'CONTM', description: 'Major Contour',              pointLayer: '-',           lineLayer: 'C-TOPO-MAJR',  lineType: 'DASHED',      category: 'Topography' },
+    { code: 'CONTN', description: 'Minor Contour',              pointLayer: '-',           lineLayer: 'C-TOPO-MINR',  lineType: 'DASHED',      category: 'Topography' },
     { code: 'BRK',   description: 'Breakline',                  pointLayer: 'V-NODE',      lineLayer: 'C-TOPO-BRKL',  lineType: 'CONTINUOUS',  category: 'Topography' },
     { code: 'TOE',   description: 'Toe of Slope',               pointLayer: 'V-NODE',      lineLayer: 'C-TOPO-BRKL',  lineType: 'CONTINUOUS',  category: 'Topography' },
     { code: 'TOP',   description: 'Top of Slope',               pointLayer: 'V-NODE',      lineLayer: 'C-TOPO-BRKL',  lineType: 'CONTINUOUS',  category: 'Topography' },

@@ -2279,7 +2279,11 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
       onClick={onOpenConversation}
       className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-md border border-white/15 bg-white/[0.03] px-2.5 py-1.5 text-[10px] font-semibold text-white/85 transition-colors hover:border-white/30 hover:bg-white/[0.06] hover:text-white"
     >
-      {message.needsInput ? 'Answer in chat' : 'Review the panel'}
+      {message.needsInput
+        ? 'Answer in chat'
+        : breakdown.a2ui
+          ? 'Review the panel'
+          : 'Read full answer'}
       <span aria-hidden="true" className="text-white/70">
         →
       </span>

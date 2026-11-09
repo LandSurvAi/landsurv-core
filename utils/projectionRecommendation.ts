@@ -77,7 +77,10 @@ export async function recommendProjectionForClusters(
       const detected = await detectProjectionForCoordinates(
         centre.latitude,
         centre.longitude,
-        { stateName: cluster.jurisdiction?.state ?? null },
+        {
+          stateName: cluster.jurisdiction?.state ?? null,
+          countyName: cluster.jurisdiction?.county ?? null,
+        },
       );
       return {
         ...detected,

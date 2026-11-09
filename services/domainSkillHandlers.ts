@@ -47,9 +47,11 @@ import {
   type ActiveWmsLayer,
   type RoadCorridorRun,
   type StreetLabel,
+  type RoadPaintSpec,
 } from '../types';
 import { rectifyBuildings, type RectifyStats } from './buildingRectifier';
 import { registerRoadingSkillHandlers } from './roadingSkillHandlers';
+import { registerRoadPaintSkillHandlers } from './roadPaintSkillHandlers';
 import { runSteepSlopeAnalysis, steepSlopeRunToSurveyLines } from './SteepSlopeService';import {
   generateContoursAsIsoPaths,
   isoPathsToSurveyLines,
@@ -140,6 +142,8 @@ export interface DomainSkillHandlersOpts {
   openTinSurfaceStudio?: () => void;
   /** Raise the shared A2UI spreadsheet from a CACP request. */
   openSpreadsheetSurface?: (spec: A2UISpreadsheetSpec) => void;
+  /** Raise the A2UI Road Paint Studio from a CACP request. */
+  openRoadPaintStudio?: (spec?: RoadPaintSpec) => void;
   handleFetchEsriContours: (
     serviceUrl: string,
     mode: 'project' | 'inclusion' | 'description',
@@ -1811,7 +1815,25 @@ export function registerDomainSkillHandlers(
     }),
   );
 
-  // ── 11. Roading Agent skills ─────────────────────────────────────────────
+  // ── 11. Civil Drafter road paint skills ──────────────────────────────────
+  unsubs.push(
+    registerRoadPaintSkillHandlers(() => {
+      const opts = getOpts();
+      return {
+        points: opts.points,
+        centerlines: opts.centerlines,
+        setCenterlines: opts.setCenterlines,
+        lines: opts.lines,
+        setLines: opts.setLines,
+        streetLabels: opts.streetLabels,
+        setStreetLabels: opts.setStreetLabels,
+        logActionToFieldbook: opts.logActionToFieldbook,
+        openRoadPaintStudio: opts.openRoadPaintStudio,
+      };
+    }),
+  );
+
+  // ── 12. Roading Agent skills ─────────────────────────────────────────────
   unsubs.push(
     registerRoadingSkillHandlers(() => {
       const opts = getOpts();

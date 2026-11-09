@@ -16,6 +16,7 @@ import { GEO_AI_SKILLS } from './geoSkillSchemas';
 import { CL_SKILLS } from './clSkillSchemas';
 import { DEED_SKILLS } from './deedSkillSchemas';
 import { ROADING_SKILLS } from './roadingSkillSchemas';
+import { ROAD_PAINT_SKILLS } from './roadPaintSkillSchemas';
 
 /** A loose JSON-Schema-ish descriptor. Kept narrow on purpose. */
 export interface SkillFieldSchema {
@@ -348,6 +349,7 @@ agentRegistry.register({
       },
     },
     ...GEO_AI_SKILLS,
+    ...ROAD_PAINT_SKILLS,
   ],
 });
 

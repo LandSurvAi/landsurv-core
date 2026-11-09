@@ -14,6 +14,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { VisionSurvey, VisionFrame } from '../../utils/civilDrafterVision';
 import type { SynthesisQaReport } from '../../utils/synthesisVerification';
+import type { RoadTakeReport } from '../../utils/roadTakeReview';
+import { formatStation, type GimbalRoadInspection, type RoadMathModel } from '../../utils/gimbalRoadModel';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -24,6 +26,16 @@ interface Props {
   survey: VisionSurvey | null;
   /** Latest synthesis verification report (Gimbal Vision pass 2). */
   qa?: SynthesisQaReport | null;
+  /** Latest imagery-free multi-take road review. */
+  roadReview?: RoadTakeReport | null;
+  /** First-pass mathematical corridor handed to the redraw. */
+  mathModel?: RoadMathModel | null;
+  /** Second-gimbal inspection of the redraw against that model. */
+  gimbalInspection?: GimbalRoadInspection | null;
+  /** Pass-2 frames of the drafted road over the field shots. */
+  inspectionSurvey?: VisionSurvey | null;
+  /** True while the pass-2 draft frames are being captured. */
+  isInspecting?: boolean;
   /** Called on the × button — parent hides the HUD */
   onDismiss?: () => void;
 }
@@ -251,7 +263,7 @@ function Lightbox({ frame, onClose }: { frame: VisionFrame; onClose: () => void 
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CivilDrafterVisionHUD: React.FC<Props> = ({ isScanning, survey, qa, onDismiss }) => {
+const CivilDrafterVisionHUD: React.FC<Props> = ({ isScanning, survey, qa, roadReview, mathModel, gimbalInspection, inspectionSurvey, isInspecting = false, onDismiss }) => {
   ensureStyles();
 
   const [collapsed, setCollapsed]         = useState(false);
@@ -343,7 +355,7 @@ const CivilDrafterVisionHUD: React.FC<Props> = ({ isScanning, survey, qa, onDism
               color: '#64B5F6', fontFamily: 'monospace', fontSize: 11,
               fontWeight: 700, letterSpacing: '0.07em',
             }}>
-              {isScanning ? 'VISUAL SURVEY · SCANNING' : `GIMBAL VISION · ${survey?.frames.length ?? 0} FRAMES`}
+              {isScanning ? 'VISUAL SURVEY · SCANNING' : `GIMBAL VISION · ${(survey?.frames.length ?? 0) + (inspectionSurvey?.frames.length ?? 0)} FRAMES`}
             </span>
             {isScanning && (
               <div
@@ -445,6 +457,165 @@ const CivilDrafterVisionHUD: React.FC<Props> = ({ isScanning, survey, qa, onDism
           </div>
         )}
 
+        {/* ── Road take review (imagery-free civil-sense pass) ──────────── */}
+        {!isScanning && roadReview && roadReview.featuresAudited > 0 && (
+          <div style={{
+            borderTop: roadReview.status === 'needs_retake'
+              ? '1px solid rgba(245,158,11,0.28)'
+              : '1px solid rgba(100,181,246,0.20)',
+            background: roadReview.status === 'needs_retake'
+              ? 'rgba(245,158,11,0.07)'
+              : 'rgba(100,181,246,0.05)',
+            padding: '8px 10px 9px',
+          }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              fontFamily: 'monospace', fontSize: 10,
+            }}>
+              <span style={{
+                color: roadReview.status === 'needs_retake' ? '#F59E0B' : '#64B5F6',
+                fontWeight: 700, letterSpacing: '0.06em',
+              }}>
+                ROAD TAKE REVIEW
+              </span>
+              <span style={{ color: roadReview.status === 'needs_retake' ? '#FBBF24' : 'rgba(255,255,255,0.60)' }}>
+                {roadReview.scoreBefore}% → {roadReview.scoreAfter}%
+              </span>
+            </div>
+            <div style={{ marginTop: 3, fontFamily: 'monospace', fontSize: 9.5, color: 'rgba(255,255,255,0.60)' }}>
+              {roadReview.takes} take{roadReview.takes === 1 ? '' : 's'} · {roadReview.featuresAudited} corridor line{roadReview.featuresAudited === 1 ? '' : 's'} ·{' '}
+              {roadReview.status === 'clean'
+                ? 'clean take'
+                : roadReview.status === 'corrected'
+                  ? `${roadReview.repairs.length} repair${roadReview.repairs.length === 1 ? '' : 's'} accepted`
+                  : 'another take required'}
+            </div>
+            <div style={{ marginTop: 2, fontFamily: 'monospace', fontSize: 9, color: 'rgba(255,255,255,0.38)' }}>
+              Grounded on {roadReview.grounding.osmWays} OSM way{roadReview.grounding.osmWays === 1 ? '' : 's'} ·{' '}
+              {roadReview.grounding.parcelSegments} parcel line{roadReview.grounding.parcelSegments === 1 ? '' : 's'}
+              {roadReview.inferredFromGeometry ? ' · layer inferred from geometry' : ''}
+            </div>
+            {roadReview.repairs.length > 0 && (
+              <ul style={{
+                margin: '5px 0 0', padding: '0 0 0 14px',
+                fontFamily: 'monospace', fontSize: 9,
+                color: 'rgba(255,255,255,0.55)', lineHeight: 1.5,
+              }}>
+                {roadReview.repairs.slice(0, 3).map((repair, i) => <li key={i}>{repair}</li>)}
+              </ul>
+            )}
+            {roadReview.remaining.length > 0 && (
+              <ul style={{
+                margin: '5px 0 0', padding: '0 0 0 14px',
+                fontFamily: 'monospace', fontSize: 9,
+                color: '#FBBF24', lineHeight: 1.5,
+              }}>
+                {roadReview.remaining.slice(0, 3).map((defect, i) => <li key={i}>{defect}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* ── Gimbal math model + second inspection ─────────────────────── */}
+        {!isScanning && mathModel && mathModel.corridors.length > 0 && (
+          <div style={{
+            borderTop: '1px solid rgba(167,139,250,0.22)',
+            background: 'rgba(167,139,250,0.055)',
+            padding: '8px 10px 9px',
+          }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              fontFamily: 'monospace', fontSize: 10,
+            }}>
+              <span style={{ color: '#A78BFA', fontWeight: 700, letterSpacing: '0.06em' }}>
+                GIMBAL MATH MODEL
+              </span>
+              <span style={{ color: 'rgba(255,255,255,0.60)' }}>
+                {mathModel.corridors.length} corridor{mathModel.corridors.length === 1 ? '' : 's'} · {mathModel.sections} sections
+              </span>
+            </div>
+            <div style={{ marginTop: 3, fontFamily: 'monospace', fontSize: 9.5, color: 'rgba(255,255,255,0.60)' }}>
+              Pass-1 target: {mathModel.totalLengthFt.toFixed(0)} ft ·{' '}
+              {mathModel.widthFt !== null ? `${mathModel.widthFt.toFixed(1)} ft typical width` : 'width not measurable'}
+              {mathModel.corridors.map(corridor =>
+                ` · ${corridor.id} ${formatStation(corridor.stationStartFt)}→${formatStation(corridor.stationEndFt)}`,
+              ).join('')}
+            </div>
+            {gimbalInspection && (
+              <div style={{ marginTop: 6, borderTop: '1px solid rgba(167,139,250,0.16)', paddingTop: 6 }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  fontFamily: 'monospace', fontSize: 9.5,
+                }}>
+                  <span style={{
+                    color: gimbalInspection.acceptable ? '#34D399' : '#FBBF24',
+                    fontWeight: 700, letterSpacing: '0.05em',
+                  }}>
+                    {gimbalInspection.acceptable ? 'SECOND INSPECTION · PASS' : 'SECOND INSPECTION · ISSUES'}
+                  </span>
+                  <span style={{ color: 'rgba(255,255,255,0.55)' }}>{gimbalInspection.score}%</span>
+                </div>
+                <div style={{ marginTop: 2, fontFamily: 'monospace', fontSize: 9, color: 'rgba(255,255,255,0.45)' }}>
+                  {gimbalInspection.coveragePct.toFixed(0)}% station coverage ·{' '}
+                  {gimbalInspection.widthDriftFt !== null ? `${gimbalInspection.widthDriftFt.toFixed(1)} ft width drift` : 'width unchanged'}
+                </div>
+                {gimbalInspection.defects.length > 0 && (
+                  <ul style={{
+                    margin: '5px 0 0', padding: '0 0 0 14px',
+                    fontFamily: 'monospace', fontSize: 9,
+                    color: '#FBBF24', lineHeight: 1.5,
+                  }}>
+                    {gimbalInspection.defects.slice(0, 3).map((defect, i) => <li key={i}>{defect}</li>)}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Pass 2: the drawn road, over the field shots ─────────────── */}
+        {!isScanning && (isInspecting || (inspectionSurvey?.frames.length ?? 0) > 0) && (
+          <div style={{
+            borderTop: '1px solid rgba(34,211,238,0.22)',
+            background: 'rgba(34,211,238,0.05)',
+            padding: '8px 10px 9px',
+          }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              fontFamily: 'monospace', fontSize: 10,
+            }}>
+              <span style={{ color: '#22D3EE', fontWeight: 700, letterSpacing: '0.06em' }}>
+                PASS 2 · DRAFT INSPECTION
+              </span>
+              <span style={{ color: 'rgba(255,255,255,0.55)' }}>
+                {isInspecting ? 'CAPTURING…' : `${inspectionSurvey?.frames.length ?? 0} frames`}
+              </span>
+            </div>
+            <div style={{ marginTop: 3, fontFamily: 'monospace', fontSize: 9.5, color: 'rgba(255,255,255,0.55)' }}>
+              {isInspecting && !inspectionSurvey
+                ? 'Capturing the drawn road over the field shots…'
+                : 'The drawn road over the field shots — click a frame to enlarge.'}
+            </div>
+            {inspectionSurvey && inspectionSurvey.frames.length > 0 && (
+              <div style={{
+                display: 'flex', gap: 8, marginTop: 7,
+                overflowX: 'auto', overflowY: 'hidden',
+                scrollbarWidth: 'thin',
+                scrollbarColor: 'rgba(34,211,238,0.3) transparent',
+              }}>
+                {inspectionSurvey.frames.map((frame, i) => (
+                  <ThumbCard
+                    key={i}
+                    frame={frame}
+                    index={i}
+                    onClick={() => setLightboxFrame(frame)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {!isScanning && survey && survey.frames.length > 0 && (
           <>
             {/* Film strip */}
@@ -509,7 +680,7 @@ const CivilDrafterVisionHUD: React.FC<Props> = ({ isScanning, survey, qa, onDism
         )}
 
         {/* ── Empty state ─────────────────────────────────────────────────────── */}
-        {!isScanning && (!survey || survey.frames.length === 0) && (
+        {!isScanning && (!survey || survey.frames.length === 0) && !isInspecting && (inspectionSurvey?.frames.length ?? 0) === 0 && (
           <div style={{
             padding: '14px 10px', textAlign: 'center',
             color: 'rgba(255,255,255,0.35)', fontFamily: 'monospace', fontSize: 11,

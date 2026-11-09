@@ -33,6 +33,20 @@ export interface RasterSegmentationOptions {
  * Pavement has low color saturation, neutral chromatic balance, and medium luminance,
  * in sharp contrast to high-saturation green/yellow grass, dark trees, or red roofs.
  */
+/**
+ * Tree canopy, grass, and other vegetation. Exposed so the synthesis QA can say
+ * "the image over this road is all trees" instead of reporting a pavement mask
+ * failure with no explanation.
+ */
+export function isVegetationPixel(r: number, g: number, b: number): boolean {
+  const maxC = Math.max(r, g, b);
+  const minC = Math.min(r, g, b);
+  const sat = maxC === 0 ? 0 : (maxC - minC) / maxC;
+  // Canopy in NAIP/satellite is usually dark green with green dominant over
+  // both red and blue; grass is brighter with the same green dominance.
+  return (g > r + 8 && g > b + 4) || (g > 95 && sat > 0.20 && g > r);
+}
+
 export function isPavementPixel(r: number, g: number, b: number): boolean {
   const maxC = Math.max(r, g, b);
   const minC = Math.min(r, g, b);
@@ -41,8 +55,7 @@ export function isPavementPixel(r: number, g: number, b: number): boolean {
   const lum = (r * 0.299 + g * 0.587 + b * 0.114);
 
   // Vegetation rejection: Grass has elevated Green relative to Red and Blue
-  const isVegetation = (g > r + 8 && g > b + 4) || (g > 95 && sat > 0.20 && g > r);
-  if (isVegetation) return false;
+  if (isVegetationPixel(r, g, b)) return false;
 
   // Water rejection: Elevated Blue with high saturation
   if (b > r + 20 && b > g + 10) return false;

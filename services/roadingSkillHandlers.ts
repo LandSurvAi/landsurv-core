@@ -45,6 +45,7 @@ import {
   parseStationFromDescription,
   resolveBeginStation,
 } from '../utils/stationing';
+import { ROAD_CENTERLINE_LINETYPE } from '../utils/roadStyles';
 import { generateProfile } from '../utils/contouring';
 import { isPointRelevantForCorridor, smoothSplinePoints } from '../utils/civilDrafterVision';
 import {
@@ -57,6 +58,11 @@ import {
   splitChainsAtGaps,
 } from '../utils/linework';
 import { formatSynthesisQaSummary, verifySynthesizedLinework } from '../utils/synthesisVerification';
+import {
+  extractRoadGrounding,
+  formatRoadTakeSummary,
+  runRoadTakeReview,
+} from '../utils/roadTakeReview';
 import { knowledgeBase } from './KnowledgeBase';
 import { isExperimentalAgentEnabled } from '../utils/experimentalAgents';
 
@@ -1182,7 +1188,7 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         effectiveWidthFt = surveyCorridor.widthFt;
         geometrySource = 'survey-shots';
         generatedLines = [
-          ...emitChainLines(surveyCorridor.centerline, clLayer, 'CENTERLINE', 'road-survey-cl'),
+          ...emitChainLines(surveyCorridor.centerline, clLayer, ROAD_CENTERLINE_LINETYPE, 'road-survey-cl'),
           ...emitChainLines(surveyCorridor.edgeA, edgeLayer, 'CONTINUOUS', 'road-survey-edge-a'),
           ...emitChainLines(surveyCorridor.edgeB, edgeLayer, 'CONTINUOUS', 'road-survey-edge-b'),
         ];
@@ -1252,7 +1258,7 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
           geometrySource = 'survey-shots';
           clCoordsList = [primaryClRun];
           generatedLines.push(
-            ...emitChainLines(primaryClRun, clLayer, 'CENTERLINE', 'road-survey-cl'),
+            ...emitChainLines(primaryClRun, clLayer, ROAD_CENTERLINE_LINETYPE, 'road-survey-cl'),
             ...emitChainLines(offsetRoadPolyline(primaryClRun, defaultRoadWidthFt / 2), edgeLayer, 'CONTINUOUS', 'road-ep-lt'),
             ...emitChainLines(offsetRoadPolyline(primaryClRun, -defaultRoadWidthFt / 2), edgeLayer, 'CONTINUOUS', 'road-ep-rt'),
           );
@@ -1303,7 +1309,7 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
           geometrySource = 'survey-shots';
           clCoordsList = [clCoords];
           generatedLines.push(
-            ...emitChainLines(clCoords, clLayer, 'CENTERLINE', 'road-survey-cl'),
+            ...emitChainLines(clCoords, clLayer, ROAD_CENTERLINE_LINETYPE, 'road-survey-cl'),
             ...emitChainLines(nearEdgeCoords, edgeLayer, 'CONTINUOUS', 'road-survey-edge-a'),
             ...emitChainLines(farEdgeCoords, edgeLayer, 'CONTINUOUS', 'road-survey-edge-b'),
           );
@@ -1322,7 +1328,7 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
           clCoordsList = [fallbackClCoords];
           const tempCl = buildCenterlineFromVertices(fallbackClCoords, 'Synthesized Road CL');
           generatedLines.push(
-            ...generateParallelOffsetLinesForCenterline(tempCl, 0, clLayer, 'CENTERLINE', 'road-cl'),
+            ...generateParallelOffsetLinesForCenterline(tempCl, 0, clLayer, ROAD_CENTERLINE_LINETYPE, 'road-cl'),
             ...generateParallelOffsetLinesForCenterline(tempCl, -defaultRoadWidthFt / 2, edgeLayer, 'CONTINUOUS', 'road-ep-lt'),
             ...generateParallelOffsetLinesForCenterline(tempCl, defaultRoadWidthFt / 2, edgeLayer, 'CONTINUOUS', 'road-ep-rt'),
           );
@@ -1409,6 +1415,37 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         }
       }
 
+      // ── CIVIL DRAFTER · MULTI-TAKE ROAD REVIEW ──────────────────────────
+      // Imagery-free civil-sense pass. Continuity, crossings, stubs, duplicate
+      // lines and alignment grounding are checked before the take reaches the
+      // canvas, so a clean synthesis does not depend on having usable imagery.
+      if (generatedLines.length > 0) {
+        try {
+          const canvasGrounding = extractRoadGrounding(deps.lines);
+          const review = runRoadTakeReview(generatedLines, {
+            parcelLines: canvasGrounding.parcelLines,
+            osmWays: [
+              ...(canvasGrounding.osmWays ?? []),
+              ...res.roadCenterlines.slice(0, 8).map((vertices, index) => ({
+                name: res.roadNames[index] || `OSM road ${index + 1}`,
+                vertices: vertices.map(vertex => ({ easting: vertex.easting, northing: vertex.northing })),
+                source: 'osm' as const,
+              })),
+            ],
+          }, { maxTakes: 3 });
+          deps.logActionToFieldbook(formatRoadTakeSummary(review.report));
+          for (const repair of review.report.repairs) {
+            deps.logActionToFieldbook(`  • ${repair}`);
+          }
+          if (review.report.remaining.length > 0) {
+            deps.logActionToFieldbook(`  ! Take still needs a redraw: ${review.report.remaining.slice(0, 5).join(' | ')}`);
+          }
+          if (review.changed) generatedLines = review.lines;
+        } catch (reviewErr) {
+          console.warn('[RoadingTakeReview] review pass failed:', reviewErr);
+        }
+      }
+
       // ── GIMBAL VISION · SYNTHESIS QA (PASS 2) ────────────────────────────
       // Audit the synthesized corridor against the active background imagery
       // before it reaches the canvas. A centreline that leaves the pavement or
@@ -1417,7 +1454,10 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
       if (generatedLines.length > 0 && tiles.length > 0) {
         try {
           const qa = verifySynthesizedLinework(generatedLines, { bounds, mapTiles: tiles });
-          if (qa.report.status !== 'unverified') {
+          if (qa.report.status === 'unverified') {
+            // Say WHY the image was unusable — usually tree canopy over the road.
+            deps.logActionToFieldbook(formatSynthesisQaSummary(qa.report));
+          } else {
             deps.logActionToFieldbook(formatSynthesisQaSummary(qa.report));
             for (const repair of qa.report.repairs) {
               deps.logActionToFieldbook(`  • ${repair}`);
@@ -1599,7 +1639,7 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
 
       // Centerline & Travelway Edges
       newLines.push(
-        ...generateParallelOffsetLinesForCenterline(targetCl, 0, 'C-ROAD-CNTR', 'CENTERLINE', 'corridor-cl'),
+        ...generateParallelOffsetLinesForCenterline(targetCl, 0, 'C-ROAD-CNTR', ROAD_CENTERLINE_LINETYPE, 'corridor-cl'),
         ...generateParallelOffsetLinesForCenterline(targetCl, -halfTravel, 'L-ROAD', 'CONTINUOUS', 'corridor-ep-lt'),
         ...generateParallelOffsetLinesForCenterline(targetCl, halfTravel, 'L-ROAD', 'CONTINUOUS', 'corridor-ep-rt'),
       );

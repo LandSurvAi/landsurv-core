@@ -273,6 +273,56 @@ function cleanOptionText(value: string): string {
     .trim();
 }
 
+export const MAX_QUICK_THOUGHT_PREVIEW_CHARS = 140;
+
+function truncateQuickThought(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const slice = text.slice(0, maxChars);
+  const clipped = slice.replace(/\s+\S*$/, '').trim();
+  return `${(clipped || slice).replace(/[.,;:!?-]+$/, '')}…`;
+}
+
+/**
+ * Builds the short line shown while the full conversation is closed. Short
+ * answers pass through intact; long answers keep only their opening sentence
+ * (or the lead-in before a numbered list) so no agent can dump an entire
+ * response into the collapsed command bar.
+ */
+export function deriveQuickThoughtPreview(
+  rawText: string | null | undefined,
+  explicitText?: string | null,
+  maxChars = MAX_QUICK_THOUGHT_PREVIEW_CHARS,
+): string {
+  const explicit = (explicitText ?? '').replace(/\s+/g, ' ').trim();
+  if (explicit) return truncateQuickThought(explicit, maxChars);
+  if (!rawText) return '';
+
+  const text = stripHtmlAndMarkdown(rawText)
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/(^|\s)#{1,6}\s*/g, '$1')
+    .replace(/^[ \t]*(?:[-+*])[ \t]+/gm, '')
+    .replace(/(\*\*|__)(.*?)\1/g, '$2')
+    .replace(/[*_~`]/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+
+  if (!text) return '';
+  const flattened = text.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+  const sentenceSource = flattened.replace(/(^|\s)\d{1,2}[.)]\s+/g, '$1');
+  if (sentenceSource.length <= maxChars) return sentenceSource;
+
+  // A long intro followed by a numbered/structured list is more useful than the
+  // first list item: "Here is an overview…: 1. Points…" becomes just the intro.
+  const introBeforeList = flattened.match(/^(.{20,180}?):\s*\d+[.)]\s+/)?.[1];
+  if (introBeforeList) return truncateQuickThought(introBeforeList, maxChars);
+
+  const firstSentence =
+    sentenceSource.match(/^.{1,240}?[.!?](?=\s|$)/)?.[0] ?? sentenceSource;
+  return truncateQuickThought(firstSentence, maxChars);
+}
+
 /**
  * Extracts markdown task-list checkboxes (`- [ ] ...` or `- [x] ...`) from a
  * model message so they can be toggled directly in Quick Thought.

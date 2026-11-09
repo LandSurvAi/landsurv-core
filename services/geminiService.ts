@@ -702,13 +702,14 @@ STRICT DISCRIMINATION RULES:
 4. If "Use Survey Points Only" is chosen and NO points with road codes (EP, CL, EDGE, CURB) exist in the database, DO NOT FABRICATE POINTS! Inform the user:
    "No field-collected survey shots with road codes (EP, CL, EDGE, CURB) were found in your point database. Loaded points 1 & 2 (TSPK SET) and 2000 & 2001 (IP FD RB) are boundary/traverse control, not road pavement." and provide options: ["Synthesize Survey Points & Imagery (Recommended)", "Use Aerial Imagery Only"].
 
-**#0C SPATIAL DRIVEWAY EXTRACTION & ROAD DELEGATION (ALWAYS DELEGATE VIA CACP):**
+**#0C SPATIAL DRIVEWAY EXTRACTION & ROAD DRAFTING (EXISTING ROADS STAY WITH YOU):**
 To ensure surveyor-grade precision and prevent false hallucinations, NEVER guess raw coordinate numbers in JSON!
 Always delegate to the CACP specialist that owns the feature via \`askPeer\`:
 - When a driveway is requested:
   \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "Synthesize driveway corridor" } }\`
-- When a road, street, corridor, or right-of-way is requested (with or without a driveway):
-  Do NOT call \`geo_extract_features\` or \`geo_extract_roads\`, and do NOT draw the roadway or ROW yourself. Delegate to the Roading Agent: \`{ "askPeer": { "skillId": "roading_synthesize_existing", "payload": {}, "reason": "Road corridors and ROW are owned by the Roading Agent" } }\` for an existing road, or \`roading_design_corridor\` for a proposed design. Never invent a ROW width — omit it and the Roading Agent draws immediately without ROW lines.
+- When a PROPOSED road, street, corridor, or right-of-way is requested (design, typical section, profile, cul-de-sac, widening):
+  Delegate the proposed design to the Roading Agent with \`roading_design_corridor\` (or \`roading_add_culdesac_or_fillet\`). Never invent a ROW width — omit it and the Roading Agent draws immediately without ROW lines.
+- **EXISTING ROAD — DO NOT DELEGATE:** when the road/street already exists and field shots or OSM ways describe it, draft it YOURSELF with chains and run the #0E multi-take review. Do NOT call \`geo_extract_features\`, \`geo_extract_roads\` or \`roading_synthesize_existing\` for an existing road. Those paths bypass this turn's host retake loop and are the paths that produce gappy, crossing corridor lines.
 - Never combine a road and a driveway into one \`geo_extract_features\` call.
 The host application queries authoritative OpenStreetMap ways, building footprints, and survey control shots to draft driveway linework with smooth Catmull-Rom spline curves and entrance bell return fillets.
 ` : `
@@ -726,6 +727,33 @@ Your THINKING section MUST be brief — at most a few short sentences summarizin
 - DO NOT narrate crossing checks, self-corrections, or "Wait, let me check..." asides in prose.
 - DO NOT restate the point sequences in words — they belong ONLY in the \`lines\` array of the RESULT.
 - Every token spent narrating in THINKING is a token NOT available for the linework JSON, and long narration will TRUNCATE your response before the drawing is finished. Reason internally, then output the JSON.
+
+**#0E MULTI-TAKE SELF-REVIEW — CHECK YOUR OWN ROAD BEFORE YOU SEND IT (CRITICAL):**
+A road is a continuous corridor, not a pile of segments. Before emitting a road/edge/paint take, run these checks and redraw the take if any fail (two or three takes is normal for a human drafter):
+1. **Continuity** — each pavement edge, and any requested centerline or paint line, is ONE continuous line from end to end. No gap in the middle, no line stopping in mid-air, no fragment left behind.
+2. **No crossings** — the left edge, right edge, paint lines and any requested centerline never cross each other. A side road or driveway **T-s into** an edge; it never cuts across the pavement. Remove any stray line lying across the road.
+3. **Complete corridor** — both edges run the full length of the shot-supported corridor and stay roughly parallel. A requested centerline stays inside them; a centerline that runs past the drawn edges is an unfinished take.
+4. **No junk** — no duplicate line on top of another, no orphan stub shorter than a driveway, no isolated short diagonal.
+If the take fails, fix it and re-check before answering. If the evidence genuinely cannot support a continuous road, say what is missing instead of drawing a broken one.
+
+**#0F IMAGERY USABILITY GATE — DO NOT SYNTHESIZE FROM A USELESS IMAGE:**
+When aerial/background imagery is attached, first ask whether the pavement you were asked to draw is actually visible. If the road area is covered by tree canopy, shadow, or vegetation (or the image shows only woods/lawn where the road should be), the image is **not usable** for that feature. Say so plainly — e.g. "The background image there is all trees — the road is covered, so image synthesis is pointless; I am drafting from the field shots, parcel lines and OSM ways." Do **not** invent or "clean up" geometry from a canopy image, and do not claim the image supports a line you cannot see. Fall back to field shots, tax-parcel frontage and OpenStreetMap road ways, which are supplied as grounding evidence.
+
+**#0H LAYER DISCIPLINE — PAVEMENT MUST CARRY A ROAD LAYER (CRITICAL):**
+Every road/pavement edge chain MUST use the L-ROAD layer; driveways use L-DRIVEWAY; road centerlines use C-ROAD-CNTR only when the user explicitly requests a centerline/baseline. Never place road linework on L-LINEWORK, L-LINE, or leave it unlayered. The host's continuity review and road QA key off the layer — unlayered road linework is treated as unknown linework and cannot be self-corrected. Every C-ROAD-CNTR centerline chain MUST also set lineType DASHED. CENTERLINE is not in the project linetype standard and renders solid, so a road drawn with it looks like it has no centerline. One road = one centerline style: C-ROAD-CNTR + DASHED.
+
+**#0I ROAD PAINT — PAINT THE SHOTS, NO BASELINE BY DEFAULT (CRITICAL):**
+A surveyor normally shoots **EP** (edge of pavement) plus **WL** or **SWL** (single white line) or **DYL** (double yellow line). EP is a REFERENCE feature used to fit and check the corridor — it is not paint and must never be drawn as a painted stripe.
+- **NO BASELINE BY DEFAULT:** A road drawing is pavement edges + paint from the shots. Do not create or emit a CL / C-ROAD-CNTR / baseline / centerline just to paint or to "complete" the corridor. CL shots are internal ordering evidence.
+- **PAINT FROM POINTS:** If DYL or WL/SWL shots exist, chain and draw them on L-ROAD-PAINT-Y / L-ROAD-PAINT-W even when no centerline exists or is requested. Do not skip paint because an alignment is missing.
+- **SWL / WL = ONE white stripe. DYL = TWO yellow stripes.**
+- If a true-width offset band is required and an existing alignment is available, paint is offset **8 inches each side** of that centerline for DYL (8 inches to one side for SWL/WL from the CL), and every stripe is a true **4 inches wide** — not a thin CAD line.
+- The CL & Stationing agent owns stationing. If no centerline exists and the user did not request one, do not create one solely to supply paint stationing; draw the paint from the shot order or ask. If the user did request a centerline, chain the ordered alignment points through **cl_create_from_points** (askPeer) and let that alignment supply the begin station and annotation; never invent station values.
+- Emit **road_paint_apply** (or **road_paint_catalog** to inspect presets, layers and available alignments) when a true-width paint band and an alignment exist. The skill sets L-ROAD-PAINT-W / L-ROAD-PAINT-Y, a CONTINUOUS linetype, the 4-inch band geometry, and rotated station callouts. Set openStudio:true to raise the Road Paint Studio A2UI. If there is no alignment and the user did not request a baseline, chain the paint shots directly instead.
+- **TRIGGER:** any mention of DYL means draw the DYL (two yellow stripes). Any mention of WL or SWL means draw the single white line (one white stripe). Never draft DYL, WL or SWL as an ordinary line — those codes are paint commands, and the host also detects them in the user's message.
+
+**#0G GROUNDING — PARCEL LINES & OPENSTREETMAP ARE ALIGNMENT EVIDENCE:**
+A road must sit where a road can legally and physically be. Use the supplied **parcel frontage** lines and **OSM road ways** as grounding: prefer their alignment when the shots are sparse, use them to continue a corridor across a survey gap only when the continuation is collinear, and do not run a new alignment through the middle of a parcel with no road evidence. Parcel lines are legal frontage, not pavement — use them to locate the corridor, not as an edge-of-pavement line.
 
 **#1 OUTPUT RULE — EMIT \`chains\` (CLASSIFY POINTS), LET THE HOST ORDER THEM:**
 The survey points you are drawing over ALREADY EXIST in the project (they are in the provided context/point database). Your job is NOT to sequence points into a polyline — the host does that deterministically. Your job is to CLASSIFY each point into the feature it belongs to.
@@ -898,6 +926,7 @@ You understand that surveyors often collect points in a pattern that doesn't ref
 
 6. **IDENTIFYING & TRACING FEATURES FROM BACKGROUND IMAGERY (ROADS & DRIVEWAYS):**
    When the user asks to "draw the driveway", "trace the road", "draw the driveway and road", or similar requests, and you are provided with a drawn property boundary (highlighted in amber #F59E0B on the visual survey frames) and background aerial imagery:
+   - **EVIDENCE ORDER:** field survey shots and parcel/frontage geometry are the control. Use imagery to understand and confirm the paved surface, or to fill a gap where no road/driveway shots exist. Never move, delete, or re-order surveyed geometry to match the imagery.
 
    **A. SCENE ANALYSIS & FEATURE RECOGNITION (DRIVEWAYS ARE COMPLEX SURFACES):**
    - **Driveways are rarely just two parallel lines!** A real driveway is an asymmetric paved surface that typically consists of:
@@ -2267,7 +2296,7 @@ When field-collected road survey shots (\`EP\`, \`EOP\`, \`ER\`, \`EDGE\`, \`PAV
   "chains": [
     { "polylineId": "road-north-edge", "layer": "L-ROAD", "pointNumbers": ["1001", "1002", "1003", "1004"] },
     { "polylineId": "road-south-edge", "layer": "L-ROAD", "pointNumbers": ["1033", "1020", "1017", "1261"] },
-    { "polylineId": "road-cl", "layer": "C-ROAD-CNTR", "lineType": "CENTERLINE", "pointNumbers": ["2001", "2002", "2003"] }
+    { "polylineId": "road-cl", "layer": "C-ROAD-CNTR", "lineType": "DASHED", "pointNumbers": ["2001", "2002", "2003"] }
   ]
 }
 \`\`\`

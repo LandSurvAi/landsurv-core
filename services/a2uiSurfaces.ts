@@ -397,6 +397,19 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
     keywords: ['roading', 'road studio', 'typical section', 'corridor', 'cul-de-sac'],
   },
   {
+    id: 'workspace-road-paint',
+    title: 'Road Paint Studio',
+    description:
+      'Station a centerline and paint 4-inch WL/SWL white lines or DYL double-yellow markings 8 inches off the CL, with CAD layers, linetypes, and station callouts.',
+    category: 'workspace',
+    glyph: '🛣',
+    accent: 'amber',
+    audiences: ['workspace'],
+    agent: AgentType.CIVIL_DRAFTER,
+    widgetType: 'road-paint-studio',
+    keywords: ['road paint', 'pavement marking', 'dyl', 'double yellow', 'swl', 'single white line', 'centerline offset'],
+  },
+  {
     id: 'workspace-wms-manager',
     title: 'WMS & Offline Maps',
     description: 'Connect WMS map servers, toggle imagery layers, and manage offline map areas.',

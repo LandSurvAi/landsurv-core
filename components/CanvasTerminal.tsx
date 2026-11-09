@@ -14,6 +14,7 @@ import { A2UIScoutActivity } from './A2UIScoutActivity';
 import { DockModeControl, type DockMode } from './DockModeControl';
 import {
   decomposeMessageForQuickThought,
+  deriveQuickThoughtPreview,
   getAgentInitialQuickThoughtOptions,
 } from '../services/a2uiQuickThought';
 import { rememberCanvasPointer } from '../services/canvasFlashes';
@@ -546,6 +547,12 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   // explicit socket/tab click opens the full agent feed.
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const latestModelMessage = lastMessage?.role === MessageRole.MODEL ? lastMessage : null;
+  const latestAgentFullText = (latestModelMessage?.result || latestModelMessage?.text || '').trim();
+  // The collapsed command bar gets a quick thought, never the full answer.
+  const latestAgentPreview = deriveQuickThoughtPreview(
+    latestAgentFullText,
+    latestModelMessage?.quickThoughtText,
+  );
   const latestModelHasContent = Boolean(
     latestModelMessage &&
       ((latestModelMessage.result || latestModelMessage.text || '').trim() ||
@@ -603,13 +610,26 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     Boolean(lastMessage?.quickThoughtText) ||
     quickThoughtBreakdown.hasActionablePrompt ||
     Boolean(liveScoutActivity);
+  // A finished answer is also a quick thought while the chat stays closed.
+  const hasCompletedAgentThought =
+    Boolean(latestModelMessage) &&
+    !isLoading &&
+    !hasPendingPrompt &&
+    Boolean(latestAgentPreview);
+  const hasQuickThought = hasPendingPrompt || hasCompletedAgentThought;
   const pendingOptions = lastMessage?.questionOptions ?? quickThoughtBreakdown.options ?? [];
   const thoughtKey = lastMessage
-    ? `${effectiveAgent}:${messages.length}:${lastMessage.role}:${lastMessage.quickThoughtText ?? ''}:${lastMessage.quickThoughtLabel ?? ''}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}:${quickThoughtBreakdown.kind ?? ''}:${liveScoutActivity?.id ?? ''}`
+    ? `${effectiveAgent}:${messages.length}:${lastMessage.role}:${lastMessage.quickThoughtText ?? ''}:${lastMessage.quickThoughtLabel ?? ''}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}:${quickThoughtBreakdown.kind ?? ''}:${latestAgentPreview}:${liveScoutActivity?.id ?? ''}`
     : liveScoutActivity
       ? `scout:${liveScoutActivity.id}`
       : null;
-  const quickThoughtLabel = lastMessage?.quickThoughtLabel?.trim() || 'Handoff';
+  const quickThoughtLabel =
+    lastMessage?.quickThoughtLabel?.trim() ||
+    (lastMessage?.quickThoughtText
+      ? 'Handoff'
+      : hasCompletedAgentThought
+        ? 'Answer'
+        : 'Needs input');
   const isThoughtDismissed = thoughtKey !== null && dismissedThoughtKey === thoughtKey;
 
   const setHoverReveal = useCallback((key: string | null) => {
@@ -639,12 +659,12 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   // feed and dismisses the card.
   const revealQuickThoughtOnHover = useCallback(() => {
     clearQuickThoughtHideTimer();
-    if (!hasPendingPrompt || isBottomAgentChatOpen || !isThoughtDismissed || !thoughtKey) return;
+    if (!hasQuickThought || isBottomAgentChatOpen || isAgentChatOpen || !isThoughtDismissed || !thoughtKey) return;
     // A fresh peek starts from the glyph, so any stale inside-card flag from a
     // previously unmounted bubble must not block the pointer-off hide.
     isPointerOverQuickThoughtRef.current = false;
     setHoverReveal(thoughtKey);
-  }, [clearQuickThoughtHideTimer, hasPendingPrompt, isBottomAgentChatOpen, isThoughtDismissed, thoughtKey, setHoverReveal]);
+  }, [clearQuickThoughtHideTimer, hasQuickThought, isBottomAgentChatOpen, isAgentChatOpen, isThoughtDismissed, thoughtKey, setHoverReveal]);
 
   const handleQuickThoughtPointerEnter = useCallback(() => {
     isPointerOverQuickThoughtRef.current = true;
@@ -669,8 +689,9 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const isQuickThoughtHoverRevealed =
     thoughtKey !== null && hoverRevealedThoughtKey === thoughtKey;
   const isQuickThoughtVisible =
-    hasPendingPrompt &&
+    hasQuickThought &&
     !isBottomAgentChatOpen &&
+    !isAgentChatOpen &&
     (!isThoughtDismissed || isQuickThoughtHoverRevealed);
 
   useEffect(() => () => clearQuickThoughtHideTimer(), [clearQuickThoughtHideTimer]);
@@ -687,7 +708,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     wasBottomFeedOpenForThoughtRef.current = isBottomAgentChatOpen;
   }, [isBottomAgentChatOpen, thoughtKey, setHoverReveal, clearQuickThoughtHideTimer]);
 
-  const thoughtText = (lastMessage?.quickThoughtText || lastMessage?.result || lastMessage?.text || '')
+  const cleanedThoughtText = (lastMessage?.quickThoughtText || latestAgentFullText)
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
@@ -699,6 +720,10 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     .replace(/&gt;/gi, '>')
     .replace(/\s+/g, ' ')
     .trim();
+  const thoughtText =
+    hasCompletedAgentThought && !lastMessage?.quickThoughtText
+      ? latestAgentPreview
+      : cleanedThoughtText;
   // The bubble animates through a generous slice; the full agent response is
   // still one click away in the conversation.
   const thoughtScrollText = thoughtText.length > 900
@@ -762,8 +787,10 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   }, []);
 
   // A completed agent turn releases the command-bar feed so the canvas is
-  // clear. Pending questions and prompting surfaces stay open because the
-  // agent is waiting on the user, not finished.
+  // clear. A plain choice prompt belongs to the Quick Thought card, so it must
+  // not auto-open the full feed — that hides the compact buttons. Only prompts
+  // that genuinely need the full feed (free-form input or an active A2UI)
+  // keep it open.
   useEffect(() => {
     const wasLoading = wasAgentLoadingRef.current;
     wasAgentLoadingRef.current = isLoading;
@@ -771,10 +798,10 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     if (isAgentFloating || isAgentChatOpen || inputMode !== 'agent') return;
     const finished = messages[messages.length - 1];
     if (!finished || finished.role !== MessageRole.MODEL) return;
+    const hasChoicePrompt = Boolean(finished.questionOptions?.length);
     const needsInput = Boolean(
-      finished.needsInput ||
-        (finished.questionOptions?.length ?? 0) > 0 ||
-        finished.a2ui?.status === 'prompting'
+      !hasChoicePrompt &&
+        (finished.needsInput || finished.a2ui?.status === 'prompting')
     );
     const hasInteractiveA2UI = Boolean(
       finished.a2ui &&
@@ -1205,11 +1232,6 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const historyNavText = historyIndexRef.current >= 0 && commandHistoryRef.current[historyIndexRef.current]
     ? `^ [${historyIndexRef.current + 1}/${commandHistoryRef.current.length}] ${commandHistoryRef.current[historyIndexRef.current]}`
     : null;
-
-  // Latest agent message preview for single-line status when in agent mode
-  const latestAgentPreview = lastMessage
-    ? (lastMessage.result || lastMessage.text || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
-    : '';
 
   // Live feedback for the command being typed: canonical verb + description,
   // or an "unknown" chip when the alias does not resolve.
@@ -2551,7 +2573,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   className="max-w-[45%] shrink-0 truncate font-mono text-[10px] font-semibold uppercase tracking-[0.16em]"
                   style={{ color: accentColor }}
                 >
-                  {lastMessage?.quickThoughtText ? quickThoughtLabel : 'Needs input'}
+                  {quickThoughtLabel}
                 </span>
                 <button
                   type="button"

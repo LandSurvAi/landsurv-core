@@ -34,6 +34,8 @@ export interface DetectProjectionOptions {
   signal?: AbortSignal;
   /** Optional pre-resolved state name, to skip a reverse-geocode round trip. */
   stateName?: string | null;
+  /** Optional pre-resolved county; used where zones follow county lines (PA). */
+  countyName?: string | null;
 }
 
 const readProj4Param = (definition: string, key: string): number | null => {
@@ -49,15 +51,58 @@ const angularDistance = (a: number, b: number): number => {
 };
 
 /**
+ * Pennsylvania's State Plane zones are legal county assignments (Act 161 of
+ * 1992), not latitude bands. The North/South seam cuts through the middle of
+ * the state, so a nearest-parallel guess flips boundary counties into the
+ * wrong zone. Keep the county split here so a known jurisdiction wins.
+ */
+const PA_NORTH_COUNTIES = new Set([
+  'bradford', 'cameron', 'carbon', 'centre', 'clarion', 'clearfield',
+  'clinton', 'columbia', 'crawford', 'elk', 'erie', 'forest', 'jefferson',
+  'lackawanna', 'luzerne', 'lycoming', 'mckean', 'mercer', 'monroe',
+  'montour', 'northumberland', 'pike', 'potter', 'sullivan', 'susquehanna',
+  'tioga', 'union', 'venango', 'warren', 'wayne', 'wyoming',
+]);
+
+const PA_SOUTH_COUNTIES = new Set([
+  'adams', 'allegheny', 'armstrong', 'beaver', 'bedford', 'berks', 'blair',
+  'bucks', 'butler', 'cambria', 'chester', 'cumberland', 'dauphin',
+  'delaware', 'fayette', 'franklin', 'fulton', 'greene', 'huntingdon',
+  'indiana', 'juniata', 'lancaster', 'lawrence', 'lebanon', 'lehigh',
+  'mifflin', 'montgomery', 'northampton', 'perry', 'philadelphia',
+  'schuylkill', 'snyder', 'somerset', 'washington', 'westmoreland', 'york',
+]);
+
+function normalizeCountyName(county?: string | null): string {
+  return String(county ?? '')
+    .split(',')[0]
+    .toLowerCase()
+    .replace(/\bcounty\b/g, '')
+    .replace(/[^a-z]/g, '');
+}
+
+function pennsylvaniaStatePlaneZoneForCounty(
+  county?: string | null,
+): 'North' | 'South' | null {
+  const normalized = normalizeCountyName(county);
+  if (!normalized) return null;
+  if (PA_NORTH_COUNTIES.has(normalized)) return 'North';
+  if (PA_SOUTH_COUNTIES.has(normalized)) return 'South';
+  return null;
+}
+
+/**
  * Choose the State Plane zone nearest a WGS84 point. LCC zones use the midpoint
  * of their standard parallels; transverse/oblique zones use their latitude of
  * origin. Longitude distance is weighted by latitude so east/west zones split
- * along the right meridian.
+ * along the right meridian. A known Pennsylvania county overrides that guess,
+ * because the PA North/South boundary is a legal county split.
  */
 export function findStatePlaneZone(
   latitude: number,
   longitude: number,
   stateName?: string | null,
+  countyName?: string | null,
 ): { state: string; zoneName: string; epsg: number; proj4def: string } | null {
   const normalized = stateName?.trim().toLowerCase();
   if (!normalized || !Number.isFinite(latitude) || !Number.isFinite(longitude)) {
@@ -73,6 +118,21 @@ export function findStatePlaneZone(
 
   const zones = projectionZones[state.code] ?? [];
   if (zones.length === 0) return null;
+
+  if (state.code === 'PA') {
+    const legalZone = pennsylvaniaStatePlaneZoneForCounty(countyName);
+    const match = legalZone
+      ? zones.find(zone => zone.name === legalZone)
+      : undefined;
+    if (match) {
+      return {
+        state: state.name,
+        zoneName: match.name,
+        epsg: match.epsg,
+        proj4def: match.proj4def,
+      };
+    }
+  }
 
   let best = zones[0];
   let bestScore = Number.POSITIVE_INFINITY;
@@ -123,6 +183,7 @@ export async function detectProjectionForCoordinates(
 
   let jurisdiction: ProjectJurisdiction | null = null;
   let stateName = options.stateName?.trim() || null;
+  let countyName = options.countyName?.trim() || null;
 
   if (!stateName) {
     try {
@@ -131,13 +192,14 @@ export async function detectProjectionForCoordinates(
         signal: options.signal,
       });
       stateName = jurisdiction?.state ?? null;
+      countyName = countyName || jurisdiction?.county || null;
     } catch {
       // Geocoding can be blocked or offline; the EPSG fallback still works.
     }
   }
 
   if (stateName) {
-    const zone = findStatePlaneZone(latitude, longitude, stateName);
+    const zone = findStatePlaneZone(latitude, longitude, stateName, countyName);
     if (zone) {
       return {
         projection: {

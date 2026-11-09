@@ -20,8 +20,8 @@ export interface ContourLineLayerAssignment {
 export const DEFAULT_CONTOUR_LINE_LAYERS: ContourLineLayerAssignment = {
   majorLayer: 'C-TOPO-MAJR',
   minorLayer: 'C-TOPO-MINR',
-  majorLineType: 'CONTINUOUS',
-  minorLineType: 'CONTINUOUS',
+  majorLineType: 'DASHED',
+  minorLineType: 'DASHED',
   source: 'fallback',
 };
 

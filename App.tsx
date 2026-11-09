@@ -53,6 +53,7 @@ import CivilDrafterVisionHUD from './components/CadManager/CivilDrafterVisionHUD
 import AutoDraftPanel from './components/CadManager/AutoDraftPanel.tsx';
 import {
   captureVisionSurvey,
+  captureMatchedBackgroundPass,
   buildVisionParts,
   isDrawIntent,
   extractBoundaryGeometry,
@@ -68,9 +69,30 @@ import {
   verifySynthesizedLinework,
   type SynthesisQaReport,
 } from './utils/synthesisVerification.ts';
+import {
+  buildRoadGroundingContext,
+  extractRoadGrounding,
+  fetchOsmGroundingWays,
+  formatRoadRetakePrompt,
+  formatRoadTakeSummary,
+  groupRoadFeatures,
+  parseRoadRetakeResponse,
+  runRoadTakeReview,
+  type GroundingWay,
+  type RoadTakeReport,
+} from './utils/roadTakeReview.ts';
+import {
+  buildRoadMathModel,
+  formatGimbalInspectionSummary,
+  formatGimbalMathBrief,
+  formatGimbalMathSummary,
+  inspectGimbalRoadModel,
+  type GimbalRoadInspection,
+  type RoadMathModel,
+} from './utils/gimbalRoadModel.ts';
 import { type ZoningContext, type AutoDraftImage } from './utils/autoDraftOrchestrator.ts';
 import { getStaticMap, clearStaticMapsCache } from './services/staticMapsService.ts';
-import { clearMapCache, getCachedBitmap, mapWithConcurrency } from './utils/mapTileCache.ts';
+import { clearMapCache, decodeImageCached, getCachedBitmap, mapWithConcurrency } from './utils/mapTileCache.ts';
 import { fetchImageBlobViaProxy } from './utils/corsProxy.ts';
 import { pointRangeBbox, centerRadiusBbox, planDownloadTiles, type MapBbox } from './utils/mapDownloadPlan.ts';
 import { buildSymbolMatchers, resolveSymbol } from './utils/symbolResolver.ts';
@@ -256,6 +278,15 @@ import { generateDxf } from './utils/dxf.ts';
 import { parseDxfGeometry } from './utils/dxfGeometryParser.ts';
 import { expandChainsToLines, expandWidthCodedChains, orderPointsAlongFeature, repairBankCorridorChains, repairRoadCorridorChains, type DrafterChain } from './utils/linework.ts';
 import { buildCenterlineFromVertices } from './services/roadingSkillHandlers.ts';
+import {
+  applyRoadCenterlineStyles,
+  ensureDoubleYellowBands,
+  isRoadCenterlineLayer,
+  queryRequestsRoadBaseline,
+  roadPaintLayerForDescriptor,
+  stripUnrequestedRoadBaselines,
+} from './utils/roadStyles.ts';
+import { detectRoadPaintRequest } from './utils/roadPaint.ts';
 import { buildCivilDrafterLineworkContext } from './utils/civilDrafterLinework.ts';
 import {
   addLineToList,
@@ -324,6 +355,7 @@ import { scoutActivityStore } from './services/scoutActivityStore.ts';
 import type { GisActivityEvent } from './services/gisServiceResolver.ts';
 import { A2UISurfaceHost } from './components/A2UISurfaceHost.tsx';
 import { A2UILegendStudio, openLegendStudioSurface } from './components/A2UILegendStudio.tsx';
+import { A2UIRoadPaintStudio, openRoadPaintStudioSurface } from './components/A2UIRoadPaintStudio.tsx';
 import { A2UIClosureInvestigation } from './components/A2UIClosureInvestigation.tsx';
 import { A2UIStationingControls } from './components/A2UIStationingControls.tsx';
 import { A2UISpreadsheet } from './components/A2UISpreadsheet.tsx';
@@ -345,7 +377,7 @@ import { resolveProjectClusterLocations, recordProjectLocationFacts } from './se
 import type { ProjectLocationAction } from './components/LsaiProjectLocationPanel.tsx';
 import { decodePlusCode } from './utils/plusCode.ts';
 import { isAddPointCommand, parsePointLocation } from './utils/pointLocationInput.ts';
-import type { A2UICacpReviewContext, A2UIGpsRoverSnapshot, A2UIPayload, A2UISpreadsheetSpec, A2UIWorkspaceToolId, CountyGisStatus, CountyParcelAttempt, ProjectLocationCluster, ProjectLocationClusterSet } from './types.ts';
+import type { A2UICacpReviewContext, A2UIGpsRoverSnapshot, A2UIPayload, A2UISpreadsheetSpec, A2UIWorkspaceToolId, CountyGisStatus, CountyParcelAttempt, ProjectLocationCluster, ProjectLocationClusterSet, RoadPaintMarkingId, RoadPaintSpec } from './types.ts';
 import type { GisResolution } from './services/gisServiceResolver.ts';
 import { exampleHighwayCl } from './assets/example.highway.cl.ts';
 import { CacpBadge } from './components/CacpBadge.tsx';
@@ -608,11 +640,29 @@ const A2UI_DOCK_TITLES: Record<string, string> = {
     'roading-intake': 'Roading Intake',
     'roading-designer': 'Roading Designer',
     'roading-panel': 'Roading Studio',
+    'road-paint-studio': 'Road Paint Studio',
     'gps-rover': 'GPS Rover',
     'project-location': 'Project Location',
     'soil-limitations': 'Soil Limitations',
 };
 
+
+/** Commit a paint spec from an A2UI studio through the CACP skill. */
+const requestRoadPaintApply = async (
+  spec: RoadPaintSpec,
+): Promise<{ ok: boolean; message?: string }> => {
+  const response = await interAgentComm.askPeer(
+    AgentType.CIVIL_DRAFTER,
+    'road_paint_apply',
+    spec as unknown as Record<string, unknown>,
+  );
+  return {
+    ok: Boolean(response?.success),
+    message: response?.success
+      ? (response?.data?.message as string | undefined)
+      : response?.error ?? 'The road paint skill did not respond.',
+  };
+};
 
 const useMediaQuery = (query: string): boolean => {
   const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
@@ -1939,6 +1989,9 @@ const AppContent = () => {
   // messages until the point set changes significantly (>5% delta).
   const [civilDrafterVisionSurvey, setCivilDrafterVisionSurvey] = useState<VisionSurvey | null>(null);
   const civilDrafterVisionSurveyRef = useRef<VisionSurvey | null>(null);
+  // Parcel auto-grounding is best-effort. Cache failures per cluster so a draw
+  // turn does not hammer an unavailable county service on every message.
+  const autoParcelGroundingRef = useRef<{ key: string; ok: boolean; at: number } | null>(null);
   // Synthesis QA (Gimbal Vision pass 2) — last post-draft verification report.
   const [synthesisQa, setSynthesisQa] = useState<SynthesisQaReport | null>(null);
   // Desktop agent rail collapse state. When the menu is closed, the workspace
@@ -1972,6 +2025,26 @@ const AppContent = () => {
   // Cached NAIP aerial of the survey extent � fetched alongside the gimbal scan
   // and attached to every vision briefing as the ground-truth reference.
   const visionAerialRef = useRef<VisionAerialImage[] | null>(null);
+  // OSM road-way grounding for the Civil Drafter's multi-take review, cached per
+  // work-area so a draw turn does not re-query Overpass every message.
+  const roadGroundingOsmRef = useRef<{ key: string; ways: GroundingWay[] } | null>(null);
+  // Last take critique — fed into the next drafting turn so the model corrects
+  // the exact defects the reviewer found (the cross-turn half of multi-take).
+  const lastRoadTakeReviewRef = useRef<RoadTakeReport | null>(null);
+  const lastGimbalInspectionRef = useRef<GimbalRoadInspection | null>(null);
+  // Latest take report shown in the Gimbal Vision HUD.
+  const [roadTakeReview, setRoadTakeReview] = useState<RoadTakeReport | null>(null);
+  // First-pass mathematical road model handed to the redraw, and the second
+  // gimbal inspection that checks the redraw against it.
+  const [gimbalRoadModel, setGimbalRoadModel] = useState<RoadMathModel | null>(null);
+  const [gimbalRoadInspection, setGimbalRoadInspection] = useState<GimbalRoadInspection | null>(null);
+  // Pass-2 frames of the drawn road, shown in the Gimbal HUD and sent to the
+  // redraw model so it can see its own take over the field shots.
+  const [gimbalDraftSurvey, setGimbalDraftSurvey] = useState<VisionSurvey | null>(null);
+  const [isGimbalInspecting, setIsGimbalInspecting] = useState(false);
+  // Paint intent waiting for a Stationing & CL alignment ("draw the DYL" in a
+  // turn that also establishes the centerline).
+  const pendingRoadPaintRef = useRef<{ marking: RoadPaintMarkingId } | null>(null);
   // OLD: const [activeAgent, setActiveAgent] = useState<AgentType>(AgentType.RAW_CRAWLER);
   // OLD: const [lastActiveAgent, setLastActiveAgent] = useState<AgentType>(AgentType.RAW_CRAWLER);
   // OLD: const [activeModel, setActiveModel] = useState<string>(availableModels[0]);
@@ -4453,6 +4526,7 @@ const AppContent = () => {
             // Clear vision cache � new file, fresh gimbal scan on next draw request
             setCivilDrafterVisionSurvey(null);
             lastVisionPointCountRef.current = 0;
+            autoParcelGroundingRef.current = null;
             visionAerialRef.current = null;
             setShowVisionHUD(true);
             return;
@@ -4582,6 +4656,7 @@ const AppContent = () => {
         // Reset vision cache so the next draw request rescans the loaded points.
         setCivilDrafterVisionSurvey(null);
         lastVisionPointCountRef.current = 0;
+        autoParcelGroundingRef.current = null;
         visionAerialRef.current = null;
         setShowVisionHUD(true);
 
@@ -8975,7 +9050,71 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, [logActionToFieldbook]);
 
   // CACP — Geospatial AI skills (SamGeo feature extraction & SAM-Road road centerlines).
-  useGeoSkills({ settings, setLines, setPointLists, pointListsRef, logActionToFieldbook, canvas2dRef });
+  const handleGeoRoadReview = useCallback((report: RoadTakeReport) => {
+    setRoadTakeReview(report);
+    lastRoadTakeReviewRef.current = report;
+    if (report.featuresAudited > 0) setShowVisionHUD(true);
+  }, []);
+
+  /**
+   * Apply a paint intent from natural language. DYL is the double yellow;
+   * WL/SWL is the single white line. The paint skill owns the 4-inch bands and
+   * stations them against the newest Centerline. If no alignment exists yet,
+   * the intent stays pending and is applied when Stationing & CL publishes one.
+   */
+  const applyDetectedRoadPaint = useCallback(
+    (marking: RoadPaintMarkingId, source: 'query' | 'draft' | 'pending'): boolean => {
+      const latest = centerlinesRef.current[0];
+      if (!latest) return false;
+      pendingRoadPaintRef.current = null;
+      void interAgentComm
+        .askPeer(AgentType.CIVIL_DRAFTER, 'road_paint_apply', {
+          marking,
+          centerlineId: latest.id,
+          annotate: true,
+        })
+        .then(response => {
+          if (response?.success) {
+            const message =
+              typeof response.data?.message === 'string'
+                ? response.data.message
+                : `${marking} road paint applied.`;
+            logActionToFieldbook(message);
+          } else {
+            logActionToFieldbook(
+              `Civil Drafter: ${marking} road paint failed — ${response?.error ?? 'no response'}.`,
+            );
+          }
+        })
+        .catch(error => {
+          logActionToFieldbook(
+            `Civil Drafter: ${marking} road paint failed — ${
+              error instanceof Error ? error.message : String(error)
+            }.`,
+          );
+        });
+      console.debug(`[RoadPaint] ${marking} requested (${source}) on ${latest.name}.`);
+      return true;
+    },
+    [logActionToFieldbook],
+  );
+
+  useEffect(() => {
+    const pendingPaint = pendingRoadPaintRef.current;
+    if (!pendingPaint) return;
+    applyDetectedRoadPaint(pendingPaint.marking, 'pending');
+  }, [centerlines, applyDetectedRoadPaint]);
+
+  useGeoSkills({
+    settings,
+    setLines,
+    setPointLists,
+    pointListsRef,
+    linesRef,
+    logActionToFieldbook,
+    canvas2dRef,
+    onRoadTakeReview: handleGeoRoadReview,
+  });
 
   // CACP � Extended COGO skill suite (forward, intersections, curves, traverse,
   // area, transforms, geodetic, subdivide, offset, self-test). All handlers
@@ -9705,6 +9844,27 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     logActionToFieldbook(`Contour labels: rebuilt ${rebuiltLabels.length} label(s) from visible contours.`);
   }, [contourGenerations, contourSettings.labelDensity, lines, logActionToFieldbook]);
 
+  const handleMoveContourLabel = useCallback((index: number, patch: Pick<ContourLabel, 'x' | 'y' | 'angle'>) => {
+    const current = contourLabels[index];
+    if (!current) return;
+    const updated = { ...current, ...patch };
+    setContourLabels(prev => prev.map((label, labelIndex) => (labelIndex === index ? updated : label)));
+
+    if (current.contourGenId) {
+      setContourGenerations(prev => prev.map(generation => {
+        if (generation.id !== current.contourGenId) return generation;
+        let changed = false;
+        const labels = generation.labels.map(label => {
+          if (label.text !== current.text) return label;
+          if (Math.abs(label.x - current.x) > 1e-6 || Math.abs(label.y - current.y) > 1e-6) return label;
+          changed = true;
+          return { ...label, ...patch };
+        });
+        return changed ? { ...generation, labels } : generation;
+      }));
+    }
+  }, [contourLabels]);
+
   const handleContourLabelStrike = useCallback((
     start: { x: number; y: number },
     end: { x: number; y: number },
@@ -10353,6 +10513,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               toPt: { x: x2, y: y2, z: elev ?? 0 },
               type: (isMajor ? 'contour-major' : 'contour-minor') as SurveyLine['type'],
               layer: layerName,
+              lineType: 'DASHED',
             });
           }
         }
@@ -12103,6 +12264,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     handleExportTinSurface,
     openTinSurfaceStudio: openTinSurfacesSurface,
     openSpreadsheetSurface,
+    openRoadPaintStudio: spec => {
+      openRoadPaintStudioSurface({ centerlines, initialSpec: spec, onApply: requestRoadPaintApply });
+    },
     handleFetchEsriContours,
     handleDiscoverPublicContourServices,
     handleResolveGisService,
@@ -12213,9 +12377,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
     bboxOverride?: [number, number, number, number] | null,
-  ): Promise<{ ok: boolean; featureCount: number; message: string }> => {
+    opts?: { silent?: boolean },
+  ): Promise<{ ok: boolean; featureCount: number; message: string; parcelLines?: SurveyLine[] }> => {
+    const silent = opts?.silent === true;
     setIsFetchingParcels(true);
-    setError(null);
+    if (!silent) setError(null);
     try {
       const { PARCEL_LAYER_TAG, fetchParcelsForBbox } = await import('./services/parcelGisService.ts');
       if (!service?.url) throw new Error('No parcel GIS service selected.');
@@ -12306,22 +12472,27 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         `${trimmedToBoundary ? ' trimmed to the inclusion boundary' : ''} from ${service.label}` +
         `${result.exceededTransferLimit ? ' � transfer limit reached, try a smaller area' : ''}.`
       );
-      showView('canvas');
-      if (result.exceededTransferLimit) {
-        setError('?? Parcel transfer limit reached � try Inclusion mode with a smaller area for full coverage.');
-        setTimeout(() => setError(null), 10000);
+      if (!silent) {
+        showView('canvas');
+        if (result.exceededTransferLimit) {
+          setError('?? Parcel transfer limit reached � try Inclusion mode with a smaller area for full coverage.');
+          setTimeout(() => setError(null), 10000);
+        }
       }
       return {
         ok: true,
         featureCount: parcelSummaries.length,
+        parcelLines,
         message: `Fetched ${parcelSummaries.length} parcels (${parcelLines.length} segments)` +
           `${trimmedToBoundary ? ' trimmed to the inclusion boundary' : ''} from ${service.label}.`,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       dbgLog('Parcel', { step: 'error', message: msg });
-      setError(`Parcel Fetch: ${msg}`);
-      setTimeout(() => setError(null), 7000);
+      if (!silent) {
+        setError(`Parcel Fetch: ${msg}`);
+        setTimeout(() => setError(null), 7000);
+      }
       return { ok: false, featureCount: 0, message: msg };
     } finally {
       setIsFetchingParcels(false);
@@ -12488,8 +12659,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     options: {
       aoi?: 'cluster' | 'inclusion';
       inclusionBbox?: [number, number, number, number] | null;
+      /** Suppress canvas switches and transient error toasts for background evidence gathering. */
+      silent?: boolean;
     } = {},
-  ): Promise<{ ok: boolean; featureCount: number; message: string }> => {
+  ): Promise<{ ok: boolean; featureCount: number; message: string; parcelLines?: SurveyLine[] }> => {
     const useInclusion = options.aoi === 'inclusion';
     const bbox = useInclusion ? (options.inclusionBbox ?? null) : cluster.estimate.bboxWgs84;
     if (!bbox) {
@@ -12550,7 +12723,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         publish('loading', `Contacting ${candidates[0].service.label}…`);
       }
       for (const candidate of candidates) {
-        const result = await handleFetchParcels(candidate.service, 'project', undefined, bbox);
+        const result = await handleFetchParcels(candidate.service, 'project', undefined, bbox, { silent: options.silent });
         const issue = result.ok ? undefined : classifyParcelFetchIssue(result.message);
         attempts.push({
           label: candidate.service.label,
@@ -12633,7 +12806,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               label: source.label,
               state: cluster.jurisdiction?.state,
             });
-            const result = await handleFetchParcels(probe.def, 'project', undefined, bbox);
+            const result = await handleFetchParcels(probe.def, 'project', undefined, bbox, { silent: options.silent });
             liveAttempt.label = probe.def.label;
             liveAttempt.ok = result.ok;
             liveAttempt.message = result.message;
@@ -12762,6 +12935,63 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     const only = set.clusters[0];
     return { status: 'done', cluster: only, result: await fetchProjectClusterLayer(intent.kind, only) };
   }, [ensureProjectClusterLocations, fetchProjectClusterLayer, projectClusterChoices, inclusionAreaInfo]);
+
+  /**
+   * Gimbal Pass A is point + parcel geometry. If the user has not drawn county
+   * parcels, pull them automatically for the draw turn so the same frontage
+   * evidence reaches both the vision pass and the road grounding block.
+   */
+  const ensureParcelGroundingForRoadDraw = useCallback(async (): Promise<SurveyLine[]> => {
+    const existing = lines.filter(line =>
+      !line.hidden &&
+      (line.type === 'parcel' || /PARCEL|TAX.?LOT|CADASTRE/i.test(line.layer ?? '')) &&
+      Boolean(line.fromPt && line.toPt),
+    );
+    if (existing.length > 0) return existing;
+    if (points.length === 0) return [];
+    const epsg = settings.projection?.epsg;
+    if (typeof epsg !== 'number') return [];
+
+    let locations: ProjectLocationClusterSet;
+    try {
+      locations = await ensureProjectClusterLocations();
+    } catch {
+      return [];
+    }
+    if (locations.clusters.length === 0) return [];
+
+    // Multi-site projects: ground the pass in the cluster that owns the most
+    // loaded points, not whichever cluster happens to sort first.
+    const loadedPointNumbers = new Set(points.map(point => point.pointNumber));
+    const cluster = [...locations.clusters].sort((a, b) => {
+      const overlap = (candidate: ProjectLocationCluster) =>
+        candidate.pointNumbers.reduce(
+          (count, pointNumber) => count + (loadedPointNumbers.has(pointNumber) ? 1 : 0),
+          0,
+        );
+      return overlap(b) - overlap(a);
+    })[0];
+    const key = `${locations.epsg ?? epsg}:${cluster.id}:${cluster.estimate.bboxWgs84?.join(',') ?? ''}`;
+    const lastAttempt = autoParcelGroundingRef.current;
+    if (lastAttempt?.key === key && !lastAttempt.ok && Date.now() - lastAttempt.at < 10 * 60_000) {
+      return [];
+    }
+
+    const result = await fetchProjectClusterLayer('parcels', cluster, { silent: true });
+    autoParcelGroundingRef.current = { key, ok: result.ok, at: Date.now() };
+    if (!result.ok || !result.parcelLines?.length) return [];
+    logActionToFieldbook(
+      `Gimbal Pass A: auto-loaded ${result.parcelLines.length} county parcel segments as frontage reference (${cluster.label}).`,
+    );
+    return result.parcelLines;
+  }, [
+    lines,
+    points,
+    settings.projection?.epsg,
+    ensureProjectClusterLocations,
+    fetchProjectClusterLayer,
+    logActionToFieldbook,
+  ]);
 
   const projectClusterPayload = useCallback((cluster: ProjectLocationCluster) => ({
     index: cluster.index,
@@ -15117,6 +15347,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       return;
     }
 
+    // ROAD PAINT INTENT: DYL = double yellow, WL/SWL = one white line. Apply
+    // against the newest alignment now, or leave the intent pending until the
+    // current road turn establishes a Centerline (then the effect above fires).
+    if (!/^\s*\[(?:CACP|SYSTEM|INTERNAL)/i.test(query)) {
+      const detectedPaint = detectRoadPaintRequest(query);
+      if (detectedPaint && !applyDetectedRoadPaint(detectedPaint, 'query')) {
+        pendingRoadPaintRef.current = { marking: detectedPaint };
+        logActionToFieldbook(
+          `Civil Drafter: ${detectedPaint} paint queued — waiting for a Stationing & CL alignment.`,
+        );
+      }
+    }
+
     // -- CIVIL DRAFTER: context management --------------------------------
     // The chat objects re-send their full history on every turn. With a large
     // point database and vision imagery attached to each draw request, that
@@ -15278,6 +15521,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // Only include lists the user has opted into agent context (undefined = included by default).
     const contextPointLists = pointLists.filter(l => l.includeInContext !== false);
 
+    // Gimbal Pass A is point + parcel geometry, never background imagery. Pull
+    // county parcels now when they are not already on the canvas so the vision
+    // pass and road grounding share the same frontage evidence on this turn.
+    let autoParcelGrounding: SurveyLine[] = [];
+    if ((agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT) && isDrawIntent(query)) {
+      try {
+        autoParcelGrounding = await ensureParcelGroundingForRoadDraw();
+      } catch (parcelErr) {
+        console.warn('[Gimbal] automatic parcel grounding failed:', parcelErr);
+      }
+    }
+
     if (agent === AgentType.LSVZ_AGENT) {
         const manifestStr = getLightweightLsvzManifest({
             jobInfo, settings, pointLists, lines, centerlines, boundaryFiles, closureReports,
@@ -15349,6 +15604,46 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         // or other geometry already on the canvas.
         const lineworkContext = buildCivilDrafterLineworkContext(lines, points);
         if (lineworkContext) context += lineworkContext;
+        // Road grounding: tax-parcel frontage already on the canvas plus OSM road
+        // ways for the work area. This is what keeps the drafter honest when the
+        // aerial is unusable (all canopy/shadow) — the road still has to follow a
+        // known street or the legal frontage.
+        if (isDrawIntent(query)) {
+          const canvasGrounding = extractRoadGrounding(lines);
+          const parcelGrounding = autoParcelGrounding.length > 0
+            ? autoParcelGrounding
+            : canvasGrounding.parcelLines;
+          let osmWays = canvasGrounding.osmWays ?? [];
+          let minE = Infinity, maxE = -Infinity, minN = Infinity, maxN = -Infinity;
+          const includePoint = (e: number, n: number) => {
+            if (!Number.isFinite(e) || !Number.isFinite(n)) return;
+            if (e < minE) minE = e;
+            if (e > maxE) maxE = e;
+            if (n < minN) minN = n;
+            if (n > maxN) maxN = n;
+          };
+          for (const p of points) includePoint(p.easting, p.northing);
+          for (const l of lines) {
+            if (l.fromPt) includePoint(l.fromPt.x, l.fromPt.y);
+            if (l.toPt) includePoint(l.toPt.x, l.toPt.y);
+          }
+          const groundEpsg = settings.projection?.epsg;
+          if (Number.isFinite(minE) && maxE > minE && maxN > minN && typeof groundEpsg === 'number') {
+            const key = `${groundEpsg}:${minE.toFixed(0)}:${minN.toFixed(0)}:${maxE.toFixed(0)}:${maxN.toFixed(0)}`;
+            if (!roadGroundingOsmRef.current || roadGroundingOsmRef.current.key !== key) {
+              const fetched = await fetchOsmGroundingWays({ minE, maxE, minN, maxN }, groundEpsg);
+              roadGroundingOsmRef.current = { key, ways: fetched };
+              // A new work area invalidates the previous take's critique.
+              lastRoadTakeReviewRef.current = null;
+            }
+            if (roadGroundingOsmRef.current?.ways.length) osmWays = roadGroundingOsmRef.current.ways;
+          }
+          context += buildRoadGroundingContext({
+            parcelLines: parcelGrounding,
+            osmWays,
+            review: lastRoadTakeReviewRef.current,
+          });
+        }
     } else if (agent === AgentType.DXF_ANALYZER || agent === AgentType.CIVIL_PLAN_EXPERT || agent === AgentType.IMAGE_ANALYZER) {
         // Make point context public for all data analysis agents
         context = `---BEGIN POINT DATABASE---\n${JSON.stringify(contextPointLists, null, 2)}\n---END POINT DATABASE---\n\n`;
@@ -15416,9 +15711,25 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     if ((agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT) && hasDrafterContext && isDrawIntent(query) && (getCivilDrafterContextConfig()?.attachVisionImagery ?? true)) {
         // Decide whether to re-scan: first time, or point/feature set changed >5 %
         const prevCount  = lastVisionPointCountRef.current;
-        const currentFeatureCount = points.length + (boundaryFiles?.length ?? 0) * 10 + lines.length;
+        const newlyFetchedParcelLines = autoParcelGrounding.filter(line => !lines.includes(line)).length;
+        const currentFeatureCount = points.length + (boundaryFiles?.length ?? 0) * 10 + lines.length + newlyFetchedParcelLines;
         const needScan   = !civilDrafterVisionSurvey
+            || civilDrafterVisionSurvey.pass !== 'geometry'
             || Math.abs(currentFeatureCount - prevCount) / Math.max(prevCount, 1) > 0.05;
+
+        // Pass A is deliberately geometry-only: field shots plus parcel and
+        // inclusion linework, with NO map tiles. Background pixels are a
+        // separate Pass B capture and never share a frame with the geometry.
+        const geometryLines = [
+            ...autoParcelGrounding,
+            ...visibleLines.filter(line =>
+                !autoParcelGrounding.includes(line) && (
+                    line.type === 'parcel' ||
+                    line.type === 'inclusion' ||
+                    /PARCEL|TAX.?LOT|CADASTRE/i.test(line.layer ?? '')
+                )
+            ),
+        ];
 
         // Retrieve any active basemap overlay tiles directly from the drawing canvas (e.g. NAIP/Google/WMS)
         const activeCanvasTiles = canvas2dRef.current?.getMapOverlayTiles?.() ?? [];
@@ -15429,9 +15740,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             setIsVisionScanning(true);
             setShowVisionHUD(true);
             try {
-                activeSurvey = await captureVisionSurvey(points, visibleLines, {
+                activeSurvey = await captureVisionSurvey(points, geometryLines, {
                     boundaryFiles,
-                    mapTiles: activeCanvasTiles.length > 0 ? activeCanvasTiles : undefined,
+                    pass: 'geometry',
                 });
                 setCivilDrafterVisionSurvey(activeSurvey);
                 civilDrafterVisionSurveyRef.current = activeSurvey;
@@ -15493,15 +15804,25 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                     const maxDim = 1280;
                     const pxScale = maxDim / Math.max(w, h);
                     let naip: any = null;
+                    let naipBounds: { minE: number; maxE: number; minN: number; maxN: number } | null = null;
+                    const requestedBounds = {
+                        minE: minE - padX,
+                        maxE: maxE + padX,
+                        minN: minN - padY,
+                        maxN: maxN + padY,
+                    };
                     try {
                         naip = await getStaticMap({
                             lat: 0, lng: 0,
                             maptype: 'naip',
-                            projectedBbox: [minE - padX, minN - padY, maxE + padX, maxN + padY],
+                            projectedBbox: [requestedBounds.minE, requestedBounds.minN, requestedBounds.maxE, requestedBounds.maxN],
                             sr: projEpsg,
                             width: Math.max(256, Math.min(1280, Math.round(w * pxScale))),
                             height: Math.max(256, Math.min(1280, Math.round(h * pxScale))),
                         }, { geminiKey: settings.userApiKey, mapsKey: settings.googleMaps?.apiKey });
+                        naipBounds = naip?.extent
+                            ? { minE: naip.extent[0], minN: naip.extent[1], maxE: naip.extent[2], maxN: naip.extent[3] }
+                            : requestedBounds;
                     } catch (directErr) {
                         try {
                             const c0 = proj4(`EPSG:${projEpsg}`, 'EPSG:3857', [minE - padX, minN - padY]) as [number, number];
@@ -15514,16 +15835,36 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                 width: Math.max(128, Math.round(w * pxScale)),
                                 height: Math.max(128, Math.round(h * pxScale)),
                             }, { geminiKey: settings.userApiKey, mapsKey: settings.googleMaps?.apiKey });
+                            // This fallback image is in EPSG:3857, not the project CRS;
+                            // do not co-register it as a matched Pass B frame.
+                            naipBounds = null;
                         } catch {
                             throw directErr;
                         }
                     }
                     if (naip?.base64) {
-                        visionAerialRef.current = [{
-                            mimeType: naip.mimeType,
-                            data: naip.base64,
-                            label: 'NAIP aerial — full survey extent, north up, same coordinate frame as the survey. Low resolution: use it only for rough feature identification (road corridors, building locations, tree lines), not precise geometry.',
-                        }];
+                        const aerialImage = naip.dataUrl
+                            ? await decodeImageCached(naip.dataUrl).catch(() => null)
+                            : null;
+                        if (activeSurvey && activeSurvey.frames.length > 0 && aerialImage && naipBounds) {
+                            // Pass B is captured at the same extents as Pass A, so
+                            // the model can compare matched zoom levels instead of
+                            // guessing how one full-extent thumbnail maps to them.
+                            const matchedPassB = captureMatchedBackgroundPass(activeSurvey, {
+                                backgroundImage: { image: aerialImage, bounds: naipBounds },
+                                maxFrames: 8,
+                            });
+                            if (matchedPassB.length > 0) visionAerialRef.current = matchedPassB;
+                        }
+                        if (!visionAerialRef.current || visionAerialRef.current.length === 0) {
+                            visionAerialRef.current = [{
+                                mimeType: naip.mimeType,
+                                data: naip.base64,
+                                label: naipBounds
+                                    ? 'GIMBAL PASS B — background imagery only, full survey extent, north up, co-registered to the survey. Separate from Pass A. Use only for rough context (canopy, buildings, driveways, visible pavement); never to overrule point/parcel geometry or trace precise road edges.'
+                                    : 'GIMBAL PASS B — background imagery only, full extent, NOT co-registered to the project frame. Use only as rough context; do not assume pixel alignment with a Pass A frame.',
+                            }];
+                        }
                     }
                 }
             } catch (aerialErr) {
@@ -15531,23 +15872,50 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             }
         }
 
-        // If visionAerialRef is still null/empty but activeSurvey captured background imagery,
-        // use the overview frame (frame 0) so the dedicated aerial image part is populated.
-        if ((!visionAerialRef.current || visionAerialRef.current.length === 0) && activeSurvey?.frames?.[0]?.base64 && (activeCanvasTiles.length > 0 || activeSurvey.hasBackgroundImagery)) {
-            visionAerialRef.current = [{
-                mimeType: 'image/png',
-                data: activeSurvey.frames[0].base64,
-                label: 'Active background aerial imagery (NAIP/satellite) — full survey extent with visible driveway, road, buildings, and amber boundary.',
-            }];
+        // Pass B is a separate background-only capture. If the static aerial is
+        // unavailable, render the active basemap with NO survey points or vector
+        // linework — never recycle a Pass A frame as imagery.
+        if ((!visionAerialRef.current || visionAerialRef.current.length === 0) && activeCanvasTiles.length > 0) {
+            try {
+                if (activeSurvey && activeSurvey.frames.length > 0) {
+                    const matchedPassB = captureMatchedBackgroundPass(activeSurvey, {
+                        mapTiles: activeCanvasTiles,
+                        maxFrames: 8,
+                    });
+                    if (matchedPassB.length > 0) visionAerialRef.current = matchedPassB;
+                }
+                if (!visionAerialRef.current || visionAerialRef.current.length === 0) {
+                    const backgroundPass = await captureVisionSurvey(points, [], {
+                        mapTiles: activeCanvasTiles,
+                        pass: 'imagery',
+                        renderVectors: false,
+                        maxClusterFrames: 0,
+                        maxDetailFrames: 0,
+                    });
+                    const backgroundFrame = backgroundPass.frames[0];
+                    if (backgroundFrame?.base64) {
+                        visionAerialRef.current = [{
+                            mimeType: 'image/png',
+                            data: backgroundFrame.base64,
+                            label: 'GIMBAL PASS B — background imagery only (no survey points or vector linework). Separate from Pass A; use for context, never geometry.',
+                        }];
+                    }
+                }
+            } catch (backgroundErr) {
+                console.warn('[CivilDrafterVision] background pass failed:', backgroundErr);
+            }
         }
 
         if (activeSurvey && activeSurvey.frames.length > 0) {
-            // Skip the cached aerial when Auto Draft imagery is already queued for
-            // this message (it rides along separately below) to avoid duplicates.
-            const aerial = pendingAutoDraftImagesRef.current.length > 0
-                ? []
-                : (visionAerialRef.current ?? []);
-            queryToSend = buildVisionParts(activeSurvey, query, context + queryPrefix, aerial) as Part[];
+            // Always attach the co-registered Pass B frames. Auto Draft images
+            // are additional context appended below; they do not replace the
+            // matched background pass.
+            queryToSend = buildVisionParts(
+                activeSurvey,
+                query,
+                context + queryPrefix,
+                visionAerialRef.current ?? [],
+            ) as Part[];
         }
     }
     // -------------------------------------------------------------------------
@@ -15628,10 +15996,22 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     if (agent === AgentType.CIVIL_DRAFTER && pendingAutoDraftImagesRef.current.length > 0) {
         const imgs = pendingAutoDraftImagesRef.current;
         pendingAutoDraftImagesRef.current = [];
-        const imageParts: Part[] = imgs.map(i => ({ inlineData: { mimeType: i.mimeType, data: i.data } }));
+        const imageParts: Part[] = imgs.flatMap(i => {
+            const parts: Part[] = [];
+            if (i.label) {
+                parts.push({
+                    text: `\nAUTO DRAFT BACKGROUND — ${i.label}. This is additional context and is not necessarily co-registered to the Pass A frames.`,
+                });
+            }
+            parts.push({ inlineData: { mimeType: i.mimeType, data: i.data } });
+            return parts;
+        });
+        const autoDraftNote: Part = {
+            text: '\nADDITIONAL AUTO DRAFT BACKGROUND IMAGERY — secondary context only. It does not replace Pass A geometry; never move a surveyed road line to match it.\n',
+        };
         queryToSend = typeof queryToSend === 'string'
-            ? [{ text: queryToSend }, ...imageParts]
-            : [...queryToSend, ...imageParts];
+            ? [{ text: queryToSend }, autoDraftNote, ...imageParts]
+            : [...queryToSend, autoDraftNote, ...imageParts];
     }
 
     let civilDrafterRequestVolume: Pick<
@@ -17446,8 +17826,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                  : chainLines;
                logActionToFieldbook(`Ordered ${repairedChains.length} feature chain(s) into ${chainLines.length} line segment(s) (deterministic bank/edge ordering).`);
 
-               // When Roading Agent drafts road chains directly from points, sync any centerline chain to Stationing & CL
-               if (agent === AgentType.ROADING_AGENT) {
+               // When Civil Drafter or Roading Agent drafts road chains directly
+               // from points, sync the centerline chain to Stationing & CL. Do
+               // this only when the user asked for a baseline/centerline; a
+               // plain road take is pavement edges + paint.
+               if (
+                 (agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT)
+                 && queryRequestsRoadBaseline(query)
+               ) {
                  const clChain = repairedChains.find(
                    ch => /CNTR|CENTER|CL/i.test(ch.layer ?? '') || /(?:^|[-_])cl(?:[-_]|$)|centerline/i.test(ch.polylineId ?? ''),
                  );
@@ -17711,6 +18097,388 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               let linesToPlot = agent === AgentType.DEED_READER
                 ? enrichedLinesFiltered.filter(l => !!l.type)
                 : enrichedLinesFiltered;
+              // Civil Drafter's default line layer is L-LINEWORK, which is not a
+              // pavement layer. When the user asked for a road (or the field shots
+              // are pavement codes), normalize generic road-ish linework to a road
+              // layer so the continuity review actually sees the take.
+              const roadTakeIntent = (() => {
+                if (agent !== AgentType.CIVIL_DRAFTER && agent !== AgentType.ROADING_AGENT) return false;
+                if (/\b(road|roadway|street|pavement|paved|curb|gutter|intersection|corridor|centerline|centreline|driveway|shoulder|right[- ]of[- ]way)\b/i.test(query)) return true;
+                return linesToPlot.some(line => {
+                  const lineValue = `${line.layer ?? ''} ${line.polylineId ?? ''}`;
+                  if (/\b(road|roadway|street|pave|curb|gutter|edge|eop|ep|er|centerline|centreline)\b/i.test(lineValue)) return true;
+                  const from = pointLookup.get(line.from);
+                  const to = pointLookup.get(line.to);
+                  return [from, to].some(point =>
+                    Boolean(point?.description && /\b(EP|EOP|ER|EDGE|CURB|GUTTER|CL|CTR|SHLD|TC|BC|EC)\b/i.test(point.description)),
+                  );
+                });
+              })();
+              if (roadTakeIntent) {
+                linesToPlot = linesToPlot.map(line => {
+                  if (line.isCurve || line.isCircle || line.curveRadius) return line;
+                  const layer = (line.layer ?? '').trim();
+                  const genericLayer = !layer || /^(L-?LINEWORK|L-?LINE|L-?POLYLINE|UNASSIGNED|L-SITE)$/i.test(layer);
+                  const centerlineLayer = isRoadCenterlineLayer(layer)
+                    || /^(CL|CTR|CENTER|CENTRE|CENTERLINE|CENTRELINE|BASELINE|BASE-LINE)$/i.test(layer);
+                  if (!genericLayer && !centerlineLayer && !/^L-ROAD$/i.test(layer)) return line;
+                  const descriptor = `${line.polylineId ?? ''} ${pointLookup.get(line.from)?.description ?? ''} ${pointLookup.get(line.to)?.description ?? ''}`;
+                  if (/(BUILDING|BLDG|HOUSE|PARCEL|PROPERTY|BOUNDARY|DEED|CONTOUR|TOPO|UTIL|FEMA|FLOOD|SOILS|TREE|VEG|SHRINK|FENCE|WALL|HATCH|LABEL|TEXT)/i.test(descriptor)) return line;
+                  // DYL/WL shots define paint, not a construction centerline. Keep
+                  // both yellow bands as paint so the take review stitches them and
+                  // the baseline stripper does not remove the centerline.
+                  const paintLayer = roadPaintLayerForDescriptor(descriptor, layer);
+                  if (paintLayer) return { ...line, layer: paintLayer, lineType: 'CONTINUOUS' };
+                  if (!genericLayer) return line;
+                  const centerline = /\b(CL|CTR|CENTER|CENTRE|C-ROAD-CNTR)\b/i.test(descriptor);
+                  return { ...line, layer: centerline ? 'C-ROAD-CNTR' : 'L-ROAD' };
+                });
+                // A single yellow run from DYL shots is half a double-yellow
+                // line. Complete it to two bands 16 in apart; an existing pair
+                // is left alone.
+                const dyl = ensureDoubleYellowBands(linesToPlot);
+                if (dyl.changed) {
+                  linesToPlot = dyl.lines;
+                  logActionToFieldbook(
+                    `Civil Drafter: completed ${dyl.completedRuns} single yellow paint run${dyl.completedRuns === 1 ? '' : 's'} as two DYL bands 16 in apart.`,
+                  );
+                }
+              }
+              // Default road takes are paint + pavement edges. A CL chain is
+              // internal ordering evidence unless the user asked for a baseline.
+              if (agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT) {
+                const beforeBaselineStrip = linesToPlot.length;
+                linesToPlot = stripUnrequestedRoadBaselines(linesToPlot, query);
+                if (linesToPlot.length < beforeBaselineStrip) {
+                  logActionToFieldbook('Civil Drafter: suppressed an unrequested baseline/centerline from the road take.');
+                }
+              }
+              // ── CIVIL DRAFTER · MULTI-TAKE ROAD REVIEW ──────────────────────
+              // Imagery-free civil-sense pass: every road edge must be one
+              // continuous line, opposite edges never cross, branches T in, and
+              // no orphan stub/duplicate is left behind. Three deterministic
+              // takes; the repaired take is used only when the score improves.
+              // Parcel and OSM grounding justify stitching a broad survey gap.
+              if (
+                (agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT)
+                && linesToPlot.length > 0
+              ) {
+                setRoadTakeReview(null);
+                setGimbalRoadModel(null);
+                setGimbalRoadInspection(null);
+                setGimbalDraftSurvey(null);
+                setIsGimbalInspecting(false);
+                lastGimbalInspectionRef.current = null;
+                const canvasGrounding = extractRoadGrounding(lines);
+                const roadGrounding = {
+                  parcelLines: autoParcelGrounding.length > 0
+                    ? autoParcelGrounding
+                    : canvasGrounding.parcelLines,
+                  osmWays: roadGroundingOsmRef.current?.ways.length
+                    ? roadGroundingOsmRef.current.ways
+                    : canvasGrounding.osmWays,
+                };
+                let reviewedTake: RoadTakeReport | null = null;
+                let committedTake: RoadTakeReport | null = null;
+                let passOneMath: RoadMathModel | null = null;
+                let passOneFrames: VisionSurvey | null = null;
+                try {
+                  const roadReview = runRoadTakeReview(linesToPlot, roadGrounding, {
+                    maxTakes: 3,
+                    inferUnlabeledRoads: roadTakeIntent,
+                    surveyPoints: points,
+                  });
+                  reviewedTake = roadReview.report;
+                  committedTake = roadReview.report;
+                  lastRoadTakeReviewRef.current = roadReview.report;
+                  setRoadTakeReview(roadReview.report);
+                  logActionToFieldbook(formatRoadTakeSummary(roadReview.report));
+                  for (const repair of roadReview.report.repairs) {
+                    logActionToFieldbook(`  • ${repair}`);
+                  }
+                  if (roadReview.report.remaining.length > 0) {
+                    logActionToFieldbook(`  ! Take still needs a redraw: ${roadReview.report.remaining.slice(0, 5).join(' | ')}`);
+                  }
+                  if (roadReview.changed) linesToPlot = roadReview.lines;
+                  // Record the first glance as a mathematical corridor: station,
+                  // bearing, width and opposite-edge coordinates. This survives
+                  // the retake and is the target the second pass is measured
+                  // against — frames alone cannot carry that relationship.
+                  passOneMath = buildRoadMathModel(linesToPlot, roadGrounding, roadReview.report, {
+                    includeGenericLinework: roadTakeIntent,
+                  });
+                  setGimbalRoadModel(passOneMath);
+                  logActionToFieldbook(formatGimbalMathSummary(passOneMath));
+                  setShowVisionHUD(true);
+
+                  // Pass-1 draft inspection: capture the road as drawn BEFORE
+                  // any redraw. These are the frames the user sees in the HUD
+                  // and the images the redraw model gets to inspect itself.
+                  setIsGimbalInspecting(true);
+                  try {
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                    passOneFrames = await captureVisionSurvey(points, linesToPlot, {
+                      boundaryFiles,
+                      draftInspection: true,
+                      maxClusterFrames: 0,
+                      maxDetailFrames: 0,
+                    });
+                    setGimbalDraftSurvey(passOneFrames);
+                    setShowVisionHUD(true);
+                    logActionToFieldbook(
+                      passOneFrames.frames.length > 0
+                        ? `Gimbal second pass: captured ${passOneFrames.frames.length} draft-inspection frame${passOneFrames.frames.length === 1 ? '' : 's'} of the drawn road.`
+                        : 'Gimbal second pass: the drafted road produced no inspection frames.',
+                    );
+                  } catch (inspectionFrameErr) {
+                    console.warn('[RoadTakeReview] pass-1 draft inspection frames failed:', inspectionFrameErr);
+                    logActionToFieldbook('  ! Gimbal could not capture the drawn road — continuing with the math model only.');
+                  } finally {
+                    setIsGimbalInspecting(false);
+                  }
+                } catch (reviewErr) {
+                  console.warn('[RoadTakeReview] review pass failed:', reviewErr);
+                }
+
+                // ── SECOND / THIRD TAKE: redraw from the inspection ───────────
+                // Pass 2 always gets one redraw, even when the deterministic
+                // reviewer is clean, so the drawn road is actually re-examined.
+                // A still-unresolved critique may earn a third take. Capped at
+                // two model retakes.
+                if (reviewedTake && reviewedTake.featuresAudited > 0) {
+                  const auditedIndexes = new Set(
+                    groupRoadFeatures(linesToPlot, { includeGenericLinework: roadTakeIntent })
+                      .flatMap(feature => feature.sourceLineIndexes),
+                  );
+                  const otherLines = linesToPlot.filter((_, index) => !auditedIndexes.has(index));
+                  let currentRoadLines = linesToPlot.filter((_, index) => auditedIndexes.has(index));
+                  let currentTake = reviewedTake;
+                  let currentInspection: GimbalRoadInspection | null = null;
+                  const mathModelBrief = passOneMath ? formatGimbalMathBrief(passOneMath) : '';
+                  const roadLength = (candidate: SurveyLine[]): number =>
+                    candidate.reduce((total, line) => {
+                      const from = line.fromPt;
+                      const to = line.toPt;
+                      return total + (from && to ? Math.hypot(to.x - from.x, to.y - from.y) : 0);
+                    }, 0);
+                  const originalLength = Math.max(1, roadLength(currentRoadLines));
+
+                  setIsLoading(true);
+                  try {
+                    for (let retake = 1; retake <= 2 && !stopGenerationRef.current; retake++) {
+                      // First redraw runs unconditionally; the second only when
+                      // the reviewer still has an unresolved defect.
+                      if (retake > 1 && currentTake.status !== 'needs_retake') break;
+                      const prompt = formatRoadRetakePrompt(currentTake, currentRoadLines, 60, {
+                        mathModelBrief,
+                        inspectionSummary: currentInspection?.summary,
+                        inspectionDefects: currentInspection?.defects,
+                        groundingContext: buildRoadGroundingContext(roadGrounding),
+                        surveyPoints: points,
+                      });
+                      logActionToFieldbook(
+                        currentTake.status === 'needs_retake'
+                          ? `Civil Drafter take ${1 + retake}: redrawing the road from the math model and the reviewer's critique…`
+                          : `Civil Drafter take ${1 + retake}: redrawing the accepted road for the second-pass Gimbal check…`,
+                      );
+
+                      // Second gimbal inspection frames: the drafted take itself,
+                      // drawn over the field shots, so the redraw model sees its
+                      // own first attempt instead of only reading coordinates.
+                      // Reuse the pass-1 capture; later rounds capture the
+                      // current redraw instead.
+                      const retakeParts: Part[] = [{ text: prompt }];
+                      let inspectionSurvey: VisionSurvey | null = retake === 1 ? passOneFrames : null;
+                      if (!inspectionSurvey) {
+                        setIsGimbalInspecting(true);
+                        try {
+                          inspectionSurvey = await captureVisionSurvey(points, currentRoadLines, {
+                            boundaryFiles,
+                            draftInspection: true,
+                            maxClusterFrames: 0,
+                            maxDetailFrames: 0,
+                          });
+                          setGimbalDraftSurvey(inspectionSurvey);
+                          setShowVisionHUD(true);
+                        } catch (inspectionFrameErr) {
+                          console.warn('[RoadTakeReview] draft inspection frames failed:', inspectionFrameErr);
+                        } finally {
+                          setIsGimbalInspecting(false);
+                        }
+                      }
+                      for (const frame of inspectionSurvey?.frames.slice(0, 7) ?? []) {
+                        retakeParts.push({
+                          text: `PASS 2 · DRAFT INSPECTION — ${frame.label} | ${frame.description}`,
+                        });
+                        retakeParts.push({ inlineData: { mimeType: 'image/png', data: frame.base64 } });
+                      }
+                      let retakeText = '';
+                      try {
+                        const retakeStream = await chat.sendMessageStream({ message: retakeParts });
+                        for await (const chunk of retakeStream) {
+                          if (stopGenerationRef.current) break;
+                          retakeText += chunk.text;
+                        }
+                      } catch (retakeErr) {
+                        console.warn('[RoadTakeReview] model retake failed:', retakeErr);
+                        logActionToFieldbook('  ! The model retake did not complete — keeping the audited take for review.');
+                        break;
+                      }
+                      const draft = parseRoadRetakeResponse(retakeText);
+                      if (!draft) {
+                        logActionToFieldbook('  ! The retake returned no usable geometry — keeping the audited take for review.');
+                        break;
+                      }
+
+                      const retakeLines: SurveyLine[] = [];
+                      for (const expanded of expandChainsToLines(
+                        draft.chains as DrafterChain[],
+                        pointNumber => {
+                          const point = pointLookup.get(String(pointNumber));
+                          return point ? { easting: point.easting, northing: point.northing } : undefined;
+                        },
+                      )) {
+                        const fromPoint = pointLookup.get(expanded.from);
+                        const toPoint = pointLookup.get(expanded.to);
+                        if (!fromPoint || !toPoint) continue;
+                        retakeLines.push({
+                          ...expanded,
+                          fromPt: { x: fromPoint.easting, y: fromPoint.northing, z: fromPoint.elevation || 0 },
+                          toPt: { x: toPoint.easting, y: toPoint.northing, z: toPoint.elevation || 0 },
+                        });
+                      }
+
+                      draft.lines.forEach((line, index) => {
+                        const from = line.fromPt
+                          ? { x: line.fromPt.x, y: line.fromPt.y, z: 0 }
+                          : (() => {
+                              const point = line.from ? pointLookup.get(String(line.from)) : undefined;
+                              return point ? { x: point.easting, y: point.northing, z: point.elevation || 0 } : null;
+                            })();
+                        const to = line.toPt
+                          ? { x: line.toPt.x, y: line.toPt.y, z: 0 }
+                          : (() => {
+                              const point = line.to ? pointLookup.get(String(line.to)) : undefined;
+                              return point ? { x: point.easting, y: point.northing, z: point.elevation || 0 } : null;
+                            })();
+                        if (!from || !to) return;
+                        retakeLines.push({
+                          id: `road-retake-${retake}-${index}`,
+                          from: line.from || `RET-${retake}-${index}`,
+                          to: line.to || `RET-${retake}-${index + 1}`,
+                          fromPt: from,
+                          toPt: to,
+                          layer: line.layer || currentRoadLines[0]?.layer || 'L-ROAD',
+                          lineType: line.lineType || 'CONTINUOUS',
+                          polylineId: line.polylineId || `road-retake-${retake}-${index}`,
+                        });
+                      });
+
+                      if (retakeLines.length < 2) {
+                        logActionToFieldbook('  ! The retake drew almost nothing — keeping the audited take for review.');
+                        break;
+                      }
+
+                      const recheck = runRoadTakeReview(retakeLines, roadGrounding, {
+                        maxTakes: 3,
+                        inferUnlabeledRoads: roadTakeIntent,
+                        surveyPoints: points,
+                      });
+                      const keptShare = roadLength(retakeLines) / originalLength;
+                      const noRegression = recheck.report.featuresAudited > 0
+                        && keptShare >= 0.5
+                        && recheck.report.scoreAfter >= currentTake.scoreAfter
+                        && recheck.report.remaining.length <= currentTake.remaining.length;
+                      const scoreImproved = recheck.report.featuresAudited > 0
+                        && keptShare >= 0.5
+                        && (recheck.report.scoreAfter > currentTake.scoreAfter
+                          || (recheck.report.scoreAfter === currentTake.scoreAfter
+                            && recheck.report.remaining.length < currentTake.remaining.length));
+                      // A clean first take can never improve its score. It still
+                      // gets the second-pass redraw; accept an equally clean,
+                      // full-length redraw so pass 2 is real rather than skipped.
+                      const cleanSecondPass = currentTake.status !== 'needs_retake'
+                        && recheck.report.status === 'clean'
+                        && noRegression;
+                      if (!scoreImproved && !cleanSecondPass) {
+                        logActionToFieldbook(`  ! Model take ${1 + retake} was not better (${recheck.report.scoreAfter}% vs ${currentTake.scoreAfter}%, ${recheck.report.remaining.length} vs ${currentTake.remaining.length} defect(s)) — keeping the audited take.`);
+                        break;
+                      }
+
+                      // ── SECOND GIMBAL INSPECTION ─────────────────────────────
+                      // The redraw is checked against the recorded first-pass
+                      // station/width model. A take that scores better but
+                      // shortens the corridor, drops an opposite edge or drifts
+                      // the width is rejected and sent back with measured
+                      // mismatches instead of being committed on score alone.
+                      const inspection = passOneMath
+                        ? inspectGimbalRoadModel(passOneMath, recheck.lines, {
+                            includeGenericLinework: roadTakeIntent,
+                          })
+                        : null;
+                      if (inspection) {
+                        currentInspection = inspection;
+                        setGimbalRoadInspection(inspection);
+                        lastGimbalInspectionRef.current = inspection;
+                        logActionToFieldbook(formatGimbalInspectionSummary(inspection));
+                        for (const defect of inspection.defects.slice(0, 5)) {
+                          logActionToFieldbook(`  • ${defect}`);
+                        }
+                        if (!inspection.acceptable) {
+                          logActionToFieldbook('  ! Second gimbal inspection rejected this redraw — keeping the audited take and feeding the measured mismatches into the next round.');
+                          continue;
+                        }
+                      }
+
+                      currentRoadLines = recheck.lines;
+                      currentTake = recheck.report;
+                      committedTake = currentTake;
+                      linesToPlot = [...otherLines, ...currentRoadLines];
+                      lastRoadTakeReviewRef.current = currentTake;
+                      setRoadTakeReview(currentTake);
+                      logActionToFieldbook(formatRoadTakeSummary(currentTake));
+                      for (const repair of currentTake.repairs) {
+                        logActionToFieldbook(`  • ${repair}`);
+                      }
+                      if (currentTake.remaining.length > 0) {
+                        logActionToFieldbook(`  ! Take still needs a redraw: ${currentTake.remaining.slice(0, 5).join(' | ')}`);
+                      }
+                    }
+                  } finally {
+                    setIsLoading(false);
+                  }
+                }
+                // The review must be visible even when the Gimbal HUD is closed:
+                // append a concise take/score/repair line to the chat response.
+                if (committedTake && (roadTakeIntent || committedTake.featuresAudited > 0)) {
+                  const bits: string[] = [];
+                  if (committedTake.featuresAudited === 0) {
+                    bits.push('no road linework recognized — check that the edges carry a road layer');
+                  } else {
+                    bits.push(`${committedTake.takes} take${committedTake.takes === 1 ? '' : 's'}`);
+                    bits.push(`${committedTake.scoreBefore}% → ${committedTake.scoreAfter}%`);
+                    bits.push(`${committedTake.repairs.length} repair${committedTake.repairs.length === 1 ? '' : 's'}`);
+                    bits.push(committedTake.remaining.length > 0
+                      ? `${committedTake.remaining.length} defect${committedTake.remaining.length === 1 ? '' : 's'} still need${committedTake.remaining.length === 1 ? 's' : ''} a redraw`
+                      : 'take accepted');
+                    if (committedTake.inferredFromGeometry) bits.push('road layer inferred from geometry');
+                    if (lastGimbalInspectionRef.current) {
+                      bits.push(lastGimbalInspectionRef.current.acceptable
+                        ? `second gimbal passed (${lastGimbalInspectionRef.current.coveragePct.toFixed(0)}% station coverage)`
+                        : `second gimbal found ${lastGimbalInspectionRef.current.defects.length} mismatch(es)`);
+                    }
+                  }
+                  const note = `\n\n🛠 **Road self-review:** ${bits.join(' · ')}.`;
+                  setHistory(prev => {
+                    const next = [...prev];
+                    const last = next[next.length - 1];
+                    if (last?.role === MessageRole.MODEL) {
+                      next[next.length - 1] = { ...last, text: `${last.text}${note}` };
+                    }
+                    return next;
+                  });
+                }
+              }
               // ── GIMBAL VISION · SYNTHESIS QA (PASS 2) ────────────────────────
               // The model has committed pavement linework. Before it reaches the
               // canvas, re-examine it against the actual background pixels: a
@@ -17721,21 +18489,29 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               // improves, so it can never make a clean draft worse.
               if (
                 (agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT)
-                && isDrawIntent(query)
                 && linesToPlot.length > 0
               ) {
                 try {
                   const evidenceTiles = canvas2dRef.current?.getMapOverlayTiles?.() ?? [];
                   const overviewBounds = civilDrafterVisionSurveyRef.current?.frames?.[0]?.bounds
                     || civilDrafterVisionSurvey?.frames?.[0]?.bounds;
-                  const qaBounds = overviewBounds ?? boundsFromLines(linesToPlot, 0.15);
+                  // Audit against the drafted road's own extent first. A
+                  // whole-site overview makes the pavement raster coarse and
+                  // can put unrelated pavement within the snap search radius.
+                  const qaBounds = boundsFromLines(linesToPlot, 0.15) ?? overviewBounds;
                   if (evidenceTiles.length > 0 && qaBounds) {
                     const qa = verifySynthesizedLinework(linesToPlot, {
                       bounds: qaBounds,
                       mapTiles: evidenceTiles,
+                      // Image evidence may nudge a line, but it must never teleport
+                      // an edge onto a different road or parcel feature.
+                      maxSnapFt: 40,
                     });
                     if (qa.report.status === 'unverified') {
                       setSynthesisQa(null);
+                      // Never silently discard a failed synthesis check: report why
+                      // (usually "the imagery there is all tree canopy").
+                      logActionToFieldbook(formatSynthesisQaSummary(qa.report));
                     } else {
                       setSynthesisQa(qa.report);
                       logActionToFieldbook(formatSynthesisQaSummary(qa.report));
@@ -17747,6 +18523,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         setShowVisionHUD(true);
                       }
                     }
+                  } else {
+                    logActionToFieldbook('Gimbal Synthesis QA: no background imagery at the drafted road — synthesis skipped; the take is grounded on field shots, parcel lines and OSM ways.');
                   }
                 } catch (qaErr) {
                   console.warn('[SynthesisQA] verification pass failed:', qaErr);
@@ -17754,6 +18532,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               }
 
               if (linesToPlot.length > 0) {
+                // One centerline style on every road path: C-ROAD-CNTR is
+                // ALWAYS DASHED. "CENTERLINE" is not in the project linetype
+                // standard and falls back to a solid stroke, which is why the
+                // same road sometimes showed a solid CL and sometimes dashed.
+                linesToPlot = applyRoadCenterlineStyles(linesToPlot);
                 setLines(prevLines => [...prevLines, ...linesToPlot]);
               }
               // Roading Agent: whenever it drafts road linework from the survey
@@ -18742,7 +19525,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   updated[existing] = newCenterline;
                   return updated;
                 } else {
-                  return [...prev, newCenterline];
+                  // centerlines[0] is the active alignment for Stationing, Roading
+                  // and paint. New CLs go to the front so every consumer agrees
+                  // which alignment is current.
+                  return [newCenterline, ...prev];
                 }
               });
               visualDataFound = true;
@@ -18800,7 +19586,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     lineLabelScale, hasConfirmedApiKey, setStandardsComplianceLastReport, formatComplianceReportText, buildStandardsComplianceReport, runVisualComplianceAudit, cadManagerContext,
     applySymbolVisibilityCommand, addNotification, getSetHistoryForAgent, handleFetchEsriContours, toggleToolDock, initializeContouringAgent,
     closePointEntrySurface, openCivilDrafterContextSurface,
-    ensureProjectClusterLocations, openProjectLocationPanel, resolveProjectLocationAction,
+    ensureProjectClusterLocations, ensureParcelGroundingForRoadDraw, openProjectLocationPanel, resolveProjectLocationAction,
     buildProjectLocationPayload, applyProjectProjection, buildProjectionSurfacePayload,
     openProjectionControls
   ]);
@@ -24214,9 +25000,27 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               cadLayerColors={cadLayerColorMap}
               profileData={profileData}
               profileInfo={profileInfo}
+              contourLabels={contourLabels}
+              streetLabels={streetLabels}
+              parcelLabels={parcelLabels}
+              mapAreaLabels={areaLabels}
+              textAnnotations={textAnnotations}
+              pointLayers={pointLayers}
+              annotationCategories={annotationCategories}
+              annotationTextStyles={annotationTextStyles}
+              activeTextStyleName={activeAnnotationTextStyle}
+              annotationScale={annotationScale}
+              parcelLabelFormatter={parcelLabelFormatter}
+              parcelCadTextStyles={parcelCadTextStyles}
               pendingNotes={pendingSheetNotes}
               onPendingNotesConsumed={() => setPendingSheetNotes(null)}
             />
+          );
+        case 'road-paint-studio':
+          return (
+            <div className="p-3">
+              <A2UIRoadPaintStudio centerlines={centerlines} onApply={requestRoadPaintApply} />
+            </div>
           );
         case 'roading-panel':
           return (
@@ -26950,6 +27754,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         points={streamPreviewPoints.length > 0 ? [...points, ...streamPreviewPoints.filter(sp => !points.some(p => p.pointNumber === sp.pointNumber))] : points} 
                                         lines={streamPreviewLines.length > 0 ? [...visibleLines, ...streamPreviewLines] : visibleLines} 
                                         contourLabels={contourLabels}
+                                        contourGenerations={contourGenerations}
+                                        onMoveContourLabel={handleMoveContourLabel}
                                         contourLabelTool={contourLabelTool}
                                         onContourLabelStrike={handleContourLabelStrike}
                                         onCancelContourLabelTool={() => setContourLabelTool(null)}
@@ -27215,10 +28021,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         }
                                     />
                                     {/* Civil Drafter Gimbal Vision HUD � debug-only (Settings ? Developer/Testing) */}
-                                    {activeAgent === AgentType.CIVIL_DRAFTER && showVisionHUD && (!!settings.debugGimbalHud || synthesisQa?.status === 'corrected') && (
+                                    {activeAgent === AgentType.CIVIL_DRAFTER && showVisionHUD && (!!settings.debugGimbalHud || synthesisQa?.status === 'corrected' || (roadTakeReview?.featuresAudited ?? 0) > 0 || isGimbalInspecting || (gimbalDraftSurvey?.frames.length ?? 0) > 0) && (
                                         <CivilDrafterVisionHUD
                                             isScanning={isVisionScanning}
                                             qa={synthesisQa}
+                                            roadReview={roadTakeReview}
+                                            mathModel={gimbalRoadModel}
+                                            gimbalInspection={gimbalRoadInspection}
+                                            inspectionSurvey={gimbalDraftSurvey}
+                                            isInspecting={isGimbalInspecting}
                                             survey={civilDrafterVisionSurvey}
                                             onDismiss={() => setShowVisionHUD(false)}
                                         />
@@ -27677,6 +28488,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                       cadLayerColors={cadLayerColorMap}
                                       profileData={profileData}
                                       profileInfo={profileInfo}
+                                      contourLabels={contourLabels}
+                                      streetLabels={streetLabels}
+                                      parcelLabels={parcelLabels}
+                                      mapAreaLabels={areaLabels}
+                                      textAnnotations={textAnnotations}
+                                      pointLayers={pointLayers}
+                                      annotationCategories={annotationCategories}
+                                      annotationTextStyles={annotationTextStyles}
+                                      activeTextStyleName={activeAnnotationTextStyle}
+                                      annotationScale={annotationScale}
+                                      parcelLabelFormatter={parcelLabelFormatter}
+                                      parcelCadTextStyles={parcelCadTextStyles}
                                       pendingNotes={pendingSheetNotes}
                                       onPendingNotesConsumed={() => setPendingSheetNotes(null)}
                                     />
