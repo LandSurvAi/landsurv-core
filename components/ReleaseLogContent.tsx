@@ -2,6 +2,17 @@
 
 const releases = [
     {
+        version: "26.11.10.01",
+        date: "November 10, 2026",
+        highlights: [
+            "📍 Point Is Now a Live Placement Tool: The canvas toolbar's Point button no longer opens the Add Point form. It closes any open Add Point surface, brings the canvas forward and arms the live add-point command with the next CACP number and the standard elevation/description defaults. Click the canvas to drop a point, keep clicking for more, and press Esc to finish.",
+            "🧭 Open Point Editor Is a Direct UI Command: Chat requests such as 'open the point editor', 'show me the point editor', 'bring up a point editor' and 'opening a point editor' now open the Point Editor Tools dock deterministically. The request never spends a model turn or polls the point database first, and the dock opens ready to add, edit, sort, save or merge points.",
+            "🧩 Floating Panels Get the Chat Out of the Way: Moving an A2UI surface or tool panel to Floating now closes the chat panel immediately, so the canvas and the floating tool get the full workspace. Chat and Toolshelf remain available from the standard placement control.",
+            "📊 CACP Spreadsheets Join the Standard A2UI Dock Lifecycle: `open_spreadsheet` results now open as first-class `spreadsheet` A2UI payloads through the same standalone presentation path as other dockable surfaces. The Manually Added Points sheet and future agent spreadsheets keep Floating / Chat / Toolshelf placement instead of a host-only window.",
+            "🎨 Point and Contour Workspaces Share One Visual Language: Point Tools now presents Capture/Import, Add Point, Point List, Point Labeling and Point Workspace as color-coded cards, with an All tools entry from the Point Editor panel. The Add Point form, point stats/filter row and unsaved-point panel use the same chip treatment; unsaved counts are blue/cyan instead of amber, duplicate warnings are rose, and contour tools use the same card system with each generation shown independently.",
+        ],
+    },
+    {
         version: "26.11.09.02",
         date: "November 9, 2026",
         highlights: [

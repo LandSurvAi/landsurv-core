@@ -37,6 +37,7 @@ export const USGS_CONTOUR_WFS_SERVICE_URL =
 export const USGS_CONTOUR_LAYER_PREFIX = 'USGS-CONTOUR';
 
 export type NationalContourType = 'contour-major' | 'contour-minor';
+export type ContourInclusionScope = 'inside' | 'outside';
 
 /** Options understood by App.handleFetchEsriContours. */
 export interface ContourFetchOptions {
@@ -46,9 +47,12 @@ export interface ContourFetchOptions {
   clearPrefix?: string;
   /** Force a contour class instead of deriving it from the elevation. */
   contourType?: NationalContourType;
+  /** For inclusion mode, keep geometry inside or outside the boundary. */
+  inclusionScope?: ContourInclusionScope;
   /**
-   * When false, a zero-feature response is reported as-is. Defaults to true:
-   * PASDA / ArcGIS Online / Scout alternatives are tried automatically.
+   * When true, a zero-feature response may be retried against resolver
+   * alternatives. Defaults to false so a user-selected source is never swapped
+   * without their consent.
    */
   autoResolve?: boolean;
 }

@@ -23,6 +23,7 @@ import {
   type A2UISurfaceSize,
   type A2UIWidgetType,
 } from '../types.ts';
+import { CONTOUR_CHIP_IDS, CONTOUR_CHIP_META } from './contourChips.ts';
 
 export type A2UISurfaceAudience = 'workspace' | 'public';
 
@@ -535,15 +536,46 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
     id: 'workspace-tin-surfaces',
     title: 'TIN Surfaces',
     description:
-      'Create a surface from contours, import .tin/LandXML, inspect vertices and triangles, and export LandXML or native .tin.',
+      'Draw a loaded .tin or LandXML surface on the canvas as a wireframe or shaded elevation model, build a surface from contours, and export LandXML or native .tin.',
     category: 'workspace',
     glyph: '△',
     accent: 'cyan',
     audiences: ['workspace'],
     agent: AgentType.CONTOURING_AGENT,
     widgetType: 'tin-surfaces',
-    keywords: ['tin', 'surface', 'landxml', 'import tin', 'export tin', 'contour surface'],
+    keywords: [
+      'tin',
+      'surface',
+      'mesh',
+      'wireframe',
+      'shaded',
+      'draw surface',
+      'draw mesh',
+      'surface display',
+      'landxml',
+      'import tin',
+      'export tin',
+      'contour surface',
+    ],
   },
+  // Every contour tool is its own A2UI chip. Chips deliberately have no dock
+  // controls: the catalog/chat layer raises them on demand, and each is
+  // independently addressable by id and widgetType.
+  ...CONTOUR_CHIP_IDS.map((chip): A2UISurfaceDefinition => {
+    const meta = CONTOUR_CHIP_META[chip];
+    return {
+      id: `workspace-${chip}`,
+      title: meta.label,
+      description: meta.description,
+      category: 'workspace',
+      glyph: meta.glyph,
+      accent: meta.accent,
+      audiences: ['workspace'],
+      agent: AgentType.CONTOURING_AGENT,
+      widgetType: chip,
+      keywords: meta.keywords,
+    };
+  }),
   {
     id: 'workspace-steep-slope-report',
     title: 'Steep Slope Report',
@@ -626,6 +658,18 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
   },
 
   // ── Dialogs and system ────────────────────────────────────────────────────
+  {
+    id: 'point-tools',
+    title: 'Point Tools',
+    description: 'Capture, add, review, label, and manage survey points from one workspace.',
+    category: 'workspace',
+    glyph: 'P',
+    accent: 'cyan',
+    audiences: ['workspace'],
+    agent: AgentType.POINT_EDITOR,
+    widgetType: 'point-tools',
+    keywords: ['point tools', 'point workspace', 'add point', 'point list', 'point labeling', 'import points'],
+  },
   {
     id: 'point-entry',
     title: 'Add Point',

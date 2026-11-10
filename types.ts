@@ -242,6 +242,7 @@ export type A2UIWorkspaceToolId =
   | 'roading-panel'
   | 'road-paint-studio'
   | 'tin-surfaces'
+  | 'point-tools'
   | 'legend';
 
 export interface A2UIInputField {
@@ -269,6 +270,25 @@ export interface A2UIInputFormSpec {
   submitLabel?: string;
   /** At least one of these field-id groups must be complete. */
   requireOneOf?: string[][];
+}
+
+export type A2UIContourChipId =
+  | 'contour-source'
+  | 'contour-intervals'
+  | 'contour-cleanup'
+  | 'contour-scope'
+  | 'contour-labels'
+  | 'contour-ignore-points'
+  | 'contour-actions'
+  | 'contour-generations'
+  | 'contour-generation'
+  | 'contour-blend'
+  | 'contour-esri';
+
+export interface A2UIContourChipSpec {
+  chip: A2UIContourChipId;
+  /** Bind one born generation when the chip is a single-generation chip. */
+  generationId?: string;
 }
 
 export type A2UIWidgetType =
@@ -310,6 +330,7 @@ export type A2UIWidgetType =
   | 'properties'
   | 'help'
   | 'page-guide'
+  | A2UIContourChipId
   | A2UIWorkspaceToolId;
 
 export interface A2UIZoningContext {
@@ -714,6 +735,7 @@ export interface A2UIPayload {
     | 'settings'
     | 'properties'
     | 'workspace-tool'
+    | 'contour-chip'
     | 'help'
     | 'page-guide';
   /** The agent that owns this A2UI surface */
@@ -762,6 +784,8 @@ export interface A2UIPayload {
   properties?: A2UIPropertiesSpec;
   /** Specific workspace manager/tool mounted inside the surface. */
   workspaceTool?: A2UIWorkspaceToolId;
+  /** One independently addressable contour chip bound to live settings/actions. */
+  contourChip?: A2UIContourChipSpec;
   /** Initial manifest selection for an in-chat CACP explorer. */
   cacpManifests?: { initialAgent?: AgentType };
   /** Roading Agent intake/design parameters bound to the A2UI surface. */
@@ -837,7 +861,7 @@ export interface SurveyLine {
   fillPath?: Array<{ x: number, y: number, z: number }>;
   bearing?: string;
   distance?: string;
-  type?: 'baseline' | 'breakline' | 'inclusion' | 'exclusion' | 'shrinkwrap-preview' | 'contour-major' | 'contour-minor' | 'parcel' | 'flood' | 'bfe' | 'soils' | 'steep-slope' | 'tin-edge' | 'road-paint';
+  type?: 'baseline' | 'breakline' | 'inclusion' | 'exclusion' | 'shrinkwrap-preview' | 'contour-major' | 'contour-minor' | 'parcel' | 'flood' | 'bfe' | 'fema-cross-section' | 'fema-firm-panel' | 'fema-political' | 'fema-lomr' | 'fema-loma' | 'fema-water' | 'fema-limwa' | 'fema-levee' | 'fema-structure' | 'fema-dune' | 'fema-hydrology' | 'fema-boundary' | 'fema-other' | 'fema-point' | 'soils' | 'steep-slope' | 'tin-edge' | 'road-paint';
   fromPt?: { x: number, y: number, z: number };
   toPt?: { x: number, y: number, z: number };
   // Curve parameters (for closure calculations and plotting)
@@ -866,8 +890,18 @@ export interface SurveyLine {
   generationId?: string;
   /** Line source — 'esri' for ESRI/State fetched contours, 'survey' for generated contours. */
   source?: 'esri' | 'survey';
+  /** True for a trimmed ESRI line or connector curve synthesized by blend mode. */
+  blendDerived?: boolean;
+  /** Survey generation whose ESRI blend produced this derived line. */
+  blendOwnerId?: string;
+  /** True while blend mode is hiding this source ESRI line. */
+  blendHidden?: boolean;
+  /** Hidden state before blend mode hid this source line, used to restore it. */
+  blendOriginalHidden?: boolean;
   /** Elevation callout drawn along the line (used by FEMA BFE linework). */
   labelText?: string;
+  /** Anchor-only line: its label renders, but the zero-length geometry does not. */
+  labelOnly?: boolean;
   /** Base Flood Elevation in feet, when this line came from the NFHL BFE layer. */
   bfeElevation?: number;
   /** Vertical datum reported by FEMA for the BFE (e.g. NAVD88). */
@@ -930,6 +964,25 @@ export interface ContourGeneration {
   esriBlendInclusionPolylineId?: string | null;
 }
 
+/** Result of fitting visible ESRI/State contours to a survey contour generation. */
+export interface ContourBlendStats {
+  status: 'blended' | 'no-esri' | 'no-boundary';
+  /** Number of smooth transition curves added at the boundary. */
+  connectorCount: number;
+  /** ESRI contour ends that found a same-elevation survey end. */
+  matchedEndpoints: number;
+  /** ESRI contour ends left open because no survey end matched them. */
+  unmatchedGisEndpoints: number;
+  /** Candidate joins rejected by the geometric rationality gate. */
+  rejectedConnectorCount?: number;
+  /** Why rejected joins were not drawn (crossing, looping, excessive bulge). */
+  rationalityIssues?: string[];
+  /** ESRI generations included in this blend. */
+  targetGenerationIds: string[];
+  /** Maximum endpoint gap this blend was allowed to bridge, in project units. */
+  maxJoinDistance: number;
+}
+
 export type GenerationKind = 'contour' | 'flood' | 'soils';
 
 export interface GenerationParameter {
@@ -943,6 +996,7 @@ export interface GenerationQuery {
   description?: string;
   bbox?: [number, number, number, number];
   includeBfe?: boolean;
+  includeAllLayers?: boolean;
   clippedToBoundary?: boolean;
   inclusionBoundaryName?: string;
 }
@@ -1987,6 +2041,8 @@ export interface EsriServiceInfo {
     dataType?: string;
     resolution?: string;
 }
+export type ContourInclusionMode = 'inside' | 'outside';
+
 export interface ContourSettings {
     contourInterval: number;
     majorInterval: number;
@@ -2009,6 +2065,16 @@ export interface ContourSettings {
     /** Hard elevation bounds applied before triangulation. Null/undefined means unbounded. */
     minElevation?: number | null;
     maxElevation?: number | null;
+    /** Drop invert shots (INV/SAN.INV/storm or sewer invert descriptions). Defaults to true. */
+    excludeInvertPoints?: boolean;
+    /** Drop finished-floor shots (FFE/FIRST FLOOR/FINISHED FLOOR). Defaults to true. */
+    excludeFfePoints?: boolean;
+    /** Drop structure/top-of shots that are not bare-earth surface (RIM, MH, CB, top of wall, etc.). Defaults to true. */
+    excludeStructureShots?: boolean;
+    /** Which side of the active inclusion boundary to contour. Defaults to 'inside'.
+     *  'outside' keeps points and contour paths outside the boundary, which is the
+     *  survey half of an inside-survey / outside-GIS blend. */
+    inclusionMode?: ContourInclusionMode;
 }
 
 export interface ProfilePoint {
@@ -2123,6 +2189,8 @@ export interface TinSurface {
   sourcePointIds?: string[];
   /** RGB hex color for wireframe rendering (e.g. "#06b6d4"). */
   color?: string;
+  /** Canvas draw style. Undefined follows the workspace TIN shading toggle. */
+  displayMode?: 'wireframe' | 'shaded';
 }
 
 export interface SteepSlopeBand {

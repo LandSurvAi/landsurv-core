@@ -6,6 +6,7 @@ import {
   USGS_NATIONAL_CONTOUR_SOURCES,
   nationalContourFetchOptions,
   type ContourFetchOptions,
+  type ContourInclusionScope,
 } from '../utils/usgsNationalContours.ts';
 import { ContourDownloadForm, type ContourAoiMode } from './ContourDownloadForm.tsx';
 import { useDocumentScrollLock } from '../hooks/useDocumentScrollLock.ts';
@@ -63,6 +64,7 @@ export const ContourPanel: React.FC<ContourPanelProps> = ({ settings, onSettings
   // Per-URL download panel state
   const [fetchOpenUrl, setFetchOpenUrl] = useState<string | null>(null);
   const [fetchMode, setFetchMode] = useState<ContourAoiMode>(hasInclusionBoundary ? 'inclusion' : 'description');
+  const [fetchInclusionScope, setFetchInclusionScope] = useState<ContourInclusionScope>('inside');
   const [fetchDescription, setFetchDescription] = useState('');
   // Inline layer browser for the URL input field
   const [browseStatus, setBrowseStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
@@ -524,9 +526,14 @@ export const ContourPanel: React.FC<ContourPanelProps> = ({ settings, onSettings
                       onDescriptionChange={setFetchDescription}
                       hasInclusionBoundary={hasInclusionBoundary}
                       inclusionSegmentCount={inclusionSegmentCount}
+                      inclusionScope={fetchInclusionScope}
+                      onInclusionScopeChange={setFetchInclusionScope}
                       isFetching={isFetchingEsri}
                       onDownload={(mode, desc) =>
-                        onFetchEsriContours(source.url, mode, desc, nationalContourFetchOptions(source))
+                        onFetchEsriContours(source.url, mode, desc, {
+                          ...nationalContourFetchOptions(source),
+                          ...(mode === 'inclusion' ? { inclusionScope: fetchInclusionScope } : {}),
+                        })
                       }
                     />
                   )}
@@ -582,8 +589,15 @@ export const ContourPanel: React.FC<ContourPanelProps> = ({ settings, onSettings
                       onDescriptionChange={setFetchDescription}
                       hasInclusionBoundary={hasInclusionBoundary}
                       inclusionSegmentCount={inclusionSegmentCount}
+                      inclusionScope={fetchInclusionScope}
+                      onInclusionScopeChange={setFetchInclusionScope}
                       isFetching={isFetchingEsri}
-                      onDownload={(mode, desc) => onFetchEsriContours(url, mode, desc)}
+                      onDownload={(mode, desc) => onFetchEsriContours(
+                        url,
+                        mode,
+                        desc,
+                        mode === 'inclusion' ? { inclusionScope: fetchInclusionScope } : undefined,
+                      )}
                     />
                   )}
                 </div>

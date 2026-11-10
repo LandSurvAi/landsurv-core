@@ -1,4 +1,4 @@
-import { type SurveyPoint, type SurveyLine, type ContourLabel, type ProfilePoint, type IsoPath, type TinSurface } from '../types.ts';
+import { type SurveyPoint, type SurveyLine, type ContourLabel, type ProfilePoint, type IsoPath, type TinSurface, type ContourInclusionMode } from '../types.ts';
 
 // Types for Delaunay triangulation
 type DPoint = { x: number; y: number; z: number; };
@@ -44,16 +44,26 @@ function delaunay(points: DPoint[]): { p1: number; p2: number; p3: number }[] {
     const midX = minX + dx / 2;
     const midY = minY + dy / 2;
 
-    const p0 = { x: midX - 20 * deltaMax, y: midY - deltaMax, z: 0 };
-    const p1 = { x: midX, y: midY + 20 * deltaMax, z: 0 };
-    const p2 = { x: midX + 20 * deltaMax, y: midY - deltaMax, z: 0 };
+    // Bowyer-Watson circumcircles are numerically fragile with State Plane
+    // coordinates in the millions of feet. Work in a local normalized frame so
+    // large sites behave like small ones; indices still refer to `points`.
+    const scale = Math.max(dx, dy) || 1;
+    const normalizedPoints = points.map(p => ({
+        x: (p.x - midX) / scale,
+        y: (p.y - midY) / scale,
+        z: p.z,
+    }));
 
-    const allPoints = [...points, p0, p1, p2];
+    const p0 = { x: -20, y: -1, z: 0 };
+    const p1 = { x: 0, y: 20, z: 0 };
+    const p2 = { x: 20, y: -1, z: 0 };
+
+    const allPoints = [...normalizedPoints, p0, p1, p2];
 
     let triangles: DTriangle[] = [createTriangle(n, n + 1, n + 2, allPoints)];
 
     for (let i = 0; i < n; i++) {
-        const point = points[i];
+        const point = normalizedPoints[i];
         const badTriangles: DTriangle[] = [];
         const polygon: { p1: number; p2: number }[] = [];
 
@@ -95,6 +105,71 @@ function delaunay(points: DPoint[]): { p1: number; p2: number; p3: number }[] {
     return triangles
         .filter(t => t.p1 < n && t.p2 < n && t.p3 < n)
         .map(t => ({ p1: t.p1, p2: t.p2, p3: t.p3 }));
+}
+
+/**
+ * Stitch contour triangle edges into polylines with endpoint buckets. The old
+ * implementation rescanned every unused edge after every join (O(E²)); a level
+ * with thousands of segments could take seconds and produce fragmented paths.
+ */
+function linkContourEdges(
+    edges: { p1: { x: number; y: number }; p2: { x: number; y: number } }[],
+    tolerance: number,
+): { x: number; y: number }[][] {
+    if (edges.length === 0) return [];
+
+    const buckets = new Map<string, number[]>();
+    const keyFor = (point: { x: number; y: number }) =>
+        `${Math.round(point.x / tolerance)}|${Math.round(point.y / tolerance)}`;
+
+    edges.forEach((edge, index) => {
+        for (const endpoint of [edge.p1, edge.p2]) {
+            const key = keyFor(endpoint);
+            const bucket = buckets.get(key);
+            if (bucket) bucket.push(index);
+            else buckets.set(key, [index]);
+        }
+    });
+
+    const used = new Uint8Array(edges.length);
+    const takeAt = (point: { x: number; y: number }): number => {
+        const bucket = buckets.get(keyFor(point));
+        if (!bucket) return -1;
+        while (bucket.length > 0) {
+            const index = bucket.pop()!;
+            if (!used[index]) return index;
+        }
+        return -1;
+    };
+
+    const paths: { x: number; y: number }[][] = [];
+    for (let i = 0; i < edges.length; i++) {
+        if (used[i]) continue;
+        used[i] = 1;
+        const path = [edges[i].p1, edges[i].p2];
+
+        let nextIndex = takeAt(path[path.length - 1]);
+        while (nextIndex >= 0) {
+            used[nextIndex] = 1;
+            const edge = edges[nextIndex];
+            const head = path[path.length - 1];
+            path.push(pointsClose(head, edge.p1, tolerance) ? edge.p2 : edge.p1);
+            nextIndex = takeAt(path[path.length - 1]);
+        }
+
+        nextIndex = takeAt(path[0]);
+        while (nextIndex >= 0) {
+            used[nextIndex] = 1;
+            const edge = edges[nextIndex];
+            const tail = path[0];
+            path.unshift(pointsClose(tail, edge.p1, tolerance) ? edge.p2 : edge.p1);
+            nextIndex = takeAt(path[0]);
+        }
+
+        if (path.length >= 2) paths.push(path);
+    }
+
+    return paths;
 }
 
 // Chaikin's corner cutting algorithm for smoothing
@@ -226,6 +301,12 @@ export interface ElevationFilterOptions {
     maxElevation?: number | null;
     /** Contour interval, used to scale the auto detachment threshold. */
     contourInterval?: number;
+    /** Drop invert shots such as SAN.INV, STORM INV or "INV" descriptions. */
+    excludeInvertPoints?: boolean;
+    /** Drop finished-floor shots (FFE / first floor / finished floor). */
+    excludeFfePoints?: boolean;
+    /** Drop structure and top-of shots (rim, MH, CB, top of wall, flow line, etc.). */
+    excludeStructureShots?: boolean;
 }
 
 export interface ElevationFilterReport {
@@ -239,6 +320,16 @@ export interface ElevationFilterReport {
     /** True when a detached cluster was detected but left in place because
      *  dropping it would have discarded too much of the survey. */
     suppressed: boolean;
+    /** Unique points removed because their description marks them as non-ground. */
+    nonGround: number;
+    /** Points removed as invert shots. */
+    nonGroundInvert: number;
+    /** Points removed as finished-floor shots. */
+    nonGroundFfe: number;
+    /** Points removed as structure / top-of shots. */
+    nonGroundStructure: number;
+    /** Coincident XY shots skipped before triangulation. */
+    duplicateXY: number;
 }
 
 export const emptyElevationReport = (): ElevationFilterReport => ({
@@ -247,7 +338,42 @@ export const emptyElevationReport = (): ElevationFilterReport => ({
     acceptedMin: null,
     acceptedMax: null,
     suppressed: false,
+    nonGround: 0,
+    nonGroundInvert: 0,
+    nonGroundFfe: 0,
+    nonGroundStructure: 0,
+    duplicateXY: 0,
 });
+
+export type ContourNonGroundCategory = 'invert' | 'ffe' | 'structure';
+
+const STRUCTURE_TOKEN_PATTERN = /\s(?:RIM|MH|SMH|CB|INLET|HEADWALL|OUTFALL|FL|TC|TOC|TOW|STRUCTURE|FOUNDATION|BUILDING|BLDG)\s/;
+const STRUCTURE_PHRASE_PATTERN = /\s(?:CATCH BASIN|DROP INLET|TOP OF WALL|TOP OF CURB|TOP OF CASING|TOP OF PIPE)\s/;
+
+/**
+ * Classify survey shots that represent man-made features rather than bare
+ * earth. These shots are useful planimetrics, but they create spikes and holes
+ * when fed into a topographic TIN.
+ */
+export function classifyContourNonGroundPoint(
+    point: Pick<SurveyPoint, 'description'>,
+): ContourNonGroundCategory[] {
+    const description = String(point.description ?? '').toUpperCase();
+    if (!description.trim()) return [];
+
+    const normalized = ` ${description.replace(/[^A-Z0-9]+/g, ' ').trim()} `;
+    const categories: ContourNonGroundCategory[] = [];
+
+    if (/\s(?:INV|INVERT|INVERSION)\s/.test(normalized)) categories.push('invert');
+    if (/\s(?:FFE|FIRST FLOOR|FIRST FLR|FINISHED FLOOR|FINISHED FLR|BASEMENT FLOOR|TOP OF FOUNDATION)\s/.test(normalized)) {
+        categories.push('ffe');
+    }
+    if (STRUCTURE_TOKEN_PATTERN.test(normalized) || STRUCTURE_PHRASE_PATTERN.test(normalized)) {
+        categories.push('structure');
+    }
+
+    return categories;
+}
 
 /** Auto-rejection refuses to discard more than this share of the survey. A real
  *  terrain feature is represented by many shots; blunders are a handful. */
@@ -329,7 +455,26 @@ export function filterPointsByElevation(
 ): { points: SurveyPoint[]; report: ElevationFilterReport } {
     const report = emptyElevationReport();
     const finite: number[] = [];
+    const nonGround = new Set<SurveyPoint>();
+    const excludeInvert = options.excludeInvertPoints !== false;
+    const excludeFfe = options.excludeFfePoints !== false;
+    const excludeStructure = options.excludeStructureShots !== false;
+
     for (const p of points) {
+        const categories = classifyContourNonGroundPoint(p);
+        const dropInvert = excludeInvert && categories.includes('invert');
+        const dropFfe = excludeFfe && categories.includes('ffe');
+        const dropStructure = excludeStructure && categories.includes('structure');
+
+        if (dropInvert || dropFfe || dropStructure) {
+            nonGround.add(p);
+            report.nonGround++;
+            if (dropInvert) report.nonGroundInvert++;
+            if (dropFfe) report.nonGroundFfe++;
+            if (dropStructure) report.nonGroundStructure++;
+            continue;
+        }
+
         if (typeof p.elevation === 'number' && Number.isFinite(p.elevation)) finite.push(p.elevation);
         else report.missingElevation++;
     }
@@ -339,6 +484,7 @@ export function filterPointsByElevation(
 
     const kept: SurveyPoint[] = [];
     for (const p of points) {
+        if (nonGround.has(p)) continue;
         const z = p.elevation;
         if (typeof z !== 'number' || !Number.isFinite(z)) continue;
         if (z < min || z > max) { report.outOfRange++; continue; }
@@ -348,6 +494,30 @@ export function filterPointsByElevation(
     }
 
     return { points: kept, report };
+}
+
+/**
+ * Remove coincident XY shots. Duplicate coordinates are a common source of
+ * zero-area Bowyer-Watson triangles; rounding to 1/10,000 ft also makes the
+ * dedupe tolerant of sub-millimetre coordinate noise.
+ */
+export function dedupeSurfacePoints(
+    points: SurveyPoint[],
+): { points: SurveyPoint[]; duplicateXY: number } {
+    const byCoordinate = new Map<string, SurveyPoint>();
+    let duplicateXY = 0;
+
+    for (const point of points) {
+        if (!Number.isFinite(point.easting) || !Number.isFinite(point.northing)) continue;
+        const key = `${Math.round(point.easting * 10000)}|${Math.round(point.northing * 10000)}`;
+        if (byCoordinate.has(key)) {
+            duplicateXY++;
+            continue;
+        }
+        byCoordinate.set(key, point);
+    }
+
+    return { points: [...byCoordinate.values()], duplicateXY };
 }
 
 // FIX: Update function signature to accept label options and return labels.
@@ -362,7 +532,8 @@ export function generateContours(
     inclusionLines?: SurveyLine[],
     exclusionLines?: SurveyLine[],
     elevationFilter?: ElevationFilterOptions,
-    lineLayers?: IsoPathLineLayers
+    lineLayers?: IsoPathLineLayers,
+    inclusionMode: ContourInclusionMode = 'inside',
 ): { lines: SurveyLine[], labels: ContourLabel[], elevationReport: ElevationFilterReport } {
     if (surveyPoints.length < 3) return { lines: [], labels: [], elevationReport: emptyElevationReport() };
 
@@ -374,20 +545,24 @@ export function generateContours(
     const exclPoly = exclSegs.length >= 3 ? buildPolygonFromSegments(exclSegs) : null;
 
     // ── Filter survey points by inclusion/exclusion zones ──────────────────
+    const keepInside = inclusionMode !== 'outside';
     let activePoints = surveyPoints;
     if (inclPoly && inclPoly.length >= 3) {
-        activePoints = activePoints.filter(p => pointInPolygon(p.easting, p.northing, inclPoly));
+        activePoints = activePoints.filter(p => pointInPolygon(p.easting, p.northing, inclPoly) === keepInside);
     }
     if (exclPoly && exclPoly.length >= 3) {
         activePoints = activePoints.filter(p => !pointInPolygon(p.easting, p.northing, exclPoly));
     }
 
-    // Reject unusable elevations before they can widen the contour level range.
+    // Reject unusable elevations and non-ground shots before they can widen the
+    // contour level range or spike the TIN.
     const { points: usablePoints, report: elevationReport } = filterPointsByElevation(activePoints, {
         contourInterval,
         ...elevationFilter,
     });
-    activePoints = usablePoints;
+    const deduped = dedupeSurfacePoints(usablePoints);
+    elevationReport.duplicateXY = deduped.duplicateXY;
+    activePoints = deduped.points;
     if (activePoints.length < 3) return { lines: [], labels: [], elevationReport };
 
     const dPoints: DPoint[] = activePoints.map(p => ({ x: p.easting, y: p.northing, z: p.elevation as number }));
@@ -413,6 +588,8 @@ export function generateContours(
         const t_p2 = dPoints[tri.p2];
         const t_p3 = dPoints[tri.p3];
         if (!t_p1 || !t_p2 || !t_p3) return false;
+        const area2 = Math.abs((t_p2.x - t_p1.x) * (t_p3.y - t_p1.y) - (t_p3.x - t_p1.x) * (t_p2.y - t_p1.y));
+        if (!Number.isFinite(area2) || area2 < 1e-6) return false;
 
         const triEdges = [[t_p1, t_p2], [t_p2, t_p3], [t_p3, t_p1]];
 
@@ -469,48 +646,7 @@ export function generateContours(
             }
         }
         
-        // Basic edge linking to form polylines
-        const paths: { x: number; y: number }[][] = [];
-        const visited = new Set<number>();
-        for(let i = 0; i < edgesForLevel.length; i++) {
-            if(visited.has(i)) continue;
-            
-            const path = [edgesForLevel[i].p1, edgesForLevel[i].p2];
-            visited.add(i);
-
-            let changed = true;
-            while(changed) {
-                changed = false;
-                for(let j = 0; j < edgesForLevel.length; j++) {
-                    if(visited.has(j)) continue;
-
-                    const edge = edgesForLevel[j];
-                    const head = path[path.length - 1];
-                    const tail = path[0];
-
-                    const dist = (p1: {x:number, y:number}, p2: {x:number, y:number}) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
-                    
-                    if (dist(head, edge.p1) < 1e-5) {
-                        path.push(edge.p2);
-                        visited.add(j);
-                        changed = true;
-                    } else if (dist(head, edge.p2) < 1e-5) {
-                        path.push(edge.p1);
-                        visited.add(j);
-                        changed = true;
-                    } else if (dist(tail, edge.p1) < 1e-5) {
-                        path.unshift(edge.p2);
-                        visited.add(j);
-                        changed = true;
-                    } else if (dist(tail, edge.p2) < 1e-5) {
-                        path.unshift(edge.p1);
-                        visited.add(j);
-                        changed = true;
-                    }
-                }
-            }
-            paths.push(path);
-        }
+        const paths = linkContourEdges(edgesForLevel, 1e-5);
         contourPaths.set(elev, paths);
     }
     
@@ -526,7 +662,11 @@ export function generateContours(
         for (const path of paths) {
             const smoothedPath = smoothing > 0 ? chaikinSmooth(path, smoothing) : path;
             const renderedPaths = inclPoly && inclPoly.length >= 3
-                ? clipIsoPathsToPolygon([{ elevation: elev, isMajor, vertices: smoothedPath }], inclPoly)
+                ? clipIsoPathsToPolygon(
+                    [{ elevation: elev, isMajor, vertices: smoothedPath }],
+                    inclPoly,
+                    inclusionMode === 'outside' ? 'outside' : 'inside',
+                )
                 : [{ elevation: elev, isMajor, vertices: smoothedPath }];
             for (const renderedPath of renderedPaths) {
                 for (let i = 0; i < renderedPath.vertices.length - 1; i++) {
@@ -592,7 +732,8 @@ export function generateContoursAsIsoPaths(
     breaklines: SurveyLine[],
     inclusionLines?: SurveyLine[],
     exclusionLines?: SurveyLine[],
-    elevationFilter?: ElevationFilterOptions
+    elevationFilter?: ElevationFilterOptions,
+    inclusionMode: ContourInclusionMode = 'inside',
 ): { isoPaths: IsoPath[], labels: ContourLabel[], elevationReport: ElevationFilterReport } {
     if (surveyPoints.length < 3) return { isoPaths: [], labels: [], elevationReport: emptyElevationReport() };
 
@@ -602,20 +743,24 @@ export function generateContoursAsIsoPaths(
     const exclSegs = getSegPairs(exclusionLines ?? []);
     const exclPoly = exclSegs.length >= 3 ? buildPolygonFromSegments(exclSegs) : null;
 
+    const keepInside = inclusionMode !== 'outside';
     let activePoints = surveyPoints;
     if (inclPoly && inclPoly.length >= 3) {
-        activePoints = activePoints.filter(p => pointInPolygon(p.easting, p.northing, inclPoly));
+        activePoints = activePoints.filter(p => pointInPolygon(p.easting, p.northing, inclPoly) === keepInside);
     }
     if (exclPoly && exclPoly.length >= 3) {
         activePoints = activePoints.filter(p => !pointInPolygon(p.easting, p.northing, exclPoly));
     }
 
-    // Reject unusable elevations before they can widen the contour level range.
+    // Reject unusable elevations and non-ground shots before they can widen the
+    // contour level range or spike the TIN.
     const { points: usablePoints, report: elevationReport } = filterPointsByElevation(activePoints, {
         contourInterval,
         ...elevationFilter,
     });
-    activePoints = usablePoints;
+    const deduped = dedupeSurfacePoints(usablePoints);
+    elevationReport.duplicateXY = deduped.duplicateXY;
+    activePoints = deduped.points;
     if (activePoints.length < 3) return { isoPaths: [], labels: [], elevationReport };
 
     const dPoints: DPoint[] = activePoints.map(p => ({ x: p.easting, y: p.northing, z: p.elevation as number }));
@@ -641,6 +786,8 @@ export function generateContoursAsIsoPaths(
         const t_p2 = dPoints[tri.p2];
         const t_p3 = dPoints[tri.p3];
         if (!t_p1 || !t_p2 || !t_p3) return false;
+        const area2 = Math.abs((t_p2.x - t_p1.x) * (t_p3.y - t_p1.y) - (t_p3.x - t_p1.x) * (t_p2.y - t_p1.y));
+        if (!Number.isFinite(area2) || area2 < 1e-6) return false;
         const triEdges = [[t_p1, t_p2], [t_p2, t_p3], [t_p3, t_p1]];
         for (const bEdge of breaklineEdges) {
             for (const tEdge of triEdges) {
@@ -681,29 +828,7 @@ export function generateContoursAsIsoPaths(
                 edgesForLevel.push({ p1: contourPoints[0], p2: contourPoints[1] });
             }
         }
-        const paths: { x: number; y: number }[][] = [];
-        const visited = new Set<number>();
-        for (let i = 0; i < edgesForLevel.length; i++) {
-            if (visited.has(i)) continue;
-            const path = [edgesForLevel[i].p1, edgesForLevel[i].p2];
-            visited.add(i);
-            let changed = true;
-            while (changed) {
-                changed = false;
-                for (let j = 0; j < edgesForLevel.length; j++) {
-                    if (visited.has(j)) continue;
-                    const edge = edgesForLevel[j];
-                    const head = path[path.length - 1];
-                    const tail = path[0];
-                    const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
-                    if (dist(head, edge.p1) < 1e-5) { path.push(edge.p2); visited.add(j); changed = true; }
-                    else if (dist(head, edge.p2) < 1e-5) { path.push(edge.p1); visited.add(j); changed = true; }
-                    else if (dist(tail, edge.p1) < 1e-5) { path.unshift(edge.p2); visited.add(j); changed = true; }
-                    else if (dist(tail, edge.p2) < 1e-5) { path.unshift(edge.p1); visited.add(j); changed = true; }
-                }
-            }
-            paths.push(path);
-        }
+        const paths = linkContourEdges(edgesForLevel, 1e-5);
         contourPaths.set(elev, paths);
     }
 
@@ -717,7 +842,11 @@ export function generateContoursAsIsoPaths(
         for (const path of paths) {
             const smoothedPath = smoothing > 0 ? chaikinSmooth(path, smoothing) : path;
             const renderedPaths = inclPoly && inclPoly.length >= 3
-                ? clipIsoPathsToPolygon([{ elevation: elev, isMajor, vertices: smoothedPath }], inclPoly)
+                ? clipIsoPathsToPolygon(
+                    [{ elevation: elev, isMajor, vertices: smoothedPath }],
+                    inclPoly,
+                    inclusionMode === 'outside' ? 'outside' : 'inside',
+                )
                 : [{ elevation: elev, isMajor, vertices: smoothedPath }];
             isoPaths.push(...renderedPaths);
 
@@ -765,7 +894,8 @@ export function generateTinContoursAsIsoPaths(
     labelDensity: number,
     inclusionLines?: SurveyLine[],
     exclusionLines?: SurveyLine[],
-    elevationFilter?: ElevationFilterOptions
+    elevationFilter?: ElevationFilterOptions,
+    inclusionMode: ContourInclusionMode = 'inside',
 ): { isoPaths: IsoPath[]; labels: ContourLabel[]; elevationReport: ElevationFilterReport } {
     if (!tin.vertices || tin.vertices.length < 3 || !tin.triangles || tin.triangles.length === 0) {
         return { isoPaths: [], labels: [], elevationReport: emptyElevationReport() };
@@ -792,20 +922,36 @@ export function generateTinContoursAsIsoPaths(
         else elevationReport.missingElevation++;
     }
 
+    const seenTinCoordinates = new Set<string>();
+    for (const p of dPoints) {
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+        const key = `${Math.round(p.x * 10000)}|${Math.round(p.y * 10000)}`;
+        if (seenTinCoordinates.has(key)) elevationReport.duplicateXY++;
+        else seenTinCoordinates.add(key);
+    }
+
     const accepted = computeAcceptedElevationRange(finiteElevations, {
         contourInterval,
         ...elevationFilter,
     });
     elevationReport.suppressed = accepted.suppressed;
 
-    const vertexUsable = dPoints.map(p => Number.isFinite(p.z) && p.z >= accepted.min && p.z <= accepted.max);
+    const vertexUsable = dPoints.map(p =>
+        Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z) && p.z >= accepted.min && p.z <= accepted.max,
+    );
     for (let i = 0; i < dPoints.length; i++) {
         if (Number.isFinite(dPoints[i].z) && !vertexUsable[i]) elevationReport.outOfRange++;
     }
 
-    const usableTriangles = tin.triangles.filter(
-        ([ia, ib, ic]) => vertexUsable[ia] && vertexUsable[ib] && vertexUsable[ic],
-    );
+    const usableTriangles = tin.triangles.filter(([ia, ib, ic]) => {
+        if (!vertexUsable[ia] || !vertexUsable[ib] || !vertexUsable[ic]) return false;
+        const a = dPoints[ia];
+        const b = dPoints[ib];
+        const c = dPoints[ic];
+        if (!a || !b || !c) return false;
+        const area2 = Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y));
+        return Number.isFinite(area2) && area2 >= 1e-6;
+    });
     if (usableTriangles.length === 0) return { isoPaths: [], labels: [], elevationReport };
 
     const smoothingIterations = normalizeSmoothingIterations(smoothing);
@@ -863,30 +1009,7 @@ export function generateTinContoursAsIsoPaths(
             edgesForLevel.push({ p1: contourPoints[0], p2: contourPoints[1] });
         }
 
-        const paths: { x: number; y: number }[][] = [];
-        const visited = new Set<number>();
-        for (let i = 0; i < edgesForLevel.length; i++) {
-            if (visited.has(i)) continue;
-            const path = [edgesForLevel[i].p1, edgesForLevel[i].p2];
-            visited.add(i);
-            let changed = true;
-            while (changed) {
-                changed = false;
-                for (let j = 0; j < edgesForLevel.length; j++) {
-                    if (visited.has(j)) continue;
-                    const edge = edgesForLevel[j];
-                    const head = path[path.length - 1];
-                    const tail = path[0];
-                    const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
-                    if (dist(head, edge.p1) < contourJoinTolerance) { path.push(edge.p2); visited.add(j); changed = true; }
-                    else if (dist(head, edge.p2) < contourJoinTolerance) { path.push(edge.p1); visited.add(j); changed = true; }
-                    else if (dist(tail, edge.p1) < contourJoinTolerance) { path.unshift(edge.p2); visited.add(j); changed = true; }
-                    else if (dist(tail, edge.p2) < contourJoinTolerance) { path.unshift(edge.p1); visited.add(j); changed = true; }
-                }
-            }
-            paths.push(path);
-        }
-
+        const paths = linkContourEdges(edgesForLevel, contourJoinTolerance);
         contourPaths.set(elev, paths);
     }
 
@@ -900,7 +1023,11 @@ export function generateTinContoursAsIsoPaths(
         for (const path of paths) {
             const smoothedPath = smoothingIterations > 0 ? chaikinSmooth(path, smoothingIterations) : path;
             const renderedPaths = inclPoly && inclPoly.length >= 3
-                ? clipIsoPathsToPolygon([{ elevation: elev, isMajor, vertices: smoothedPath }], inclPoly)
+                ? clipIsoPathsToPolygon(
+                    [{ elevation: elev, isMajor, vertices: smoothedPath }],
+                    inclPoly,
+                    inclusionMode === 'outside' ? 'outside' : 'inside',
+                )
                 : [{ elevation: elev, isMajor, vertices: smoothedPath }];
             isoPaths.push(...renderedPaths);
 
@@ -1086,9 +1213,56 @@ function clipSegmentToPolygon(
 }
 
 /**
- * Clips IsoPath geometry to a polygon and returns split/trimmed paths.
+ * Keep the parts of a segment that lie outside a polygon. Splitting at every
+ * boundary crossing (rather than assuming one inside interval) keeps this
+ * correct for concave inclusion boundaries that a contour enters more than once.
  */
-export function clipIsoPathsToPolygon(isoPaths: IsoPath[], polygon: { x: number; y: number }[]): IsoPath[] {
+function clipSegmentOutsidePolygon(
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+    polygon: { x: number; y: number }[],
+): Array<{ a: { x: number; y: number }; b: { x: number; y: number } }> {
+    const cuts = [0, 1];
+    for (let i = 0; i < polygon.length; i++) {
+        const p1 = polygon[i];
+        const p2 = polygon[(i + 1) % polygon.length];
+        const hit = lineSegmentIntersection(a.x, a.y, b.x, b.y, p1.x, p1.y, p2.x, p2.y);
+        if (hit && hit.t > 1e-9 && hit.t < 1 - 1e-9) cuts.push(hit.t);
+    }
+    cuts.sort((p, q) => p - q);
+
+    const uniqueCuts: number[] = [];
+    for (const cut of cuts) {
+        const last = uniqueCuts[uniqueCuts.length - 1];
+        if (last === undefined || Math.abs(cut - last) > 1e-9) uniqueCuts.push(cut);
+    }
+
+    const at = (t: number) => ({ x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) });
+    const pieces: Array<{ a: { x: number; y: number }; b: { x: number; y: number } }> = [];
+    for (let i = 0; i < uniqueCuts.length - 1; i++) {
+        const t1 = uniqueCuts[i];
+        const t2 = uniqueCuts[i + 1];
+        if (t2 - t1 < 1e-9) continue;
+        const mid = at((t1 + t2) / 2);
+        if (pointInPolygon(mid.x, mid.y, polygon)) continue;
+        pieces.push({
+            a: t1 === 0 ? a : at(t1),
+            b: t2 === 1 ? b : at(t2),
+        });
+    }
+    return pieces;
+}
+
+/**
+ * Clips IsoPath geometry to the inside or outside of a polygon and returns
+ * split/trimmed paths. Outside clipping is used for contour generations that
+ * intentionally leave a void for GIS contours or a later blend.
+ */
+export function clipIsoPathsToPolygon(
+    isoPaths: IsoPath[],
+    polygon: { x: number; y: number }[],
+    keep: 'inside' | 'outside' = 'inside',
+): IsoPath[] {
     if (!polygon || polygon.length < 3) return isoPaths;
     const out: IsoPath[] = [];
 
@@ -1099,7 +1273,9 @@ export function clipIsoPathsToPolygon(isoPaths: IsoPath[], polygon: { x: number;
         for (let i = 0; i < path.vertices.length - 1; i++) {
             const v1 = path.vertices[i];
             const v2 = path.vertices[i + 1];
-            const clipped = clipSegmentToPolygon(v1, v2, polygon);
+            const clipped = keep === 'outside'
+                ? clipSegmentOutsidePolygon(v1, v2, polygon)
+                : clipSegmentToPolygon(v1, v2, polygon);
 
             if (clipped.length === 0) {
                 if (current.length >= 2) out.push({ ...path, vertices: current });
@@ -1152,7 +1328,7 @@ export function suppressEsriContoursInsidePolygon(
 }
 
 // Re-export polygon helpers for use in App.tsx blend logic
-export { buildPolygonFromSegments, pointInPolygon, getSegPairs, clipSegmentToPolygon };
+export { buildPolygonFromSegments, pointInPolygon, getSegPairs, clipSegmentToPolygon, clipSegmentOutsidePolygon };
 
 // FIX: Added 'generateProfile' function to create elevation profiles.
 // Now also consults contour SurveyLines (e.g. fetched from PASDA / state DEM

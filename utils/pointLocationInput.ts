@@ -1,4 +1,10 @@
-import { decodePlusCode, extractPlusCode } from './plusCode.ts';
+import {
+  decodePlusCode,
+  extractPlusCode,
+  extractShortPlusCode,
+  isShortPlusCode,
+  type PlusCodeReference,
+} from './plusCode.ts';
 
 export type PointLocationKind = 'plus-code' | 'latlon';
 
@@ -39,10 +45,13 @@ function directionSign(direction: string | undefined, fallback: number): number 
   return 1;
 }
 
-export function parsePointLocation(input: string): PointLocationParseResult {
-  const plusCode = extractPlusCode(input);
+export function parsePointLocation(
+  input: string,
+  reference?: PlusCodeReference | null,
+): PointLocationParseResult {
+  const plusCode = extractPlusCode(input, reference);
   if (plusCode) {
-    const decoded = decodePlusCode(plusCode);
+    const decoded = decodePlusCode(plusCode, reference);
     if (decoded) {
       return {
         location: {
@@ -53,12 +62,32 @@ export function parsePointLocation(input: string): PointLocationParseResult {
         },
       };
     }
+    if (isShortPlusCode(plusCode)) {
+      return {
+        location: null,
+        error: reference
+          ? 'That short Plus Code could not be resolved near the current project location. Try the full code.'
+          : 'Short Plus Codes need a project location or GPS fix. Enter the full code or set a project location.',
+      };
+    }
+  }
+
+  if (!plusCode) {
+    const shortCode = extractShortPlusCode(input);
+    if (shortCode) {
+      return {
+        location: null,
+        error: reference
+          ? 'That short Plus Code could not be resolved near the current project location. Try the full code.'
+          : 'Short Plus Codes need a project location or GPS fix. Enter the full code or set a project location.',
+      };
+    }
   }
 
   if (!plusCode && PLUS_CODE_LOOKING_RE.test(input)) {
     return {
       location: null,
-      error: 'That Plus Code is not valid. Use a full Google Plus Code such as 87G8Q2PQ+5X.',
+      error: 'That Plus Code is not valid. Use a full Google Plus Code such as 87G8Q2PQ+5X, or a short code when a project location is available.',
     };
   }
 

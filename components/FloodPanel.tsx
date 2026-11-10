@@ -4,6 +4,7 @@ import type { AreaHatchSettings, GenerationBlock, InclusionBoundary, MapAreaFeat
 import { AreaHatchControls } from './AreaHatchControls.tsx';
 import { GenerationBlockSummary } from './GenerationBlockSummary.tsx';
 import { buildFloodSheetNotes, buildFloodZoneReport } from '../services/floodReport.ts';
+import type { FemaNfhlSummary } from '../services/floodService.ts';
 
 /**
  * FloodPanel — controls for the Flood Zone Agent.
@@ -23,6 +24,8 @@ import { buildFloodSheetNotes, buildFloodZoneReport } from '../services/floodRep
 interface FloodFetchOptions {
   /** Also fetch FEMA Base Flood Elevation linework (NFHL layer 16). */
   includeBfe?: boolean;
+  /** Fetch every NFHL map layer (panels, cross-sections, jurisdictions, LOMRs, water, etc.). */
+  includeAllLayers?: boolean;
 }
 
 interface FloodPanelProps {
@@ -52,6 +55,8 @@ interface FloodPanelProps {
   floodAreas?: MapAreaFeature[];
   /** Optional BFE linework summary from the last fetch. */
   bfeSummary?: { count: number; datum?: string | null; error?: string } | null;
+  /** Complete FEMA NFHL layer + regulatory metadata inventory. */
+  nfhlSummary?: FemaNfhlSummary | null;
   /** Append a notes block to the active paperspace sheet titleblock. */
   onAddSheetNotes?: (notes: string) => void;
   /** Trigger a FIRMETTE image fetch for the current query area (requires a prior flood fetch). */
@@ -93,6 +98,7 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
   onFloodHatchChange,
   floodAreas = [],
   bfeSummary,
+  nfhlSummary,
   onAddSheetNotes,
   onFetchFirmette,
   isFetchingFirmette,
@@ -103,6 +109,8 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
   const [description, setDescription] = useState('');
   /** Asked up-front so the agent can bring BFE lines in the same pass. */
   const [includeBfe, setIncludeBfe] = useState(true);
+  /** Full NFHL stack is the default: one fetch should produce the whole FEMA map. */
+  const [includeAllLayers, setIncludeAllLayers] = useState(true);
   const [showReport, setShowReport] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -112,6 +120,7 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
     else if (generation.query?.mode) setMode('description');
     if (generation.query?.description) setDescription(generation.query.description);
     if (typeof generation.query?.includeBfe === 'boolean') setIncludeBfe(generation.query.includeBfe);
+    if (typeof generation.query?.includeAllLayers === 'boolean') setIncludeAllLayers(generation.query.includeAllLayers);
   }, [generation]);
 
   const canFetch =
@@ -124,7 +133,7 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
     onFetchFloodZones(
       mode,
       mode === 'description' ? description.trim() : undefined,
-      { includeBfe },
+      { includeBfe, includeAllLayers },
     );
   };
 
@@ -138,7 +147,8 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
     bfeCount: bfeSummary?.count ?? 0,
     bfeDatum: bfeSummary?.datum ?? null,
     bfeError: bfeSummary?.error ?? null,
-  }), [floodAreas, lastResult, bfeSummary]);
+    nfhl: nfhlSummary ?? null,
+  }), [floodAreas, lastResult, bfeSummary, nfhlSummary]);
 
   const reportText = useMemo(
     () => buildFloodZoneReport(reportInput),
@@ -266,6 +276,20 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
         <label className="flex items-start gap-2 text-[11px] text-gray-300 cursor-pointer">
           <input
             type="checkbox"
+            checked={includeAllLayers}
+            onChange={e => setIncludeAllLayers(e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5 accent-cyan-400"
+          />
+          <span>
+            <span className="font-semibold text-cyan-200">Complete NFHL map stack</span>
+            <span className="block text-[10px] text-gray-500">
+              FIRM panels, cross-sections, political jurisdictions, LOMRs/LOMAs, water, levees, structures, and every other FEMA NFHL map layer.
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-[11px] text-gray-300 cursor-pointer">
+          <input
+            type="checkbox"
             checked={includeBfe}
             onChange={e => setIncludeBfe(e.target.checked)}
             className="mt-0.5 h-3.5 w-3.5 accent-cyan-400"
@@ -302,7 +326,7 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
         disabled={!canFetch}
         className="w-full py-2.5 px-4 font-semibold text-white bg-cyan-600 rounded-md hover:bg-cyan-700 transition-colors disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
       >
-        {isFetching ? 'Fetching FEMA NFHL…' : includeBfe ? 'Fetch Flood Zones + BFEs' : 'Fetch Flood Zones'}
+        {isFetching ? 'Fetching FEMA NFHL…' : includeAllLayers ? 'Fetch Full FEMA NFHL Map' : includeBfe ? 'Fetch Flood Zones + BFEs' : 'Fetch Flood Zones'}
       </button>
 
       {/* FIRMETTE PDF — available from fetched flood zones, an inclusion area, or project points */}
@@ -370,6 +394,58 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
                 : 'none'}
             </span>
           </div>
+          {nfhlSummary && (
+            <div className="space-y-1 border-t border-gray-700/60 pt-1.5 text-[11px]">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">NFHL layers</span>
+                <span className="font-mono text-cyan-300">{nfhlSummary.layerCount}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">FIRM panels</span>
+                <span className="font-mono text-slate-200">{nfhlSummary.firmPanels.length}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">Jurisdictions</span>
+                <span className="font-mono text-amber-200">{nfhlSummary.jurisdictions.length}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">Cross-sections</span>
+                <span className="font-mono text-fuchsia-200">{nfhlSummary.crossSections.length}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">LOMRs / LOMAs</span>
+                <span className="font-mono text-emerald-200">{nfhlSummary.lomrs.length} / {nfhlSummary.lomas.length}</span>
+              </div>
+              {nfhlSummary.firmPanels.length > 0 && (
+                <p className="text-[10px] text-slate-300 leading-relaxed">
+                  {nfhlSummary.firmPanels.slice(0, 3).map(panel =>
+                    `${panel.panel}${panel.effectiveDate ? ` eff. ${panel.effectiveDate}` : ''}`,
+                  ).join(' · ')}
+                  {nfhlSummary.firmPanels.length > 3 ? ` · +${nfhlSummary.firmPanels.length - 3} more` : ''}
+                </p>
+              )}
+              {nfhlSummary.jurisdictions.length > 0 && (
+                <p className="text-[10px] text-amber-200/80 leading-relaxed">
+                  {nfhlSummary.jurisdictions.map(j => j.name).join(' · ')}
+                </p>
+              )}
+              <details className="pt-1">
+                <summary className="cursor-pointer text-[10px] text-cyan-300 hover:text-cyan-200">
+                  FEMA data inventory ({nfhlSummary.layers.length} layers)
+                </summary>
+                <ul className="mt-1 max-h-44 overflow-auto space-y-0.5 pr-1">
+                  {nfhlSummary.layers.map(layer => (
+                    <li key={`${layer.id}-${layer.cadLayer}`} className="flex items-start justify-between gap-2 text-[10px]">
+                      <span className={layer.error ? 'text-amber-300' : 'text-gray-400'}>
+                        {layer.name}{layer.error ? ` — ${layer.error}` : ''}
+                      </span>
+                      <span className="font-mono text-gray-500 whitespace-nowrap">{layer.featureCount}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+          )}
           {bfeSummary?.error && (
             <p className="text-[10px] text-amber-300/90">
               BFE layer unavailable for this area: {bfeSummary.error}
@@ -459,8 +535,11 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
 
       <p className="text-xs text-gray-500 leading-relaxed border-t border-gray-700 pt-2">
         Each FEMA flood zone is added as its own CAD layer (<code className="text-cyan-300">FEMA-FLOOD-AE</code>,
-        <code className="text-cyan-300 ml-1">FEMA-FLOOD-X</code>, etc.) and BFE linework lands on{' '}
-        <code className="text-blue-300">FEMA-BFE</code> so you can style or hide each independently.
+        <code className="text-cyan-300 ml-1">FEMA-FLOOD-X</code>, etc.), BFE linework lands on{' '}
+        <code className="text-blue-300">FEMA-BFE</code>, and every other FEMA layer uses its own{' '}
+        <code className="text-cyan-300">FEMA-NFHL-*</code> layer so the entire map can be styled or hidden independently.
+        <br />
+        FIRM panel and base-index attributes stay in the inventory, but their rectangular panel outlines are not plotted over the flood map.
       </p>
     </div>
   );

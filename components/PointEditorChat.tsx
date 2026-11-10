@@ -3,9 +3,10 @@ import { type SurveyPoint, type PointList, AgentType } from '../types.ts';
 import { DownloadIcon, ArrowUpTrayIcon, XMarkIcon, EraserIcon, ChevronDownIcon, ChevronUpIcon, CameraIcon, CrosshairsIcon, MapPinIcon, EyeIcon, ChevronLeftIcon, ChevronRightIcon, CpuChipIcon } from './icons.tsx';
 import { PointEditorC3DSync } from './PointEditorC3DSync.tsx';
 import { expandGoogleMapsShortLink, isGoogleMapsShortLink, parseGoogleMapsLatLon } from '../utils/googleMaps.ts';
-import { decodePlusCode } from '../utils/plusCode.ts';
+import { decodePlusCode, isShortPlusCode } from '../utils/plusCode.ts';
 import { derivePointWorkflow } from '../services/pointWorkflow.ts';
 import { useErrorReporter } from '../contexts/AppStateContext';
+import { SectionChip, CHIP_WIDE_ACTION_CLASS, chipButtonClass } from './common/SectionChip.tsx';
 
 // C3D Sync Icon
 const SyncIcon = () => (
@@ -58,6 +59,10 @@ interface PointEditorChatProps {
   c3dSessionToken?: string | null;
   onImportPointsFromC3D?: (points: SurveyPoint[], sourceListName?: string) => void;
   convertLatLon?: (lat: number, lon: number) => { northing: number; easting: number } | null;
+  /** Open the all-point-tools surface from the workspace header. */
+  onOpenPointTools?: () => void;
+  /** Project centre or GPS fix used to recover shortened Plus Codes. */
+  plusCodeReference?: { latitude: number; longitude: number } | null;
 }
 
 export interface PointEditorChatHandles {
@@ -70,7 +75,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
   onToggleContext,
   onImportPointList, onAddPhotoToPoint, onDeletePhotoFromPoint, onStakeoutPoint, onZoomToPoint,
   nextAvailablePointNumber, settings,
-  c3dSessionToken, onImportPointsFromC3D, convertLatLon
+  c3dSessionToken, onImportPointsFromC3D, convertLatLon, plusCodeReference, onOpenPointTools
 }, ref) => {
   const [newPoint, setNewPoint] = useState({ pn: '', n: '', e: '', z: '', d: '' });
   const [addMode, setAddMode] = useState<'ne' | 'latlon' | 'plus'>('ne');
@@ -261,9 +266,16 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
   const handleAddPointSubmit = (e: React.FormEvent) => {
       e.preventDefault();
       if (addMode === 'plus') {
-          const decoded = decodePlusCode(plusCodeInput.code);
+          const decoded = decodePlusCode(plusCodeInput.code, plusCodeReference);
           if (!decoded) {
-              reportError({ title: 'Invalid Plus Code', message: 'Enter a full Google Plus Code such as 87G8Q2PQ+5X. Shortened codes need a reference location.' });
+              reportError({
+                  title: 'Invalid Plus Code',
+                  message: isShortPlusCode(plusCodeInput.code)
+                      ? plusCodeReference
+                          ? 'That short Plus Code could not be resolved near the project location. Try the full code.'
+                          : 'Short Plus Codes need a project location or GPS fix. Enter the full code or set a project location.'
+                      : 'Enter a Google Plus Code such as 87G8Q2PQ+5X or Q2PQ+5X.',
+              });
               return;
           }
           if (!convertLatLon) {
@@ -417,7 +429,8 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
     const matchingPoints = sortPoints(list.points.filter(matchesFilters));
     
     return (
-        <div className="bg-white/[0.025] rounded-xl border border-white/[0.07] light-theme:bg-gray-100/50 light-theme:border-gray-300 mb-3">
+        <div className="relative overflow-hidden bg-white/[0.025] rounded-xl border border-white/[0.07] light-theme:bg-gray-100/50 light-theme:border-gray-300 mb-3">
+            <SectionChip color={isUnsaved ? 'cyan' : 'blue'} />
             <header 
                 className="p-3 flex justify-between items-center cursor-pointer hover:bg-gray-700/30 light-theme:hover:bg-gray-200/30"
                 onClick={() => handleToggleExpand(list.id)}
@@ -611,6 +624,16 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-1">
+              {onOpenPointTools && (
+                <button
+                  type="button"
+                  onClick={onOpenPointTools}
+                  className="inline-flex items-center gap-1 rounded-md border border-cyan-400/30 bg-cyan-400/10 px-1.5 py-1 text-[10px] font-semibold text-cyan-200 transition-colors hover:border-cyan-300/60 hover:text-white"
+                  title="Open every point tool"
+                >
+                  All tools
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -653,65 +676,64 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
               </button>
             )}
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <span className="rounded border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 text-[9.5px] font-medium text-slate-400">
-              {allPoints.length} total
-            </span>
-            <span className="rounded border border-yellow-500/20 bg-yellow-500/[0.06] px-1.5 py-0.5 text-[9.5px] font-medium text-yellow-300/90">
-              {unsavedPointsList?.points.length ?? 0} unsaved
-            </span>
-            {duplicatePointCount > 0 && (
-              <span
-                className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9.5px] font-medium text-amber-300"
-                title="The same point number appears in more than one list."
-              >
-                {duplicatePointCount} duplicate PN{duplicatePointCount === 1 ? '' : 's'}
+          <div className="relative mt-2 overflow-hidden rounded-lg border border-white/[0.07] bg-black/20 px-2 py-1.5 pl-3">
+            <SectionChip color="cyan" />
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="rounded border border-cyan-400/20 bg-cyan-400/[0.06] px-1.5 py-0.5 text-[9.5px] font-medium text-cyan-200">
+                {allPoints.length} total
               </span>
-            )}
-            <span className="rounded border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 text-[9.5px] font-medium text-slate-400">
-              {visiblePointCount} visible
-            </span>
-            <select
-              value={listFilter}
-              onChange={event => setListFilter(event.target.value)}
-              aria-label="Filter by point list"
-              className="rounded border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[9.5px] text-slate-300 focus:border-yellow-500/40 focus:outline-none"
-            >
-              <option value="all">All lists</option>
-              <option value="working">Unsaved only</option>
-              {savedLists.map(list => (
-                <option key={list.id} value={list.id}>{list.name}</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => setDuplicatesOnly(value => !value)}
-              aria-pressed={duplicatesOnly}
-              className={`rounded border px-1.5 py-0.5 text-[9.5px] font-semibold transition-colors ${
-                duplicatesOnly
-                  ? 'border-amber-500/50 bg-amber-500/15 text-amber-200'
-                  : 'border-white/[0.07] bg-white/[0.025] text-slate-400 hover:border-white/[0.16] hover:text-slate-200'
-              }`}
-              title="Show only duplicate point numbers"
-            >
-              Duplicates only
-            </button>
-            <button
-              type="button"
-              onClick={showAllLists}
-              className="rounded border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-400 transition-colors hover:border-white/[0.16] hover:text-slate-200"
-              title="Show every point list on the canvas"
-            >
-              Show all
-            </button>
-            <button
-              type="button"
-              onClick={hideAllLists}
-              className="rounded border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-400 transition-colors hover:border-white/[0.16] hover:text-slate-200"
-              title="Hide every point list on the canvas"
-            >
-              Hide all
-            </button>
+              <span className="rounded border border-blue-400/30 bg-blue-400/10 px-1.5 py-0.5 text-[9.5px] font-medium text-blue-200">
+                {unsavedPointsList?.points.length ?? 0} unsaved
+              </span>
+              {duplicatePointCount > 0 && (
+                <span
+                  className="rounded border border-rose-400/30 bg-rose-400/10 px-1.5 py-0.5 text-[9.5px] font-medium text-rose-200"
+                  title="The same point number appears in more than one list."
+                >
+                  {duplicatePointCount} duplicate PN{duplicatePointCount === 1 ? '' : 's'}
+                </span>
+              )}
+              <span className="rounded border border-emerald-400/20 bg-emerald-400/[0.06] px-1.5 py-0.5 text-[9.5px] font-medium text-emerald-200">
+                {visiblePointCount} visible
+              </span>
+              <select
+                value={listFilter}
+                onChange={event => setListFilter(event.target.value)}
+                aria-label="Filter by point list"
+                className="h-7 rounded border border-white/10 bg-black/25 px-1.5 text-[9.5px] text-slate-200 focus:border-cyan-400/40 focus:outline-none"
+              >
+                <option value="all">All lists</option>
+                <option value="working">Unsaved only</option>
+                {savedLists.map(list => (
+                  <option key={list.id} value={list.id}>{list.name}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setDuplicatesOnly(value => !value)}
+                aria-pressed={duplicatesOnly}
+                className={chipButtonClass('neutral', duplicatesOnly)}
+                title="Show only duplicate point numbers"
+              >
+                Duplicates only
+              </button>
+              <button
+                type="button"
+                onClick={showAllLists}
+                className={chipButtonClass('neutral')}
+                title="Show every point list on the canvas"
+              >
+                Show all
+              </button>
+              <button
+                type="button"
+                onClick={hideAllLists}
+                className={chipButtonClass('neutral')}
+                title="Hide every point list on the canvas"
+              >
+                Hide all
+              </button>
+            </div>
           </div>
           <div
             data-testid="point-workflow-progress"
@@ -787,7 +809,8 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
         
         <div className="flex-grow p-3.5 space-y-3 flex flex-col overflow-y-auto scrollbar-hide">
             {/* Add Point Form */}
-            <div className="bg-white/[0.025] rounded-xl p-3 border border-white/[0.08] light-theme:bg-gray-100/50 light-theme:border-gray-300 flex-shrink-0">
+            <div className="relative overflow-hidden bg-white/[0.025] rounded-xl p-3 border border-white/[0.08] light-theme:bg-gray-100/50 light-theme:border-gray-300 flex-shrink-0">
+                <SectionChip color="emerald" />
                 <div className="flex items-center justify-between mb-2">
                     <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-300 light-theme:text-cyan-600">New point</h3>
                     {/* C3D Sync Button */}
@@ -813,7 +836,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                     <div className="grid grid-cols-2 gap-2">
                         <input type="text" placeholder="PN" required value={newPoint.pn} onChange={e => setNewPoint(p => ({...p, pn: e.target.value}))} className="p-1.5 text-xs bg-gray-600 border border-gray-500 rounded-md light-theme:bg-gray-200 light-theme:border-gray-400" />
                         {addMode === 'plus' ? (<>
-                            <input type="text" placeholder="Google Plus Code (full, e.g. 87G8Q2PQ+5X)" required value={plusCodeInput.code} onChange={e => setPlusCodeInput(p => ({...p, code: e.target.value}))} className="col-span-2 p-1.5 text-xs bg-gray-600 border border-cyan-700/60 rounded-md font-mono uppercase" />
+                            <input type="text" placeholder="Plus Code (87G8Q2PQ+5X or Q2PQ+5X)" required value={plusCodeInput.code} onChange={e => setPlusCodeInput(p => ({...p, code: e.target.value}))} className="col-span-2 p-1.5 text-xs bg-gray-600 border border-cyan-700/60 rounded-md font-mono uppercase" />
                             <input type="number" step="any" placeholder="Elevation" value={plusCodeInput.z} onChange={e => setPlusCodeInput(p => ({...p, z: e.target.value}))} className="p-1.5 text-xs bg-gray-600 border border-gray-500 rounded-md light-theme:bg-gray-200 light-theme:border-gray-400" />
                         </>) : addMode === 'ne' ? (<>
                             <input type="number" step="any" placeholder="Northing" required value={newPoint.n} onChange={e => setNewPoint(p => ({...p, n: e.target.value}))} className="p-1.5 text-xs bg-gray-600 border border-gray-500 rounded-md light-theme:bg-gray-200 light-theme:border-gray-400" />
@@ -828,7 +851,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                         </>)}
                     </div>
                     <input type="text" placeholder="Description" value={addMode === 'ne' ? newPoint.d : addMode === 'plus' ? plusCodeInput.d : latLonInput.d} onChange={e => addMode === 'ne' ? setNewPoint(p => ({...p, d: e.target.value})) : addMode === 'plus' ? setPlusCodeInput(p => ({...p, d: e.target.value})) : setLatLonInput(p => ({...p, d: e.target.value}))} className="w-full p-1.5 text-xs bg-gray-600 border border-gray-500 rounded-md light-theme:bg-gray-200 light-theme:border-gray-400" />
-                    <button type="submit" className="w-full py-1.5 bg-cyan-600 text-white font-semibold rounded-md hover:bg-cyan-700 transition-colors text-xs">
+                    <button type="submit" className={CHIP_WIDE_ACTION_CLASS}>
                         {addMode === 'latlon' ? 'Convert & Add Point' : addMode === 'plus' ? 'Add Point from Plus Code' : 'Add Point'}
                     </button>
                 </form>
@@ -836,12 +859,13 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
 
             {/* Unsaved Points Alert */}
             {unsavedPointsList && unsavedPointsList.points.length > 0 && (
-                 <div className="p-3 bg-amber-500/[0.06] border border-amber-500/25 rounded-xl space-y-2 flex-shrink-0">
-                    <p className="text-xs text-yellow-300">({unsavedPointsList.points.length} unsaved)</p>
+                 <div className="relative overflow-hidden rounded-xl border border-cyan-400/25 bg-cyan-400/[0.05] p-3 pl-4 space-y-2 flex-shrink-0">
+                    <SectionChip color="cyan" />
+                    <p className="text-xs font-semibold text-cyan-200">({unsavedPointsList.points.length} unsaved)</p>
                     <div className="grid grid-cols-1 gap-2">
                         <form onSubmit={(e) => { e.preventDefault(); onSaveUnsavedPoints(newListName); setNewListName(''); }} className="flex gap-1.5">
                             <input type="text" value={newListName} onChange={e => setNewListName(e.target.value)} placeholder="Name..." required className="flex-grow p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md light-theme:bg-gray-200 light-theme:border-gray-400"/>
-                            <button type="submit" className="px-2.5 py-1.5 text-xs font-semibold bg-green-600 text-white rounded-md hover:bg-green-700">Save</button>
+                            <button type="submit" className={`${chipButtonClass('emerald')} shrink-0`}>Save</button>
                         </form>
                         <div className="flex gap-1.5">
                              <select value={mergeTargetListId} onChange={e => setMergeTargetListId(e.target.value)} disabled={savedLists.length === 0} className="flex-grow p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md disabled:opacity-50 light-theme:bg-gray-200 light-theme:border-gray-400">
@@ -851,7 +875,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                                     <option>No lists</option>
                                 )}
                              </select>
-                             <button onClick={() => onMergeUnsavedPoints(mergeTargetListId)} disabled={savedLists.length === 0} className="px-2.5 py-1.5 text-xs font-semibold bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50">Merge</button>
+                             <button onClick={() => onMergeUnsavedPoints(mergeTargetListId)} disabled={savedLists.length === 0} className={`${chipButtonClass('blue')} shrink-0`}>Merge</button>
                         </div>
                     </div>
                  </div>

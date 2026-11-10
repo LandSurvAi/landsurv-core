@@ -124,6 +124,9 @@ export interface DomainSkillHandlersOpts {
   }>;
   // Contours & TIN
   contourSettings: ContourSettings;
+  setContourSettings: React.Dispatch<React.SetStateAction<ContourSettings>>;
+  /** Raise and dock the Contour Generation controls for review. */
+  openContourGenerationPanel?: () => void;
   contourGenerations: ContourGeneration[];
   setContourGenerations: React.Dispatch<React.SetStateAction<ContourGeneration[]>>;
   tinSurfaces: TinSurface[];
@@ -138,6 +141,13 @@ export interface DomainSkillHandlersOpts {
     sourceTinId: string | undefined,
     format: 'landxml' | 'native',
   ) => Promise<SessionFile | null> | SessionFile | null;
+  /** Draw, hide, or restyle one loaded TIN surface on the canvas. */
+  handleSetTinSurfaceDisplayMode?: (
+    tinId: string,
+    mode: 'wireframe' | 'shaded' | 'hidden',
+  ) => boolean | void;
+  /** Switch to the canvas and zoom to a drawn surface. */
+  onShowTinSurfaceOnCanvas?: (tinId: string, mode?: 'wireframe' | 'shaded') => void;
   /** Raise the A2UI TIN Surfaces surface from a CACP request. */
   openTinSurfaceStudio?: () => void;
   /** Raise the shared A2UI spreadsheet from a CACP request. */
@@ -148,6 +158,7 @@ export interface DomainSkillHandlersOpts {
     serviceUrl: string,
     mode: 'project' | 'inclusion' | 'description',
     descriptionText?: string,
+    opts?: import('../utils/usgsNationalContours.ts').ContourFetchOptions,
   ) => Promise<{
     ok: boolean;
     featureCount: number;
@@ -687,22 +698,87 @@ export function registerDomainSkillHandlers(
           typeof d.smoothing === 'number' ? d.smoothing : opts.contourSettings.smoothing;
         const showLabels =
           typeof d.showLabels === 'boolean' ? d.showLabels : opts.contourSettings.showLabels;
+        const labelDensity =
+          typeof d.labelDensity === 'number' ? d.labelDensity : opts.contourSettings.labelDensity;
+        const inclusionMode = d.inclusionMode === 'outside'
+          ? 'outside'
+          : d.inclusionMode === 'inside'
+            ? 'inside'
+            : (opts.contourSettings.inclusionMode ?? 'inside');
+        const applyNow = d.apply === true || d.applyNow === true || d.generateNow === true;
+
+        const nextSettings: ContourSettings = {
+          ...opts.contourSettings,
+          contourInterval: interval,
+          majorInterval: major,
+          smoothing,
+          showLabels,
+          labelDensity,
+          inclusionMode,
+          sourceType: 'points',
+          sourceTinId: null,
+          ...(typeof d.pointFilterDescription === 'string'
+            ? { pointFilterDescription: d.pointFilterDescription }
+            : {}),
+          ...(typeof d.excludeInvertPoints === 'boolean'
+            ? { excludeInvertPoints: d.excludeInvertPoints }
+            : {}),
+          ...(typeof d.excludeFfePoints === 'boolean'
+            ? { excludeFfePoints: d.excludeFfePoints }
+            : {}),
+          ...(typeof d.excludeStructureShots === 'boolean'
+            ? { excludeStructureShots: d.excludeStructureShots }
+            : {}),
+        };
+        opts.setContourSettings(nextSettings);
+
+        if (!applyNow) {
+          opts.openContourGenerationPanel?.();
+          opts.logActionToFieldbook(
+            `CACP generate_contours — staged a ${interval}' contour job for review (nothing generated yet).`,
+          );
+          return respond(message, AgentType.CONTOURING_AGENT, true, {
+            staged: true,
+            contourInterval: interval,
+            majorInterval: major,
+            inclusionMode,
+            pointCount: opts.points.length,
+            cleanup: {
+              invert: nextSettings.excludeInvertPoints !== false,
+              ffe: nextSettings.excludeFfePoints !== false,
+              structures: nextSettings.excludeStructureShots !== false,
+            },
+            message: 'Contour controls are open. Review the settings, then press Generate Contours; nothing has been generated yet.',
+          });
+        }
 
         const breaklines = opts.lines.filter((l) => l.type === 'breakline');
         const inclusionLines = opts.lines.filter((l) => l.type === 'inclusion');
         const exclusionLines = opts.lines.filter((l) => l.type === 'exclusion');
 
-        const { isoPaths, labels } = generateContoursAsIsoPaths(
+        const { isoPaths, labels, elevationReport } = generateContoursAsIsoPaths(
           opts.points,
           interval,
           major,
           smoothing,
           showLabels,
-          opts.contourSettings.labelDensity,
+          labelDensity,
           breaklines,
           inclusionLines,
           exclusionLines,
+          {
+            mode: nextSettings.elevationFilterMode ?? 'auto',
+            minElevation: nextSettings.minElevation ?? null,
+            maxElevation: nextSettings.maxElevation ?? null,
+            contourInterval: interval,
+            excludeInvertPoints: nextSettings.excludeInvertPoints,
+            excludeFfePoints: nextSettings.excludeFfePoints,
+            excludeStructureShots: nextSettings.excludeStructureShots,
+          },
+          inclusionMode,
         );
+        const excludedPointCount =
+          elevationReport.missingElevation + elevationReport.outOfRange + elevationReport.nonGround;
         const genId = `gen-${Date.now()}`;
         const contourLayers = await resolveContourLineLayersViaCacp();
         const contourLines = isoPathsToSurveyLines(isoPaths, genId, contourLayers);
@@ -712,15 +788,15 @@ export function registerDomainSkillHandlers(
           name: `Survey ${interval}ft (CACP)`,
           createdAt: now,
           lastGeneratedAt: now,
-          settings: {
-            ...opts.contourSettings,
-            contourInterval: interval,
-            majorInterval: major,
-            smoothing,
-            showLabels,
-          },
+          settings: nextSettings,
           activeInclusionBoundaryId: opts.activeInclusionBoundaryId,
           pointCount: opts.points.length,
+          excludedPointCount,
+          elevationRange:
+            elevationReport.acceptedMin !== null && elevationReport.acceptedMax !== null
+              ? { min: elevationReport.acceptedMin, max: elevationReport.acceptedMax }
+              : null,
+          elevationFilterSuppressed: elevationReport.suppressed,
           isoPaths,
           labels,
           visible: true,
@@ -731,12 +807,17 @@ export function registerDomainSkillHandlers(
           ...contourLines,
         ]);
         opts.logActionToFieldbook(
-          `CACP generate_contours — generated ${isoPaths.length} contour paths (${contourLines.length} segments) at ${interval}' interval on ${contourLayers.minorLayer} / ${contourLayers.majorLayer}.`,
+          `CACP generate_contours — generated ${isoPaths.length} contour paths (${contourLines.length} segments) at ${interval}' interval on ${contourLayers.minorLayer} / ${contourLayers.majorLayer}. ` +
+          `${excludedPointCount} non-surface point(s) excluded.`,
         );
         return respond(message, AgentType.CONTOURING_AGENT, true, {
+          staged: false,
           generationId: genId,
+          inclusionMode,
           pathCount: isoPaths.length,
           lineCount: contourLines.length,
+          excludedPointCount,
+          elevationReport,
         });
       } catch (e) {
         return respond(
@@ -774,6 +855,32 @@ export function registerDomainSkillHandlers(
           undefined,
           'No loaded TIN surface available to generate contours from.',
         );
+      }
+
+      const applyNow = d.apply === true || d.applyNow === true || d.generateNow === true;
+      const nextSettings: ContourSettings = {
+        ...opts.contourSettings,
+        contourInterval: interval,
+        majorInterval: major,
+        smoothing,
+        showLabels,
+        labelDensity,
+        sourceType: 'tin',
+        sourceTinId: tin.id,
+      };
+      opts.setContourSettings(nextSettings);
+      if (!applyNow) {
+        opts.openContourGenerationPanel?.();
+        opts.logActionToFieldbook(
+          `CACP generate_loaded_tin_contours — staged ${tin.name} for review (nothing generated yet).`,
+        );
+        return respond(message, AgentType.CONTOURING_AGENT, true, {
+          staged: true,
+          sourceTinId: tin.id,
+          contourInterval: interval,
+          majorInterval: major,
+          message: 'The loaded TIN is selected in the Contour Generation panel. Review the settings, then press Generate Contours.',
+        });
       }
 
       try {
@@ -962,6 +1069,58 @@ export function registerDomainSkillHandlers(
   );
 
   unsubs.push(
+    interAgentComm.onCommand('set_tin_surface_display', async (message) => {
+      const opts = getOpts();
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      if (!opts.handleSetTinSurfaceDisplayMode) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          'TIN display control is not available on this host.',
+        );
+      }
+      const allTins = [...opts.tinSurfaces, ...opts.steepSlopeTinSurfaces];
+      const requestedId = typeof d.sourceTinId === 'string' ? d.sourceTinId.trim() : '';
+      const tin = requestedId
+        ? allTins.find((t) => t.id === requestedId)
+        : allTins[allTins.length - 1];
+      if (!tin) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          'No loaded TIN surface is available to draw.',
+        );
+      }
+      const requestedMode = d.displayMode;
+      const mode =
+        requestedMode === 'wireframe' || requestedMode === 'hidden' ? requestedMode : 'shaded';
+      const changed = opts.handleSetTinSurfaceDisplayMode(tin.id, mode);
+      if (changed === false) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          `TIN surface "${tin.id}" cannot be displayed on this host.`,
+        );
+      }
+      if (mode !== 'hidden') opts.onShowTinSurfaceOnCanvas?.(tin.id, mode);
+      opts.logActionToFieldbook(
+        `CACP set_tin_surface_display — "${tin.name}" ${mode === 'hidden' ? 'hidden' : `drawn as ${mode}`}.`,
+      );
+      return respond(message, AgentType.CONTOURING_AGENT, true, {
+        tinId: tin.id,
+        displayMode: mode,
+        drawn: mode !== 'hidden',
+      });
+    }),
+  );
+
+  unsubs.push(
     interAgentComm.onCommand('open_tin_surfaces', async (message) => {
       const opts = getOpts();
       if (!opts.openTinSurfaceStudio) {
@@ -1032,19 +1191,47 @@ export function registerDomainSkillHandlers(
     interAgentComm.onCommand('fetch_esri_rest_contours', async (message) => {
       const opts = getOpts();
       const d = (message.data ?? {}) as Record<string, unknown>;
-      // serviceUrl is optional: omitting it lets the host resolve PASDA / a
-      // state or county service from the project location automatically.
+      // A source must be chosen by the user. Never let the host silently pick
+      // USGS, PASDA, or a resolver result on the agent's behalf.
       const serviceUrl = typeof d.serviceUrl === 'string' ? d.serviceUrl.trim() : '';
+      if (!serviceUrl) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          'No GIS contour source selected. Ask the user which source to use: USGS 3DEP (and which layer), state GIS/PASDA, or a custom ESRI REST service URL. Do not choose one for them.',
+        );
+      }
       const mode = (d.mode === 'description' ? 'description' : d.mode === 'project' ? 'project' : 'inclusion') as
         | 'project'
         | 'inclusion'
         | 'description';
+      const inclusionScope = d.inclusionScope === 'outside'
+        ? 'outside'
+        : d.inclusionScope === 'inside'
+          ? 'inside'
+          : undefined;
+      if (mode === 'inclusion' && !inclusionScope) {
+        return respond(
+          message,
+          AgentType.CONTOURING_AGENT,
+          false,
+          undefined,
+          'The inclusion area is ambiguous. Ask the user whether the GIS contours should be inside or outside the inclusion boundary, then pass inclusionScope="inside" or "outside".',
+        );
+      }
       const descriptionText =
         (typeof d.descriptionText === 'string' && d.descriptionText) ||
         (typeof d.description === 'string' && d.description) ||
         undefined;
       try {
-        const result = await opts.handleFetchEsriContours(serviceUrl, mode, descriptionText);
+        const result = await opts.handleFetchEsriContours(
+          serviceUrl,
+          mode,
+          descriptionText,
+          inclusionScope ? { inclusionScope } : undefined,
+        );
         if (!result.ok) {
           return respond(message, AgentType.CONTOURING_AGENT, false, undefined, result.message);
         }
@@ -1059,7 +1246,8 @@ export function registerDomainSkillHandlers(
           layerName: result.layerName,
           serviceUrl: result.serviceUrl ?? serviceUrl,
           resolvedSource: result.resolvedSource,
-          resolvedAutomatically: !serviceUrl,
+          inclusionScope,
+          resolvedAutomatically: false,
         });
       } catch (e) {
         return respond(

@@ -24,8 +24,10 @@
  * PARCEL_DATA_NATIONWIDE.md for the licensed options.
  */
 
-import type { CountyParcelIssue, ParcelLabelTextData, SurveyLine } from '../types.ts';
+import type { CountyParcelIssue, HatchBoundaryLoop, ParcelLabelTextData, SurveyLine } from '../types.ts';
 import { queryEsriFeatures, fetchEsriJson, getServiceInfo, makePointConverter } from './esriRestClient.ts';
+import { clipSurveyLinesToBoundaries } from './resourceClipService.ts';
+import { pointInPolygon } from '../utils/contouring.ts';
 
 export const PARCEL_LAYER_TAG = 'COUNTY-PARCEL';
 
@@ -1109,6 +1111,42 @@ export interface ParcelFetchResult {
   labelPoints: Array<{ x: number; y: number; parcelId: string | null; owner: string | null; deedBook: string | null; deedPage: string | null; block: string | null; unit: string | null; deedRef: string | null }>;
   /** Set when owner/deed attributes were filled in from a secondary layer. */
   enrichment?: ParcelEnrichmentSummary;
+}
+
+/**
+ * Trim a parcel fetch to closed inclusion loops. Parcel rings arrive as
+ * two-point segments, so a segment crossing the boundary is split at the
+ * boundary and only the inside pieces survive. Parcels left with no visible
+ * linework — and their centroid labels — are dropped.
+ *
+ * Returns the input unchanged when the loops do not describe a usable polygon.
+ */
+export function clipParcelFetchToBoundary(
+  result: ParcelFetchResult,
+  boundaryLoops: HatchBoundaryLoop[],
+): ParcelFetchResult {
+  const polygons = boundaryLoops
+    .filter(loop => loop.isHole !== true && loop.vertices.length >= 3)
+    .map(loop => loop.vertices.map(vertex => ({ x: vertex.x, y: vertex.y })));
+  if (polygons.length === 0) return result;
+
+  const lines = clipSurveyLinesToBoundaries(result.lines, boundaryLoops);
+  const keptParcels = new Set<number>();
+  for (const line of lines) {
+    const match = /^PARCEL-(\d+)-/.exec(line.id ?? '');
+    if (match) keptParcels.add(Number(match[1]));
+  }
+
+  const parcels = result.parcels.filter((_, index) => keptParcels.has(index));
+  return {
+    ...result,
+    lines,
+    labelPoints: result.labelPoints.filter(point =>
+      polygons.some(polygon => pointInPolygon(point.x, point.y, polygon)),
+    ),
+    parcels,
+    featureCount: parcels.length,
+  };
 }
 
 /** Bbox in WGS84 (xmin/ymin/xmax/ymax = west/south/east/north). */

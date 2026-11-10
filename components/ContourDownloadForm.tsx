@@ -1,4 +1,5 @@
 import React from 'react';
+import type { ContourInclusionScope } from '../utils/usgsNationalContours.ts';
 
 export type ContourAoiMode = 'project' | 'inclusion' | 'description';
 
@@ -9,6 +10,9 @@ export interface ContourDownloadFormProps {
   onDescriptionChange: (value: string) => void;
   hasInclusionBoundary: boolean;
   inclusionSegmentCount: number;
+  /** For inclusion mode: keep only geometry inside or outside the boundary. */
+  inclusionScope?: ContourInclusionScope;
+  onInclusionScopeChange?: (scope: ContourInclusionScope) => void;
   /**
    * When provided, inclusion mode additionally requires a project projection.
    * ESRI queries need georeferenced coordinates; the chat panel omits this
@@ -30,6 +34,8 @@ export const ContourDownloadForm: React.FC<ContourDownloadFormProps> = ({
   onDescriptionChange,
   hasInclusionBoundary,
   inclusionSegmentCount,
+  inclusionScope = 'inside',
+  onInclusionScopeChange,
   hasProjectProjection,
   hasProjectExtent,
   isFetching,
@@ -97,12 +103,43 @@ export const ContourDownloadForm: React.FC<ContourDownloadFormProps> = ({
 
       {/* Inclusion mode info */}
       {mode === 'inclusion' && (
-        <div className={`text-[10px] rounded px-2 py-1.5 border ${
-          inclusionReady
-            ? 'bg-green-900/20 border-green-700/40 text-green-300'
-            : 'bg-yellow-900/20 border-yellow-700/40 text-yellow-400'
-        }`}>
-          {inclusionWarning}
+        <div className="space-y-1.5">
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={() => onInclusionScopeChange?.('inside')}
+              className={`flex-1 text-[10px] py-1 rounded border transition-colors ${
+                inclusionScope === 'inside'
+                  ? 'bg-green-700/40 border-green-500/50 text-green-200'
+                  : 'bg-gray-700/40 border-gray-600/40 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Inside Boundary
+            </button>
+            <button
+              type="button"
+              onClick={() => onInclusionScopeChange?.('outside')}
+              className={`flex-1 text-[10px] py-1 rounded border transition-colors ${
+                inclusionScope === 'outside'
+                  ? 'bg-amber-700/40 border-amber-500/50 text-amber-200'
+                  : 'bg-gray-700/40 border-gray-600/40 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Outside Boundary
+            </button>
+          </div>
+          <div className={`text-[10px] rounded px-2 py-1.5 border ${
+            inclusionReady
+              ? 'bg-green-900/20 border-green-700/40 text-green-300'
+              : 'bg-yellow-900/20 border-yellow-700/40 text-yellow-400'
+          }`}>
+            {inclusionWarning}
+          </div>
+          <p className="text-[10px] text-gray-500">
+            {inclusionScope === 'outside'
+              ? 'Keeps only GIS contour geometry outside the boundary — useful for filling the void around survey contours.'
+              : 'Keeps only GIS contour geometry inside the boundary.'}
+          </p>
         </div>
       )}
 

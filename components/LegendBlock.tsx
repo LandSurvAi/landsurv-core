@@ -1,6 +1,6 @@
 import React, { useSyncExternalStore } from 'react';
 import { legendStore, legendEntryResolvedStyle } from '../services/legendStudio.ts';
-import { layoutLegend } from '../utils/legendLayout.ts';
+import { layoutLegend, legendSwatchDashArray } from '../utils/legendLayout.ts';
 
 interface LegendBlockProps {
   /** Pixels per sheet inch (SheetView's effectivePpi). */
@@ -15,6 +15,9 @@ interface LegendBlockProps {
  * The paperspace legend. It reads the shared legend store directly, so every
  * edit in the Legend A2UI appears here immediately, and clicking an entry
  * selects the same entry in the editor.
+ *
+ * Everything drawn here is plot content: transparent background, line samples,
+ * and text — the same marks `legendToSvgMarkup` puts in the exported PDF.
  */
 export const LegendBlock: React.FC<LegendBlockProps> = ({
   ppi,
@@ -36,6 +39,9 @@ export const LegendBlock: React.FC<LegendBlockProps> = ({
   const fontScale = Math.min(1.8, Math.max(0.7, settings.fontScale ?? 1));
   const titleSize = Math.max(6, px(0.13 * fontScale));
   const entrySize = Math.max(5.5, px(0.1 * fontScale));
+  const swatchW = Math.max(4, px(layout.swatchWIn));
+  const swatchH = Math.max(3, px(layout.rowIn * 0.56));
+  const ruleWidth = Math.max(0.75, px(0.012));
 
   return (
     <div
@@ -50,8 +56,8 @@ export const LegendBlock: React.FC<LegendBlockProps> = ({
         height: px(layout.heightIn),
         boxSizing: 'border-box',
         padding: px(layout.padIn),
-        background: 'rgba(255,255,255,0.94)',
-        border: settings.showBorder ? '1px solid #111827' : '1px solid transparent',
+        background: 'transparent',
+        border: settings.showBorder ? '1px solid #111827' : 'none',
         color: '#111827',
         zIndex: 36,
         pointerEvents: 'auto',
@@ -61,43 +67,21 @@ export const LegendBlock: React.FC<LegendBlockProps> = ({
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'flex-end',
           justifyContent: 'space-between',
           gap: px(0.05),
           height: px(layout.headerIn),
+          boxSizing: 'border-box',
           fontSize: titleSize,
           fontWeight: 700,
           letterSpacing: '0.08em',
           fontFamily: 'Arial, sans-serif',
+          borderBottom: `${ruleWidth}px solid #111827`,
         }}
       >
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {settings.title || 'LEGEND'}
         </span>
-        {onOpenEditor && (
-          <button
-            type="button"
-            onClick={event => {
-              event.stopPropagation();
-              onOpenEditor();
-            }}
-            aria-label="Edit legend"
-            title="Edit legend"
-            style={{
-              border: '1px solid #0f766e',
-              background: '#ccfbf1',
-              color: '#0f766e',
-              fontSize: Math.max(5, entrySize * 0.85),
-              lineHeight: 1,
-              padding: `${Math.max(1, px(0.015))}px ${Math.max(2, px(0.03))}px`,
-              borderRadius: 2,
-              cursor: 'pointer',
-              flexShrink: 0,
-            }}
-          >
-            Edit
-          </button>
-        )}
       </div>
       <div
         style={{
@@ -116,6 +100,7 @@ export const LegendBlock: React.FC<LegendBlockProps> = ({
               key={entry.id}
               type="button"
               onClick={() => legendStore.select(entry.id)}
+              aria-pressed={selected}
               title={`${entry.layer}${resolved.patternName ? ` · ${resolved.patternName}` : ''}`}
               style={{
                 display: 'flex',
@@ -123,26 +108,51 @@ export const LegendBlock: React.FC<LegendBlockProps> = ({
                 gap: px(layout.gapIn),
                 height: px(layout.rowIn),
                 padding: 0,
-                border: selected ? '1px solid #0f766e' : '1px solid transparent',
-                background: selected ? 'rgba(13,148,136,0.16)' : 'transparent',
+                border: 'none',
+                background: 'transparent',
                 cursor: 'pointer',
                 textAlign: 'left',
                 minWidth: 0,
               }}
             >
-              <span
-                style={{
-                  width: px(layout.swatchWIn),
-                  height: px(layout.rowIn * 0.56),
-                  flexShrink: 0,
-                  background: resolved.color,
-                  opacity: 0.85,
-                  border: `1px solid ${resolved.color}`,
-                  backgroundImage: hatch
-                    ? 'repeating-linear-gradient(45deg, rgba(0,0,0,0.55) 0 1px, transparent 1px 4px)'
-                    : undefined,
-                }}
-              />
+              <svg
+                width={swatchW}
+                height={swatchH}
+                viewBox={`0 0 ${swatchW} ${swatchH}`}
+                aria-hidden="true"
+                style={{ display: 'block', flexShrink: 0 }}
+              >
+                {hatch ? (
+                  <>
+                    <rect
+                      x={0.5}
+                      y={0.5}
+                      width={Math.max(0, swatchW - 1)}
+                      height={Math.max(0, swatchH - 1)}
+                      fill={resolved.color}
+                      fillOpacity={0.22}
+                      stroke={resolved.color}
+                      strokeWidth={ruleWidth}
+                    />
+                    <path
+                      d={`M 0 ${swatchH} L ${swatchW} 0 M ${swatchW * 0.32} ${swatchH} L ${swatchW} ${swatchH * 0.36}`}
+                      stroke={resolved.color}
+                      strokeWidth={ruleWidth}
+                      fill="none"
+                    />
+                  </>
+                ) : (
+                  <line
+                    x1={0}
+                    y1={swatchH / 2}
+                    x2={swatchW}
+                    y2={swatchH / 2}
+                    stroke={resolved.color}
+                    strokeWidth={Math.max(1, px(0.018))}
+                    strokeDasharray={legendSwatchDashArray(resolved.linetype)}
+                  />
+                )}
+              </svg>
               <span
                 style={{
                   fontSize: entrySize,

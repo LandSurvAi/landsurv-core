@@ -8,43 +8,33 @@ interface ShrinkwrapPanelProps {
   hullCount: number;
   /** CAD layer the hull is drawn on. */
   layer: string;
-  /** Currently-committed excluded point numbers (drives the rendered hull). */
+  /** Point numbers currently left out of the hull. */
   excludedPns: string[];
-  /** User-editable draft set — what the hull WILL be excluding after Update. */
-  pendingExcludedPns: string[];
   /** KNN tightness for the concave-hull walker. Lower = tighter (more concave). */
   concavityK: number;
-  /** Live-updates the hull tightness (no Update press required). */
+  /** Live-updates the hull tightness. */
   onConcavityChange: (k: number) => void;
   /** Construction-line "cuts" — each is a chord (a → b) that auto-excludes
    *  every point on its smaller-area side, redefining that boundary segment. */
   cuts: Array<{ a: string; b: string; flipped: boolean }>;
-  /** When true, every canvas click builds the next cut endpoint instead of
-   *  staging an exclusion. Owned by the host so the canvas click handler can
-   *  branch deterministically without competing with the exclude workflow. */
+  /** When true, canvas clicks build cut chords instead of toggling points. */
   cutMode: boolean;
-  /** First endpoint of an in-progress cut (set by the host as the user
-   *  clicks). When non-null, the next canvas click in cut mode completes
-   *  the cut. */
+  /** First endpoint of an in-progress cut. */
   cutStartPn: string | null;
-  /** Toggle cut mode on/off. Toggling always clears the in-progress endpoint. */
+  /** Toggle cut mode on/off. */
   onToggleCutMode: () => void;
-  /** Toggle which side of a cut is amputated. Live-applies. */
+  /** Toggle which side of a cut is amputated. */
   onFlipCut: (idx: number) => void;
-  /** Remove a cut (and its exclusion effect). Live-applies. */
+  /** Remove a cut. */
   onRemoveCut: (idx: number) => void;
   /** The single point currently selected on canvas, if any. */
   selectedPoint: SurveyPoint | null;
-  /** Stage an exclusion in the draft (does not recompute). */
-  onStageExclude: (pn: string) => void;
-  /** Remove a still-staged exclusion from the draft (does not recompute). */
-  onUnstageExclude: (pn: string) => void;
-  /** Stage a restore for an already-committed exclusion (does not recompute). */
-  onStageRestore: (pn: string) => void;
-  /** Stage a restore for every excluded point (does not recompute). */
-  onStageRestoreAll: () => void;
-  /** Commit the draft: copy pendingExcludedPns → excludedPns and recompute. */
-  onApplyUpdate: () => void;
+  /** Remove a point from the hull immediately. */
+  onExcludePoint: (pn: string) => void;
+  /** Put an excluded point back into the candidate pool immediately. */
+  onRestorePoint: (pn: string) => void;
+  /** Put every excluded point back into the candidate pool. */
+  onRestoreAll: () => void;
   /** Convert the reviewed preview into an inclusion boundary. */
   onDrawInclusion: () => void;
   /** Convert the reviewed preview into a Boundary object in the Boundary Editor. */
@@ -53,30 +43,29 @@ interface ShrinkwrapPanelProps {
   isCommitted: boolean;
   /** Remove the shrinkwrap polyline and end the session. */
   onClearShrinkwrap: () => void;
+  /** True while the user is drawing an ephemeral lasso. */
+  freehandActive: boolean;
+  /** Enter/leave the freehand lasso tool. */
+  onToggleFreehand: () => void;
 }
 
 /**
  * Floating control panel for an active shrinkwrap session.
  *
- * Two explicit, mutually-exclusive interaction modes:
+ * Point edits apply immediately:
+ *   - click a hull point (red X on hover) to remove it
+ *   - hover a point outside the hull (green +) and click to pin it to the hull
+ *   - excluded points stay visible with a red X so they can be restored
  *
- *   EXCLUDE MODE (default) — every canvas click on a hull point STAGES that
- *     point for removal. Batched until "Update" is pressed.
- *
- *   CUT MODE (toggle button) — every canvas click is a cut endpoint. First
- *     click sets the start; second click completes the chord and adds it
- *     to `cuts`. Cuts live-apply (no Update press required). Toggling the
- *     mode always clears the in-progress endpoint.
- *
- * The mode is owned by the host (App.tsx) so the canvas click handler can
- * route deterministically without the panel and canvas getting out of sync.
+ * Freehand mode is an ephemeral grease-pencil lasso: draw a rough loop around
+ * the points to keep, and every point outside the loop is excluded at once.
+ * The guide disappears on release and is never persisted.
  */
 const ShrinkwrapPanel: React.FC<ShrinkwrapPanelProps> = ({
   sourceCount,
   hullCount,
   layer,
   excludedPns,
-  pendingExcludedPns,
   concavityK,
   onConcavityChange,
   cuts,
@@ -86,39 +75,18 @@ const ShrinkwrapPanel: React.FC<ShrinkwrapPanelProps> = ({
   onFlipCut,
   onRemoveCut,
   selectedPoint,
-  onStageExclude,
-  onUnstageExclude,
-  onStageRestore,
-  onStageRestoreAll,
-  onApplyUpdate,
+  onExcludePoint,
+  onRestorePoint,
+  onRestoreAll,
   onDrawInclusion,
   onDrawBoundary,
   isCommitted,
   onClearShrinkwrap,
+  freehandActive,
+  onToggleFreehand,
 }) => {
-  const committedSet = useMemo(() => new Set(excludedPns), [excludedPns]);
-  const pendingSet = useMemo(() => new Set(pendingExcludedPns), [pendingExcludedPns]);
-
-  // Newly staged for exclusion (not yet committed).
-  const newlyStaged = useMemo(
-    () => pendingExcludedPns.filter(pn => !committedSet.has(pn)),
-    [pendingExcludedPns, committedSet],
-  );
-  // Currently excluded but staged to be restored.
-  const stagedRestores = useMemo(
-    () => excludedPns.filter(pn => !pendingSet.has(pn)),
-    [excludedPns, pendingSet],
-  );
-  // Excluded and staying excluded.
-  const stillExcluded = useMemo(
-    () => excludedPns.filter(pn => pendingSet.has(pn)),
-    [excludedPns, pendingSet],
-  );
-
-  const hasChanges = newlyStaged.length > 0 || stagedRestores.length > 0;
-  const canExclude = !!selectedPoint
-    && !pendingSet.has(selectedPoint.pointNumber)
-    && !committedSet.has(selectedPoint.pointNumber);
+  const excludedSet = useMemo(() => new Set(excludedPns), [excludedPns]);
+  const selectedIsExcluded = !!selectedPoint && excludedSet.has(selectedPoint.pointNumber);
 
   return (
     <div className="text-sm text-gray-200 space-y-3 light-theme:text-gray-800">
@@ -133,12 +101,7 @@ const ShrinkwrapPanel: React.FC<ShrinkwrapPanelProps> = ({
         </div>
         <div className="rounded bg-gray-700/40 px-2 py-1 light-theme:bg-gray-100">
           <div className="text-[10px] uppercase tracking-wide text-gray-400 light-theme:text-gray-500">Excluded</div>
-          <div className="font-mono text-base">
-            {excludedPns.length}
-            {hasChanges && (
-              <span className="text-amber-300 text-[11px] ml-1">→ {pendingExcludedPns.length}</span>
-            )}
-          </div>
+          <div className="font-mono text-base">{excludedPns.length}</div>
         </div>
       </div>
 
@@ -168,16 +131,18 @@ const ShrinkwrapPanel: React.FC<ShrinkwrapPanelProps> = ({
         </div>
       </div>
 
-      {/* Mode toggle — single source of truth for what canvas clicks do. */}
+      {/* Point editing — every action is immediate; there is no Update step. */}
       <div className={`rounded border p-2 space-y-2 ${
         cutMode
           ? 'border-red-500/60 bg-red-900/20'
-          : 'border-violet-700/40 bg-violet-900/10'
+          : freehandActive
+            ? 'border-cyan-500/60 bg-cyan-900/20'
+            : 'border-violet-700/40 bg-violet-900/10'
       }`}>
         <div className="flex items-center justify-between gap-2">
           <div className="text-[11px] uppercase tracking-wide">
-            <span className={cutMode ? 'text-red-300' : 'text-violet-300'}>
-              Mode: {cutMode ? 'Construction Cut' : 'Exclude Points'}
+            <span className={cutMode ? 'text-red-300' : freehandActive ? 'text-cyan-300' : 'text-violet-300'}>
+              {cutMode ? 'Mode: Construction Cut' : freehandActive ? 'Mode: Freehand Lasso' : 'Point editing'}
             </span>
           </div>
           <button
@@ -188,117 +153,101 @@ const ShrinkwrapPanel: React.FC<ShrinkwrapPanelProps> = ({
                 ? 'bg-red-600 hover:bg-red-500'
                 : 'bg-gray-700 hover:bg-gray-600 border border-red-500/40 text-red-300'
             }`}
-            title={cutMode ? 'Exit cut mode and go back to excluding points' : 'Strike chord cuts between two points'}
+            title={cutMode ? 'Exit cut mode and go back to editing points' : 'Strike chord cuts between two points'}
           >
             {cutMode ? 'Exit Cut Mode' : 'Enter Cut Mode'}
           </button>
         </div>
 
         {cutMode ? (
-          // CUT-MODE PANEL — every canvas click is a cut endpoint.
-          <>
-            <div className="text-[11px] text-red-200 leading-snug">
-              {cutStartPn
-                ? <>Cut start: <span className="font-mono">{cutStartPn}</span>. Click the second point on the canvas to complete the chord, or tap <span className="font-mono">{cutStartPn}</span> again to cancel.</>
-                : <>Click any two points on the canvas to strike a construction cut. The smaller side of the chord is auto-excluded.</>
-              }
-            </div>
-            <div className="text-[11px] text-gray-400">
-              Selected: <span className="font-mono">{selectedPoint?.pointNumber ?? '—'}</span>
-            </div>
-          </>
+          <div className="text-[11px] text-red-200 leading-snug">
+            {cutStartPn
+              ? <>Cut start: <span className="font-mono">{cutStartPn}</span>. Click the second point on the canvas to complete the chord, or tap <span className="font-mono">{cutStartPn}</span> again to cancel.</>
+              : <>Click any two points on the canvas to strike a construction cut. The smaller side of the chord is auto-excluded.</>}
+          </div>
         ) : (
-          // EXCLUDE-MODE PANEL — canvas clicks stage exclusions (batched).
           <>
-            <div className="text-[11px] text-gray-400 light-theme:text-gray-600">
-              Click any hull point on the canvas to stage it for removal. The hull
-              recomputes only when you press <span className="font-semibold text-amber-300">Update</span>.
+            <div className="text-[11px] text-gray-400 light-theme:text-gray-600 leading-snug">
+              Click a hull point (red X) to remove it instantly. Hover a point outside the hull for a green + and click to add it.
             </div>
-            <div className="flex items-center gap-2">
-              <div className="font-mono text-sm flex-1 truncate">
-                {selectedPoint
-                  ? `${selectedPoint.pointNumber}${selectedPoint.description ? ` — ${selectedPoint.description}` : ''}`
-                  : <span className="text-gray-500 italic">(click a point on the canvas)</span>}
+
+            <button
+              type="button"
+              onClick={onToggleFreehand}
+              className={`w-full px-2 py-1.5 rounded text-[11px] font-semibold border transition-colors ${
+                freehandActive
+                  ? 'bg-cyan-500 text-gray-950 border-cyan-300 hover:bg-cyan-400'
+                  : 'bg-cyan-500/10 text-cyan-200 border-cyan-500/50 hover:bg-cyan-500/20'
+              }`}
+              title={freehandActive
+                ? 'Leave the freehand lasso and return to point editing'
+                : 'Draw a rough loop around the points to keep'}
+            >
+              {freehandActive ? 'Exit Freehand' : 'Freehand'}
+            </button>
+
+            {freehandActive ? (
+              <div className="text-[11px] text-cyan-200 leading-snug">
+                Drag a rough loop around the points you want. Everything outside is excluded when you release; the grease-pencil guide disappears.
               </div>
-              <button
-                type="button"
-                disabled={!canExclude}
-                onClick={() => selectedPoint && onStageExclude(selectedPoint.pointNumber)}
-                className="px-2 py-1 rounded text-[11px] font-semibold bg-violet-600 text-white hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Stage Exclude
-              </button>
-            </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="font-mono text-sm flex-1 truncate">
+                  {selectedPoint
+                    ? `${selectedPoint.pointNumber}${selectedPoint.description ? ` — ${selectedPoint.description}` : ''}`
+                    : <span className="text-gray-500 italic">(click a point on the canvas)</span>}
+                </div>
+                <button
+                  type="button"
+                  disabled={!selectedPoint}
+                  onClick={() => {
+                    if (!selectedPoint) return;
+                    if (selectedIsExcluded) onRestorePoint(selectedPoint.pointNumber);
+                    else onExcludePoint(selectedPoint.pointNumber);
+                  }}
+                  className={`px-2 py-1 rounded text-[11px] font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed ${
+                    selectedIsExcluded
+                      ? 'bg-emerald-600 hover:bg-emerald-500'
+                      : 'bg-violet-600 hover:bg-violet-500'
+                  }`}
+                >
+                  {selectedIsExcluded ? 'Restore' : 'Remove'}
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>
 
-      {/* Newly staged exclusions (not yet committed). */}
-      {newlyStaged.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <div className="text-[11px] uppercase tracking-wide text-amber-300">
-              Staged to exclude ({newlyStaged.length})
-            </div>
-          </div>
-          <ul className="max-h-32 overflow-auto divide-y divide-amber-500/20 rounded border border-amber-500/40 bg-amber-900/10">
-            {newlyStaged.map(pn => (
-              <li key={pn} className="flex items-center justify-between px-2 py-1 text-xs">
-                <span className="font-mono text-amber-200">{pn}</span>
-                <button
-                  type="button"
-                  onClick={() => onUnstageExclude(pn)}
-                  className="text-[11px] text-amber-300 hover:text-amber-200 underline"
-                >
-                  Unstage
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Already-committed exclusions (with stage-to-restore option). */}
+      {/* Excluded points — restore immediately, no staging. */}
       <div>
         <div className="flex items-center justify-between mb-1">
           <div className="text-[11px] uppercase tracking-wide text-gray-400 light-theme:text-gray-600">
             Excluded points
           </div>
-          {excludedPns.length > 0 && stagedRestores.length < excludedPns.length && (
+          {excludedPns.length > 0 && (
             <button
               type="button"
-              onClick={onStageRestoreAll}
+              onClick={onRestoreAll}
               className="text-[11px] text-violet-300 hover:text-violet-200 underline"
             >
-              Stage restore all
+              Restore all
             </button>
           )}
         </div>
         {excludedPns.length === 0 ? (
-          <div className="text-[11px] text-gray-500 italic">None — the hull uses every source point.</div>
+          <div className="text-[11px] text-gray-500 italic">None — the hull uses every candidate point.</div>
         ) : (
           <ul className="max-h-40 overflow-auto divide-y divide-gray-700/60 rounded border border-gray-700/60 light-theme:divide-gray-300 light-theme:border-gray-300">
-            {stillExcluded.map(pn => (
+            {excludedPns.map(pn => (
               <li key={pn} className="flex items-center justify-between px-2 py-1 text-xs">
                 <span className="font-mono">{pn}</span>
                 <button
                   type="button"
-                  onClick={() => onStageRestore(pn)}
-                  className="text-[11px] text-violet-300 hover:text-violet-200"
+                  onClick={() => onRestorePoint(pn)}
+                  className="text-[11px] text-emerald-300 hover:text-emerald-200"
                 >
-                  Stage restore
-                </button>
-              </li>
-            ))}
-            {stagedRestores.map(pn => (
-              <li key={pn} className="flex items-center justify-between px-2 py-1 text-xs bg-emerald-900/10">
-                <span className="font-mono text-emerald-300 line-through">{pn}</span>
-                <button
-                  type="button"
-                  onClick={() => onStageExclude(pn)}
-                  className="text-[11px] text-emerald-300 hover:text-emerald-200 underline"
-                >
-                  Keep excluded
+                  Restore
                 </button>
               </li>
             ))}
@@ -306,7 +255,7 @@ const ShrinkwrapPanel: React.FC<ShrinkwrapPanelProps> = ({
         )}
       </div>
 
-      {/* Active construction cuts — list only; builder lives in the selected-point box above. */}
+      {/* Active construction cuts — list only; builder lives on the canvas. */}
       {cuts.length > 0 && (
         <div className="rounded border border-red-700/40 bg-red-900/10 p-2 space-y-2">
           <div className="text-[11px] uppercase tracking-wide text-red-300">
@@ -342,26 +291,6 @@ const ShrinkwrapPanel: React.FC<ShrinkwrapPanelProps> = ({
           </ul>
         </div>
       )}
-
-      {/* Update button — commits pending changes and triggers recompute. */}
-      <button
-        type="button"
-        disabled={!hasChanges}
-        onClick={onApplyUpdate}
-        className={[
-          'w-full px-2 py-2 rounded text-xs font-semibold transition-colors',
-          hasChanges
-            ? 'bg-amber-500 text-gray-900 hover:bg-amber-400 animate-pulse'
-            : 'bg-gray-700 text-gray-500 cursor-not-allowed',
-        ].join(' ')}
-        title={hasChanges
-          ? 'Re-run the COGO convex hull with the new exclusion set'
-          : 'No pending changes — stage exclusions or restores first'}
-      >
-        {hasChanges
-          ? `Update Hull (${newlyStaged.length} exclude, ${stagedRestores.length} restore)`
-          : 'Update Hull'}
-      </button>
 
       <div className="grid grid-cols-2 gap-2">
         <button

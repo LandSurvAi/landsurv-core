@@ -228,9 +228,9 @@ agentRegistry.register({
       name: 'Add Point',
       type: 'action' as const,
       description:
-        'Authoritative point creation. Accepts a full Google Plus Code, a WGS84 latitude/longitude pair, or project northing/easting. PointAgent assigns the next number when pointNumber is omitted and renumbers duplicates instead of overwriting an existing point.',
+        'Authoritative point creation. Accepts a full Google Plus Code, a short local Plus Code when the project has a location/GPS fix, a WGS84 latitude/longitude pair, or project northing/easting. PointAgent assigns the next number when pointNumber is omitted and renumbers duplicates instead of overwriting an existing point.',
       inputs: {
-        plusCode:    { type: 'string',  description: 'Full Google Plus Code, e.g. 87G8Q2PQ+5X.' },
+        plusCode:    { type: 'string',  description: 'Google Plus Code, full (87G8Q2PQ+5X) or short (Q2PQ+5X). Short codes resolve against the project location or GPS fix.' },
         latitude:    { type: 'number',  description: 'WGS84 latitude for Plus Code-free input.' },
         longitude:   { type: 'number',  description: 'WGS84 longitude for Plus Code-free input.' },
         northing:    { type: 'number',  description: 'Project northing when the caller already has projected coordinates.' },
@@ -248,6 +248,7 @@ agentRegistry.register({
       },
       examples: [
         'User: "add point at 87G8Q2PQ+5X" → askPeer add_point {plusCode:"87G8Q2PQ+5X"}',
+        'User: "add point at Q2PQ+5X" → askPeer add_point {plusCode:"Q2PQ+5X"} (short code resolves from the project/GPS reference)',
         'User: "set a point at 39.9526, -75.1652" → askPeer add_point {latitude:39.9526, longitude:-75.1652}',
         'CACP caller already has project coordinates → askPeer add_point {northing:5000, easting:6000, description:"MON"}',
       ],
@@ -1426,20 +1427,32 @@ agentRegistry.register({
       name: 'Generate Survey Point Contours',
       type: 'action' as const,
       description:
-        'Generates topographic contour IsoPaths and SurveyLines from the loaded project survey points using the active or supplied contour interval, major interval, and smoothing settings.',
+        'Prepares a survey-point contour job, stages the requested settings, and opens the Contour Generation controls for review. It does not draw automatically; the user presses Generate Contours after reviewing.',
       inputs: {
         contourInterval: { type: 'number', description: 'Vertical interval between minor contour lines (default uses current contourSettings).' },
         majorInterval:   { type: 'number', description: 'Vertical interval for major/index contours.' },
         smoothing:       { type: 'integer', description: 'Optional smoothing level from 0-4.' },
         showLabels:      { type: 'boolean', description: 'Whether major contours should receive labels.' },
+        labelDensity:    { type: 'number', description: 'Optional label density multiplier.' },
+        pointFilterDescription: { type: 'string', description: 'Optional description substring used to select survey points.' },
+        excludeInvertPoints: { type: 'boolean', description: 'Drop INV/SAN.INV/STORM INV shots before triangulation. Defaults to true.' },
+        excludeFfePoints: { type: 'boolean', description: 'Drop FFE/finished-floor shots before triangulation. Defaults to true.' },
+        excludeStructureShots: { type: 'boolean', description: 'Drop rim, MH, CB and top-of-structure shots before triangulation. Defaults to true.' },
+        inclusionMode: {
+          type: 'string',
+          enum: ['inside', 'outside'],
+          description: 'Generate contours inside or outside the active inclusion boundary. Defaults to inside.',
+        },
       },
       outputs: {
-        generationId: { type: 'string', required: true },
-        pathCount:    { type: 'integer', required: true },
-        lineCount:    { type: 'integer', required: true },
+        staged:       { type: 'boolean' },
+        generationId: { type: 'string' },
+        pathCount:    { type: 'integer' },
+        lineCount:    { type: 'integer' },
       },
       examples: [
         'Generate 1ft contours with 5ft index contours from current survey points',
+        'Review contour settings before generating',
       ],
     },
     {
@@ -1478,6 +1491,7 @@ agentRegistry.register({
         },
       },
       outputs: {
+        staged: { type: 'boolean', description: 'True when settings were staged for review instead of generating.' },
         count: { type: 'integer', description: 'Number of contour path segments generated.' },
         sourceTinId: { type: 'string', description: 'TIN surface id used for the generation.' },
       },
@@ -1556,6 +1570,36 @@ agentRegistry.register({
       examples: ['Export the loaded TIN as LandXML', 'Save the surface as a .tin file'],
     },
     {
+      id: 'set_tin_surface_display',
+      name: 'Draw TIN Surface',
+      type: 'action' as const,
+      description:
+        'Draws or hides a loaded TIN surface on the canvas and chooses wireframe or shaded display. ' +
+        'Use this for "draw the surface", "draw the mesh", "show the TIN shaded", "wireframe the surface", or "hide the surface".',
+      inputs: {
+        sourceTinId: {
+          type: 'string',
+          description: 'Optional loaded TIN surface id. Defaults to the most recent surface.',
+        },
+        displayMode: {
+          type: 'string',
+          enum: ['wireframe', 'shaded', 'hidden'],
+          default: 'shaded',
+          description: 'wireframe = triangle edges, shaded = elevation fill, hidden = remove from canvas.',
+        },
+        zoomTo: {
+          type: 'boolean',
+          description: 'When true, switch to the canvas and zoom to the surface. Defaults to true.',
+        },
+      },
+      outputs: {
+        tinId: { type: 'string', required: true },
+        displayMode: { type: 'string', required: true },
+        drawn: { type: 'boolean', required: true },
+      },
+      examples: ['Draw the surface shaded', 'Show the TIN as a wireframe', 'Hide the Survey Points TIN'],
+    },
+    {
       id: 'open_tin_surfaces',
       name: 'Open TIN Surfaces Surface',
       type: 'action' as const,
@@ -1577,12 +1621,11 @@ agentRegistry.register({
       inputs: {
         serviceUrl: {
           type: 'string',
-          required: false,
+          required: true,
           description:
-            'Optional base URL of the ESRI REST Feature Service or Map Service layer ' +
+            'Base URL of the ESRI REST Feature Service or Map Service layer chosen by the user ' +
             '(e.g. https://services.pasda.psu.edu/arcgis/rest/services/PAMAP_Contour_Mosaic_South/MapServer/0). ' +
-            'Omit it whenever the project location is known: the host resolves PASDA in Pennsylvania ' +
-            'and live state/county services elsewhere, with no user action required.',
+            'Never omit it or pick a provider on the user\'s behalf. Ask which source they want first.',
         },
         mode: {
           type: 'string',
@@ -1590,6 +1633,13 @@ agentRegistry.register({
           description:
             'Area of interest. "project" uses the loaded survey points, ' +
             '"inclusion" uses the active inclusion boundary, and "description" geocodes descriptionText.',
+        },
+        inclusionScope: {
+          type: 'string',
+          enum: ['inside', 'outside'],
+          description:
+            'Required when mode="inclusion": keep only contour geometry inside or outside the ' +
+            'inclusion boundary. Ask the user which they want; never assume.',
         },
         descriptionText: {
           type: 'string',
@@ -1848,20 +1898,20 @@ agentRegistry.register({
   skills: [
     {
       id: 'fetch_flood_zones',
-      name: 'Fetch FEMA Flood Zones',
+      name: 'Fetch FEMA NFHL Flood Map',
       type: 'action' as const,
       description:
-        'Fetches FEMA National Flood Hazard Layer (NFHL) flood-hazard polygons for a project area ' +
-        'and drops them onto the canvas as SurveyLines tagged type=\'flood\' and ' +
-        'layer=\'FEMA-FLOOD-<ZONE>\' (one CAD layer per FEMA zone code: AE, AH, AO, VE, X, ' +
-        'X-Shaded, etc.). When includeBfe is true (the UI default) it also pulls NFHL layer 16 ' +
-        '(S_BFE) and plots Base Flood Elevation lines on layer \'FEMA-BFE\' with one BFE ' +
-        'elevation callout per line. The area is specified either by drawn inclusion polygon ' +
-        '(mode=\'inclusion\') OR by free-text description that gets geocoded via Nominatim ' +
-        '(mode=\'description\'). Reprojects WGS84 → project EPSG client-side so the linework ' +
-        'lands on the correct State Plane / UTM coordinates. The Flood Agent should ask the user ' +
-        'which deliverables they want (BFE lines, zone callouts, written report, paperspace notes) ' +
-        'before and after fetching instead of assuming.',
+        'Fetches the complete FEMA National Flood Hazard Layer (NFHL) map for a project area, not ' +
+        'just flood-zone rings: flood-hazard polygons and floodway (FEMA-FLOOD-<ZONE>), Base Flood ' +
+        'Elevation lines (FEMA-BFE), cross-sections, FIRM panels, political jurisdictions, LOMRs, ' +
+        'LOMAs, water lines/areas, levees, structures, dunes, LiMWA, profile baselines, flood ' +
+        'boundaries and the remaining NFHL map layers. Every layer lands on its own ' +
+        'FEMA-NFHL-* CAD layer with labels where FEMA publishes a name/number. includeAllLayers ' +
+        'defaults to true; includeBfe defaults to true. The result also returns the FIRM panel ' +
+        'numbers/effective dates, community CIDs, cross-section WSELs, LOMR/LOMA cases and a ' +
+        'per-layer feature inventory for reports. The area is specified by drawn inclusion ' +
+        'polygon (mode=\'inclusion\') or free-text description geocoded via Nominatim ' +
+        '(mode=\'description\'). Reprojects WGS84 → project EPSG client-side.',
       inputs: {
         includeBfe: {
           type: 'boolean',
@@ -1869,6 +1919,13 @@ agentRegistry.register({
             'Also fetch FEMA Base Flood Elevation lines (NFHL layer 16) onto layer ' +
             'FEMA-BFE. Default true. Set false when the user only wants zone rings ' +
             'or the BFE service is unavailable.',
+        },
+        includeAllLayers: {
+          type: 'boolean',
+          description:
+            'Fetch the complete NFHL map stack (FIRM panels, cross-sections, political ' +
+            'jurisdictions, LOMRs/LOMAs, water, levees, structures and all remaining ' +
+            'map layers). Default true. Set false for a fast zone/BFE-only fetch.',
         },
         mode: {
           type: 'string',
@@ -1891,7 +1948,13 @@ agentRegistry.register({
         zoneCounts:    { type: 'object', description: 'Map of FEMA zone code → polygon count, e.g. {"AE": 14, "X": 7}.' },
         bfeCount:      { type: 'integer', description: 'Number of FEMA Base Flood Elevation line features added.' },
         bfeDatum:      { type: 'string', description: 'Vertical datum reported by FEMA for the BFE lines (e.g. NAVD88), when available.' },
-        layers:        { type: 'array', items: { type: 'string' }, description: 'CAD layer names created (FEMA-FLOOD-AE, FEMA-FLOOD-X, FEMA-BFE, ...).' },
+        layers:        { type: 'array', items: { type: 'string' }, description: 'CAD layer names created (FEMA-FLOOD-AE, FEMA-FLOOD-X, FEMA-BFE, FEMA-NFHL-*).' },
+        nfhlLayerCount: { type: 'integer', description: 'Number of NFHL layers queried/returned in the full map stack.' },
+        firmPanels:    { type: 'array', items: { type: 'object' }, description: 'FIRM panel numbers with effective dates and scales.' },
+        jurisdictions: { type: 'array', items: { type: 'object' }, description: 'Political jurisdictions with community numbers and CIDs.' },
+        crossSections: { type: 'integer', description: 'Number of FEMA cross-sections returned.' },
+        lomrs:         { type: 'integer', description: 'Number of LOMR case polygons returned.' },
+        lomas:         { type: 'integer', description: 'Number of LOMA determinations returned.' },
         truncated:     { type: 'boolean', description: 'True if FEMA NFHL hit the transfer limit and only a partial set came back.' },
       },
       examples: [

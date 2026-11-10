@@ -11,7 +11,14 @@
 
 import React, { useId, useState } from 'react';
 import type { A2UIPointEntrySpec, SurveyPoint } from '../types.ts';
-import { decodePlusCode } from '../utils/plusCode.ts';
+import { decodePlusCode, isShortPlusCode } from '../utils/plusCode.ts';
+import {
+  ChipCard,
+  CHIP_FIELD_LABEL_CLASS,
+  CHIP_INPUT_CLASS,
+  CHIP_WIDE_ACTION_CLASS,
+  chipButtonClass,
+} from './common/SectionChip.tsx';
 
 export interface A2UIPointEntryResult {
   ok: boolean;
@@ -35,14 +42,14 @@ export interface A2UIPointEntryProps {
   }) => void;
   /** Project from WGS84 to the active CRS, used by Plus Code entry. */
   convertLatLon?: (lat: number, lon: number) => { northing: number; easting: number } | null;
+  /** Project centre or GPS fix used to recover a shortened Plus Code. */
+  referenceLocation?: { latitude: number; longitude: number } | null;
 }
 
 const CHIPS = ['CALC', 'PROP', 'MON', 'FND_IP', 'EP', 'BLDG'] as const;
 
-const LABEL = 'mb-0.5 block text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400';
-const INPUT =
-  'w-full rounded-md border border-white/[0.1] bg-[#060d17] px-2.5 py-1.5 text-[11px] text-slate-100 outline-none transition-colors placeholder:text-slate-600 focus:border-emerald-400/60 focus:ring-1 focus:ring-emerald-400/20';
-const CARD = 'rounded-xl border border-white/[0.08] bg-white/[0.025] p-3';
+const LABEL = `${CHIP_FIELD_LABEL_CLASS} mb-0.5 block`;
+const INPUT = CHIP_INPUT_CLASS;
 
 export const A2UIPointEntry: React.FC<A2UIPointEntryProps> = ({
   spec,
@@ -51,6 +58,7 @@ export const A2UIPointEntry: React.FC<A2UIPointEntryProps> = ({
   onAddPoint,
   onStartCanvasPlacement,
   convertLatLon,
+  referenceLocation,
 }) => {
   const idPrefix = useId();
   // The surface is mounted when it opens; later CACP changes are requested
@@ -87,9 +95,16 @@ export const A2UIPointEntry: React.FC<A2UIPointEntryProps> = ({
   };
 
   const handleUsePlusCode = () => {
-    const decoded = decodePlusCode(plusCode);
+    const decoded = decodePlusCode(plusCode, referenceLocation);
     if (!decoded) {
-      setFeedback({ ok: false, message: 'Enter a full Google Plus Code, such as 87G8Q2PQ+5X. Shortened codes need a reference location.' });
+      setFeedback({
+        ok: false,
+        message: isShortPlusCode(plusCode)
+          ? referenceLocation
+            ? 'That short Plus Code could not be resolved near the project location. Try the full code.'
+            : 'Short Plus Codes need a project location or GPS fix. Enter the full code or set a project location.'
+          : 'Enter a Google Plus Code, such as 87G8Q2PQ+5X or Q2PQ+5X.',
+      });
       return;
     }
     if (!convertLatLon) {
@@ -175,9 +190,10 @@ export const A2UIPointEntry: React.FC<A2UIPointEntryProps> = ({
         </span>
       </div>
 
-      <div className={CARD}>
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-300">Point identity</span>
+      <ChipCard
+        color="emerald"
+        title="Point identity"
+        aside={
           <span
             data-testid="point-entry-cacp-status"
             className={`rounded-full border px-2 py-0.5 text-[9px] font-semibold ${
@@ -188,8 +204,8 @@ export const A2UIPointEntry: React.FC<A2UIPointEntryProps> = ({
           >
             {taken ? 'Exists — will renumber' : 'CACP available'}
           </span>
-        </div>
-
+        }
+      >
         <label className={LABEL} htmlFor={`${idPrefix}-point-number`}>
           Point #
         </label>
@@ -218,10 +234,9 @@ export const A2UIPointEntry: React.FC<A2UIPointEntryProps> = ({
             ? `Point ${pointNumber} already exists. Adding it will renumber to ${suggestedNext || 'the next CACP number'}.`
             : `Next CACP number: ${suggestedNext || '—'}`}
         </p>
-      </div>
+      </ChipCard>
 
-      <div className={CARD}>
-        <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-300">Coordinates</div>
+      <ChipCard color="cyan" title="Coordinates">
         <div className="mb-2 rounded-lg border border-cyan-400/20 bg-cyan-400/[0.04] p-2">
           <label className={LABEL} htmlFor={`${idPrefix}-plus-code`}>
             Google Plus Code
@@ -236,7 +251,7 @@ export const A2UIPointEntry: React.FC<A2UIPointEntryProps> = ({
                 setPlusCode(event.target.value);
                 setPlusCodeLocation(null);
               }}
-              placeholder="87G8Q2PQ+5X"
+              placeholder="87G8Q2PQ+5X or Q2PQ+5X"
               className={`${INPUT} font-mono uppercase`}
             />
             <button
@@ -252,7 +267,9 @@ export const A2UIPointEntry: React.FC<A2UIPointEntryProps> = ({
           <p className="mt-1 text-[9px] text-slate-500">
             {plusCodeLocation
               ? `Resolved to ${plusCodeLocation.latitude.toFixed(6)}, ${plusCodeLocation.longitude.toFixed(6)}`
-              : 'Full code only; it fills Northing/Easting in the active projection.'}
+              : referenceLocation
+                ? 'Full or short code; short codes resolve near the project/GPS location.'
+                : 'Full code only; set a project location to use short codes.'}
           </p>
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -338,10 +355,9 @@ export const A2UIPointEntry: React.FC<A2UIPointEntryProps> = ({
             </button>
           ))}
         </div>
-      </div>
+      </ChipCard>
 
-      <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/[0.04] p-3">
-        <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-200">Canvas placement</div>
+      <ChipCard color="violet" title="Canvas placement">
         <p className="mt-1 text-[10px] leading-relaxed text-slate-400">
           Arm the add-point tool with this number, elevation, and description, then click the canvas to drop
           points. Press Esc when finished.
@@ -350,18 +366,18 @@ export const A2UIPointEntry: React.FC<A2UIPointEntryProps> = ({
           type="button"
           data-testid="point-entry-pick-canvas"
           onClick={handlePickOnCanvas}
-          className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1.5 text-[10.5px] font-semibold text-emerald-100 transition-colors hover:border-emerald-300/70 hover:bg-emerald-500/25"
+          className={`mt-2 w-full ${chipButtonClass('violet')}`}
         >
           Pick on Canvas (Osnap Active)
         </button>
-      </div>
+      </ChipCard>
 
       <button
         type="button"
         data-testid="point-entry-add"
         onClick={handleAdd}
         disabled={!canSubmit}
-        className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-emerald-400/40 bg-emerald-600 px-2.5 py-2 text-[11px] font-semibold text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+        className={CHIP_WIDE_ACTION_CLASS}
       >
         Add Point to Project
       </button>
@@ -380,10 +396,6 @@ export const A2UIPointEntry: React.FC<A2UIPointEntryProps> = ({
         </div>
       )}
 
-      <div className="flex items-center justify-between border-t border-white/[0.07] pt-2 text-[8.5px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-        <span>PointAgent CACP authority</span>
-        <span className="font-mono normal-case tracking-normal text-slate-600">point-entry</span>
-      </div>
     </div>
   );
 };

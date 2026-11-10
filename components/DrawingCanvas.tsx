@@ -48,6 +48,7 @@ import {
     DEFAULT_ANNOTATION_TEXT_STYLES,
 } from '../types.ts';
 import type { ParcelFeatureSummary } from '../services/parcelGisService.ts';
+import { tinSurfaceDisplayMode } from '../services/TinService.ts';
 import {
     ALL_BUILT_IN_HATCHES,
     getHatchByName,
@@ -384,6 +385,41 @@ function getSymbolGeometry(symbol: CustomSymbol): SymbolGeometry {
     return geometry;
 }
 
+function drawShrinkwrapBadge(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    kind: 'x' | 'plus',
+    color: string,
+): void {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, 9, 0, 2 * Math.PI);
+    ctx.fillStyle = 'rgba(10, 15, 22, 0.90)';
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.beginPath();
+    if (kind === 'x') {
+        ctx.moveTo(x - 3.5, y - 3.5);
+        ctx.lineTo(x + 3.5, y + 3.5);
+        ctx.moveTo(x + 3.5, y - 3.5);
+        ctx.lineTo(x - 3.5, y + 3.5);
+    } else {
+        ctx.moveTo(x - 4, y);
+        ctx.lineTo(x + 4, y);
+        ctx.moveTo(x, y - 4);
+        ctx.lineTo(x, y + 4);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.restore();
+}
+
 interface DrawingCanvasProps {
     /** Initial 2D canvas transform (scale/zoom & pan offsets) restored from saved session state. */
     initialTransform?: { scale: number; offsetX: number; offsetY: number } | null;
@@ -617,10 +653,22 @@ interface DrawingCanvasProps {
     onOpenShrinkwrap?: () => void;
     /** Whether the shrinkwrap editor is currently open. */
     isShrinkwrapOpen?: boolean;
-    /** Active shrinkwrap source pns (already filtered: excludedPns removed). Enables hover-to-highlight + click-to-remove. */
+    /** Active shrinkwrap hull vertices. Hovering one shows a red X; clicking removes it. */
     shrinkwrapSourcePns?: string[];
-    /** Called when the user clicks a shrinkwrap source point on the canvas. */
+    /** Points outside the current hull that can be pinned onto it with a green +. */
+    shrinkwrapAddPns?: string[];
+    /** Points currently excluded from the hull; they stay visible with a red X. */
+    shrinkwrapExcludedPns?: string[];
+    /** Called when the user clicks a shrinkwrap hull point on the canvas. */
     onShrinkwrapPointClick?: (pn: string) => void;
+    /** Called when the user clicks a green + outside the hull. */
+    onShrinkwrapAddPointClick?: (pn: string) => void;
+    /** Called when the user clicks an excluded point to restore it. */
+    onShrinkwrapRestorePointClick?: (pn: string) => void;
+    /** When true, the canvas captures a rough freehand loop instead of clicks. */
+    shrinkwrapFreehandActive?: boolean;
+    /** Receives the ephemeral freehand loop in world coordinates on release. */
+    onShrinkwrapFreehandComplete?: (polygon: Array<{ easting: number; northing: number }>) => void;
     /** General point selection — called whenever a survey point is clicked in normal (non-drawing) mode. Used by DeedSummaryPanel alignment and other panels. */
     onPointSelected?: (point: SurveyPoint) => void;
     /** Boundary-align tool — patch translationE/N/rotationDeg on a boundary file.
@@ -1370,6 +1418,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     /** Point number currently hovered in shrinkwrap mode (null = none). */
     const hoveredShrinkwrapPnRef = useRef<string | null>(null);
     const [hoveredShrinkwrapPn, setHoveredShrinkwrapPn] = useState<string | null>(null);
+    /** Ephemeral grease-pencil guide; screen coordinates, cleared on release. */
+    const [freehandStroke, setFreehandStroke] = useState<Array<{ x: number; y: number }>>([]);
+    const freehandStrokeRef = useRef<Array<{ x: number; y: number }>>([]);
+    const freehandDrawingRef = useRef(false);
     // Dynamic input / Cursor HUD screen position
     const [cursorScreenPos, setCursorScreenPos] = useState<{ x: number; y: number } | null>(null);
     // Multi-value command prompt (ARRAY / POLARARRAY / REC / POL / DI): values
@@ -7706,6 +7758,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             if (line.hidden) {
                 return;
             }
+            // FEMA label anchors carry text only — no drawable geometry.
+            if (line.labelOnly) {
+                return;
+            }
+            // FIRM panel / base-index sheets are metadata-only. Suppress legacy
+            // panel outlines loaded from older sessions so they cannot draw a
+            // grid of white boxes over the flood zones.
+            if (line.type === 'fema-firm-panel') {
+                return;
+            }
             
             const p1 = pointMap.get(line.from);
             const p2 = pointMap.get(line.to);
@@ -7760,6 +7822,55 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     // apart from breaklines/contours and reads at any zoom.
                     strokeStyle = isLightTheme ? 'rgba(180, 83, 9, 0.85)' : 'rgba(251, 191, 36, 0.85)';
                     lineWidth = Math.max(scaledLineWidth * 0.7, minScreenPixelWidth);
+                } else if (line.type?.startsWith('fema-')) {
+                    // Full NFHL reference stack. Each family gets a distinct
+                    // CAD-like color so panels, political limits, cross-sections
+                    // and water remain readable over the flood-zone fill.
+                    lineWidth = Math.max(scaledLineWidth * 0.8, minScreenPixelWidth);
+                    switch (line.type) {
+                        case 'fema-cross-section':
+                            strokeStyle = isLightTheme ? '#A21CAF' : '#E879F9';
+                            lineWidth = Math.max(scaledLineWidth * 1.05, minScreenPixelWidth);
+                            break;
+                        case 'fema-political':
+                            strokeStyle = isLightTheme ? '#B45309' : '#FBBF24';
+                            isDashed = true;
+                            break;
+                        case 'fema-lomr':
+                            strokeStyle = isLightTheme ? '#15803D' : '#4ADE80';
+                            lineWidth = Math.max(scaledLineWidth * 1.1, minScreenPixelWidth);
+                            break;
+                        case 'fema-loma':
+                            strokeStyle = isLightTheme ? '#047857' : '#34D399';
+                            break;
+                        case 'fema-water':
+                            strokeStyle = isLightTheme ? '#0369A1' : '#7DD3FC';
+                            break;
+                        case 'fema-limwa':
+                            strokeStyle = isLightTheme ? '#C2410C' : '#FB923C';
+                            isDashed = true;
+                            break;
+                        case 'fema-levee':
+                            strokeStyle = isLightTheme ? '#78350F' : '#D6A46A';
+                            lineWidth = Math.max(scaledLineWidth * 1.25, minScreenPixelWidth);
+                            break;
+                        case 'fema-structure':
+                            strokeStyle = isLightTheme ? '#475569' : '#94A3B8';
+                            break;
+                        case 'fema-dune':
+                            strokeStyle = isLightTheme ? '#A16207' : '#FACC15';
+                            break;
+                        case 'fema-hydrology':
+                            strokeStyle = isLightTheme ? '#1E3A8A' : '#93C5FD';
+                            isDashed = true;
+                            break;
+                        case 'fema-boundary':
+                            strokeStyle = isLightTheme ? '#0F172A' : '#E2E8F0';
+                            break;
+                        default:
+                            strokeStyle = isLightTheme ? '#64748B' : '#94A3B8';
+                            isDashed = true;
+                    }
                 } else if (line.type === 'flood') {
                     // FEMA NFHL flood-hazard polygon ring — cyan to distinguish
                     // from parcel (amber) and contours (gray).
@@ -8607,6 +8718,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const hue = 8 + t * 112; // red->yellow->green style ramp
                 return `hsla(${hue.toFixed(1)}, 92%, 56%, 0.38)`;
             };
+            const displayMode = tinSurfaceDisplayMode(surface, isTinShadingEnabled);
+            const wireColor = surface.color
+                || (isLightTheme ? 'rgba(245, 158, 11, 0.35)' : 'rgba(251, 191, 36, 0.5)');
 
             for (const tri of surface.triangles) {
                 const ia = Array.isArray(tri) ? tri[0] : (tri as any).a;
@@ -8623,14 +8737,17 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 ctx.lineTo(c.easting, c.northing);
                 ctx.closePath();
 
-                if (isTinShadingEnabled) {
+                if (displayMode === 'shaded') {
                     const zAvg = (a.elevation + b.elevation + c.elevation) / 3;
                     ctx.fillStyle = toShadeColor(zAvg);
                     ctx.fill();
-                }
-
-                if (!isTinShadingEnabled) {
-                    ctx.strokeStyle = isLightTheme ? 'rgba(245, 158, 11, 0.35)' : 'rgba(251, 191, 36, 0.5)';
+                    // A fine triangle edge keeps a shaded surface readable in CAD.
+                    ctx.strokeStyle = isLightTheme ? 'rgba(17, 24, 39, 0.18)' : 'rgba(255, 255, 255, 0.16)';
+                    ctx.lineWidth = Math.max(scaledLineWidth * 0.18, minScreenPixelWidth * 0.3);
+                    ctx.setLineDash([]);
+                    ctx.stroke();
+                } else {
+                    ctx.strokeStyle = wireColor;
                     ctx.lineWidth = Math.max(scaledLineWidth * 0.3, minScreenPixelWidth * 0.45);
                     ctx.setLineDash([]);
                     ctx.stroke();
@@ -10647,18 +10764,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             });
         }
 
-        // FEMA BFE elevation callouts. One segment per BFE feature carries the
-        // label, so a long elevation line gets a single readable annotation.
+        // FEMA NFHL callouts. BFE segments, cross-section lines, panel/political
+        // anchors and point features all carry labelText from the layer fetcher.
         {
-            const bfeLabels = lines.filter(l => l.type === 'bfe' && l.labelText && !l.hidden);
-            if (bfeLabels.length > 0) {
+            const femaLabels = lines.filter(l => l.labelText && !l.hidden && (l.type === 'bfe' || l.type?.startsWith('fema-')));
+            if (femaLabels.length > 0) {
                 const fontSize = Math.max(0.5, 10 * attributeScale * transform.scale);
                 if (fontSize >= 6) {
                     ctx.save();
                     ctx.font = `600 ${fontSize}px Arial`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'bottom';
-                    for (const l of bfeLabels) {
+                    for (const l of femaLabels) {
                         const pFrom = l.fromPt ?? (pointMap.get(l.from) ? { x: pointMap.get(l.from)!.easting, y: pointMap.get(l.from)!.northing } : null);
                         const pTo = l.toPt ?? (pointMap.get(l.to) ? { x: pointMap.get(l.to)!.easting, y: pointMap.get(l.to)!.northing } : null);
                         if (!pFrom || !pTo) continue;
@@ -10676,7 +10793,15 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         const w = ctx.measureText(text).width;
                         ctx.fillStyle = isLightTheme ? 'rgba(255,255,255,0.88)' : 'rgba(10,15,30,0.82)';
                         ctx.fillRect(-w / 2 - 3, -fontSize - 1, w + 6, fontSize + 4);
-                        ctx.fillStyle = isLightTheme ? '#1d4ed8' : '#93c5fd';
+                        ctx.fillStyle = l.type === 'bfe'
+                            ? (isLightTheme ? '#1d4ed8' : '#93c5fd')
+                            : l.type === 'fema-cross-section'
+                                ? (isLightTheme ? '#A21CAF' : '#F0ABFC')
+                                : l.type === 'fema-political'
+                                    ? (isLightTheme ? '#92400E' : '#FCD34D')
+                                    : l.type === 'fema-firm-panel'
+                                        ? (isLightTheme ? '#334155' : '#E2E8F0')
+                                        : (isLightTheme ? '#0E7490' : '#A5F3FC');
                         ctx.fillText(text, 0, 0);
                         ctx.restore();
                     }
@@ -10692,6 +10817,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         // Shrinkwrap source pns set for O(1) lookup during point rendering
         const shrinkwrapPnSet: Set<string> | null = props.shrinkwrapSourcePns?.length
             ? new Set(props.shrinkwrapSourcePns)
+            : null;
+        const shrinkwrapAddPnSet: Set<string> | null = props.shrinkwrapAddPns?.length
+            ? new Set(props.shrinkwrapAddPns)
+            : null;
+        const shrinkwrapExcludedPnSet: Set<string> | null = props.shrinkwrapExcludedPns?.length
+            ? new Set(props.shrinkwrapExcludedPns)
             : null;
         const pendingDeleteSet: Set<string> | null = props.pendingDeletePointNumbers?.size
             ? props.pendingDeletePointNumbers
@@ -10809,6 +10940,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const markerPointNumbers = new Set<string>();
             selectedPointNumbers.forEach(pn => markerPointNumbers.add(pn));
             shrinkwrapPnSet?.forEach(pn => markerPointNumbers.add(pn));
+            shrinkwrapAddPnSet?.forEach(pn => markerPointNumbers.add(pn));
+            shrinkwrapExcludedPnSet?.forEach(pn => markerPointNumbers.add(pn));
             pendingDeleteSet?.forEach(pn => markerPointNumbers.add(pn));
 
             for (const pointNumber of markerPointNumbers) {
@@ -10847,6 +10980,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ctx.strokeStyle = 'rgba(239, 68, 68, 0.9)';
                     ctx.lineWidth = 2;
                     ctx.stroke();
+                }
+
+                if (shrinkwrapPnSet?.has(p.pointNumber) && p.pointNumber === hoveredShrinkwrapPn) {
+                    drawShrinkwrapBadge(ctx, screenX, screenY, 'x', '#EF4444');
+                } else if (shrinkwrapExcludedPnSet?.has(p.pointNumber)) {
+                    drawShrinkwrapBadge(
+                        ctx,
+                        screenX,
+                        screenY,
+                        p.pointNumber === hoveredShrinkwrapPn ? 'plus' : 'x',
+                        p.pointNumber === hoveredShrinkwrapPn ? '#22C55E' : '#EF4444',
+                    );
+                } else if (shrinkwrapAddPnSet?.has(p.pointNumber) && p.pointNumber === hoveredShrinkwrapPn) {
+                    drawShrinkwrapBadge(ctx, screenX, screenY, 'plus', '#22C55E');
                 }
             }
         }
@@ -10974,6 +11121,22 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 ctx.arc(screenX, screenY, pointRadius, 0, 2 * Math.PI);
                 ctx.fill();
                 ctx.stroke();
+            }
+
+            // Shrinkwrap toggle badges sit above the glyph so a red X / green +
+            // is never hidden by a point symbol.
+            if (shrinkwrapPnSet?.has(p.pointNumber) && p.pointNumber === hoveredShrinkwrapPn) {
+                drawShrinkwrapBadge(ctx, screenX, screenY, 'x', '#EF4444');
+            } else if (shrinkwrapExcludedPnSet?.has(p.pointNumber)) {
+                drawShrinkwrapBadge(
+                    ctx,
+                    screenX,
+                    screenY,
+                    p.pointNumber === hoveredShrinkwrapPn ? 'plus' : 'x',
+                    p.pointNumber === hoveredShrinkwrapPn ? '#22C55E' : '#EF4444',
+                );
+            } else if (shrinkwrapAddPnSet?.has(p.pointNumber) && p.pointNumber === hoveredShrinkwrapPn) {
+                drawShrinkwrapBadge(ctx, screenX, screenY, 'plus', '#22C55E');
             }
 
             // Draw labels. Screen scaling is resolved once per frame above;
@@ -11506,6 +11669,27 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             ctx.restore();
         }
 
+        // Ephemeral freehand shrinkwrap guide. Drawn in screen space so it stays
+        // a constant grease-pencil weight at any zoom, then cleared on release.
+        if (freehandStroke.length > 1) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(freehandStroke[0].x, freehandStroke[0].y);
+            for (let i = 1; i < freehandStroke.length; i++) {
+                ctx.lineTo(freehandStroke[i].x, freehandStroke[i].y);
+            }
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(34, 211, 238, 0.10)';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(34, 211, 238, 0.90)';
+            ctx.lineWidth = 2.5;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.setLineDash([7, 5]);
+            ctx.stroke();
+            ctx.restore();
+        }
+
         if (gpuBasemap && useGpuBasemap) {
             gpuBasemap.render(gpuLayers, {
                 width: logicalWidth,
@@ -11522,7 +11706,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         ctx.restore(); // --- End screen-space pass ---
-    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, contourLabelSlide, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.pendingDeletePointNumbers, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id, rasterUnderlays, selectedRasterUnderlayId, rasterUnderlayImages]);
+    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, contourLabelSlide, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.shrinkwrapAddPns, props.shrinkwrapExcludedPns, props.pendingDeletePointNumbers, freehandStroke, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id, rasterUnderlays, selectedRasterUnderlayId, rasterUnderlayImages]);
 
     // Throttled draw using requestAnimationFrame to prevent flickering during rapid updates
     const scheduleDraw = useCallback(() => {
@@ -14089,6 +14273,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
 
+        // Freehand shrinkwrap lasso — capture a rough screen-space loop. The
+        // guide is intentionally ephemeral; it never becomes canvas linework.
+        if (e.button === 0 && props.shrinkwrapFreehandActive && props.onShrinkwrapFreehandComplete) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            freehandStrokeRef.current = [point];
+            setFreehandStroke([point]);
+            freehandDrawingRef.current = true;
+            return;
+        }
+
         // A contour label in slide mode is placed by the next left click.
         if (contourLabelSlide) {
             if (e.button === 0) {
@@ -14796,8 +14994,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
 
-        // Shrinkwrap point removal — click nearest source point to exclude it
-        if (props.shrinkwrapSourcePns?.length && props.onShrinkwrapPointClick && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
+        // Shrinkwrap point toggles — hull points remove, outside/excluded points add.
+        const shrinkwrapClickPns = new Set<string>([
+            ...(props.shrinkwrapSourcePns ?? []),
+            ...(props.shrinkwrapAddPns ?? []),
+            ...(props.shrinkwrapExcludedPns ?? []),
+        ]);
+        if (shrinkwrapClickPns.size > 0 && drawingMode === 'none' && !isDeletingLines && !isTrimmingLines && !isExtendingLines) {
             const canvas = canvasRef.current;
             if (canvas) {
                 const rect = canvas.getBoundingClientRect();
@@ -14807,7 +15010,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 let nearest: string | null = null;
                 let bestDist = HIT * HIT;
                 for (const p of points) {
-                    if (!props.shrinkwrapSourcePns.includes(p.pointNumber)) continue;
+                    if (!shrinkwrapClickPns.has(p.pointNumber)) continue;
                     const pt = worldToScreen(p.easting, p.northing);
                     const sx = pt.x;
                     const sy = pt.y;
@@ -14815,7 +15018,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     if (d < bestDist) { bestDist = d; nearest = p.pointNumber; }
                 }
                 if (nearest) {
-                    props.onShrinkwrapPointClick(nearest);
+                    if (props.shrinkwrapSourcePns?.includes(nearest)) {
+                        props.onShrinkwrapPointClick?.(nearest);
+                    } else if (props.shrinkwrapExcludedPns?.includes(nearest)) {
+                        props.onShrinkwrapRestorePointClick?.(nearest);
+                    } else {
+                        props.onShrinkwrapAddPointClick?.(nearest);
+                    }
                     hoveredShrinkwrapPnRef.current = null;
                     setHoveredShrinkwrapPn(null);
                     return;
@@ -15960,6 +16169,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     }, [contourLabelSlide, isZoomBoxMode, drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, hatches, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, polylineTangentExit, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter, rasterUnderlays, selectedRasterUnderlayId, beginRasterUnderlayDrag]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
+        // Freehand lasso capture — append screen-space points while the mouse is down.
+        if (freehandDrawingRef.current) {
+            const canvas = canvasRef.current;
+            if (canvas) {
+                const rect = canvas.getBoundingClientRect();
+                const point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                const previous = freehandStrokeRef.current[freehandStrokeRef.current.length - 1];
+                if (!previous || Math.hypot(point.x - previous.x, point.y - previous.y) >= 2) {
+                    freehandStrokeRef.current = [...freehandStrokeRef.current, point].slice(-4000);
+                    setFreehandStroke(freehandStrokeRef.current.slice());
+                }
+            }
+            return;
+        }
+
         const underlayDrag = underlayDragRef.current;
         if (underlayDrag) {
             const dragCanvas = canvasRef.current;
@@ -16351,8 +16575,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             lastMousePos.current = { x: e.clientX, y: e.clientY };
         }
 
-        // Shrinkwrap hover detection — find nearest source point within 14px
-        if (props.shrinkwrapSourcePns?.length) {
+        // Shrinkwrap hover detection — hull points show a red X, outside/excluded
+        // points show a green +. One hover target at a time keeps the badges clear.
+        const shrinkwrapHoverPns = new Set<string>([
+            ...(props.shrinkwrapSourcePns ?? []),
+            ...(props.shrinkwrapAddPns ?? []),
+            ...(props.shrinkwrapExcludedPns ?? []),
+        ]);
+        if (shrinkwrapHoverPns.size > 0) {
             const canvas = canvasRef.current;
             if (canvas) {
                 const rect = canvas.getBoundingClientRect();
@@ -16360,11 +16590,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const my = e.clientY - rect.top;
                 const HIT = 14;
                 let found: string | null = null;
+                let best = HIT * HIT;
                 for (const p of points) {
-                    if (!props.shrinkwrapSourcePns.includes(p.pointNumber)) continue;
+                    if (!shrinkwrapHoverPns.has(p.pointNumber)) continue;
                     const sx = p.easting * transform.scale + transform.offsetX;
                     const sy = -p.northing * transform.scale + transform.offsetY;
-                    if ((mx - sx) ** 2 + (my - sy) ** 2 < HIT * HIT) { found = p.pointNumber; break; }
+                    const d = (mx - sx) ** 2 + (my - sy) ** 2;
+                    if (d < best) { best = d; found = p.pointNumber; }
                 }
                 if (found !== hoveredShrinkwrapPnRef.current) {
                     hoveredShrinkwrapPnRef.current = found;
@@ -16437,6 +16669,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     }, [zoomBox, isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview, inlineOsnapOverride, runningOsnaps, findNearestSurveyPoint, resolveOsnapAtScreen, contourLabelSlide, onMoveContourLabel, findContourLabelAtScreenPoint, hoveredContourLabelIndex, rasterUnderlays, onUpdateRasterUnderlay]);
 
     const handleMouseUp = useCallback((e: React.MouseEvent) => {
+        // Finish the ephemeral lasso before any normal mouse-up handling.
+        if (freehandDrawingRef.current) {
+            freehandDrawingRef.current = false;
+            const stroke = freehandStrokeRef.current;
+            freehandStrokeRef.current = [];
+            setFreehandStroke([]);
+            if (stroke.length >= 3) {
+                props.onShrinkwrapFreehandComplete?.(stroke.map(point => {
+                    const world = screenToWorld(point.x, point.y);
+                    return { easting: world.easting, northing: world.northing };
+                }));
+            }
+            return;
+        }
+
         if (underlayDragRef.current) {
             underlayDragRef.current = null;
             setIsDraggingUnderlay(false);
@@ -16695,7 +16942,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             document.body.classList.remove('panning');
             setIsPanning(false);
         }
-    }, [zoomBox, isZoomBoxMode, isLabelDragging, isPanning, shiftBoxSelect, lines, pointMap, transform, activeGrip, isBoxSelectMode, selectedLineIds, selectedHatchIds, selectedEntityCount, hatches, commitActiveGrip, screenToWorld, activeOsnapPoint, isOffsetMode, offsetDistance, offsetTargetId, updateOffsetPreview, clearOffsetPreview, zoomToBbox]);
+    }, [zoomBox, isZoomBoxMode, isLabelDragging, isPanning, shiftBoxSelect, lines, pointMap, transform, activeGrip, isBoxSelectMode, selectedLineIds, selectedHatchIds, selectedEntityCount, hatches, commitActiveGrip, screenToWorld, activeOsnapPoint, isOffsetMode, offsetDistance, offsetTargetId, updateOffsetPreview, clearOffsetPreview, zoomToBbox, props]);
     
     const handleTouchStart = useCallback((e: React.TouchEvent) => {
         if (drawingMode !== 'none') return;
@@ -19269,7 +19516,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 startCopyMode();
                                             }
                                             setIsDrawingToolsMenuOpen(false);
-                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${isCopyingSelection ? 'bg-cyan-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Copy Selected Entities (CP)">
+                                        }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${isCopyingSelection ? 'bg-cyan-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Copy Selected Entities (CP / CC)">
                                             <DocumentDuplicateIcon className="w-5 h-5"/> Copy Selected (CP)
                                         </button>
 

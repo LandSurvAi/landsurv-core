@@ -308,6 +308,10 @@ export function CanvasStateProvider({ children, defaultCutSheetInfo }: { childre
     labelScale: 1.0,
     sourceType: 'points',
     sourceTinId: null,
+    inclusionMode: 'inside',
+    excludeInvertPoints: true,
+    excludeFfePoints: true,
+    excludeStructureShots: true,
   });
   const [isGeneratingContours, setIsGeneratingContours] = useState(false);
   

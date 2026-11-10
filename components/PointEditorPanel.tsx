@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { type SurveyPoint, type PointList, AgentType } from '../types.ts';
 import { DownloadIcon, EraserIcon, FullscreenIcon, ExitFullscreenIcon, ChevronDownIcon, ChevronUpIcon, ArrowUpTrayIcon, CameraIcon, XMarkIcon, CrosshairsIcon, MapPinIcon, EyeIcon } from './icons.tsx';
 import { expandGoogleMapsShortLink, isGoogleMapsShortLink, parseGoogleMapsLatLon } from '../utils/googleMaps.ts';
-import { decodePlusCode } from '../utils/plusCode.ts';
+import { decodePlusCode, isShortPlusCode } from '../utils/plusCode.ts';
 import { useErrorReporter } from '../contexts/AppStateContext';
 
 interface PointEditorPanelProps {
@@ -24,13 +24,15 @@ interface PointEditorPanelProps {
   onZoomToPoint: (point: SurveyPoint) => void;
   nextAvailablePointNumber: string;
   convertLatLon?: (lat: number, lon: number) => { northing: number; easting: number } | null;
+  /** Project centre or GPS fix used to recover shortened Plus Codes. */
+  plusCodeReference?: { latitude: number; longitude: number } | null;
 }
 
 export const PointEditorPanel: React.FC<PointEditorPanelProps> = ({
   pointLists, onAddPoint, onUpdatePoint, onDeletePoint, 
   onSaveUnsavedPoints, onMergeUnsavedPoints, onRenameList, onDeleteList, onToggleVisibility,
   onImportPointList, onAddPhotoToPoint, onDeletePhotoFromPoint, onStakeoutPoint, onZoomToPoint,
-  nextAvailablePointNumber, convertLatLon
+  nextAvailablePointNumber, convertLatLon, plusCodeReference
 }) => {
   const [newPoint, setNewPoint] = useState({ pn: '', n: '', e: '', z: '', d: '' });
   const [addMode, setAddMode] = useState<'ne' | 'latlon' | 'plus'>('ne');
@@ -138,9 +140,16 @@ export const PointEditorPanel: React.FC<PointEditorPanelProps> = ({
   const handleAddPointSubmit = (e: React.FormEvent) => {
       e.preventDefault();
       if (addMode === 'plus') {
-          const decoded = decodePlusCode(plusCodeInput.code);
+          const decoded = decodePlusCode(plusCodeInput.code, plusCodeReference);
           if (!decoded) {
-              reportError({ title: 'Invalid Plus Code', message: 'Enter a full Google Plus Code such as 87G8Q2PQ+5X. Shortened codes need a reference location.' });
+              reportError({
+                  title: 'Invalid Plus Code',
+                  message: isShortPlusCode(plusCodeInput.code)
+                      ? plusCodeReference
+                          ? 'That short Plus Code could not be resolved near the project location. Try the full code.'
+                          : 'Short Plus Codes need a project location or GPS fix. Enter the full code or set a project location.'
+                      : 'Enter a Google Plus Code such as 87G8Q2PQ+5X or Q2PQ+5X.',
+              });
               return;
           }
           if (!convertLatLon) {
@@ -399,7 +408,7 @@ export const PointEditorPanel: React.FC<PointEditorPanelProps> = ({
             <form onSubmit={handleAddPointSubmit} className="grid grid-cols-12 gap-2 items-center">
                 <input type="text" placeholder="PN" required value={newPoint.pn} onChange={e => setNewPoint(p => ({...p, pn: e.target.value}))} className="col-span-2 p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md" />
                 {addMode === 'plus' ? (<>
-                    <input type="text" placeholder="Google Plus Code (full)" required value={plusCodeInput.code} onChange={e => setPlusCodeInput(p => ({...p, code: e.target.value}))} className="col-span-8 p-1.5 text-xs bg-gray-700 border border-cyan-700/60 rounded-md font-mono uppercase" />
+                    <input type="text" placeholder="Plus Code (87G8Q2PQ+5X or Q2PQ+5X)" required value={plusCodeInput.code} onChange={e => setPlusCodeInput(p => ({...p, code: e.target.value}))} className="col-span-8 p-1.5 text-xs bg-gray-700 border border-cyan-700/60 rounded-md font-mono uppercase" />
                     <input type="number" step="any" placeholder="Elev" value={plusCodeInput.z} onChange={e => setPlusCodeInput(p => ({...p, z: e.target.value}))} className="col-span-2 p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md" />
                     <input type="text" placeholder="Desc" value={plusCodeInput.d} onChange={e => setPlusCodeInput(p => ({...p, d: e.target.value}))} className="col-span-2 p-1.5 text-xs bg-gray-700 border border-gray-600 rounded-md" />
                 </>) : addMode === 'ne' ? (<>

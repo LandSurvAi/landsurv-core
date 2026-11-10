@@ -11,11 +11,13 @@
 
 import {
   AgentType,
+  type A2UIContourChipId,
   type A2UIHatchStudioSpec,
   type A2UISettingsSection,
   type A2UIWorkspaceToolId,
 } from '../types.ts';
 import { agentRegistry } from './AgentRegistry.ts';
+import { CONTOUR_CHIP_META } from './contourChips.ts';
 import { resolveHatchForFeatureOrCode } from './hatchLibrary.ts';
 
 export type A2UISurfaceIntent =
@@ -63,6 +65,14 @@ export type A2UISurfaceIntent =
       suggestedQuestions: string[];
     }
   | {
+      surface: 'contour-chip';
+      chip: A2UIContourChipId;
+      /** Bind one born generation when the chip is a single-generation chip. */
+      generationId?: string;
+      replyText: string;
+      suggestedQuestions: string[];
+    }
+  | {
       surface: 'cad-standards-editor';
       replyText: string;
       suggestedQuestions: string[];
@@ -70,6 +80,11 @@ export type A2UISurfaceIntent =
   | {
       surface: 'gps-rover';
       mode: 'overview' | 'stakeout' | 'collect' | 'benchmark';
+      replyText: string;
+      suggestedQuestions: string[];
+    }
+  | {
+      surface: 'point-editor';
       replyText: string;
       suggestedQuestions: string[];
     }
@@ -94,7 +109,7 @@ const REQUEST_VERB_RE =
   /\b(?:show|open|inspect|browse|list|view|display|review|pull\s+up|what(?:'s| is)|which|any)\b/i;
 
 const ACTION_OR_HOWTO_VERB_RE =
-  /\b(?:add|create|enter|place|drop|show|open|inspect|browse|list|view|display|review|pull\s+up|bring\s+up|launch|edit|adjust|change|configure|set(?:\s+up)?|turn\s+(?:on|off)|enable|disable|toggle|switch|update|manage|import|georeferenc\w*|export|hatch|bhatch|fill|shade|cross[- ]?hatch|how\s+(?:do\s+i|to|can\s+i)|where\s+(?:do\s+i|can\s+i|is|are))\b/i;
+  /\b(?:add|create|generate|build|make|run|enter|place|drop|draw|draft|trace|render|put|show|open|inspect|browse|list|view|display|review|pull\s+up|bring\s+up|launch|edit|adjust|change|configure|set(?:\s+up)?|turn\s+(?:on|off)|enable|disable|toggle|switch|update|manage|import|georeferenc\w*|export|hatch|bhatch|fill|shade|cross[- ]?hatch|how\s+(?:do\s+i|to|can\s+i)|where\s+(?:do\s+i|can\s+i|is|are))\b/i;
 
 const MANIFEST_RE = /\b(?:manifests?|skills?|schemas?|capabilit(?:y|ies))\b/i;
 const CACCP_RE = /\bcacp\b/i;
@@ -459,13 +474,14 @@ const WORKSPACE_TOOL_RULES: readonly WorkspaceToolRule[] = [
   {
     tool: 'tin-surfaces',
     agent: AgentType.CONTOURING_AGENT,
-    pattern: /\b(?:tin\s+surfaces?|surface\s+(?:manager|studio)|(?:create|build|make)\s+(?:a\s+)?(?:tin|surface)\s+(?:from|using)\s+contours?|import\s+(?:a\s+)?(?:\.?tin|landxml|surface)|export\s+(?:a\s+)?(?:tin|surface|landxml)|contour\s+surface)\b/i,
+    pattern:
+      /\b(?:(?:tin|terrain)\s+surfaces?|surface\s+(?:manager|studio|display|view)|(?:draw|show|display|render|put)\s+(?:me\s+)?(?:the\s+|my\s+|this\s+)?(?:tin|surface|mesh)(?:\s+(?:as|in)\s+(?:a\s+)?(?:wireframe|shaded|mesh))?|(?:create|build|make)\s+(?:a\s+|the\s+)?(?:tin|surface|mesh)(?:\s+(?:from|using)\s+contours?)?|(?:wireframe|shaded)\s+(?:tin|surface|mesh)|mesh\s+(?:display|view)|import\s+(?:a\s+)?(?:\.?tin|landxml|surface)|export\s+(?:a\s+)?(?:tin|surface|landxml)|contour\s+surface)\b/i,
     replyText:
-      'Here is the live <strong>TIN Surfaces</strong> surface in chat. Create a surface from the latest contour generation, import a <code>.tin</code> or LandXML file, or export a surface — every action is also exposed over CACP.',
+      'Here is the live <strong>TIN Surfaces</strong> surface. Pick a loaded surface and draw it on the canvas as a <strong>wireframe</strong> or <strong>shaded</strong> elevation model, hide it, or zoom to it. You can also build a surface from the latest contours or import <code>.tin</code> / LandXML.',
     suggestedQuestions: [
-      'Create TIN from the latest contours',
-      'Import a .TIN or LandXML surface',
-      'Open Steep Slope Report',
+      'Draw the surface shaded',
+      'Show the surface as a wireframe',
+      'Create a TIN from the latest contours',
     ],
   },
   {
@@ -538,6 +554,82 @@ const CAD_SPREADSHEET_EDITOR_RE =
 
 const POINT_LIST_RE =
   /\b(?:point\s+(?:list|table|grid|spreadsheet)|(?:all|my|the|project|survey|current|loaded)\s+points\b|(?:list|show|view|display|open)\s+(?:all\s+|my\s+|the\s+|project\s+)?points\b)/i;
+
+// Contour tools are split into independently addressable A2UI chips. Each rule
+// is intentionally contour-specific so ordinary drawing/label phrasing keeps
+// flowing through the normal agent pipeline.
+const CONTOUR_CHIP_INTENT_RULES: ReadonlyArray<{
+  chip: A2UIContourChipId;
+  pattern: RegExp;
+}> = [
+  {
+    chip: 'contour-generation',
+    pattern:
+      /\b(?:(?:open|show|pull|bring)\s+(?:up\s+)?(?:the\s+)?(?:latest|last|newest|recent)\s+contour\s+generation(?:\s+chip)?|contour\s+generation\s+chip|born\s+contour\s+generation)\b/i,
+  },
+  {
+    chip: 'contour-generations',
+    pattern:
+      /\b(?:contour\s+generations?|contour\s+history|generation\s+manager|(?:manage|rename|delete|hide|show|list|open)\s+(?:my\s+|the\s+)?contour\s+generations?)\b/i,
+  },
+  {
+    chip: 'contour-blend',
+    pattern:
+      /\b(?:(?:esri|gis|state|online)\s+(?:contour\s+)?blend|blend\s+(?:contours?|esri|gis|survey)|auto[- ]?join\s+(?:contours?|esri)|stitch\s+contours?|contour\s+blend|transition\s+curves?)\b/i,
+  },
+  {
+    chip: 'contour-esri',
+    pattern:
+      /\b(?:(?:esri|arcgis|usgs|pasda|state\s+gis|online)\s+(?:contour\s+)?(?:services?|sources?|contours?|data)|fetch\s+(?:esri|arcgis|usgs|online)\s+contours?|contour\s+services?|contour\s+sources?\s+(?:online|esri|gis)|download\s+(?:esri|arcgis|usgs|online)\s+contours?)\b/i,
+  },
+  {
+    chip: 'contour-ignore-points',
+    pattern:
+      /\b(?:ignore[sd]?\s+(?:survey\s+|contour\s+)?points?|exclude\s+(?:survey\s+|contour\s+)?points?|ignore\s+list|smart\s+match\s+(?:points?|contours?)|bad\s+survey\s+points?)\b/i,
+  },
+  {
+    chip: 'contour-cleanup',
+    pattern:
+      /\b(?:(?:contour|surface)\s+cleanup|non[- ]?ground\s+(?:shots?|points?)|invert\s+shots?|ffe\s+shots?|finished[- ]floor\s+shots?|structure\s+shots?|contour\s+elevation\s+filter)\b/i,
+  },
+  {
+    chip: 'contour-labels',
+    pattern:
+      /\b(?:contour\s+labels?|label\s+(?:the\s+)?contours?|re[- ]?label\s+(?:the\s+)?contours?|clear\s+contour\s+labels?|contour\s+label\s+(?:density|scale|tools?))\b/i,
+  },
+  {
+    chip: 'contour-intervals',
+    pattern:
+      /\b(?:contour\s+intervals?|(?:minor|major)\s+contour\s+interval|contour\s+presets?|smoothing\s+(?:level\s+)?(?:for\s+)?contours?|contour\s+curve\s+subdivision)\b/i,
+  },
+  {
+    chip: 'contour-scope',
+    pattern:
+      /\b(?:contour\s+(?:scope|breaklines?|exclusion\s+zones?)|contour\s+(?:inside|outside)\s+(?:the\s+)?(?:inclusion\s+)?boundary|(?:inside|outside)\s+(?:the\s+)?inclusion\s+boundary\s+(?:for\s+)?contours?|inclusion\s+boundary\s+(?:for\s+)?contours?)\b/i,
+  },
+  {
+    chip: 'contour-source',
+    pattern:
+      /\b(?:contour\s+source|source\s+(?:for|of)\s+contours?|contours?\s+from\s+(?:survey\s+points?|(?:a\s+)?(?:loaded\s+)?tin)|(?:loaded\s+)?tin\s+contours?|contour\s+point\s+filter)\b/i,
+  },
+  {
+    chip: 'contour-actions',
+    pattern:
+      /\b(?:(?:generate|build|make|run)\s+(?:the\s+)?contours?|contour\s+(?:actions?|generation\s+actions?)|generate\s+contours?\s+now|contour\s+generate)\b/i,
+  },
+];
+
+function resolveContourChipIntent(query: string): A2UISurfaceIntent | null {
+  const rule = CONTOUR_CHIP_INTENT_RULES.find(candidate => candidate.pattern.test(query));
+  if (!rule) return null;
+  const meta = CONTOUR_CHIP_META[rule.chip];
+  return {
+    surface: 'contour-chip',
+    chip: rule.chip,
+    replyText: meta.replyText,
+    suggestedQuestions: meta.suggestedQuestions,
+  };
+}
 const GENERIC_SPREADSHEET_RE =
   /\b(?:open|show|start|create|new|blank)\b[\s\S]{0,24}\bspreadsheet\b/i;
 
@@ -616,7 +708,56 @@ export function resolveA2UISurfaceIntent(query: string): A2UISurfaceIntent | nul
     };
   }
 
+  // 3. Opening the Point Editor is a UI navigation command, not a point query.
+  // Resolve it before any model turn so asking any agent for the editor never
+  // polls the point database first.
+  if (
+    /\b(?:(?:open(?:ing)?|show|launch|view)(?:\s+up)?|bring\s+up|pull\s+up|(?:go|take\s+me)\s+to)\s+(?:me\s+)?(?:the\s+|a\s+|an\s+|my\s+)?point\s+editor\b/i.test(
+      trimmed
+    )
+  ) {
+    return {
+      surface: 'point-editor',
+      replyText:
+        'Opening the live <strong>Point Editor</strong>. Add, edit, sort, and save points directly in the workspace.',
+      suggestedQuestions: [
+        'Add a point by coordinates',
+        'Open the point list',
+        'Open Point Tools',
+      ],
+    };
+  }
+
   if (!hasActionOrHowToVerb) return null;
+
+  // 3. Point Tools hub: one surface that presents every point workflow as an
+  // independently actionable card. Individual point tools keep their own
+  // surfaces; this is the manager card.
+  if (
+    /\b(?:(?:open|show|launch|view|manage)\s+(?:the\s+)?point\s+(?:tools?|workspace|manager)|point\s+tools?\s+(?:dock|surface|panel)|point\s+workspace)\b/i.test(
+      trimmed
+    )
+  ) {
+    return {
+      surface: 'workspace-tool',
+      tool: 'point-tools',
+      agent: AgentType.POINT_EDITOR,
+      replyText:
+        'Here is the live <strong>Point Tools</strong> surface. Capture or import points, add a point, open the list, adjust point labeling, or jump into the full workspace from one place.',
+      suggestedQuestions: [
+        'Import points',
+        'Add a point by coordinates',
+        'Open the point list',
+        'Open Point Tools',
+      ],
+    };
+  }
+
+  // 3. Contour tools are chips: one unique surface per tool part. This sits
+  // before the generic workspace tools so a request for contour cleanup never
+  // opens a different panel with the same word in its name.
+  const contourChipIntent = resolveContourChipIntent(trimmed);
+  if (contourChipIntent) return contourChipIntent;
 
   // 3a. Point database views: the default is the in-chat text editor; explicit
   // sheet/grid/table wording opens the same data directly in the spreadsheet.

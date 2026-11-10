@@ -23,6 +23,7 @@
  */
 
 export type ContourUnits = 'feet' | 'meters' | 'unknown';
+export type ContourClass = 'major' | 'minor' | null;
 
 export interface ContourElevationReading {
   /** Elevation in feet (meters converted when `units` is 'meters'). */
@@ -102,6 +103,25 @@ export function readContourUnits(attrs: Record<string, unknown>): ContourUnits {
     if (s === 'meters' || s === 'metres' || s === 'meter' || s === 'm') return 'meters';
   }
   return 'unknown';
+}
+
+/**
+ * Read the publisher's own major/minor classification when it provides one.
+ * PASDA's PAMAP mosaics use `Contour_Ty` values such as "Index Contours",
+ * "Intermediate Contours", and "Intermediate Depression Contours". Honoring
+ * that field keeps minor lines as minors even when the user's major interval
+ * happens to equal the source interval (for example 2 ft).
+ */
+export function readContourClass(attrs: Record<string, unknown>): ContourClass {
+  const entry = Object.entries(attrs).find(([key]) => {
+    const normalized = normalizeKey(key);
+    return normalized === 'contourty' || normalized === 'contourtype';
+  });
+  if (!entry) return null;
+  const value = String(entry[1] ?? '').toLowerCase();
+  if (/\bindex\b/.test(value)) return 'major';
+  if (/\b(?:intermediate|supplemental|depression)\b/.test(value)) return 'minor';
+  return null;
 }
 
 /**

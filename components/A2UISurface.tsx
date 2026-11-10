@@ -6,11 +6,15 @@ import {
   type BoundaryFile,
   type DeedSummary,
   type A2UICacpReviewItem,
+  type A2UIContourChipId,
   type A2UIGpsRoverSnapshot,
   type A2UIProjectLocationSnapshot,
   type A2UIWorkspaceToolId,
   type ProjectionSetting,
   type ComplianceSourceMode,
+  type ContourBlendStats,
+  type ContourGeneration,
+  type ContourSettings,
   type InclusionBoundary,
   type JobInfo,
   type SessionFile,
@@ -47,6 +51,7 @@ import { A2UIProperties } from './A2UIProperties.tsx';
 import { A2UISoilLimitations } from './A2UISoilLimitations.tsx';
 import { A2UITextEditor } from './A2UITextEditor.tsx';
 import { A2UISpreadsheet } from './A2UISpreadsheet.tsx';
+import { A2UIContourChip } from './A2UIContourChips.tsx';
 import { DockModeControl, type DockMode } from './DockModeControl.tsx';
 
 // Lazy-load PDF-backed intake components so pdfjs-dist is only loaded when a PDF intake widget is rendered
@@ -77,6 +82,7 @@ export const WORKSPACE_TOOL_LABELS: Record<A2UIWorkspaceToolId, string> = {
   'roading-panel': 'Roading Studio',
   'road-paint-studio': 'Road Paint Studio',
   'tin-surfaces': 'TIN Surfaces',
+  'point-tools': 'Point Tools',
   'legend': 'Legend',
 };
 
@@ -99,6 +105,8 @@ export interface A2UIHostContextValue {
   }) => void;
   /** Project WGS84 coordinates to the active CRS for Plus Code entry. */
   convertLatLon?: (lat: number, lon: number) => { northing: number; easting: number } | null;
+  /** Project centre or GPS fix used to recover shortened Plus Codes. */
+  plusCodeReference?: { latitude: number; longitude: number } | null;
   // RAW Crawler
   onRawFileUploaded?: (content: string, fileName: string) => void;
   // Civil Drafter
@@ -275,6 +283,44 @@ export interface A2UIHostContextValue {
   onOpenCountyGis?: () => void;
   /** Fetch a layer over the drawn inclusion area instead of a cluster. */
   onProjectLocationFetchInclusion?: (action: 'parcels' | 'flood' | 'soils') => void;
+  /** Live contour settings, shared by every independently addressable contour chip. */
+  contourSettings?: ContourSettings;
+  contourGenerations?: ContourGeneration[];
+  /** Survey points used for cleanup counts and ignore-point search. */
+  contourPoints?: SurveyPoint[];
+  contourBlendStatsById?: Record<string, ContourBlendStats>;
+  contourLabelCount?: number;
+  contourLabelTool?: 'place' | 'erase' | null;
+  contourBreaklineCount?: number;
+  contourInclusionSegmentCount?: number;
+  contourExclusionSegmentCount?: number;
+  isGeneratingContours?: boolean;
+  isFetchingEsriContours?: boolean;
+  creatingContourTinGenerationId?: string | null;
+  onContourSettingsChange?: (settings: ContourSettings) => void;
+  onGenerateContours?: () => void;
+  onContourSetLabelTool?: (tool: 'place' | 'erase' | null) => void;
+  onContourClearLabels?: () => void;
+  onContourAutoLabel?: () => void;
+  onContourToggleGenerationVisible?: (id: string, visible: boolean) => void;
+  onContourRenameGeneration?: (id: string, name: string) => void;
+  onContourSetGenerationColor?: (id: string, color: string | undefined) => void;
+  onContourSetGenerationOpacity?: (id: string, opacity: number) => void;
+  onContourDeleteGeneration?: (id: string) => void;
+  onContourToggleBlend?: (id: string, enabled: boolean) => void;
+  onContourSetBlendBoundary?: (id: string, polylineId: string | null) => void;
+  onContourCreateTinFromGeneration?: (id: string) => void;
+  /** Raise one born contour generation as its own chip in chat. */
+  onContourOpenGenerationChip?: (id: string) => void;
+  onContourSelectBoundary?: (id: string | null) => void;
+  onContourManageBoundaries?: () => void;
+  onContourAddEsriService?: (url: string) => void;
+  onContourRemoveEsriService?: (url: string) => void;
+  onContourFetchEsri?: (
+    serviceUrl: string,
+    mode: 'inclusion' | 'project',
+    sourceId?: string
+  ) => void;
   /** Loaded TIN surfaces, shared with the A2UI TIN Surfaces workspace surface. */
   tinSurfaces?: TinSurface[];
   /** Contour generations available for "Create from Contours". */
@@ -284,6 +330,13 @@ export interface A2UIHostContextValue {
   onImportTinSurface?: () => void;
   onCreateTinFromContours?: () => void;
   onExportTinSurface?: (tinId: string, format: 'landxml' | 'native') => void;
+  /** Default style for surfaces without an explicit display mode. */
+  tinDefaultDisplayMode?: 'wireframe' | 'shaded';
+  /** Draw, hide, or restyle one surface on the canvas. */
+  onSetTinSurfaceDisplayMode?: (tinId: string, mode: 'wireframe' | 'shaded' | 'hidden') => void;
+  onToggleTinSurfaceVisibility?: (tinId: string) => void;
+  /** Unhide, draw, show the canvas, and zoom to the surface. */
+  onShowTinSurfaceOnCanvas?: (tinId: string, mode?: 'wireframe' | 'shaded') => void;
   /** Bind a project point as the live stakeout target. */
   onGpsSetTarget?: (pointNumber: string) => void;
   /** Store a collected GPS point at the current fix. */
@@ -693,10 +746,28 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
     );
   }
 
+  if (payload.kind === 'contour-chip') {
+    const chip = (payload.contourChip?.chip ?? payload.widgetType) as A2UIContourChipId;
+    const generationId = payload.contourChip?.generationId;
+    const embedded = presentation !== 'inline';
+    return (
+      <div
+        data-testid={`a2ui-surface-${chip}`}
+        className={embedded ? 'flex h-full min-h-0 flex-col' : 'mt-3 w-full'}
+      >
+        <div className={embedded ? 'min-h-0 flex-1 overflow-y-auto' : ''}>
+          <A2UIContourChip chip={chip} generationId={generationId} />
+        </div>
+      </div>
+    );
+  }
+
   if (payload.kind === 'workspace-tool') {
     const toolId = (payload.workspaceTool ?? payload.widgetType) as A2UIWorkspaceToolId;
     const toolLabel = WORKSPACE_TOOL_LABELS[toolId] ?? 'Workspace Tool';
     const embedded = presentation !== 'inline';
+    // Sheet View is a visual canvas: give it the room a plot sheet needs.
+    const isSheetView = toolId === 'sheet-view';
     const rendered = host.renderWorkspaceTool?.(toolId, presentation);
     return (
       <div
@@ -718,7 +789,11 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
         </div>
         <div
           className={`overflow-hidden rounded-xl border border-cyan-400/25 bg-[#070e18]/90 ${
-            embedded ? 'min-h-0 flex-1 overflow-y-auto' : 'max-h-[min(62vh,520px)] overflow-y-auto'
+            embedded
+              ? 'min-h-0 flex-1 overflow-y-auto'
+              : isSheetView
+                ? 'h-[min(80vh,820px)] overflow-y-auto'
+                : 'max-h-[min(62vh,520px)] overflow-y-auto'
           }`}
         >
           {rendered ?? (
@@ -1129,7 +1204,7 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
         <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
           <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-300">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            Point Entry
+            Add Point
           </span>
           <SurfaceActions
             onPopOut={onPopOut}
@@ -1151,6 +1226,7 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
             onAddPoint={host.onAddPointFromSurface}
             onStartCanvasPlacement={host.onStartPointPlacement}
             convertLatLon={host.convertLatLon}
+            referenceLocation={host.plusCodeReference}
           />
         </div>
       </div>

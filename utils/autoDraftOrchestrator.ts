@@ -34,12 +34,14 @@ import { resolveAoi, type AoiResult } from './aoiResolver.ts';
 import { fetchFemaFloodHazards, type FloodFetchResult } from '../services/floodService.ts';
 import {
   ALL_PARCEL_SERVICES_LABEL,
+  clipParcelFetchToBoundary,
   fetchParcelsForBbox,
   findStatewideParcelService,
   getAllParcelServices,
   type ParcelFetchResult,
   type ParcelGisServiceDef,
 } from '../services/parcelGisService.ts';
+import { buildInclusionBoundaryLoops } from '../services/soilLimitationsReport.ts';
 import { fetchSsurgoSoils, getSoilsContextString, type SoilsFetchResult } from '../services/soilsService.ts';
 import { fetchNsiStructures, type StructuresFetchResult, type NsiStructureProps } from '../services/structuresService.ts';
 import { fetchOsmBuildings, type BuildingFootprint } from '../services/osmBuildingsService.ts';
@@ -755,11 +757,23 @@ export async function runAutoDraft(opts: AutoDraftOptions): Promise<void> {
     }
     start('parcels', `Querying ${service.label} parcel fabric…`);
     try {
-      const result: ParcelFetchResult = await fetchParcelsForBbox(
+      const fetched: ParcelFetchResult = await fetchParcelsForBbox(
         service,
         { xmin: bbox[0], ymin: bbox[1], xmax: bbox[2], ymax: bbox[3] },
         epsg,
       );
+      // The bbox query returns whole parcels around the AOI. When the AOI is
+      // the user's inclusion boundary, trim the fabric to that polygon before
+      // it reaches the canvas or the label pipeline.
+      let result = fetched;
+      let trimmedToInclusion = false;
+      if (aoi?.source === 'inclusion') {
+        const clipLoops = buildInclusionBoundaryLoops(lines, points, null);
+        if (clipLoops.length > 0) {
+          result = clipParcelFetchToBoundary(fetched, clipLoops);
+          trimmedToInclusion = true;
+        }
+      }
       const sample = result.parcels.slice(0, 12)
         .map(p => `  • ${p.parcelId ?? '(no id)'}${p.owner ? ' — ' + p.owner : ''}${p.deedRef ? ' (' + p.deedRef + ')' : ''}`)
         .join('\n');
@@ -769,7 +783,7 @@ export async function runAutoDraft(opts: AutoDraftOptions): Promise<void> {
         result.parcels.length > 0 ? 'Parcel IDs / owners:' : null,
         sample || null,
         result.parcels.length > 12 ? `  …and ${result.parcels.length - 12} more` : null,
-        drawParcels && onCanvasLines ? 'Parcel linework has been drawn to the canvas (layer COUNTY-PARCEL).' : null,
+        drawParcels && onCanvasLines ? `Parcel linework has been drawn to the canvas (layer COUNTY-PARCEL${trimmedToInclusion ? ', trimmed to the inclusion boundary' : ''}).` : null,
       ].filter(Boolean).join('\n');
       if (drawParcels && onCanvasLines && result.lines.length > 0) {
         onCanvasLines(result.lines, 'COUNTY-PARCEL');
@@ -779,7 +793,7 @@ export async function runAutoDraft(opts: AutoDraftOptions): Promise<void> {
         // labels render via the existing parcelLabels pipeline.
         onParcelResult(result);
       }
-      done('parcels', `${result.featureCount} parcels`, `${result.lines.length} line segments${drawParcels && onCanvasLines ? ' drawn to canvas' : ''}.`);
+      done('parcels', `${result.featureCount} parcels`, `${result.lines.length} line segments${trimmedToInclusion ? ' trimmed to the inclusion boundary' : ''}${drawParcels && onCanvasLines ? ' drawn to canvas' : ''}.`);
     } catch (e) {
       parcelBlock = `(Parcel fetch failed: ${errMsg(e)})`;
       fail('parcels', errMsg(e));
@@ -791,7 +805,9 @@ export async function runAutoDraft(opts: AutoDraftOptions): Promise<void> {
     if (!bbox) { femaBlock = '(No AOI — flood query skipped)'; skip('fema', 'No AOI'); return; }
     start('fema', 'Querying FEMA NFHL flood hazard layer…');
     try {
-      const result: FloodFetchResult = await fetchFemaFloodHazards(bbox, epsg);
+      // Auto Draft only needs the zone rings; the Flood Agent panel requests
+      // the complete NFHL stack separately.
+      const result: FloodFetchResult = await fetchFemaFloodHazards(bbox, epsg, { includeAllLayers: false });
       const zones = Object.entries(result.zoneCounts)
         .sort((a, b) => b[1] - a[1])
         .map(([z, n]) => `${z}×${n}`)

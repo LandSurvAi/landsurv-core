@@ -1,27 +1,24 @@
 /**
- * ContourManagementPanel (v26.05.19.3)
+ * ContourManagementPanel
  *
- * Floating panel that manages all ContourGeneration objects for the current
- * session.  Allows:
- *   • Show / hide individual generations
- *   • Rename generations
- *   • Colour-code outputs
- *   • Enable ESRI/State blend mode per generation
- *   • Delete generations
- *   • Trigger a new generation (opens ContourGenerationPanel)
- *
- * ESRI Blend mode:
- *   When enabled for a generation, ESRI contour lines whose midpoint falls
- *   inside the selected inclusion boundary are suppressed — leaving survey
- *   contours as the sole source inside that boundary and ESRI as the sole
- *   source outside it.  The user then manually draws blend curves at the
- *   boundary to achieve a smooth hand-off.
+ * Floating/deed-docked panel that manages every ContourGeneration in the
+ * session. Each born generation is rendered as its own deed-style chip card:
+ * a colored left rail, black-hole button chrome, and an explicit A2UI hand-off
+ * so an agent can pull that single generation into chat without the full
+ * history. The panel itself keeps its dock/close controls; the chips do not.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { type ContourGeneration, type InclusionBoundary } from '../types.ts';
+import { type ContourBlendStats, type ContourGeneration, type InclusionBoundary } from '../types.ts';
 import { ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon } from './icons.tsx';
 import { DockModeControl, type DockMode } from './DockModeControl.tsx';
+import {
+  ChipCard,
+  SectionChip,
+  CHIP_INPUT_CLASS,
+  CHIP_FIELD_LABEL_CLASS,
+  chipButtonClass,
+} from './common/SectionChip.tsx';
 
 interface ContourManagementPanelProps {
   generations: ContourGeneration[];
@@ -32,11 +29,15 @@ interface ContourManagementPanelProps {
   onSetOpacity: (id: string, opacity: number) => void;
   onToggleEsriBlend: (id: string, enabled: boolean) => void;
   onSetEsriBlendPolylineId: (id: string, polylineId: string | null) => void;
+  /** Latest automatic stitch result for each survey generation. */
+  blendStatsById?: Record<string, ContourBlendStats>;
   onCreateTinFromGeneration?: (id: string) => void;
   creatingTinGenerationId?: string | null;
   recentlyCreatedTinGenerationId?: string | null;
   onDelete: (id: string) => void;
   onNewGeneration: () => void;
+  /** Raise one born generation as an A2UI chip in chat. */
+  onOpenGenerationChip?: (id: string) => void;
   /** Contour-label strike tools, shared with the generation panel. */
   labelCount?: number;
   labelTool?: 'place' | 'erase' | null;
@@ -63,6 +64,43 @@ const GENERATION_COLORS = [
   '#ec4899', // pink
 ];
 
+function blendStatusText(stats: ContourBlendStats | undefined): { text: string; className: string } {
+  if (!stats) {
+    return { text: 'Recalculating blend…', className: 'text-indigo-300/70' };
+  }
+  if (stats.status === 'no-boundary') {
+    return {
+      text: 'Boundary geometry is unavailable. Redraw or reselect the inclusion boundary.',
+      className: 'text-amber-300/90',
+    };
+  }
+  if (stats.status === 'no-esri') {
+    return {
+      text: 'No visible ESRI/State contour generation to blend.',
+      className: 'text-amber-300/90',
+    };
+  }
+  const rejected = stats.rejectedConnectorCount ?? 0;
+  const rejectionNote = rejected > 0
+    ? ` ${rejected} implausible join(s) rejected instead of drawing crossing or looping curves.`
+    : '';
+  if (stats.connectorCount === 0) {
+    return {
+      text: rejected > 0
+        ? `Blend active.${rejectionNote}`
+        : 'Blend active. No same-elevation ESRI ends are close enough to a survey contour yet.',
+      className: 'text-amber-300/90',
+    };
+  }
+  const openEnds = stats.unmatchedGisEndpoints > 0
+    ? ` ${stats.unmatchedGisEndpoints} ESRI end(s) remain open.`
+    : '';
+  return {
+    text: `Auto-joined ${stats.matchedEndpoints} ESRI end(s) with ${stats.connectorCount} transition curve(s).${openEnds}${rejectionNote}`,
+    className: rejected > 0 ? 'text-amber-200/90' : 'text-emerald-300/90',
+  };
+}
+
 export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
   generations,
   inclusionBoundaries,
@@ -72,11 +110,13 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
   onSetOpacity,
   onToggleEsriBlend,
   onSetEsriBlendPolylineId,
+  blendStatsById = {},
   onCreateTinFromGeneration,
   creatingTinGenerationId,
   recentlyCreatedTinGenerationId,
   onDelete,
   onNewGeneration,
+  onOpenGenerationChip,
   labelCount = 0,
   labelTool = null,
   onSetLabelTool,
@@ -145,31 +185,33 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
     <div
       className={
         isDocked
-          ? 'w-full bg-gray-900/95 border-b border-amber-500/30 text-sm text-gray-200 flex flex-col'
-          : 'fixed z-40 bg-gray-900/95 border border-amber-500/40 rounded-lg shadow-2xl text-sm text-gray-200 backdrop-blur-sm w-[360px]'
+          ? 'flex w-full flex-col border-b border-cyan-400/25 bg-[#070e18]/95 text-[12px] text-slate-300'
+          : 'fixed z-40 w-[360px] rounded-xl border border-white/[0.12] bg-[#070e18]/95 text-[12px] text-slate-300 shadow-2xl backdrop-blur-sm'
       }
       style={isDocked ? undefined : { left: resolvedPos.x, top: resolvedPos.y }}
     >
-      {/* Header */}
+      {/* Panel header — docking/closing lives on the panel, never on a chip. */}
       <div
-        className={`flex items-center justify-between px-3 py-2 border-b border-amber-500/30 select-none ${
+        className={`flex select-none items-center justify-between border-b border-white/[0.08] px-3 py-2 ${
           isDocked ? 'cursor-default' : 'cursor-move'
         }`}
         onMouseDown={isDocked ? undefined : handleDragStart}
       >
         <div className="flex items-center gap-2">
-          <span className="text-amber-400">📐</span>
-          <span className="font-semibold text-amber-200">Contour Generations</span>
-          <span className="text-[10px] bg-amber-700/50 text-amber-100 px-1.5 py-0.5 rounded font-mono">
+          <span className="text-cyan-300">📐</span>
+          <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-cyan-200">Contour Generations</span>
+          <span className="rounded-full border border-white/10 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[9px] text-slate-300">
             {generations.length}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
           <button
             onClick={onNewGeneration}
-            className="text-[11px] px-2 py-0.5 rounded bg-amber-600/80 hover:bg-amber-500 text-white font-medium"
+            className={chipButtonClass('emerald')}
             title="Generate new contours"
-          >+ New</button>
+          >
+            + New
+          </button>
           {(onDockModeChange || onToggleDock) && (
             onDockModeChange ? (
               <DockModeControl mode={mode} onChange={onDockModeChange} />
@@ -177,57 +219,51 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
               <button
                 type="button"
                 onClick={onToggleDock}
-                className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-cyan-400 transition-colors"
+                className="rounded p-1 text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-cyan-300"
                 title={isDocked ? 'Pop out Contour Generations to canvas' : 'Dock Contour Generations into Tool Station'}
               >
-                {isDocked ? <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" /> : <ArrowDownOnSquareIcon className="w-3.5 h-3.5" />}
+                {isDocked ? <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" /> : <ArrowDownOnSquareIcon className="h-3.5 w-3.5" />}
               </button>
             )
           )}
-          <button onClick={() => setCollapsed(c => !c)} className="text-xs text-gray-400 hover:text-white" title={collapsed ? 'Expand' : 'Collapse'}>
+          <button onClick={() => setCollapsed(c => !c)} className="text-xs text-slate-400 hover:text-white" title={collapsed ? 'Expand' : 'Collapse'}>
             {collapsed ? '▾' : '▴'}
           </button>
           {onClose && (
-            <button onClick={onClose} className="text-xs text-gray-400 hover:text-white" title="Close">✕</button>
+            <button onClick={onClose} className="text-xs text-slate-400 hover:text-white" title="Close">✕</button>
           )}
         </div>
       </div>
 
       {!collapsed && (
-        <div className="p-2 space-y-1.5 max-h-[70vh] overflow-y-auto">
+        <div className="max-h-[70vh] space-y-2 overflow-y-auto p-2">
           {(onSetLabelTool || onAutoLabelContours || onClearContourLabels) && (
-            <div className="rounded border border-amber-700/30 bg-amber-950/10 p-2 space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase font-semibold tracking-wide text-amber-300/80">Contour Labels</span>
-                <span className="text-[10px] text-gray-500">{labelCount} on canvas</span>
-              </div>
+            <ChipCard
+              color="labels"
+              title="Contour Labels"
+              aside={<span className="text-[9.5px] text-slate-500">{labelCount} on canvas</span>}
+            >
               <div className="grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
                   onClick={() => onSetLabelTool?.(labelTool === 'place' ? null : 'place')}
-                  className={`py-1 rounded border text-[11px] font-medium transition-colors ${
-                    labelTool === 'place'
-                      ? 'border-amber-400 bg-amber-600/30 text-amber-200'
-                      : 'border-gray-600 bg-gray-700/50 text-gray-300 hover:border-amber-500/60 hover:text-amber-200'
-                  }`}
+                  aria-pressed={labelTool === 'place'}
+                  className={chipButtonClass('emerald', labelTool === 'place')}
                 >
                   {labelTool === 'place' ? 'Stop Placing' : 'Place by Strike'}
                 </button>
                 <button
                   type="button"
                   onClick={() => onSetLabelTool?.(labelTool === 'erase' ? null : 'erase')}
-                  className={`py-1 rounded border text-[11px] font-medium transition-colors ${
-                    labelTool === 'erase'
-                      ? 'border-rose-400 bg-rose-600/30 text-rose-200'
-                      : 'border-gray-600 bg-gray-700/50 text-gray-300 hover:border-rose-500/60 hover:text-rose-200'
-                  }`}
+                  aria-pressed={labelTool === 'erase'}
+                  className={chipButtonClass('rose', labelTool === 'erase')}
                 >
                   {labelTool === 'erase' ? 'Stop Erasing' : 'Erase by Strike'}
                 </button>
                 <button
                   type="button"
                   onClick={onAutoLabelContours}
-                  className="py-1 rounded border border-gray-600 bg-gray-700/50 text-[11px] font-medium text-gray-300 hover:border-amber-500/60 hover:text-amber-200 transition-colors"
+                  className={chipButtonClass('neutral')}
                 >
                   Re-label
                 </button>
@@ -235,22 +271,24 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
                   type="button"
                   onClick={onClearContourLabels}
                   disabled={labelCount === 0}
-                  className="py-1 rounded border border-gray-600 bg-gray-700/50 text-[11px] font-medium text-gray-300 hover:border-rose-500/60 hover:text-rose-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  className={chipButtonClass('neutral')}
                 >
                   Clear Labels
                 </button>
               </div>
               {labelTool && (
-                <p className="text-[10px] leading-snug text-amber-300/80">
+                <p className="text-[9.5px] leading-snug text-teal-300/80">
                   Strike mode active — drag on the canvas. Press Esc to finish.
                 </p>
               )}
-            </div>
+            </ChipCard>
           )}
+
           {generations.length === 0 && (
-            <div className="py-6 text-center text-xs text-gray-500">
-              No contour generations yet.<br />
-              Click <span className="text-amber-400">+ New</span> to generate contours.
+            <div className="rounded-xl border border-dashed border-white/10 px-3 py-6 text-center text-[10.5px] leading-relaxed text-slate-500">
+              No contour generations yet.
+              <br />
+              Click <span className="font-semibold text-emerald-300">+ New</span> to generate contours.
             </div>
           )}
 
@@ -259,45 +297,48 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
             const accentColor = gen.color ?? GENERATION_COLORS[idx % GENERATION_COLORS.length];
             const createdDate = new Date(gen.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
             const lastRegen = new Date(gen.lastGeneratedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+            const blendStatus = gen.esriBlendEnabled ? blendStatusText(blendStatsById[gen.id]) : null;
 
             return (
               <div
                 key={gen.id}
-                className="rounded border bg-gray-800/60"
+                data-contour-generation-chip={gen.id}
+                className="panel-surface relative overflow-hidden rounded-xl border border-white/[0.08] bg-[#070e18]/90 py-2 pl-4 pr-2 shadow-sm"
                 style={{ borderColor: `${accentColor}40` }}
               >
+                <SectionChip color={accentColor} />
+
                 {/* Row header */}
-                <div className="flex items-center gap-2 px-2 py-1.5">
-                  {/* Visibility toggle */}
+                <div className="flex items-center gap-2">
                   <button
                     onClick={() => onToggleVisible(gen.id, !gen.visible)}
-                    className="flex-shrink-0 w-4 h-4 rounded text-[11px] leading-4 text-center border transition-colors"
+                    className="flex h-4 w-4 flex-none items-center justify-center rounded border text-[10px] leading-4 transition-colors"
                     style={gen.visible
                       ? { background: accentColor, borderColor: accentColor, color: '#111' }
                       : { background: 'transparent', borderColor: '#4b5563', color: '#6b7280' }
                     }
                     title={gen.visible ? 'Hide' : 'Show'}
+                    aria-pressed={gen.visible}
                   >
                     {gen.visible ? '●' : '○'}
                   </button>
 
-                  {/* Color swatch */}
-                  <div
-                    className="w-2.5 h-2.5 rounded-full flex-shrink-0 cursor-pointer"
+                  <button
+                    className="h-2.5 w-2.5 flex-none cursor-pointer rounded-full border border-black/40"
                     style={{ background: accentColor }}
                     title="Change color"
+                    aria-label={`Change color of ${gen.name}`}
                     onClick={() => {
-                      const idx = GENERATION_COLORS.indexOf(accentColor);
-                      const next = GENERATION_COLORS[(idx + 1) % GENERATION_COLORS.length];
+                      const colorIdx = GENERATION_COLORS.indexOf(accentColor);
+                      const next = GENERATION_COLORS[(colorIdx + 1) % GENERATION_COLORS.length];
                       onSetColor(gen.id, next);
                     }}
                   />
 
-                  {/* Name */}
                   {editingId === gen.id ? (
                     <input
                       autoFocus
-                      className="flex-1 text-xs bg-gray-700 border border-amber-500/50 rounded px-1.5 py-0.5 text-gray-100 focus:outline-none"
+                      className={`${CHIP_INPUT_CLASS} h-6 flex-1 py-0.5`}
                       value={editName}
                       onChange={e => setEditName(e.target.value)}
                       onBlur={() => commitEdit(gen.id)}
@@ -305,7 +346,7 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
                     />
                   ) : (
                     <span
-                      className="flex-1 text-xs text-gray-200 truncate cursor-pointer hover:text-white"
+                      className="flex-1 cursor-pointer truncate text-[11px] font-semibold text-slate-100 hover:text-white"
                       title="Double-click to rename"
                       onDoubleClick={() => startEdit(gen)}
                     >
@@ -313,125 +354,152 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
                     </span>
                   )}
 
-                  {/* Stats */}
-                  <span className="text-[10px] text-gray-500 flex-shrink-0">
+                  <span className="flex-none font-mono text-[9px] text-slate-500">
                     {gen.settings.contourInterval}ft · {gen.pointCount}pts
                   </span>
 
                   {(gen.excludedPointCount ?? 0) > 0 && (
                     <span
-                      className="text-[10px] text-amber-400/90 flex-shrink-0"
+                      className="flex-none text-[9px] text-amber-300/90"
                       title={`${gen.excludedPointCount} point(s) excluded: missing elevations or elevations detached from the surveyed surface.`}
                     >
-                      −{gen.excludedPointCount} excl
+                      −{gen.excludedPointCount}
                     </span>
                   )}
 
                   {gen.elevationFilterSuppressed && (
                     <span
-                      className="text-[10px] text-rose-400/90 flex-shrink-0"
+                      className="flex-none text-[9px] text-rose-300/90"
                       title="Some elevations look detached from the surface but were kept because excluding them would drop too many points. Review the survey for elevation blunders."
                     >
                       ⚠ z?
                     </span>
                   )}
 
-                  {/* Expand toggle */}
                   <button
                     onClick={() => setExpandedId(isExpanded ? null : gen.id)}
-                    className="text-xs text-gray-500 hover:text-gray-300 flex-shrink-0"
+                    className="flex-none text-xs text-slate-500 hover:text-slate-300"
+                    aria-label={isExpanded ? `Collapse ${gen.name}` : `Expand ${gen.name}`}
                   >
                     {isExpanded ? '▴' : '▾'}
                   </button>
 
-                  {/* Delete */}
                   <button
                     onClick={() => {
                       if (window.confirm(`Delete "${gen.name}"?`)) onDelete(gen.id);
                     }}
-                    className="text-xs text-gray-600 hover:text-rose-400 flex-shrink-0"
+                    className="flex-none text-xs text-slate-600 transition-colors hover:text-rose-400"
                     title="Delete generation"
+                    aria-label={`Delete ${gen.name}`}
                   >✕</button>
                 </div>
 
                 {/* Expanded details */}
                 {isExpanded && (
-                  <div className="px-3 pb-3 pt-1 border-t border-gray-700/40 space-y-3">
-                    {/* Meta */}
-                    <div className="flex gap-4 text-[10px] text-gray-500">
+                  <div className="mt-2 space-y-2.5 border-t border-white/[0.07] pt-2">
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-slate-500">
                       <span>Created {createdDate}</span>
                       <span>Updated {lastRegen}</span>
                       <span>{gen.isoPaths.length} polylines</span>
                     </div>
 
                     {gen.elevationRange && (
-                      <div className="text-[10px] text-gray-500">
-                        Contoured elevations {gen.elevationRange.min.toFixed(2)}' – {gen.elevationRange.max.toFixed(2)}'
+                      <div className="text-[9.5px] text-slate-500">
+                        Contoured Z {gen.elevationRange.min.toFixed(2)}' – {gen.elevationRange.max.toFixed(2)}'
                         {(gen.excludedPointCount ?? 0) > 0 && (
-                          <span className="text-amber-400/90"> · {gen.excludedPointCount} point(s) excluded</span>
+                          <span className="text-amber-300/90"> · {gen.excludedPointCount} point(s) excluded</span>
                         )}
                       </div>
                     )}
 
-                    {/* Settings summary */}
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
-                      <div><span className="text-gray-500">Interval:</span> <span className="text-gray-200">{gen.settings.contourInterval} ft</span></div>
-                      <div><span className="text-gray-500">Major:</span> <span className="text-gray-200">{gen.settings.majorInterval} ft</span></div>
-                      <div><span className="text-gray-500">Smoothing:</span> <span className="text-gray-200">{gen.settings.smoothing}</span></div>
-                      <div><span className="text-gray-500">Filter:</span> <span className="text-gray-200 truncate">{gen.settings.pointFilterDescription || 'All'}</span></div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                      <div><span className="text-slate-500">Interval:</span> <span className="text-slate-200">{gen.settings.contourInterval} ft</span></div>
+                      <div><span className="text-slate-500">Major:</span> <span className="text-slate-200">{gen.settings.majorInterval} ft</span></div>
+                      <div><span className="text-slate-500">Smoothing:</span> <span className="text-slate-200">{gen.settings.smoothing}</span></div>
+                      <div><span className="text-slate-500">Filter:</span> <span className="truncate text-slate-200">{gen.settings.pointFilterDescription || 'All'}</span></div>
                     </div>
 
-                    {onCreateTinFromGeneration && (
-                      <button
-                        type="button"
-                        onClick={() => onCreateTinFromGeneration(gen.id)}
-                        disabled={!!creatingTinGenerationId}
-                        className="w-full py-1.5 text-[11px] font-semibold rounded border border-indigo-500/40 bg-indigo-700/30 hover:bg-indigo-600/40 text-indigo-100 transition-colors"
-                        title="Create a TIN from this contour generation and save it to File Manager"
-                      >
-                        {creatingTinGenerationId === gen.id
-                          ? 'Creating TIN...'
-                          : recentlyCreatedTinGenerationId === gen.id
-                            ? 'TIN Created'
-                            : 'Create TIN for This Generation'}
-                      </button>
-                    )}
-
-                    {/* Opacity */}
-                    <div>
-                      <label className="text-[11px] text-gray-400">Opacity: {Math.round((gen.opacity ?? 1) * 100)}%</label>
+                    <div className="flex items-center gap-2">
+                      <span className="w-12 flex-none text-[9px] text-slate-500">Opacity</span>
                       <input
                         type="range" min={0.1} max={1} step={0.05}
                         value={gen.opacity ?? 1}
                         onChange={e => onSetOpacity(gen.id, parseFloat(e.target.value))}
-                        className="w-full accent-amber-500"
+                        className="min-w-0 flex-1 accent-cyan-400"
+                        aria-label={`Opacity for ${gen.name}`}
                       />
+                      <span className="w-8 flex-none text-right font-mono text-[9px] text-slate-400">
+                        {Math.round((gen.opacity ?? 1) * 100)}%
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1">
+                      {GENERATION_COLORS.map(swatch => (
+                        <button
+                          key={swatch}
+                          type="button"
+                          onClick={() => onSetColor(gen.id, swatch)}
+                          aria-label={`Set ${gen.name} color ${swatch}`}
+                          className={`h-3 w-3 rounded-full border ${accentColor === swatch ? 'border-white' : 'border-black/40'}`}
+                          style={{ backgroundColor: swatch }}
+                        />
+                      ))}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {onOpenGenerationChip && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenGenerationChip(gen.id)}
+                          className={chipButtonClass('emerald')}
+                          title="Open this generation on its own"
+                          aria-label={`Open ${gen.name}`}
+                        >
+                          ❖ Open
+                        </button>
+                      )}
+                      {onCreateTinFromGeneration && (
+                        <button
+                          type="button"
+                          onClick={() => onCreateTinFromGeneration(gen.id)}
+                          disabled={!!creatingTinGenerationId}
+                          className={chipButtonClass('violet')}
+                          title="Create a TIN from this contour generation and save it to File Manager"
+                        >
+                          {creatingTinGenerationId === gen.id
+                            ? 'Creating TIN…'
+                            : recentlyCreatedTinGenerationId === gen.id
+                              ? 'TIN Created'
+                              : 'Create TIN'}
+                        </button>
+                      )}
                     </div>
 
                     {/* ESRI Blend */}
-                    <div className="rounded border border-indigo-700/30 bg-indigo-900/20 p-2.5 space-y-2">
-                      <label className="flex items-center gap-2 cursor-pointer">
+                    <div className="rounded-lg border border-indigo-400/20 bg-indigo-400/[0.05] p-2">
+                      <label className="flex cursor-pointer items-center gap-2">
                         <input
                           type="checkbox"
                           checked={gen.esriBlendEnabled ?? false}
                           onChange={e => onToggleEsriBlend(gen.id, e.target.checked)}
-                          className="accent-indigo-500"
+                          className="h-3.5 w-3.5 accent-indigo-400"
                         />
-                        <span className="text-[11px] font-medium text-indigo-200">Blend with ESRI/State Contours</span>
+                        <span className="text-[10.5px] font-semibold text-indigo-200">Blend with ESRI/State Contours</span>
                       </label>
                       {gen.esriBlendEnabled && (
                         <>
-                          <p className="text-[10px] text-indigo-300/70 leading-snug">
-                            ESRI contours inside the selected inclusion boundary are suppressed.
-                            Survey contours are 100% inside; ESRI is 100% outside.
-                            Draw blend curves at the boundary edge to transition smoothly.
+                          <p className="mt-1 text-[9px] leading-snug text-indigo-300/70">
+                            ESRI contours inside the selected boundary are trimmed away. Outside ESRI
+                            ends are automatically extended with curves to the nearest survey contour
+                            at the same elevation.
                           </p>
-                          <div>
-                            <label className="text-[10px] text-gray-400 block mb-1">Blend Inclusion Boundary</label>
+                          <div className="mt-1.5">
+                            <div className={`${CHIP_FIELD_LABEL_CLASS} mb-1`}>Blend boundary</div>
                             <select
                               value={gen.esriBlendInclusionPolylineId ?? ''}
                               onChange={e => onSetEsriBlendPolylineId(gen.id, e.target.value || null)}
-                              className="w-full text-xs bg-gray-800 border border-gray-600 rounded px-2 py-1 text-gray-200"
+                              className={CHIP_INPUT_CLASS}
+                              aria-label={`Blend boundary for ${gen.name}`}
                             >
                               <option value="">— select boundary —</option>
                               {inclusionBoundaries.map(b => (
@@ -440,7 +508,12 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
                             </select>
                           </div>
                           {!gen.esriBlendInclusionPolylineId && (
-                            <p className="text-[10px] text-amber-400/80">Select an inclusion boundary to activate blend.</p>
+                            <p className="mt-1 text-[9px] text-amber-300/80">Select an inclusion boundary to activate blend.</p>
+                          )}
+                          {gen.esriBlendInclusionPolylineId && blendStatus && (
+                            <p className={`mt-1 text-[9px] leading-snug ${blendStatus.className}`}>
+                              {blendStatus.text}
+                            </p>
                           )}
                         </>
                       )}
@@ -452,7 +525,7 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
           })}
 
           {generations.length > 0 && (
-            <p className="text-[10px] text-gray-600 text-center pt-1">
+            <p className="pt-1 text-center text-[9px] text-slate-600">
               Auto-updates when survey points change · Double-click name to rename
             </p>
           )}

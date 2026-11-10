@@ -8,6 +8,7 @@
  */
 
 import type { MapAreaFeature } from '../types.ts';
+import type { FemaNfhlSummary } from './floodService.ts';
 
 export interface FloodReportInput {
   areas: MapAreaFeature[];
@@ -16,6 +17,8 @@ export interface FloodReportInput {
   bfeCount?: number;
   bfeDatum?: string | null;
   bfeError?: string | null;
+  /** Complete FEMA NFHL inventory — panels, jurisdictions, cross-sections, LOMRs/LOMAs, layers. */
+  nfhl?: FemaNfhlSummary | null;
   projectName?: string;
   generatedAt?: Date;
 }
@@ -160,6 +163,90 @@ export function buildFloodZoneReport(input: FloodReportInput): string {
     }
   }
 
+  const nfhl = input.nfhl;
+  if (nfhl) {
+    lines.push('');
+    lines.push('NFHL MAP DATA');
+    lines.push('-------------');
+    lines.push(`Layers: ${nfhl.layerCount}${nfhl.errorCount ? ` (${nfhl.errorCount} unavailable)` : ''}`);
+    lines.push(`Features: ${nfhl.totalFeatures}`);
+
+    if (nfhl.firmPanels.length > 0) {
+      lines.push('');
+      lines.push('FIRM PANELS');
+      for (const panel of nfhl.firmPanels) {
+        lines.push(
+          `- ${panel.panel}` +
+          `${panel.effectiveDate ? `  effective ${panel.effectiveDate}` : ''}` +
+          `${panel.scale ? `  scale 1:${panel.scale}` : ''}` +
+          `${panel.panelType ? `  ${panel.panelType}` : ''}`,
+        );
+      }
+    }
+
+    if (nfhl.jurisdictions.length > 0) {
+      lines.push('');
+      lines.push('POLITICAL JURISDICTIONS');
+      for (const jurisdiction of nfhl.jurisdictions) {
+        lines.push(
+          `- ${jurisdiction.name}` +
+          `${jurisdiction.cid ? `  CID ${jurisdiction.cid}` : ''}` +
+          `${jurisdiction.communityNumber ? `  community ${jurisdiction.communityNumber}` : ''}`,
+        );
+      }
+    }
+
+    if (nfhl.crossSections.length > 0) {
+      lines.push('');
+      lines.push('CROSS-SECTIONS');
+      for (const xs of nfhl.crossSections) {
+        lines.push(
+          `- XS ${xs.letter ?? xs.id}` +
+          `${xs.streamName ? `  ${xs.streamName}` : ''}` +
+          `${xs.station !== null ? `  station ${xs.station}` : ''}` +
+          `${xs.waterSurfaceElevation !== null ? `  WSEL ${xs.waterSurfaceElevation}` : ''}` +
+          `${xs.datum ? ` ${xs.datum}` : ''}`,
+        );
+      }
+    }
+
+    if (nfhl.lomrs.length > 0 || nfhl.lomas.length > 0) {
+      lines.push('');
+      lines.push('LOMRS / LOMAS');
+      for (const lomr of nfhl.lomrs) {
+        lines.push(
+          `- LOMR ${lomr.caseNumber ?? '(no case)'}` +
+          `${lomr.effectiveDate ? `  effective ${lomr.effectiveDate}` : ''}` +
+          `${lomr.status ? `  ${lomr.status}` : ''}`,
+        );
+      }
+      for (const loma of nfhl.lomas) {
+        lines.push(
+          `- LOMA ${loma.caseNumber ?? '(no case)'}` +
+          `${loma.projectName ? `  ${loma.projectName}` : ''}` +
+          `${loma.determinationType ? `  ${loma.determinationType}` : ''}` +
+          `${loma.outcome ? `  ${loma.outcome}` : ''}`,
+        );
+      }
+    }
+
+    if (nfhl.waterNames.length > 0) {
+      lines.push('');
+      lines.push(`WATER FEATURES: ${nfhl.waterNames.join(', ')}`);
+    }
+
+    if (nfhl.layers.length > 0) {
+      lines.push('');
+      lines.push('NFHL LAYER INVENTORY');
+      for (const layer of nfhl.layers) {
+        lines.push(
+          `- ${layer.name}: ${layer.featureCount} feature${layer.featureCount === 1 ? '' : 's'}` +
+          `${layer.error ? `  [unavailable: ${layer.error}]` : ''}`,
+        );
+      }
+    }
+  }
+
   lines.push('');
   lines.push('NOTES');
   lines.push('-----');
@@ -191,6 +278,15 @@ export function buildFloodSheetNotes(input: FloodReportInput): string {
     parts.push(
       `BFE LINES PLOTTED: ${input.bfeCount}${input.bfeDatum ? ` (${input.bfeDatum})` : ''}`,
     );
+  }
+  if (input.nfhl?.firmPanels.length) {
+    parts.push(`FIRM PANEL: ${input.nfhl.firmPanels.map(p => p.panel).join(', ')}`);
+  }
+  if (input.nfhl?.jurisdictions.length) {
+    parts.push(`JURISDICTION: ${input.nfhl.jurisdictions.map(j => j.name).join(', ')}`);
+  }
+  if (input.nfhl) {
+    parts.push(`NFHL DATA: ${input.nfhl.layerCount} LAYERS / ${input.nfhl.totalFeatures} FEATURES`);
   }
   parts.push('SOURCE: FEMA NFHL. VERIFY AGAINST EFFECTIVE FIRM PANEL.');
   parts.push('SCREENING AID ONLY — NOT A FLOOD DETERMINATION.');

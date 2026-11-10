@@ -250,6 +250,61 @@ function escapeXml(value: string): string {
  * Serialize a TIN to the native text `.tin` format understood by
  * `TinImportService` (VERTICES / TRIANGLES sections, one-based faces).
  */
+export type TinSurfaceDisplayMode = 'wireframe' | 'shaded';
+
+/** Per-surface canvas style, falling back to the workspace-wide shading toggle. */
+export function tinSurfaceDisplayMode(
+  surface: TinSurface,
+  shadedByDefault = false,
+): TinSurfaceDisplayMode {
+  if (surface.displayMode === 'shaded' || surface.displayMode === 'wireframe') {
+    return surface.displayMode;
+  }
+  return shadedByDefault ? 'shaded' : 'wireframe';
+}
+
+/** Plan-space bounds and elevation range for a surface, or null when empty. */
+export function tinSurfaceBounds(surface: TinSurface): {
+  minE: number;
+  maxE: number;
+  minN: number;
+  maxN: number;
+  minZ: number;
+  maxZ: number;
+} | null {
+  const vertices = surface.vertices;
+  if (!vertices || vertices.length === 0) return null;
+  let minE = Infinity, maxE = -Infinity;
+  let minN = Infinity, maxN = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  for (const v of vertices) {
+    if (v.easting < minE) minE = v.easting;
+    if (v.easting > maxE) maxE = v.easting;
+    if (v.northing < minN) minN = v.northing;
+    if (v.northing > maxN) maxN = v.northing;
+    if (v.elevation < minZ) minZ = v.elevation;
+    if (v.elevation > maxZ) maxZ = v.elevation;
+  }
+  return { minE, maxE, minN, maxN, minZ, maxZ };
+}
+
+/** Total plan (horizontal) area of the TIN triangles, in squared project units. */
+export function tinSurfacePlanArea(surface: TinSurface): number {
+  const vertices = surface.vertices;
+  let area = 0;
+  for (const tri of surface.triangles) {
+    const a = vertices[tri[0]];
+    const b = vertices[tri[1]];
+    const c = vertices[tri[2]];
+    if (!a || !b || !c) continue;
+    area += Math.abs(
+      (b.easting - a.easting) * (c.northing - a.northing) -
+      (c.easting - a.easting) * (b.northing - a.northing),
+    ) / 2;
+  }
+  return area;
+}
+
 export function tinSurfaceToNativeTin(tin: TinSurface): string {
   const lines: string[] = [
     '# LandSurv.ai TIN surface',

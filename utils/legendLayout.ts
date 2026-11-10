@@ -103,11 +103,12 @@ export function fitLegendLabel(label: string, maxChars: number): string {
   return `${text.slice(0, Math.max(1, maxChars - 1))}…`;
 }
 
-function dashForLinetype(linetype?: string): string {
+/** SVG stroke-dasharray for a legend line sample; undefined means continuous. */
+export function legendSwatchDashArray(linetype?: string): string | undefined {
   const value = String(linetype ?? '').toUpperCase();
-  if (/DOT|DOTTED/.test(value)) return '1.5,1.5';
-  if (/DASH|HIDDEN|PHANTOM|CENTER/.test(value)) return '5,2.5';
-  return '';
+  if (/DOT|DOTTED/.test(value)) return '1.5 1.5';
+  if (/DASH|HIDDEN|PHANTOM|CENTER/.test(value)) return '5 2.5';
+  return undefined;
 }
 
 function swatchMarkup(
@@ -121,18 +122,18 @@ function swatchMarkup(
   const color = entry.color || '#9ca3af';
   const hatch = Boolean(entry.patternName);
   const parts: string[] = [];
-  parts.push(
-    `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${width.toFixed(2)}" height="${height.toFixed(2)}" fill="${escapeLegendXml(color)}" fill-opacity="${hatch ? '0.28' : '0.16'}" stroke="${escapeLegendXml(color)}" stroke-width="0.8" />`,
-  );
   if (hatch) {
     parts.push(
-      `<path d="M ${x.toFixed(2)} ${(y + height).toFixed(2)} L ${(x + width).toFixed(2)} ${y.toFixed(2)} M ${(x + width * 0.35).toFixed(2)} ${(y + height).toFixed(2)} L ${(x + width).toFixed(2)} ${(y + height * 0.35).toFixed(2)}" stroke="${escapeLegendXml(color)}" stroke-width="0.8" fill="none" />`,
+      `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${width.toFixed(2)}" height="${height.toFixed(2)}" fill="${escapeLegendXml(color)}" fill-opacity="0.22" stroke="${escapeLegendXml(color)}" stroke-width="0.8" />`,
+    );
+    parts.push(
+      `<path d="M ${x.toFixed(2)} ${(y + height).toFixed(2)} L ${(x + width).toFixed(2)} ${y.toFixed(2)} M ${(x + width * 0.32).toFixed(2)} ${(y + height).toFixed(2)} L ${(x + width).toFixed(2)} ${(y + height * 0.36).toFixed(2)}" stroke="${escapeLegendXml(color)}" stroke-width="0.8" fill="none" />`,
     );
   } else {
-    const dash = dashForLinetype(entry.linetype);
+    const dash = legendSwatchDashArray(entry.linetype);
     const midY = y + height / 2;
     parts.push(
-      `<line x1="${x.toFixed(2)}" y1="${midY.toFixed(2)}" x2="${(x + width).toFixed(2)}" y2="${midY.toFixed(2)}" stroke="${escapeLegendXml(color)}" stroke-width="${Math.max(1, ppi * 0.012).toFixed(2)}"${dash ? ` stroke-dasharray="${dash}"` : ''} />`,
+      `<line x1="${x.toFixed(2)}" y1="${midY.toFixed(2)}" x2="${(x + width).toFixed(2)}" y2="${midY.toFixed(2)}" stroke="${escapeLegendXml(color)}" stroke-width="${Math.max(1, ppi * 0.018).toFixed(2)}"${dash ? ` stroke-dasharray="${dash}"` : ''} />`,
     );
   }
   return parts.join('');
@@ -179,9 +180,16 @@ export function legendToSvgMarkup(
     );
   });
 
+  // The legend plots as text, line samples, and an optional border — never a
+  // filled panel, so the sheet reads as one drawing.
+  const border = settings.showBorder
+    ? `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${width.toFixed(2)}" height="${height.toFixed(2)}" fill="none" stroke="#111827" stroke-width="1" />`
+    : '';
+  const ruleY = y + pad + px(layout.headerIn) - 0.75;
   return `<g data-legend="paperspace">
-    <rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${width.toFixed(2)}" height="${height.toFixed(2)}" fill="#ffffff"${settings.showBorder ? ' stroke="#111827" stroke-width="1"' : ''} fill-opacity="0.94" />
+    ${border}
     <text x="${(x + pad).toFixed(2)}" y="${(y + pad + px(layout.headerIn) * 0.62).toFixed(2)}" font-family="Arial, sans-serif" font-size="${titleFont.toFixed(2)}" font-weight="bold" letter-spacing="0.8" fill="#111827">${escapeLegendXml(settings.title || 'LEGEND')}</text>
+    <line x1="${(x + pad).toFixed(2)}" y1="${ruleY.toFixed(2)}" x2="${(x + width - pad).toFixed(2)}" y2="${ruleY.toFixed(2)}" stroke="#111827" stroke-width="0.8" />
     ${rows.join('')}
   </g>`;
 }

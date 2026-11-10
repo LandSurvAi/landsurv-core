@@ -32,6 +32,7 @@ import { LegendBlock } from './LegendBlock.tsx';
 import { openLegendStudioSurface } from './A2UILegendStudio.tsx';
 import { legendStore } from '../services/legendStudio.ts';
 import { legendToSvgMarkup } from '../utils/legendLayout.ts';
+import { Compass, FileDown, Files, Frame, Layers, Lock, Map as MapIcon, Maximize2, Palette, RotateCw, Ruler, Tag, Target, Trash2, Unlock } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { parseDxfForSymbol } from '../utils/dxfParser.ts';
 import { parseBearingToRadians } from '../utils/cogo.ts';
@@ -1074,19 +1075,22 @@ function buildSheetNotesBlockSvg(
     const bodyLines = wrapSheetNoteText(block.body, maxChars);
     const lineHeight = fontPx * 1.22;
     const titleLineHeight = titlePx * 1.2;
-    const heightPx = pad * 2 + titleLines.length * titleLineHeight + 3 + bodyLines.length * lineHeight;
+    const ruleY = pad + titleLines.length * titleLineHeight;
+    const bodyY = ruleY + fontPx + 4;
+    const heightPx = bodyY + Math.max(0, bodyLines.length - 1) * lineHeight + pad;
 
     const titleSpans = titleLines.map((line, index) => (
         `<tspan x="${pad.toFixed(2)}" y="${(pad + titlePx + index * titleLineHeight).toFixed(2)}">${escapeSheetNoteXml(line)}</tspan>`
     )).join('');
-    const bodyY = pad + titleLines.length * titleLineHeight + 3 + fontPx;
     const bodySpans = bodyLines.map((line, index) => (
         `<tspan x="${pad.toFixed(2)}" y="${(bodyY + index * lineHeight).toFixed(2)}">${escapeSheetNoteXml(line)}</tspan>`
     )).join('');
 
+    // Notes are paper-space text and rules. No panel fill or box, so the block
+    // sits on the sheet exactly like plotted annotation linework.
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${widthPx.toFixed(2)}" height="${heightPx.toFixed(2)}" viewBox="0 0 ${widthPx.toFixed(2)} ${heightPx.toFixed(2)}">
-        <rect x="0" y="0" width="${widthPx.toFixed(2)}" height="${heightPx.toFixed(2)}" fill="#ffffff" fill-opacity="0.96" stroke="#111827" stroke-width="0.8" />
         <text font-family="Arial, Helvetica, sans-serif" font-weight="bold" font-size="${titlePx.toFixed(2)}" fill="#111827">${titleSpans}</text>
+        <line x1="${pad.toFixed(2)}" y1="${ruleY.toFixed(2)}" x2="${(widthPx - pad).toFixed(2)}" y2="${ruleY.toFixed(2)}" stroke="#111827" stroke-width="0.8" />
         <text font-family="Arial, Helvetica, sans-serif" font-size="${fontPx.toFixed(2)}" fill="#1f2937">${bodySpans}</text>
     </svg>`;
     return { svg, widthPx, heightPx };
@@ -2946,7 +2950,7 @@ const SheetView: React.FC<SheetViewProps> = ({
 
                                     {/* Hover Lock & Orientation Toolbar on Viewport */}
                                     <div
-                                        className={`absolute top-1.5 right-1.5 z-30 flex items-center gap-1 transition-opacity duration-150 pointer-events-auto bg-gray-900/90 backdrop-blur-md px-1.5 py-0.5 rounded-lg border border-gray-700 shadow-xl text-[10px] ${
+                                        className={`absolute top-1.5 right-1.5 z-30 flex items-center gap-0.5 transition-opacity duration-150 pointer-events-auto bg-slate-950/90 backdrop-blur-md px-1 py-0.5 rounded-md border border-white/10 shadow-lg text-[10px] ${
                                             (vp.lockPosition || vp.lockZoom || vp.lockRotationToModelSpace || (vp.rotationDeg ?? 0) !== 0) ? 'opacity-90 group-hover:opacity-100' : 'opacity-0 group-hover:opacity-100 hover:opacity-100'
                                         }`}
                                         onClick={e => e.stopPropagation()}
@@ -2955,27 +2959,27 @@ const SheetView: React.FC<SheetViewProps> = ({
                                         <button
                                             type="button"
                                             onClick={() => updateVp(vp.id, { lockPosition: !vp.lockPosition })}
-                                            className={`px-1.5 py-0.5 rounded flex items-center gap-1 font-semibold transition-colors ${
+                                            className={`px-1.5 py-0.5 rounded flex items-center gap-1 font-medium transition-colors ${
                                                 vp.lockPosition
-                                                    ? 'bg-amber-500/25 text-amber-300 border border-amber-500/60'
-                                                    : 'hover:bg-gray-800 text-gray-400 hover:text-gray-200'
+                                                    ? 'bg-amber-400/15 text-amber-300 border border-amber-400/30'
+                                                    : 'text-slate-400 hover:text-slate-100 hover:bg-white/5 border border-transparent'
                                             }`}
                                             title={vp.lockPosition ? "Position Locked (click to unlock moving/resizing on sheet)" : "Position Unlocked (click to lock moving/resizing on sheet)"}
                                         >
-                                            <span>{vp.lockPosition ? '🔒' : '🔓'}</span>
+                                            {vp.lockPosition ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
                                             <span>Pos</span>
                                         </button>
                                         <button
                                             type="button"
                                             onClick={() => updateVp(vp.id, { lockZoom: !vp.lockZoom })}
-                                            className={`px-1.5 py-0.5 rounded flex items-center gap-1 font-semibold transition-colors ${
+                                            className={`px-1.5 py-0.5 rounded flex items-center gap-1 font-medium transition-colors ${
                                                 vp.lockZoom
-                                                    ? 'bg-cyan-500/25 text-cyan-300 border border-cyan-500/60'
-                                                    : 'hover:bg-gray-800 text-gray-400 hover:text-gray-200'
+                                                    ? 'bg-cyan-400/15 text-cyan-300 border border-cyan-400/30'
+                                                    : 'text-slate-400 hover:text-slate-100 hover:bg-white/5 border border-transparent'
                                             }`}
                                             title={vp.lockZoom ? `Scale Locked at 1"=${vp.scaleFt}' (click to unlock zoom)` : "Scale Unlocked (click to lock zoom)"}
                                         >
-                                            <span>{vp.lockZoom ? '🔒' : '🔓'}</span>
+                                            {vp.lockZoom ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
                                             <span>Scale</span>
                                         </button>
 
@@ -2985,14 +2989,14 @@ const SheetView: React.FC<SheetViewProps> = ({
                                         <button
                                             type="button"
                                             onClick={() => updateVp(vp.id, { lockRotationToModelSpace: !vp.lockRotationToModelSpace })}
-                                            className={`px-1.5 py-0.5 rounded flex items-center gap-1 font-semibold transition-colors ${
+                                            className={`px-1.5 py-0.5 rounded flex items-center gap-1 font-medium transition-colors ${
                                                 vp.lockRotationToModelSpace
-                                                    ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/60'
-                                                    : 'hover:bg-gray-800 text-gray-400 hover:text-gray-200'
+                                                    ? 'bg-emerald-400/15 text-emerald-300 border border-emerald-400/30'
+                                                    : 'text-slate-400 hover:text-slate-100 hover:bg-white/5 border border-transparent'
                                             }`}
                                             title={vp.lockRotationToModelSpace ? `Locked to Model Space Orientation (${msAngleDeg}°)` : `Lock to Model Space Orientation (${msAngleDeg}°)`}
                                         >
-                                            <span>{vp.lockRotationToModelSpace ? '🔒' : '📐'}</span>
+                                            {vp.lockRotationToModelSpace ? <Lock className="h-3 w-3" /> : <Compass className="h-3 w-3" />}
                                             <span>MS</span>
                                         </button>
 
@@ -3006,14 +3010,14 @@ const SheetView: React.FC<SheetViewProps> = ({
                                                     const next = (cur + 90) % 360;
                                                     updateVp(vp.id, { rotationDeg: next });
                                                 }}
-                                                className={`px-1.5 py-0.5 rounded flex items-center gap-1 font-semibold transition-colors ${
+                                                className={`px-1.5 py-0.5 rounded flex items-center gap-1 font-medium transition-colors ${
                                                     (vp.rotationDeg ?? 0) !== 0
-                                                        ? 'bg-purple-500/25 text-purple-300 border border-purple-500/60'
-                                                        : 'hover:bg-gray-800 text-gray-400 hover:text-gray-200'
+                                                        ? 'bg-violet-400/15 text-violet-300 border border-violet-400/30'
+                                                        : 'text-slate-400 hover:text-slate-100 hover:bg-white/5 border border-transparent'
                                                 }`}
                                                 title={`View Rotation: ${vp.rotationDeg ?? 0}° (click to rotate +90°)`}
                                             >
-                                                <span>🔄</span>
+                                                <RotateCw className="h-3 w-3" />
                                                 <span>{vp.rotationDeg ?? 0}°</span>
                                             </button>
                                         )}
@@ -3022,7 +3026,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                     {/* In-viewport Floating HUD when Model Space is active */}
                                     {isModelSpace && (
                                         <div
-                                            className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-gray-900/95 text-white px-3 py-1.5 rounded-lg shadow-2xl border border-cyan-500/70 backdrop-blur-md text-[11px] pointer-events-auto"
+                                            className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-slate-950/95 text-white px-2.5 py-1.5 rounded-md shadow-xl border border-white/10 backdrop-blur-md text-[11px] pointer-events-auto"
                                             onClick={e => e.stopPropagation()}
                                             onMouseDown={e => e.stopPropagation()}
                                         >
@@ -3034,27 +3038,27 @@ const SheetView: React.FC<SheetViewProps> = ({
                                             <button
                                                 type="button"
                                                 onClick={() => zoomToLargestCluster(vp.id)}
-                                                className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500 text-amber-200 hover:text-white font-semibold transition-all flex items-center gap-1 border border-amber-500/30"
+                                                className="px-2 py-0.5 rounded bg-amber-400/15 hover:bg-amber-400/25 text-amber-200 font-medium transition-colors flex items-center gap-1 border border-amber-400/25"
                                                 title="Zoom to primary / largest cluster of points & lines"
                                             >
-                                                🎯 Largest Cluster
+                                                <Target className="h-3 w-3" /> Largest Cluster
                                             </button>
                                             <button
                                                 type="button"
                                                 onClick={() => zoomExtents(vp.id)}
-                                                className="px-2 py-0.5 rounded bg-cyan-500/20 hover:bg-cyan-500 text-cyan-200 hover:text-white font-semibold transition-all flex items-center gap-1 border border-cyan-500/30"
+                                                className="px-2 py-0.5 rounded bg-cyan-400/15 hover:bg-cyan-400/25 text-cyan-200 font-medium transition-colors flex items-center gap-1 border border-cyan-400/25"
                                                 title="Fit all survey data inside this viewport"
                                             >
-                                                ⚡ Extents
+                                                <Maximize2 className="h-3 w-3" /> Extents
                                             </button>
                                             {entityClusters.length > 0 && (
                                                 <div className="relative group">
                                                     <button
                                                         type="button"
-                                                        className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500 text-amber-200 hover:text-white font-semibold transition-all flex items-center gap-1 border border-amber-500/30"
+                                                        className="px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-slate-200 font-medium transition-colors flex items-center gap-1 border border-white/10"
                                                         title="Zoom to cluster of survey points"
                                                     >
-                                                        📍 Clusters ({entityClusters.length}) ▾
+                                                        <Layers className="h-3 w-3" /> Clusters ({entityClusters.length}) ▾
                                                     </button>
                                                     <div className="hidden group-hover:flex group-focus-within:flex flex-col absolute left-0 top-full mt-1 bg-gray-900 border border-gray-700/80 rounded-lg shadow-2xl py-1 min-w-[170px] z-40 max-h-52 overflow-y-auto">
                                                         <div className="px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-gray-400 border-b border-gray-800">
@@ -3111,8 +3115,7 @@ const SheetView: React.FC<SheetViewProps> = ({
 
                                     <div style={{
                                         position: 'absolute', left: 2, bottom: 1, fontSize: 8, color: '#444',
-                                        fontFamily: 'monospace', background: 'rgba(255,255,255,0.85)', padding: '0 4px',
-                                        borderRadius: '2px', border: '1px solid rgba(0,0,0,0.1)'
+                                        fontFamily: 'monospace', background: 'transparent', padding: '0 2px',
                                     }}>
                                         1″ = {vp.scaleFt}′ {isModelSpace ? '• [MODEL SPACE ACTIVE]' : ''}
                                     </div>
@@ -3160,7 +3163,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                         zIndex: 35,
                                         pointerEvents: 'auto',
                                     }}
-                                    className="group hover:ring-2 hover:ring-amber-400 rounded transition-all bg-white/75 backdrop-blur-[2px] p-1 shadow-sm select-none"
+                                    className="group hover:ring-2 hover:ring-amber-400 rounded transition-all select-none"
                                     title={`Graphic Scale Bar (1" = ${linkedVp?.scaleFt ?? 50}') — Drag anywhere on sheet`}
                                     dangerouslySetInnerHTML={{ __html: sbSvgMarkup }}
                                 />
@@ -3224,7 +3227,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                     <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-2.5">
                         <div className="flex items-center justify-between">
                             <h3 className="text-xs font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
-                                <span>📐</span> Paper Size
+                                <Ruler className="h-3.5 w-3.5" /> Paper Size
                             </h3>
                             <span className="text-[10px] text-gray-400 font-mono">{effW}″ × {effH}″</span>
                         </div>
@@ -3305,7 +3308,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                     <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-3">
                         <div className="flex items-center justify-between">
                             <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
-                                <span>🔍</span> Viewports
+                                <Frame className="h-3.5 w-3.5" /> Viewports
                             </h3>
                             <div className="flex gap-1.5">
                                 <button onClick={addViewport}
@@ -3378,7 +3381,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                             className="w-full py-1.5 px-2 rounded-lg bg-amber-600/30 hover:bg-amber-600 text-amber-200 hover:text-white border border-amber-500/50 font-semibold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm"
                                             title="Zoom to primary / largest cluster of points and lines"
                                         >
-                                            <span>🎯</span> Largest Cluster
+                                            <Target className="h-3.5 w-3.5" /> Largest Cluster
                                         </button>
                                         <button
                                             type="button"
@@ -3386,7 +3389,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                             className="w-full py-1.5 px-2 rounded-lg bg-cyan-600/30 hover:bg-cyan-600 text-cyan-200 hover:text-white border border-cyan-500/50 font-semibold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm"
                                             title="Center all survey data (full extents)"
                                         >
-                                            <span>⚡</span> Full Extents
+                                            <Maximize2 className="h-3.5 w-3.5" /> Full Extents
                                         </button>
                                     </div>
 
@@ -3476,7 +3479,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                     <div className="border border-gray-700/80 rounded-lg p-2.5 bg-gray-900/80 space-y-2">
                                         <div className="flex items-center justify-between">
                                             <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
-                                                <span>🗺️</span> Background Map
+                                                <MapIcon className="h-3.5 w-3.5" /> Background Map
                                             </span>
                                             <label className="relative inline-flex items-center cursor-pointer">
                                                 <input
@@ -3521,10 +3524,10 @@ const SheetView: React.FC<SheetViewProps> = ({
                                                                 fetchingBasemapsRef.current.clear();
                                                                 fetchBasemapForVp(selectedVp);
                                                             }}
-                                                            className="text-amber-400 hover:text-amber-300 underline font-medium text-[10px]"
+                                                            className="inline-flex items-center gap-1 text-amber-400 hover:text-amber-300 underline font-medium text-[10px]"
                                                             title="Dump map cache and reload fresh imagery"
                                                         >
-                                                            🗑️ Dump Cache
+                                                            <Trash2 className="h-3 w-3" /> Dump Cache
                                                         </button>
                                                         <button
                                                             type="button"
@@ -3543,7 +3546,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                 <div className="border border-gray-700/80 rounded-lg p-2.5 bg-gray-900/80 space-y-2">
                                     <div className="flex items-center justify-between">
                                         <span className="text-[11px] font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
-                                            <span>🔄</span> View Rotation
+                                            <RotateCw className="h-3.5 w-3.5" /> View Rotation
                                         </span>
                                         <span className="font-mono text-xs text-purple-200 font-bold">
                                             {getEffectiveVpRotation(selectedVp)}°
@@ -3621,7 +3624,9 @@ const SheetView: React.FC<SheetViewProps> = ({
                                                 onClick={() => setStyleExpanded(v => !v)}
                                                 className="w-full flex items-center justify-between text-[11px] font-semibold text-gray-300 hover:text-white"
                                             >
-                                                <span>🎨 Viewport Styling</span>
+                                                <span className="flex items-center gap-1.5">
+                                                    <Palette className="h-3.5 w-3.5" /> Viewport Styling
+                                                </span>
                                                 <span className="text-gray-400">{styleExpanded ? '▲' : '▼'}</span>
                                             </button>
                                             {styleExpanded && (
@@ -3700,7 +3705,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                     <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-2.5">
                         <div className="flex items-center justify-between">
                             <h3 className="text-xs font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
-                                <span>📏</span> Graphic Scale Bar
+                                <Ruler className="h-3.5 w-3.5" /> Graphic Scale Bar
                             </h3>
                             <label className="relative inline-flex items-center cursor-pointer">
                                 <input
@@ -3835,7 +3840,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                     </button>
                                 </div>
                                 <p className="text-[10px] text-gray-500 italic">
-                                    💡 Drag the scale bar directly on the paper canvas to position it anywhere.
+                                    Drag the scale bar directly on the paper canvas to position it anywhere.
                                 </p>
                             </div>
                         )}
@@ -3844,7 +3849,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                     {/* Section 3: Titleblock Information */}
                     <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-2.5">
                         <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
-                            <span>🏷️</span> Titleblock Fields
+                            <Tag className="h-3.5 w-3.5" /> Titleblock Fields
                         </h3>
                         <div className="space-y-1.5 text-xs">
                             <input className="w-full bg-gray-900 border border-gray-700/80 rounded-lg px-2.5 py-1 text-xs text-gray-200"
@@ -3877,7 +3882,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                 onClick={() => updateSet({ tbLayout: createDefaultVerticalTitleblockLayout(effH - 1.0) })}
                                 className="py-1.5 px-2 text-[10px] font-bold rounded-lg bg-cyan-700/40 hover:bg-cyan-600 text-cyan-200 hover:text-white border border-cyan-500/50 transition-all flex items-center justify-center gap-1"
                                 title="Set to industry standard vertical titleblock running down the right edge of the sheet">
-                                <span>📐</span> Vertical Right
+                                <Ruler className="h-3 w-3" /> Vertical Right
                             </button>
                             <button
                                 type="button"
@@ -3912,17 +3917,17 @@ const SheetView: React.FC<SheetViewProps> = ({
                     {/* Section 4: Export to PDF */}
                     <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-2">
                         <h3 className="text-xs font-bold uppercase tracking-wider text-sky-300 flex items-center gap-1.5">
-                            <span>🖨️</span> Publish & Export
+                            <FileDown className="h-3.5 w-3.5" /> Publish & Export
                         </h3>
                         <button onClick={handleExportCurrentPdf}
                             type="button"
                             className="w-full py-2.5 px-3 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-1.5">
-                            <span>📄</span> Export This Sheet (PDF)
+                            <FileDown className="h-3.5 w-3.5" /> Export This Sheet (PDF)
                         </button>
                         <button onClick={handleExportSetPdf}
                             type="button"
                             className="w-full py-2.5 px-3 rounded-lg bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-bold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-1.5">
-                            <span>📚</span> Export Complete Set ({totalSheets} {totalSheets === 1 ? 'Page' : 'Pages'})
+                            <Files className="h-3.5 w-3.5" /> Export Complete Set ({totalSheets} {totalSheets === 1 ? 'Page' : 'Pages'})
                         </button>
                         <div className="text-[10px] text-gray-500 italic text-center pt-1">
                             Persisted automatically per project name.

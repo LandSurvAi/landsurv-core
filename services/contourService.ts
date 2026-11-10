@@ -73,6 +73,10 @@ export function generateContoursWithSettings(
       mode: contourSettings.elevationFilterMode ?? 'auto',
       minElevation: contourSettings.minElevation ?? null,
       maxElevation: contourSettings.maxElevation ?? null,
+      contourInterval: contourSettings.contourInterval,
+      excludeInvertPoints: contourSettings.excludeInvertPoints,
+      excludeFfePoints: contourSettings.excludeFfePoints,
+      excludeStructureShots: contourSettings.excludeStructureShots,
     }
   );
 }
