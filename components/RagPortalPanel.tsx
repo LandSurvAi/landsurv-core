@@ -106,6 +106,9 @@ interface RagSource {
   label: string;
   seeds: string[];
   license: string;
+  category?: string;
+  jurisdiction?: string;
+  enabled_by_default?: boolean;
 }
 
 interface RagEvent {
@@ -466,7 +469,7 @@ function DataHandlingPanel({ status }: { status: RagStatus | null }) {
 
       <ol className="mt-4 space-y-2.5 text-xs">
         {[
-          'Allowlist check: only BLM / NGS federal hosts are queued; commercial portals are denied before navigation.',
+          'Allowlist check: only allowlisted government hosts are queued; discovered links stay on the source\u2019s own domains, and commercial portals are denied before navigation.',
           'In-memory fetch: Playwright extracts visible text or parses a PDF; raw bytes, browser cache and cookies are discarded.',
           'Normalize + chunk: paragraphs are packed to 4,000 characters with 400-character overlap; 400 chunks per document maximum.',
           'Dedupe: the URL fingerprint is checked in the ledger before navigation; content hash is checked before any embedding spend.',
@@ -548,7 +551,7 @@ function ConfigPanel({ config }: { config: RagConfig | null }) {
         </div>
       </dl>
       <div className="mt-4 border-t border-slate-700 pt-3 text-xs">
-        <p className="text-slate-500">Allowed federal hosts</p>
+        <p className="text-slate-500">Allowed government hosts</p>
         <div className="mt-1.5 flex flex-wrap gap-1">
           {config.allowed_domains.map((domain) => (
             <span key={domain} className="border border-slate-600 bg-slate-900/60 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
@@ -818,7 +821,11 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
   useEffect(() => {
     if (!sourcesInitRef.current && sources.length > 0) {
       sourcesInitRef.current = true;
-      setIngestSources(sources.map((source) => source.id));
+      setIngestSources(
+        sources
+          .filter((source) => source.enabled_by_default !== false)
+          .map((source) => source.id),
+      );
     }
   }, [sources]);
 
@@ -873,7 +880,7 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
     { id: 'live', label: 'Live', hint: 'Streaming crawl, extraction, spend and what is being written' },
     { id: 'overview', label: 'Overview', hint: 'Budget, corpus health and effective limits' },
     { id: 'corpus', label: 'Corpus', hint: 'Every claimed URL and its ingestion outcome' },
-    { id: 'ingest', label: 'Run ingestion', hint: 'Start a bounded, single-flight public-domain crawl' },
+    { id: 'ingest', label: 'Run ingestion', hint: 'Start a bounded, single-flight government-source crawl' },
     { id: 'query', label: 'Query', hint: 'Semantic search over the ingested chunks' },
   ];
 
@@ -1185,12 +1192,13 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
 
               <div className="grid gap-5 lg:grid-cols-[1fr_0.9fr]">
                 <section className="border border-slate-700 bg-slate-800 p-5">
-                  <h3 className="font-semibold text-white">Public-domain sources</h3>
+                  <h3 className="font-semibold text-white">Government sources</h3>
                   <p className="mt-1 text-xs text-slate-400">
-                    Only these allowlisted federal registries are eligible. Commercial and
-                    non-permissive portals are denied in code, not just by convention.
+                    Federal public-domain agencies and state DOT survey manuals. Licences are
+                    shown per source; commercial and non-permissive portals are denied in code,
+                    not just by convention.
                   </p>
-                  <div className="mt-4 space-y-2">
+                  <div className="mt-4 max-h-[34rem] space-y-2 overflow-y-auto pr-1">
                     {sources.map((source) => {
                       const checked = ingestSources.includes(source.id);
                       return (
@@ -1214,8 +1222,18 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
                           />
                           <span>
                             <span className="block text-sm font-semibold text-slate-100">{source.label}</span>
-                            <span className="mt-0.5 block text-[11px] text-slate-400">{source.agency}</span>
-                            <span className="mt-1 block text-[10px] text-slate-500">{source.license}</span>
+                            <span className="mt-0.5 block text-[11px] text-slate-400">
+                              {source.agency}
+                              {source.jurisdiction ? ` · ${source.jurisdiction}` : ''}
+                            </span>
+                            <span className="mt-1 block text-[10px] text-slate-500">
+                              {source.category ? `${source.category} · ` : ''}{source.license}
+                            </span>
+                            {source.enabled_by_default === false && (
+                              <span className="mt-1 inline-flex border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+                                review required — not selected by default
+                              </span>
+                            )}
                           </span>
                         </label>
                       );
@@ -1248,7 +1266,7 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
                       <li>A run can take up to 15 minutes; this request stays open and the panel polls the ledger.</li>
                       <li>Leaving the page does not stop the run; the Cloud Run request continues server-side.</li>
                       <li>Embedding spend is capped by the rolling token budget shown here.</li>
-                      <li>Only BLM / NGS public-domain pages are eligible; robots-restricted portals are never fetched.</li>
+                      <li>Only allowlisted government survey pages are eligible; discovered links are scoped to the selected source, and robots-restricted portals are never fetched.</li>
                     </ul>
                   </section>
                 </div>

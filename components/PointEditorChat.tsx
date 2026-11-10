@@ -5,6 +5,7 @@ import { PointEditorC3DSync } from './PointEditorC3DSync.tsx';
 import { expandGoogleMapsShortLink, isGoogleMapsShortLink, parseGoogleMapsLatLon } from '../utils/googleMaps.ts';
 import { decodePlusCode, isShortPlusCode } from '../utils/plusCode.ts';
 import { derivePointWorkflow } from '../services/pointWorkflow.ts';
+import { buildPointExportCsv, type PointExportFormat } from '../utils/pointFile.ts';
 import { useErrorReporter } from '../contexts/AppStateContext';
 import { SectionChip, CHIP_WIDE_ACTION_CLASS, chipButtonClass } from './common/SectionChip.tsx';
 
@@ -104,6 +105,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
   // Column visibility state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(['pn', 'northing', 'easting', 'elev', 'desc']));
   const [showColumnMenu, setShowColumnMenu] = useState<string | null>(null);
+  const [exportFormat, setExportFormat] = useState<PointExportFormat>('pnezd');
 
   // C3D Sync state
   const [isC3DSyncOpen, setIsC3DSyncOpen] = useState(false);
@@ -359,26 +361,8 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
   
   const handleExportPoints = () => {
     if (allPoints.length === 0) return;
-    const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
-    const rows = [
-      ['List', 'Point Number', 'Northing', 'Easting', 'Elevation', 'Description', 'Photos']
-        .map(csvCell)
-        .join(','),
-    ];
-    for (const list of pointLists) {
-      for (const point of list.points) {
-        rows.push([
-          list.name,
-          point.pointNumber,
-          point.northing,
-          point.easting,
-          point.elevation ?? 0,
-          point.description ?? '',
-          (point.photos ?? []).length,
-        ].map(csvCell).join(','));
-      }
-    }
-    const blob = new Blob([rows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const csv = buildPointExportCsv(pointLists, exportFormat);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -623,7 +607,18 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                 {visiblePointCount !== allPoints.length ? ` · ${visiblePointCount.toLocaleString()} visible` : ''}
               </p>
             </div>
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+              <select
+                value={exportFormat}
+                onChange={event => setExportFormat(event.target.value as PointExportFormat)}
+                aria-label="Point export format"
+                title="PNEZD (default): Point, Northing, Easting, Elevation, Description. Full CSV adds list name and photo count."
+                className="h-[24px] rounded border border-white/[0.08] bg-white/[0.03] px-1 text-[9.5px] font-semibold text-slate-300 focus:border-cyan-400/40 focus:outline-none light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-700"
+              >
+                <option value="pnezd">PNEZD</option>
+                <option value="pnezd_header">PNEZD + Header</option>
+                <option value="full">Full CSV</option>
+              </select>
               {onOpenPointTools && (
                 <button
                   type="button"
@@ -648,7 +643,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                 onClick={handleExportPoints}
                 disabled={allPoints.length === 0}
                 className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-1 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.15] hover:bg-white/[0.07] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                title="Export all points as CSV"
+                title={exportFormat === 'full' ? 'Export all points as a full CSV' : 'Export all points as PNEZD'}
               >
                 <DownloadIcon className="h-3 w-3" />
                 Export

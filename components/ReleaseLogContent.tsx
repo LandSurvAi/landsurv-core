@@ -2,6 +2,14 @@
 
 const releases = [
     {
+        version: "26.11.10.02",
+        date: "November 10, 2026",
+        highlights: [
+            "📚 SurveyBrain Corpus Grows to 16 Authoritative Sources: The ingestion registry now spans federal cadastral, geodetic, mapping and hydrographic agencies plus state DOT survey manuals. New sources include the BLM 2009 Manual of Surveying Instructions and historical editions, Specifications for Descriptions of Land, FGDC CadNSDI standards, NGS datums/CORS/OPUS publications, USGS 3DEP and National Map documentation, NOAA Coast Survey publications, and PennDOT, Caltrans, TxDOT, FDOT, WSDOT, MnDOT, ODOT, NCDOT, NYSDOT and Iowa DOT manuals. Every seed URL was checked before registration.",
+            "⚖️ Per-Source Licensing With Source-Scoped Crawling: Chunk metadata now records each corpus's real license instead of a blanket public-domain label. Caltrans and TxDOT are marked review-required and start deselected because their manuals carry explicit copyright notices. Discovered links are restricted to the source's own domains, so a federal crawl cannot be attributed to a state corpus, and the SurveyBrain source picker shows category, jurisdiction, license and default-selection status.",
+        ],
+    },
+    {
         version: "26.11.10.01",
         date: "November 10, 2026",
         highlights: [

@@ -83,6 +83,57 @@ export const pointListToString = (pointList: PointList, settings: Settings): str
   return `${header}\n${rows}`;
 };
 
+/** Supported point export layouts. PNEZD is the headerless default. */
+export type PointExportFormat = 'pnezd' | 'pnezd_header' | 'full';
+
+const csvCell = (value: unknown): string =>
+  `"${String(value ?? '').replace(/"/g, '""')}"`;
+
+/**
+ * Build a CSV export for one or more point lists.
+ *
+ * - `pnezd` (default): Point, Northing, Easting, Elevation, Description; no header.
+ * - `pnezd_header`: the PNEZD columns with a header row.
+ * - `full`: List, Point Number, Northing, Easting, Elevation, Description, Photos.
+ */
+export const buildPointExportCsv = (
+  pointLists: PointList[],
+  format: PointExportFormat = 'pnezd'
+): string => {
+  const includeListAndPhotos = format === 'full';
+  const rows: string[] = [];
+
+  if (format !== 'pnezd') {
+    rows.push(
+      (includeListAndPhotos
+        ? ['List', 'Point Number', 'Northing', 'Easting', 'Elevation', 'Description', 'Photos']
+        : ['Point', 'Northing', 'Easting', 'Elevation', 'Description']
+      ).map(csvCell).join(',')
+    );
+  }
+
+  for (const list of pointLists) {
+    for (const point of list.points) {
+      rows.push(
+        (includeListAndPhotos
+          ? [
+              list.name,
+              point.pointNumber,
+              point.northing,
+              point.easting,
+              point.elevation ?? 0,
+              point.description ?? '',
+              (point.photos ?? []).length,
+            ]
+          : [point.pointNumber, point.northing, point.easting, point.elevation ?? 0, point.description ?? '']
+        ).map(csvCell).join(',')
+      );
+    }
+  }
+
+  return rows.join('\r\n');
+};
+
 /**
  * Format a single survey point as a CSV row
  * 
