@@ -1296,6 +1296,44 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     setIsExpanded(false);
   };
 
+  // Escape backs out of the chat / command surfaces once nothing else has a
+  // claim on the key. Menus, canvas commands and flyouts call preventDefault()
+  // when they consume Escape, so the decision is deferred one tick: every other
+  // Escape handler in this dispatch gets its turn first, and this only runs when
+  // none of them did. Inputs own their Escape while focused (clear typed text,
+  // cancel the live command, then close the line - see handleKeyDown*).
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return;
+      window.setTimeout(() => {
+        if (event.defaultPrevented) return;
+        if (showSuggestions) {
+          setShowSuggestions(false);
+          return;
+        }
+        if (isAgentFloating) {
+          dockAgentBack();
+          return;
+        }
+        if (isExpanded) {
+          setIsExpanded(false);
+          setIsCollapsePulsing(false);
+          return;
+        }
+        if (isCommandLineActive) {
+          setIsCommandLineActive(false);
+          setInputMode('agent');
+          commandContext.onActivateSelectionMode?.();
+        }
+      }, 0);
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [showSuggestions, isAgentFloating, isExpanded, isCommandLineActive, dockAgentBack, commandContext]);
+
   // Drag the agent glyph/tab. Past the threshold the agent detaches, and the
   // floating line keeps tracking this same pointer until release — you never
   // have to let go and re-grab the dialog. Tracking lives on window listeners

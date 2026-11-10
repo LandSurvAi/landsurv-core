@@ -183,6 +183,19 @@ root.render(
   </React.StrictMode>
 );
 
+// Report the page load so the DevOps console can chart front-end traffic.  The
+// static host has no request counters of its own, so the shell is the sensor.
+const reportPageLoad = () => {
+  const url = '/api/presence/pageview';
+  try {
+    if (navigator.sendBeacon && navigator.sendBeacon(url)) return;
+  } catch {
+    /* fall through to fetch */
+  }
+  void fetch(url, { method: 'POST', keepalive: true }).catch(() => {});
+};
+reportPageLoad();
+
 // Startup fail-safe: never let the static splash block the UI forever.
 requestAnimationFrame(() => {
   setTimeout(clearInitialLoader, 150);
