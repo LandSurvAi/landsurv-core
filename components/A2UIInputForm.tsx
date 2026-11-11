@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useState, useSyncExternalStore } from 'react';
 import { ArrowRight, CheckCircle2, ListChecks } from 'lucide-react';
 import type { A2UIInputFormSpec } from '../types.ts';
 import {
@@ -6,6 +6,7 @@ import {
   buildA2UIInputSubmission,
   validateA2UIInputValues,
 } from '../utils/a2uiInputForm.ts';
+import { isSurfaceNameField, projectInputChoices } from '../services/projectInputChoices.ts';
 
 interface A2UIInputFormProps {
   form: A2UIInputFormSpec;
@@ -18,6 +19,11 @@ const inputClass =
 
 export const A2UIInputForm: React.FC<A2UIInputFormProps> = ({ form, onSubmit }) => {
   const formId = useId();
+  const surfaceNames = useSyncExternalStore(
+    projectInputChoices.subscribe,
+    projectInputChoices.getSnapshot,
+    projectInputChoices.getSnapshot,
+  ).surfaceNames;
   const initialValues = useMemo(() => buildA2UIInputInitialValues(form), [form]);
 
   const [values, setValues] = useState<Record<string, string>>(initialValues);
@@ -81,6 +87,7 @@ export const A2UIInputForm: React.FC<A2UIInputFormProps> = ({ form, onSubmit }) 
             const showGroup =
               Boolean(field.group) && field.group !== form.fields[index - 1]?.group;
             const fieldValue = values[field.id] ?? '';
+            const surfaceSuggestions = isSurfaceNameField(field) ? surfaceNames : [];
 
             return (
               <React.Fragment key={field.id}>
@@ -153,15 +160,23 @@ export const A2UIInputForm: React.FC<A2UIInputFormProps> = ({ form, onSubmit }) 
                             type={field.type === 'number' ? 'number' : 'text'}
                             inputMode={field.type === 'number' ? 'decimal' : undefined}
                             step={field.type === 'number' ? 'any' : undefined}
+                            list={surfaceSuggestions.length > 0 ? `${inputId}-surfaces` : undefined}
                             value={fieldValue}
                             onChange={event => updateValue(field.id, event.target.value)}
-                            placeholder={field.placeholder}
+                            placeholder={field.placeholder ?? (surfaceSuggestions.length > 0 ? 'Select or type a surface…' : undefined)}
                             aria-describedby={hintId}
                             aria-required={field.required || undefined}
                             autoComplete="off"
                             spellCheck={false}
                             className={`${inputClass} ${field.unit ? 'pr-10' : ''}`}
                           />
+                          {surfaceSuggestions.length > 0 && (
+                            <datalist id={`${inputId}-surfaces`}>
+                              {surfaceSuggestions.map(name => (
+                                <option key={name} value={name} />
+                              ))}
+                            </datalist>
+                          )}
                           {field.unit && (
                             <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[9px] font-semibold uppercase tracking-wide text-slate-500">
                               {field.unit}

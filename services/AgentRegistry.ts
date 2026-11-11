@@ -17,6 +17,8 @@ import { CL_SKILLS } from './clSkillSchemas';
 import { DEED_SKILLS } from './deedSkillSchemas';
 import { ROADING_SKILLS } from './roadingSkillSchemas';
 import { ROAD_PAINT_SKILLS } from './roadPaintSkillSchemas';
+import { STORMWATER_SKILLS } from './stormwaterSkillSchemas';
+import { DIRT_VOLUME_SKILLS } from './dirtVolumeSkillSchemas';
 
 /** A loose JSON-Schema-ish descriptor. Kept narrow on purpose. */
 export interface SkillFieldSchema {
@@ -2128,6 +2130,29 @@ agentRegistry.register({
       ],
     },
   ],
+});
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Stormwater Agent — preliminary runoff (Rational Method) and time of concentration
+// ---------------------------------------------------------------------------
+agentRegistry.register({
+  agent: AgentType.STORMWATER_AGENT,
+  displayName: 'Stormwater Agent',
+  cacpEnabled: true,
+  version: '0.1.0',
+  skills: [...STORMWATER_SKILLS],
+});
+
+// ---------------------------------------------------------------------------
+// Dirt Volume Agent — earthwork quantities, scenario comparison, and reports
+// ---------------------------------------------------------------------------
+agentRegistry.register({
+  agent: AgentType.DIRT_VOLUME_AGENT,
+  displayName: 'Dirt Volume Agent',
+  cacpEnabled: true,
+  version: '1.0.0',
+  skills: [...DIRT_VOLUME_SKILLS],
 });
 
 // ---------------------------------------------------------------------------

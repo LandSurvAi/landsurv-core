@@ -122,6 +122,8 @@ export const HOMEPAGE_AGENT_TYPES = [
   AgentType.FLOOD_AGENT,
   AgentType.STRUCTURES_AGENT,
   AgentType.SOILS_AGENT,
+  AgentType.STORMWATER_AGENT,
+  AgentType.DIRT_VOLUME_AGENT,
   AgentType.LSVZ_AGENT,
 ] as const;
 

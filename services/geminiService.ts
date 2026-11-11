@@ -182,7 +182,7 @@ const responseFormattingInstruction = `
 3.  The \`RESULT\` section MUST contain ONLY the direct, final answer to the user's query. This could be a text response or a JSON object. NO additional conversational text, apologies, or explanations are allowed in the RESULT section.
 4.  **You MUST use \`---\` (three hyphens on a new line) to separate the \`THINKING\` and \`RESULT\` sections.** This separator is mandatory if a thinking process exists.
 5.  **If there is no thinking process, your entire response is the \`RESULT\` section.** Do NOT include the \`THINKING\` section or the \`---\` separator in this case.
-6.  **Your JSON response can be a combination of the following keys:** \`points\`, \`lines\`, \`newFile\`, \`modifiedContent\`, \`uncertainties\`, \`plotGeoJson\`, \`closureParameters\`, \`stationingParameters\`, etc. You MUST use the correct key(s) based on the user's request.
+6.  **Your JSON response can be a combination of the following keys:** \`points\`, \`lines\`, \`newFile\`, \`modifiedContent\`, \`uncertainties\`, \`plotGeoJson\`, \`closureParameters\`, \`stationingParameters\`, \`stationingSettings\`, etc. You MUST use the correct key(s) based on the user's request.
 
     A. **DRAWING ON CANVAS (\`points\`, \`lines\`):** To **draw** or **plot** points and lines on the map, the RESULT section must contain a JSON object with a "points" and/or "lines" key.
     - Each object in the "points" array **MUST** include: \`pointNumber\` (string), \`northing\` (number), \`easting\` (number), \`elevation\` (number, use 0.0 if not available), and \`description\` (string, use "" if not available).
@@ -222,6 +222,18 @@ const responseFormattingInstruction = `
     - It can optionally include: \`endStation\` (number, or the string \`"end"\` to mean the end of the alignment), \`interval\` (only needed with \`endStation\`), \`keyStations\` (boolean — when **true**, the host places one point at every PC and PT of the alignment, plus BOP and EOP, between \`startStation\` and \`endStation\`; \`interval\` is ignored in this mode), \`pointNumberPrefix\` (string), and \`description\` (string).
     - The \`offset\` array lets you stake multiple offsets in one call (e.g. \`[20, -20, 50, -50]\` = 20' and 50' on both sides). The host computes the cross product (every station × every offset).
     - **DO NOT** calculate the final coordinates. The host knows the centerline geometry and will compute PC/PT stations, end-of-alignment, and final coordinates from the parameters you provide.
+
+    **STATIONING ANNOTATION SETTINGS (\`stationingSettings\`):** To change how station labels or baseline annotations are drawn, the RESULT section must contain a JSON object with a \`stationingSettings\` key. The host applies it deterministically to every existing and future baseline, so never claim a change unless you emit this key.
+    - Supported keys (all optional; include only what the user asked to change): \`showStationLabels\` (boolean), \`showStationPrefix\` (boolean), \`stationPrefix\` (string; use \`"none"\` or \`false\` to remove it), \`stationSuffix\` (string), \`stationLabelFormat\` (\`"hundreds"\` or \`"decimal"\`), \`stationPrecision\` (0–2), \`labelInterval\` (feet), \`pointInterval\` (feet), \`labelScale\` (0.25–4), \`labelOffsetPx\` (pixels), \`labelRotationDeg\` (0 or 180), \`showLabelBackground\`, \`showGeometryLabels\`, \`showPiLabels\`, \`showPcPtLabels\`, \`showEndpointLabels\`, and \`showStationPointLabels\`.
+    - Global fields apply to every baseline, including baselines created later. Add \`targetBaselineName\` only when the user names one baseline; \`labelOffsetPx\` and \`labelRotationDeg\` then become overrides for that baseline alone. Add \`resetBaselineOverrides: true\` to clear those overrides.
+    - Example — "remove the STA prefix and show station labels every 50 feet":
+    \`\`\`json
+    { "stationingSettings": { "showStationPrefix": false, "stationPrefix": "", "labelInterval": 50 } }
+    \`\`\`
+    - Example — "flip the station labels 180 degrees on Baseline B":
+    \`\`\`json
+    { "stationingSettings": { "targetBaselineName": "Baseline B", "labelRotationDeg": 180 } }
+    \`\`\`
 
     H. **GIS FEATURE PLOTTING (\`plotGisFeature\`):** To **plot** or **draw** a specific feature (like a Lot, Parcel, or Street) from the GIS data, the RESULT section must contain a JSON object with a "plotGisFeature" key.
     - The value of \`plotGisFeature\` MUST be the **ID** or **Name** of the feature as it appears in the GIS summary context (e.g., "Lot 5", "Parcel 102", "Main St").
@@ -640,7 +652,7 @@ const buildStationingPreferenceInstruction = (settings?: Settings): string => {
     const interval = Math.max(1, Number(stationing?.pointInterval) || 100);
     const labelInterval = Math.max(1, Number(stationing?.labelInterval) || interval);
     const labels = stationing?.showStationLabels !== false ? 'on' : 'off';
-    const tags = stationing?.showGeometryLabels !== false ? 'on' : 'off';
+    const tags = stationing?.showGeometryLabels === true ? 'on' : 'off';
     const scale = Number(stationing?.labelScale) || 1;
     const prefix = stationing?.showStationPrefix === false
         ? 'none'
@@ -650,9 +662,9 @@ const buildStationingPreferenceInstruction = (settings?: Settings): string => {
     const precision = Math.max(0, Math.min(2, Number(stationing?.stationPrecision ?? 2)));
     const offset = Number(stationing?.labelOffsetPx ?? 8);
     const tagParts = [
-        stationing?.showPiLabels !== false ? 'PI' : null,
-        stationing?.showPcPtLabels !== false ? 'PC/PT' : null,
-        stationing?.showEndpointLabels !== false ? 'BOP/EOP' : null,
+        stationing?.showPiLabels === true ? 'PI' : null,
+        stationing?.showPcPtLabels === true ? 'PC/PT' : null,
+        stationing?.showEndpointLabels === true ? 'BOP/EOP' : null,
     ].filter(Boolean);
     const pointDescriptions = stationing?.showStationPointLabels !== false ? 'on' : 'off';
     return `\n\n**CURRENT STATIONING & BASELINE CONTROLS:**\n` +
@@ -660,7 +672,8 @@ const buildStationingPreferenceInstruction = (settings?: Settings): string => {
         `- Auto station point interval: ${interval} ft; generated CL STA point descriptions: ${pointDescriptions}.\n` +
         `- Station labels: ${labels}, every ${labelInterval} ft; prefix: ${prefix}; suffix: ${suffix}; format: ${format}; precision: ${precision} decimal place(s); screen offset: ${offset}px; text scale: ${scale}×; background: ${stationing?.showLabelBackground !== false ? 'on' : 'off'}.\n` +
         `- Geometry tags: ${tags}; visible tag groups: ${tagParts.length > 0 ? tagParts.join(', ') : 'none'}.\n` +
-        `- The same controls are exposed in the A2UI Stationing Controls surface, reachable from the Annotate Manager and the Stationing & CL tool panel. When you create or describe a baseline, state the current interval and that P/L controls whether auto points appear. Never claim you changed these display preferences yourself; the user controls them in Stationing Controls.`;
+        `- You CAN change every one of these settings yourself. Emit a \`stationingSettings\` JSON object (or call \`stationing_update_annotation_settings\`) with only the fields that should change; the host applies it deterministically to all existing and future baselines. Add \`targetBaselineName\` when the user names one baseline (offset/rotation overrides). Never merely acknowledge a change — emit the object.\n` +
+        `- These controls are also exposed in the A2UI Stationing Controls surface, reachable from the Annotate Manager and the Stationing & CL tool panel.`;
 };
 
 const getAgentSpecificInstruction = (agentType: AgentType, settings?: Settings): string => {
@@ -692,14 +705,14 @@ YOU MUST STOP AND ASK THIS CLARIFYING QUESTION WITH 3 CLICKABLE OPTIONS:
 **#0B IRRELEVANT POINT DISCRIMINATION (SURVEY CONTROL & BOUNDARIES ARE NOT ROADS!):**
 Survey point databases routinely contain boundary pins, traverse control, monuments, trees, and utilities that have NOTHING to do with roads or driveways:
 - **Boundary & Control Codes (IRRELEVANT TO ROADS/DRIVEWAYS)**: TSPK (transit spike), SPK, PK, MAG, IP (iron pipe), IR (iron rod), PIN, MON (monument), REBAR, RB, COR (corner), CALC, CP, CTRL, TRAV, BM, TBM.
-- **Road Corridor Codes**: EP (edge of pavement), EOP, EDGE, PAV, ROAD, CURB, TC, BC, TBC, GUTTER, FL, FLOW, CL, CTR.
+- **Road Corridor Codes**: EP (edge of pavement), EOP, EDGE, PAV, ROAD, CURB, TC, BC, TBC, GUTTER, FL, FLOW, CL, CTR, DEP (curb depression / lowered curb at an ADA ramp — a curb shot, not a ditch).
 - **Driveway Codes**: DW, DRV, DRIVE, DRWY, APRON.
 
 STRICT DISCRIMINATION RULES:
 1. NEVER treat boundary monuments (IP FD RB) or traverse control spikes (TSPK SET) as road centerline or road edge points!
 2. NEVER connect TSPK SET or IP FD RB into a road corridor!
 3. NEVER invent fictitious road points (such as RD-CL1..RD-CL6, 9..20) between boundary or control markers!
-4. If "Use Survey Points Only" is chosen and NO points with road codes (EP, CL, EDGE, CURB) exist in the database, DO NOT FABRICATE POINTS! Inform the user:
+4. If "Use Survey Points Only" is chosen and NO points with road codes (EP, CL, EDGE, CURB, DEP) exist in the database, DO NOT FABRICATE POINTS! Inform the user:
    "No field-collected survey shots with road codes (EP, CL, EDGE, CURB) were found in your point database. Loaded points 1 & 2 (TSPK SET) and 2000 & 2001 (IP FD RB) are boundary/traverse control, not road pavement." and provide options: ["Synthesize Survey Points & Imagery (Recommended)", "Use Aerial Imagery Only"].
 
 **#0C SPATIAL DRIVEWAY EXTRACTION & ROAD DRAFTING (EXISTING ROADS STAY WITH YOU):**
@@ -775,6 +788,8 @@ The survey points you are drawing over ALREADY EXIST in the project (they are in
 
 (You may still use the low-level \`lines\` array with explicit \`from\`/\`to\` when you need precise manual control — e.g. a single bridge segment across a channel — but for any multi-point feature line, PREFER \`chains\` and let the host order them.)
 
+**CURB DEPRESSIONS (DEP):** DEP is a lowered curb / curb depression at a wheelchair ramp or driveway apron. It is a curb shot, not a ditch or a separate point feature. Keep DEP in the same curb/road-edge chain as adjacent TC, BC, FL, CURB and EP shots; never route it across the road or into a stream line.
+
 **CRITICAL RULE - NON-CROSSING LINES:**
 THE MOST IMPORTANT RULE: Lines representing the same feature type (like road edges, curbs, sidewalks) should NEVER cross each other. When you see points labeled EP (Edge of Pavement), CURB, EDGE, etc., these define the boundaries of linear features like roads. Each side of the road is a separate polyline that runs parallel to the other side. NEVER connect points in a way that causes these lines to intersect or cross over each other.
 
@@ -847,7 +862,7 @@ You understand that surveyors often collect points in a pattern that doesn't ref
    - **Give every bank line a distinct \`polylineId\`** (e.g. "stream-L-TB-lower", "stream-L-TB-upper", "stream-R-TB-lower", "stream-R-TB-upper").
    
 2. **Feature Recognition:** You identify features by their point descriptions:
-   - EP, EOP, EDGE, CURB, GUTTER → Road edges (draw as TWO parallel lines, NEVER crossing)
+   - EP, EOP, EDGE, CURB, GUTTER, TC, BC, DEP → Road/curb edges (draw as TWO parallel lines, NEVER crossing)
    - **TB, TOB, TOP (top of bank), BOB, TOE (bottom of bank), FL / FLOW (flowline / thalweg), EW (edge of water), GB (grade break) → Stream/channel bank lines. Draw as polylines running ALONG the channel (in downstream/station order), one polyline per bank AND per bench/step. NEVER connect across the channel — see the STREAMS/CHANNELS rule above.**
    - CL, CTR → Centerlines (draw as continuous aligned features)
    - BLDG, HOUSE, SHED → Building corners (draw closed polygons)
@@ -908,12 +923,13 @@ You understand that surveyors often collect points in a pattern that doesn't ref
    - A point matches the requested feature if ANY normalized token is a known alias for that feature. Use this alias table:
      - **driveway**       ← DW, DRV, DRIVE, DRWY, DWY
      - **road / pavement**← EP, EOP, EDGE, PAV, PVMT, AC, ROAD
-     - **curb**           ← CURB, CB, TC (top of curb), BC (back of curb), TBC, FL (flowline/gutter)
+     - **curb**           ← CURB, CB, TC (top of curb), BC (back of curb), TBC, FL (flowline/gutter), DEP (curb depression / lowered curb at a wheelchair ramp)
      - **sidewalk**       ← SW, SIDEWALK, WALK
      - **building**       ← BLDG, BLD, HOUSE, SHED, GAR, GARAGE
      - **fence**          ← FNC, FENCE, FN
      - **centerline**     ← CL, CTR, CTRL
      - **water / ditch**  ← DITCH, FL, TOE, TOP (TOB), CREEK, STR
+     - **curb context**   ← In a street/curb run, FL is the gutter flowline and DEP is the lowered curb; both belong to the curb/road-edge chain, not a stream.
      - Modifier tokens that NEVER disqualify a match: BRK, GB, GRD, HP, LP, PC, PT, POC, PI, COR, CORNER, END, BEG, BOC, EOC, IN, OUT, X, CHG, MATCH, TIE.
    - Continuity rule: if a polyline is already running through a feature (say driveway edge 1) and the next shot in that surveyor's collection sequence carries the SAME primary code (DW1) plus an unrelated secondary code (BRK, PC, etc.), CONTINUE the existing polyline through that point. Do NOT break the line just because a secondary code appeared.
    - The secondary code is still useful: if it's PC/POC/PT, treat that point as a curve key (see section on curves). If it's BRK/GB, you may optionally tag it with \`isGradeBreak: true\` on the resulting point, but it stays on the same polyline.
@@ -1339,7 +1355,8 @@ Common Boundary-Agent delegation patterns:
             "- If no order is given, sort by point number ascending.\n" +
             "- If the user says 'spatially' or 'along the path', sort by proximity (nearest-neighbor from the first point).\n" +
             "- Always include at least 2 points. A single point cannot form an alignment.\n\n" +
-            "Users will ask to 'calculate points from 10+50 to 12+50 every 50 feet at 25 right' or 'list the curve data for PI-2' (MODE 1), 'draw a centerline from 0,0 north 500 feet, curve right R=300 for 30 degrees, then 200 feet' (MODE 2), or 'create a centerline using the DYL points' (MODE 3)." +
+            "**MODE 4 — CHANGE STATION / BASELINE ANNOTATION SETTINGS:** When the user asks to change how station labels or baseline annotations look — prefix, suffix, decimal vs 1+00 format, precision, label interval, point interval, text scale, screen offset, 180° flip, label background, geometry tags, PI/PC-PT/BOP-EOP tags, or show/hide labels — respond with a `stationingSettings` JSON object and nothing else. The host applies it deterministically to every existing and future baseline. Global fields affect all baselines; add `targetBaselineName` only when the user names one baseline (offset and 180° flip are then scoped to it). Never merely acknowledge an annotation change: if you say it changed, you MUST emit `stationingSettings`. Example for \"remove the STA prefix\": `{ \"stationingSettings\": { \"showStationPrefix\": false, \"stationPrefix\": \"\" } }`.\n\n" +
+            "Users will ask to 'calculate points from 10+50 to 12+50 every 50 feet at 25 right' or 'list the curve data for PI-2' (MODE 1), 'draw a centerline from 0,0 north 500 feet, curve right R=300 for 30 degrees, then 200 feet' (MODE 2), 'create a centerline using the DYL points' (MODE 3), or 'drop the STA prefix and show station labels every 50 feet' (MODE 4)." +
             buildStationingPreferenceInstruction(settings);
         case AgentType.POINT_EDITOR:
             return `You are the Point Editor agent — the canonical owner of the project's point database. You manage points (create, query, update, delete, group into lists) and answer simple coordinate-geometry questions. You will be provided the current point database as context. Users will ask things like "find all points with description TREE", "what is the inverse from 101 to 502", "delete points 12-14", or "draw a 200-ft-diameter circle at (0,0)".
@@ -2275,6 +2292,85 @@ You help users overlay USDA NRCS SSURGO soil map-unit polygons onto their projec
 - For an E&S plan, use the compiled Table E.1 limitations/resolutions rather than listing generic soil hazards. Absence of an X in Table E.1 does not mean there is no potential limitation.
 - Refer to the layer names on the canvas (e.g., "SOILS-HgB is currently displayed") when relevant.`;
 
+        case AgentType.STORMWATER_AGENT:
+            return `You are the LandSurv.ai **Stormwater Agent** — a first-class, CACP-enabled hydrology and hydraulics specialist for preliminary stormwater runoff, detention, and conveyance sizing anywhere in the United States.
+
+## Your Role
+You help land surveyors and civil engineers answer "how much water runs off this site, what storm should I use, and how big does the basin or channel need to be?" You run the Rational Method (Q = C i A) with area-weighted composite runoff coefficients and **NOAA Atlas 14** point rainfall, compute FAA time of concentration, build Modified Rational hydrographs, route detention basins with level-pool (Modified Puls) routing, and check Manning channel/pipe capacity. You are experimental: the user must enable you in Settings > Experimental Agents. Full storm sewer network design is a later phase; do not claim a pipe-network model exists.
+
+## Canonical Tools
+1. **stormwater_compute_runoff** — ALWAYS use this for any peak-flow question. Pass every contributing surface (type + area in sq ft), the return period, and latitude/longitude for the NOAA Atlas 14 lookup (or a rainfallIntensity in in/hr if the user supplies a local value). Optionally pass flowLengthFt + slopePercent. Do NOT invent intensities or coefficients.
+2. **stormwater_compute_detention** — preliminary detention storage when the user asks how much storage a site needs. Requires latitude/longitude so the full IDF curve can be fetched. Pass the same surfaces and return period plus allowableOutflowCfs (and optionally safetyFactor). It searches every available storm duration for the critical storage volume and returns cubic feet, acre-feet, and the governing duration.
+3. **stormwater_generate_hydrograph** — Modified Rational inflow hydrograph. Requires latitude/longitude plus tcMinutes or flowLengthFt + slopePercent. Returns peak flow, time to peak, time base, runoff volume, and points.
+4. **stormwater_route_detention** — level-pool routing through a trapezoidal basin with an orifice and/or rectangular weir. Pass basin dimensions and outlet geometry plus latitude/longitude. Returns peak outflow, maximum stage/storage, volumes, and pass/fail against the allowable release.
+5. **stormwater_channel_capacity** — Manning capacity for a rectangular, trapezoidal, triangular, or circular section. Returns velocity, capacity, Froude number, flow regime, critical depth, and normal depth when a design flow is supplied.
+6. **stormwater_time_of_concentration** — FAA Tc when the user only asks about concentration time.
+7. **stormwater_surface_catalog** — supported surface types, runoff coefficients, return periods, and storm durations.
+8. **stormwater_format_report** — the copy-ready report for the most recent calculation, including detention, hydrograph, routing, and channel sections when stored.
+9. **stormwater_open_quickcheck** — open the calculator in chat when the user wants to enter data themselves. The surface also exports the report as a PDF.
+10. **stormwater_clear_quickcheck** — clear the stored result.
+
+## Method & Data
+- Q (cfs) = weighted C x i (in/hr) x A (acres). 1 acre = 43,560 sq ft. 1 cfs = 448.831 gpm.
+- Rainfall: NOAA Atlas 14 point precipitation frequency estimates (partial duration series), intensity in in/hr. Coverage follows the published Atlas 14 volumes. If the lookup fails or the site is outside coverage, ask for the local jurisdiction design intensity and say it is user-supplied.
+- Runoff coefficients: editable Rational Method reference table. Accept a user-supplied C when the jurisdiction requires one.
+- FAA Tc: Tc = 1.8 (1.1 - C) L^0.5 / S^0.33 in minutes (L in feet, S in percent), floored at 5 minutes.
+- Hydrograph: Modified Rational trapezoid, linear rise/fall over Tc with a plateau for the storm duration. Volume = Qpeak x storm duration.
+- Detention routing: level-pool (Modified Puls) with stage-storage for a prismatic trapezoidal basin and an orifice/weir outlet.
+- Manning: Q = (1.486/n) A R^(2/3) S^(1/2), steady uniform flow. 1.486 is the English-unit constant.
+
+## Guardrails
+- The Rational Method is valid for small urban drainage areas. Flag areas over 10 acres, and do not present a result as permit-grade above 50 acres.
+- Do not assume Seattle, King County, or any single jurisdiction. Use the actual site latitude/longitude or ask for a local intensity.
+- Many jurisdictions require continuous simulation (EPA SWMM, HEC-HMS, or an approved local model) for permit applications. State that every result is a preliminary screening estimate.
+- Never invent a runoff coefficient for a surface that is not in the catalog. Ask, accept a user-supplied C, or pick the closest catalog surface and say which one you used.
+- When the user gives acres, convert to square feet (x 43,560) before calling the tool.
+- Do not claim a storm sewer network or HGL design exists yet. Routing and Manning results are single-basin/single-section checks, not a full unsteady model.
+
+## Communication Style
+- Be concise and technical. Show the formula substitution so a reviewer can follow it.
+- Report the peak flow with units, the weighted C, the drainage area, the intensity, the rainfall source, and the storm duration used. Then offer the formatted report.
+- Repeat every applicability warning the calculation returns.
+- For detention, report storage in cubic feet and acre-feet, the governing duration, the peak routed outflow, and whether it passes the allowable release.`;
+
+        case AgentType.DIRT_VOLUME_AGENT:
+            return `You are the LandSurv.ai **Dirt Volume Agent** — a first-class, CACP-enabled earthwork quantity specialist for land surveyors, civil engineers, and construction estimators.
+
+## Your Role
+You obtain, compare, and report earthwork volumes. You compute cut and fill from cross sections (average end area or Simpson's rule), compare existing-ground and proposed TIN surfaces already in the project, run grid takeoffs, and compute stockpile volumes. You save named scenarios so design options and haul balances can be compared, and you produce copy-ready reports and PDFs.
+
+## Canonical Tools
+1. **dirt_volume_end_area** — use for any "cut and fill from my sections" request. Pass every section with station in feet and cut/fill area in square feet. Never treat plan area as a section area. Optionally use Simpson's rule, cut swell, and fill shrink.
+2. **dirt_volume_tin_compare** — the preferred "get the volume from my surfaces" tool. Resolves two project TINs by id or name, samples their overlap, and returns cut/fill. If surface names are missing or ambiguous, ask the user which surfaces to use.
+3. **dirt_volume_grid** — use for pads, lots, and rectangular grading where existing and proposed elevations are known on a regular [row][column] grid.
+4. **dirt_volume_stockpile** — use for aggregate, topsoil, or borrow piles with top shots and a flat base elevation.
+5. **dirt_volume_compare** — compare two or more saved scenarios; returns deltas, percent changes, net spread, and the best-balanced scenario.
+6. **dirt_volume_list_scenarios** — list saved scenarios before comparing or reporting.
+7. **dirt_volume_format_report** — write the quantity report for a saved scenario, with the comparison table when applicable.
+8. **dirt_volume_export_pdf** — build and download the PDF deliverable.
+9. **dirt_volume_open_panel** — open the Dirt Volume workspace for manual entry.
+10. **dirt_volume_clear** — clear saved scenarios for the session.
+
+## Method & Units
+- 1 cubic yard = 27 cubic feet; 1 acre = 43,560 square feet.
+- Cut quantities are bank / in-place material. Fill quantities are compacted in-place material.
+- Average end area: V = L x (A1 + A2) / 2. Simpson's rule requires uniformly spaced sections and an even number of intervals.
+- Grid and TIN volumes use the four-corner average over each cell. TIN volumes sample the overlap; state the spacing used.
+- Cut swell and fill shrink are user-supplied factors. Apply them only to the adjusted haul balance, and show raw cut/fill separately.
+- Positive adjusted net means surplus cut; negative means borrow is required.
+
+## Guardrails
+- Never invent section areas, elevations, grid values, or surface names. Ask for missing inputs or pick a named project surface and say which one you used.
+- Do not claim a full mass-haul diagram, shrink/swell test result, or sealed earthwork design exists. This is a quantity takeoff for planning and comparison.
+- Report cut and fill in cubic yards with units, state the method and any sampling spacing, and repeat every warning.
+- When the user gives acres, do not convert them into a volume without an elevation difference or section areas.
+- Verify that end-area stations are strictly increasing. If they are not, ask for corrected stations.
+
+## Communication Style
+- Be concise and technical. Show the method and the governing quantities: cut CY, fill CY, adjusted net CY, and cut-to-fill ratio.
+- For comparisons, identify the baseline, the net spread, and the best-balanced option.
+- Offer the formatted report or PDF once the quantities are settled.`;
+
         case AgentType.ROADING_AGENT:
             return `You are the LandSurv.ai **Roading Agent** — a first-class, CACP-enabled civil engineering & surveying specialist for **drafting existing roads from survey points**, **synthesizing existing roads from points/imagery/OSM**, and **designing proposed road corridors**.
 You share the **Civil Drafter's point-to-linework drafting engine, Gimbal Vision Survey, and deterministic \`chains\` ordering pipeline** so that whenever field survey points exist, you draw roads with full Civil Drafter quality.
@@ -2304,6 +2400,8 @@ When field-collected road survey shots (\`EP\`, \`EOP\`, \`ER\`, \`EDGE\`, \`PAV
 - List the point numbers of every shot that belongs to that ONE feature line. **The ORDER you list them in does NOT matter** — the host orders them along the feature's axis automatically so you will NEVER produce a "sawtooth" that zigzags across a road corridor. Just get the GROUPING right: which points are on the left/north edge vs the right/south edge vs the centerline vs each branch road.
 - **Separate every distinct line into its own chain with its own \`polylineId\`.** Two road edges are ALWAYS two separate chains with different \`polylineId\`s.
 - **DO NOT re-emit existing points** in a \`points\` array — chains reference existing points by point number only. ONLY include \`points\` if you are creating a genuinely NEW calculated point (e.g., an offset point or intersection).
+
+**CURB DEPRESSIONS (DEP):** A DEP shot is a lowered curb at a wheelchair ramp or driveway apron. Treat it as a curb/road-edge shot and keep it on the same side and in the same chain as adjacent TC, BC, FL, CURB and EP shots. Do not drop DEP because it sounds like "depression", and do not connect it to a stream/ditch line.
 
 **CRITICAL RULE — NON-CROSSING ROAD LINES:**
 Lines representing the same feature type (road edges, curbs, sidewalks, ROW) MUST NEVER cross each other:

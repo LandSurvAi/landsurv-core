@@ -19,6 +19,11 @@ import {
 import { agentRegistry } from './AgentRegistry.ts';
 import { CONTOUR_CHIP_META } from './contourChips.ts';
 import { resolveHatchForFeatureOrCode } from './hatchLibrary.ts';
+import {
+  detectKeyEntrySource,
+  isKeyEntryRequest,
+  type KeySourceId,
+} from './keySources.ts';
 
 export type A2UISurfaceIntent =
   | {
@@ -35,6 +40,12 @@ export type A2UISurfaceIntent =
   | {
       surface: 'settings';
       section: A2UISettingsSection;
+      replyText: string;
+      suggestedQuestions: string[];
+    }
+  | {
+      surface: 'key-entry';
+      focus?: KeySourceId;
       replyText: string;
       suggestedQuestions: string[];
     }
@@ -61,6 +72,12 @@ export type A2UISurfaceIntent =
       surface: 'workspace-tool';
       tool: A2UIWorkspaceToolId;
       agent: AgentType;
+      replyText: string;
+      suggestedQuestions: string[];
+    }
+  | {
+      surface: 'centerline-picker';
+      centerlineNames: string[];
       replyText: string;
       suggestedQuestions: string[];
     }
@@ -352,6 +369,19 @@ const WORKSPACE_TOOL_RULES: readonly WorkspaceToolRule[] = [
     ],
   },
   {
+    tool: 'centerline-list',
+    agent: AgentType.CENTERLINE_STATIONING,
+    pattern:
+      /\b(?:(?:list|show|open|view|display|manage)\s+(?:all\s+|my\s+|the\s+|project\s+)?(?:centerlines?|baselines?|alignments?)(?:\s+(?:list|panel|surface|manager))?|(?:centerline|baseline|alignment)\s+(?:list|manager|panel|surface))\b/i,
+    replyText:
+      'Here is the live <strong>Centerlines &amp; Baselines</strong> chip list. Click a chip to make that alignment active, or double-click it to open its Stationing tools.',
+    suggestedQuestions: [
+      'Adjust the start station of the centerline',
+      'Open Stationing & CL tools',
+      'Show the station points on the active baseline',
+    ],
+  },
+  {
     tool: 'drafting-style-library',
     agent: AgentType.CAD_MANAGER,
     pattern: /\b(?:drafting\s+style\s+library|style\s+library\s+panel|manage\s+drafting\s+styles?)\b/i,
@@ -637,7 +667,15 @@ const GENERIC_SPREADSHEET_RE =
  * Map a chat message to a surface intent. Returns null when the message should
  * continue through the normal agent pipeline.
  */
-export function resolveA2UISurfaceIntent(query: string): A2UISurfaceIntent | null {
+export interface A2UISurfaceIntentOptions {
+  /** Names of alignments already loaded/drawn in the project. */
+  centerlineNames?: string[];
+}
+
+export function resolveA2UISurfaceIntent(
+  query: string,
+  options: A2UISurfaceIntentOptions = {},
+): A2UISurfaceIntent | null {
   const trimmed = query.trim();
   if (trimmed.length < 6) return null;
 
@@ -724,6 +762,22 @@ export function resolveA2UISurfaceIntent(query: string): A2UISurfaceIntent | nul
         'Add a point by coordinates',
         'Open the point list',
         'Open Point Tools',
+      ],
+    };
+  }
+
+  // Credential entry gets a dedicated inline surface. The input saves through
+  // the App handlers, so raw keys never become chat messages.
+  if (isKeyEntryRequest(trimmed)) {
+    return {
+      surface: 'key-entry',
+      focus: detectKeyEntrySource(trimmed),
+      replyText:
+        'Here is the secure <strong>key panel</strong>. Enter your key directly in the card below — it is saved in this browser and never added to the conversation.',
+      suggestedQuestions: [
+        'Enter my LandSurv Enabling Key',
+        'Add my OpenAI API key',
+        'Where are my keys stored?',
       ],
     };
   }
@@ -897,7 +951,32 @@ export function resolveA2UISurfaceIntent(query: string): A2UISurfaceIntent | nul
     }
   }
 
-  // 5. Workspace Tools & Managers
+  // 5. Ambiguous alignment edits. When several centerlines exist and the request
+  // names none of them, collect the choice with an A2UI dropdown before the
+  // turn reaches the model.
+  const centerlineNames = (options.centerlineNames ?? [])
+    .map(name => name.trim())
+    .filter(Boolean);
+  const asksForStartStation =
+    /\b(?:start(?:ing)?|begin(?:ning)?|initial)\s+station\b/i.test(trimmed);
+  const namesAnAlignment =
+    /\b(?:centerlines?|baselines?|alignments?|cl)\b/i.test(trimmed);
+  if (
+    centerlineNames.length > 1 &&
+    asksForStartStation &&
+    (namesAnAlignment || ACTION_OR_HOWTO_VERB_RE.test(trimmed)) &&
+    !centerlineNames.some(name => trimmed.toLowerCase().includes(name.toLowerCase()))
+  ) {
+    return {
+      surface: 'centerline-picker',
+      centerlineNames,
+      replyText:
+        'Which alignment should I adjust? Choose a centerline or baseline below, then I will continue with its start station.',
+      suggestedQuestions: centerlineNames.slice(0, 3),
+    };
+  }
+
+  // 6. Workspace Tools & Managers
   for (const rule of WORKSPACE_TOOL_RULES) {
     if (rule.pattern.test(trimmed)) {
       return {

@@ -1,5 +1,5 @@
 import React, { createContext, Suspense, lazy, useContext, useEffect, useState } from 'react';
-import { FileText, Maximize2, Settings2, Table2, Wrench } from 'lucide-react';
+import { FileText, KeyRound, Maximize2, Settings2, Table2, Wrench } from 'lucide-react';
 import {
   type AgentType,
   type A2UIPayload,
@@ -52,7 +52,10 @@ import { A2UISoilLimitations } from './A2UISoilLimitations.tsx';
 import { A2UITextEditor } from './A2UITextEditor.tsx';
 import { A2UISpreadsheet } from './A2UISpreadsheet.tsx';
 import { A2UIContourChip } from './A2UIContourChips.tsx';
+import { KeyManagementPanel } from './KeyManagementPanel.tsx';
 import { DockModeControl, type DockMode } from './DockModeControl.tsx';
+import type { KeyDetailSnapshot } from '../services/keySources.ts';
+import type { ByokProvider } from '../services/providerKeys.ts';
 
 // Lazy-load PDF-backed intake components so pdfjs-dist is only loaded when a PDF intake widget is rendered
 const CivilDrafterFileUpload = lazy(() => import('./CivilDrafterFileUpload.tsx'));
@@ -67,6 +70,7 @@ export const WORKSPACE_TOOL_LABELS: Record<A2UIWorkspaceToolId, string> = {
   'raster-underlay': 'Image & PDF Underlays',
   'annotate-manager': 'Annotate Manager',
   'stationing-controls': 'Stationing Controls',
+  'centerline-list': 'Centerlines & Baselines',
   'drafting-style-library': 'Drafting Style Library',
   'layer-manager': 'Data Visibility & Layers',
   'compliance-summary': 'Standards Compliance Audit',
@@ -80,11 +84,23 @@ export const WORKSPACE_TOOL_LABELS: Record<A2UIWorkspaceToolId, string> = {
   'legal-writer': 'Legal Description Writer',
   'sheet-view': 'Sheet View (24×36 Plot Layout)',
   'roading-panel': 'Roading Studio',
+  'stormwater-quick-check': 'Stormwater Quick-Check',
+  'dirt-volume-panel': 'Dirt Volume',
   'road-paint-studio': 'Road Paint Studio',
   'tin-surfaces': 'TIN Surfaces',
   'point-tools': 'Point Tools',
   'legend': 'Legend',
 };
+
+export interface A2UIKeyEntryStatus {
+  hasLandSurvKey?: boolean;
+  hasGoogleApiKey?: boolean;
+  hasServiceAccess?: boolean;
+  serviceAccessExpiresAt?: string | null;
+  computeCredits?: number;
+  connectedProviders?: Partial<Record<ByokProvider, boolean>>;
+  currentKeyDetails?: KeyDetailSnapshot | null;
+}
 
 export interface A2UIHostContextValue {
   // Point Editor
@@ -241,6 +257,18 @@ export interface A2UIHostContextValue {
   onOpenFullTextEditor?: (fileName: string, content: string) => void;
   /** Send values collected by an A2UI input form back to the owning agent. */
   onSubmitInput?: (message: string, payload: A2UIPayload) => void;
+  /** Live credential state for the inline key-entry surface. */
+  keyEntryStatus?: A2UIKeyEntryStatus;
+  /** Save a LandSurv Enabling Key without routing it through chat. */
+  onSubmitServiceKey?: (serviceKey: string) => boolean | Promise<boolean>;
+  /** Save a generic BYOK key when no provider-specific handler is wired. */
+  onSubmitApiKey?: (apiKey: string) => boolean | Promise<boolean>;
+  /** Save a BYOK key into its provider slot. */
+  onSubmitProviderKey?: (provider: ByokProvider, apiKey: string) => boolean | Promise<boolean>;
+  /** Remove one stored BYOK key. */
+  onClearProviderKey?: (provider: ByokProvider) => void;
+  /** Open the plan upgrade flow from the key surface. */
+  onOpenKeyUpgrade?: () => void;
   /** Enter canvas entity-selection mode from an A2UI prompt. */
   onStartCanvasSelection?: () => void;
   /** Apply the current canvas selection to an A2UI selection prompt. */
@@ -627,6 +655,54 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
           projectBboxWgs84={host.projectBboxWgs84}
           gpsPosition={host.gpsPosition}
         />
+      </div>
+    );
+  }
+
+  if (payload.kind === 'key-entry') {
+    const status = host.keyEntryStatus ?? {};
+    const embedded = presentation !== 'inline';
+    return (
+      <div
+        data-testid="a2ui-surface-key-entry"
+        className={embedded ? 'flex h-full min-h-0 flex-col' : 'mt-3 w-full'}
+      >
+        <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
+          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-300">
+            <KeyRound className="h-3 w-3" />
+            API Keys
+          </span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="rounded border border-emerald-400/25 bg-emerald-400/10 px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-wide text-emerald-200">
+              A2UI
+            </span>
+            <SurfaceActions
+              onPopOut={onPopOut}
+              onDock={onDock}
+              onChat={onChat}
+              onFullscreen={onFullscreen}
+              onMinimize={onMinimize}
+            />
+          </div>
+        </div>
+        <div className={embedded ? 'min-h-0 flex-1 overflow-y-auto' : ''}>
+          <KeyManagementPanel
+            variant="surface"
+            currentKeyDetails={status.currentKeyDetails}
+            hasLandSurvKey={status.hasLandSurvKey}
+            hasGoogleApiKey={status.hasGoogleApiKey}
+            hasServiceAccess={status.hasServiceAccess}
+            serviceAccessExpiresAt={status.serviceAccessExpiresAt}
+            computeCredits={status.computeCredits}
+            connectedProviders={status.connectedProviders}
+            initialSource={payload.keyEntry?.focus}
+            onSubmitApiKey={host.onSubmitApiKey ?? (() => false)}
+            onSubmitServiceKey={host.onSubmitServiceKey}
+            onSubmitProviderKey={host.onSubmitProviderKey}
+            onClearProviderKey={host.onClearProviderKey}
+            onOpenUpgrade={host.onOpenKeyUpgrade}
+          />
+        </div>
       </div>
     );
   }

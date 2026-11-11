@@ -151,6 +151,16 @@ export const AGENT_WELCOME_PROFILES: Partial<Record<AgentType, AgentWelcomeProfi
     summary:
       'I retrieve USDA NRCS SSURGO soil map units and attribute reports, including hydrologic group, drainage class, and farmland classification.',
   },
+  [AgentType.STORMWATER_AGENT]: {
+    name: 'Stormwater',
+    summary:
+      'I run national stormwater runoff with the Rational Method (Q = C i A), NOAA Atlas 14 rainfall, composite surface coefficients, FAA time of concentration, detention routing, and Manning channel capacity, and I produce a copy-ready report and PDF.',
+  },
+  [AgentType.DIRT_VOLUME_AGENT]: {
+    name: 'Dirt Volume',
+    summary:
+      'I obtain and compare earthwork volumes: end-area cut/fill from cross sections, TIN-to-TIN surface comparisons, grid takeoffs, and stockpile volumes. I save scenarios, compare design options and haul balances, and produce copy-ready reports and PDFs.',
+  },
   [AgentType.ROADING_AGENT]: {
     name: 'Roading',
     summary:

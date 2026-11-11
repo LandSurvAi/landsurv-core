@@ -21,6 +21,7 @@ import {
   buildA2UIInputSubmission,
   validateA2UIInputValues,
 } from '../utils/a2uiInputForm.ts';
+import { isSurfaceNameField, projectInputChoices } from '../services/projectInputChoices.ts';
 
 const EDGE_MARGIN = 8;
 const CURSOR_X_OFFSET = 14;
@@ -30,7 +31,7 @@ const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(value, max));
 
 const fieldClass =
-  'h-6 min-w-0 flex-1 rounded border border-white/[0.1] bg-black/40 px-1.5 text-[10.5px] text-slate-100 outline-none transition-colors placeholder:text-slate-600 focus:border-cyan-400/60 focus:bg-black/55';
+  'h-5 min-w-0 flex-1 rounded border border-white/[0.08] bg-black/35 px-1 text-[10px] text-slate-100 outline-none transition-colors placeholder:text-slate-600 focus:border-cyan-400/60 focus:bg-black/55';
 
 const TONE_STYLES: Record<CanvasFlashMessage['tone'], { dot: string; text: string }> = {
   info: { dot: 'bg-sky-400', text: 'text-slate-200' },
@@ -168,6 +169,11 @@ const CanvasFlashMessagePill: React.FC<{
 
 const CanvasFlashInputSurface: React.FC<{ input: CanvasFlashInput }> = ({ input }) => {
   const formId = useId().replace(/:/g, '');
+  const surfaceNames = useSyncExternalStore(
+    projectInputChoices.subscribe,
+    projectInputChoices.getSnapshot,
+    projectInputChoices.getSnapshot,
+  ).surfaceNames;
   const [values, setValues] = useState<Record<string, string>>(() =>
     buildA2UIInputInitialValues({
       fields: input.fields,
@@ -248,27 +254,23 @@ const CanvasFlashInputSurface: React.FC<{ input: CanvasFlashInput }> = ({ input 
       onPointerDown={event => event.stopPropagation()}
       onClick={event => event.stopPropagation()}
       onWheel={event => event.stopPropagation()}
-      className="w-[232px] max-w-[calc(100vw-16px)] overflow-hidden rounded-md border border-cyan-400/25 bg-[#071019]/[0.97] font-mono text-slate-200 shadow-[0_14px_34px_rgba(0,0,0,0.62)] backdrop-blur-md"
+      className="w-[232px] max-w-[calc(100vw-16px)] overflow-hidden rounded-md border border-white/[0.1] bg-[#071019]/[0.97] font-mono text-slate-200 shadow-[0_10px_24px_rgba(0,0,0,0.45)]"
     >
       {hasHeader && (
-        <div className="flex items-start gap-1.5 px-2 pb-1 pt-1.5">
+        <div className="flex items-start gap-1 px-1.5 pb-0.5 pt-1">
           <div className="min-w-0 flex-1">
-            {input.title && (
+            {input.title ? (
               <div
-                className="truncate text-[8.5px] font-bold uppercase tracking-[0.12em] text-cyan-300/90"
+                className="truncate text-[8px] font-bold uppercase tracking-[0.12em] text-cyan-300/85"
                 title={input.title}
               >
                 {input.title}
               </div>
-            )}
-            {input.hint && (
-              <div
-                className={`truncate text-[8.5px] leading-snug text-slate-500 ${input.title ? 'mt-0.5' : ''}`}
-                title={input.hint}
-              >
+            ) : input.hint ? (
+              <div className="truncate text-[8px] leading-tight text-slate-500" title={input.hint}>
                 {input.hint}
               </div>
-            )}
+            ) : null}
           </div>
           <button
             type="button"
@@ -276,13 +278,13 @@ const CanvasFlashInputSurface: React.FC<{ input: CanvasFlashInput }> = ({ input 
             onClick={() => closeCanvasFlashInput(input.id)}
             className="-mr-0.5 -mt-0.5 rounded p-0.5 text-slate-500 transition-colors hover:text-slate-200"
           >
-            <X className="h-2.5 w-2.5" />
+            <X className="h-2 w-2" />
           </button>
         </div>
       )}
 
       <div
-        className={`flex flex-col gap-1 px-2 ${hasHeader ? '' : 'pt-1.5'} ${input.fields.length === 0 ? 'pb-1.5' : ''}`}
+        className={`flex flex-col gap-0.5 px-1.5 ${hasHeader ? '' : 'pt-1'} ${input.fields.length === 0 ? 'pb-1' : ''}`}
         style={{ maxHeight: '44vh', overflowY: 'auto' }}
       >
         {input.options && input.options.length > 0 && (
@@ -295,9 +297,9 @@ const CanvasFlashInputSurface: React.FC<{ input: CanvasFlashInput }> = ({ input 
                   input.onSubmit(opt);
                   closeCanvasFlashInput(input.id);
                 }}
-                className="flex min-h-[22px] w-full items-center gap-1.5 rounded border border-white/15 bg-white/[0.04] px-1.5 py-1 text-left text-[9.5px] font-medium leading-snug text-slate-100 transition-colors hover:border-cyan-400/45 hover:bg-cyan-400/15 hover:text-white"
+                className="flex min-h-[20px] w-full items-center gap-1 rounded border border-white/10 bg-white/[0.03] px-1 py-0.5 text-left text-[9px] font-medium leading-snug text-slate-100 transition-colors hover:border-cyan-400/45 hover:bg-cyan-400/15 hover:text-white"
               >
-                <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[2px] border border-white/20 bg-white/[0.06] font-mono text-[7.5px] font-bold text-cyan-200">
+                <span className="flex h-3 w-3 shrink-0 items-center justify-center rounded-[2px] border border-white/15 bg-white/[0.06] font-mono text-[7px] font-bold text-cyan-200">
                   {String.fromCharCode(65 + optIdx)}
                 </span>
                 <span className="line-clamp-2 min-w-0 flex-1">{opt}</span>
@@ -307,6 +309,7 @@ const CanvasFlashInputSurface: React.FC<{ input: CanvasFlashInput }> = ({ input 
         )}
         {input.fields.map((field, index) => {
           const value = values[field.id] ?? '';
+          const surfaceSuggestions = isSurfaceNameField(field) ? surfaceNames : [];
           if (field.type === 'checkbox') {
             return (
               <label key={field.id} className="flex min-w-0 cursor-pointer items-center gap-1.5">
@@ -325,7 +328,7 @@ const CanvasFlashInputSurface: React.FC<{ input: CanvasFlashInput }> = ({ input 
           return (
             <label key={field.id} htmlFor={inputId} className="flex min-w-0 items-center gap-1.5">
               <span
-                className="w-[72px] shrink-0 truncate text-[7.5px] font-semibold uppercase tracking-[0.06em] text-slate-400"
+                className="w-[64px] shrink-0 truncate text-[7px] font-semibold uppercase tracking-[0.06em] text-slate-400"
                 title={field.label}
               >
                 {field.label}
@@ -353,13 +356,21 @@ const CanvasFlashInputSurface: React.FC<{ input: CanvasFlashInput }> = ({ input 
                     type={field.type === 'number' ? 'number' : 'text'}
                     inputMode={field.type === 'number' ? 'decimal' : undefined}
                     step={field.type === 'number' ? 'any' : undefined}
+                    list={surfaceSuggestions.length > 0 ? `${inputId}-surfaces` : undefined}
                     value={value}
                     onChange={event => updateValue(field.id, event.target.value)}
-                    placeholder={field.placeholder}
+                    placeholder={field.placeholder ?? (surfaceSuggestions.length > 0 ? 'Select or type a surface…' : undefined)}
                     autoComplete="off"
                     spellCheck={false}
                     className={`${fieldClass} ${field.unit ? 'pr-7' : ''}`}
                   />
+                  {surfaceSuggestions.length > 0 && (
+                    <datalist id={`${inputId}-surfaces`}>
+                      {surfaceSuggestions.map(name => (
+                        <option key={name} value={name} />
+                      ))}
+                    </datalist>
+                  )}
                   {field.unit && (
                     <span className="pointer-events-none absolute inset-y-0 right-1 flex items-center text-[7px] uppercase tracking-wide text-slate-500">
                       {field.unit}
@@ -373,19 +384,20 @@ const CanvasFlashInputSurface: React.FC<{ input: CanvasFlashInput }> = ({ input 
       </div>
 
       {error && (
-        <div role="alert" className="px-2 pt-1 text-[8px] leading-snug text-rose-300">
+        <div role="alert" className="px-1.5 pt-0.5 text-[8px] leading-snug text-rose-300">
           {error}
         </div>
       )}
 
       {input.fields.length > 0 && (
-        <div className="p-1 pt-1.5">
+        <div className="flex items-center justify-end px-1.5 pb-1 pt-0.5">
           <button
             type="submit"
-            className="flex h-[22px] w-full items-center justify-center gap-1 rounded border border-cyan-400/35 bg-cyan-400/15 px-2 text-[8.5px] font-bold uppercase tracking-[0.12em] text-cyan-100 transition-colors hover:bg-cyan-400/25 hover:text-white"
+            aria-label={input.submitLabel || 'Send'}
+            className="inline-flex h-[18px] items-center gap-0.5 rounded border border-cyan-400/30 bg-cyan-400/10 px-1.5 text-[8px] font-bold uppercase tracking-[0.1em] text-cyan-100 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/20 hover:text-white"
           >
             {input.submitLabel || 'Send'}
-            <ArrowRight className="h-2.5 w-2.5" />
+            <ArrowRight className="h-2 w-2" />
           </button>
         </div>
       )}

@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   SettingsContext,
   type A2UIInputFormSpec,
@@ -27,6 +27,7 @@ import { DockModeControl } from './DockModeControl.tsx';
 import { LegendQuickActions } from './LegendQuickActions.tsx';
 import type { A2UIQuickThoughtBreakdown } from '../services/a2uiQuickThought.ts';
 import { closeCanvasFlashInput, flashCanvasMessage, openCanvasFlashForInputForm } from '../services/canvasFlashes.ts';
+import { isSurfaceNameField, projectInputChoices } from '../services/projectInputChoices.ts';
 import { exampleFileContent, exampleFileName } from '../assets/example.raw.ts';
 import { exampleHighwayCl } from '../assets/example.highway.cl.ts';
 import { exampleDeedContent } from '../assets/example.deed.ts';
@@ -188,6 +189,11 @@ const QuickThoughtInputForm: React.FC<{
   onOpenConversation: () => void;
 }> = ({ form, needsInput, onSubmit, onOpenConversation }) => {
   const formId = useId();
+  const surfaceNames = useSyncExternalStore(
+    projectInputChoices.subscribe,
+    projectInputChoices.getSnapshot,
+    projectInputChoices.getSnapshot,
+  ).surfaceNames;
   const initialValues = useMemo(() => {
     const next: Record<string, string> = {};
     for (const field of form.fields) {
@@ -275,6 +281,7 @@ const QuickThoughtInputForm: React.FC<{
         {form.fields.map(field => {
           const inputId = `${formId}-${field.id}`;
           const val = values[field.id] ?? '';
+          const surfaceSuggestions = isSurfaceNameField(field) ? surfaceNames : [];
 
           if (field.type === 'checkbox') {
             return (
@@ -330,16 +337,32 @@ const QuickThoughtInputForm: React.FC<{
                   className={`${compactInputClass} resize-y`}
                 />
               ) : (
-                <input
-                  id={inputId}
-                  data-no-drag
-                  type={field.type === 'number' ? 'number' : 'text'}
-                  step={field.type === 'number' ? 'any' : undefined}
-                  value={val}
-                  onChange={e => updateValue(field.id, e.target.value)}
-                  placeholder={field.placeholder || field.hint || `Enter ${field.label.toLowerCase()}…`}
-                  className={compactInputClass}
-                />
+                <>
+                  <input
+                    id={inputId}
+                    data-no-drag
+                    type={field.type === 'number' ? 'number' : 'text'}
+                    step={field.type === 'number' ? 'any' : undefined}
+                    list={surfaceSuggestions.length > 0 ? `${inputId}-surfaces` : undefined}
+                    value={val}
+                    onChange={e => updateValue(field.id, e.target.value)}
+                    placeholder={
+                      field.placeholder ||
+                      field.hint ||
+                      (surfaceSuggestions.length > 0
+                        ? 'Select or type a surface…'
+                        : `Enter ${field.label.toLowerCase()}…`)
+                    }
+                    className={compactInputClass}
+                  />
+                  {surfaceSuggestions.length > 0 && (
+                    <datalist id={`${inputId}-surfaces`}>
+                      {surfaceSuggestions.map(name => (
+                        <option key={name} value={name} />
+                      ))}
+                    </datalist>
+                  )}
+                </>
               )}
             </div>
           );

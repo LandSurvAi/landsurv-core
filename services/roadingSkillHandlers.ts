@@ -405,7 +405,7 @@ export interface SurveyRoadCorridor {
 }
 
 const GENERATED_ROAD_POINT = /^(EP|CL|DW|ROAD|POLY|TRIM)-/i;
-const EDGE_SHOT = /\b(EP|EOP|ER|EDGE|ES|EG|EC|ET|CURB|TBC|TC|BC|GUTTER|PAV|PVMT|SHLD|SH)\b/i;
+const EDGE_SHOT = /\b(EP|EOP|ER|EDGE|ES|EG|EC|ET|CURB|TBC|TC|BC|GUTTER|PAV|PVMT|SHLD|SH|DEP[0-9]*)\b/i;
 const CENTERLINE_SHOT = /\b(CL|CTR|CENTER|CENTERLINE)\b/i;
 const WIDTH_CODE_RE = /(\d+(?:\.\d+)?)\s*W\b/i;
 

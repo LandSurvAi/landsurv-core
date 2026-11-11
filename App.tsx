@@ -25,6 +25,7 @@ import { ChatInterface } from './components/ChatInterface.tsx';
 import { AgentToolDock, type DockableToolItem } from './components/AgentToolDock.tsx';
 import { AgentToolShelf } from './components/AgentToolShelf.tsx';
 import StationingChat from './components/StationingChat.tsx';
+import { A2UICenterlineList } from './components/A2UICenterlineList.tsx';
 import { PointEditorChat } from './components/PointEditorChat.tsx';
 import { resolveStandardsA2UIQuery } from './services/standardsA2UI.ts';
 import { EnvironmentBanner } from './components/EnvironmentBanner.tsx';
@@ -122,6 +123,7 @@ import {
   tinSurfaceBounds,
   tinSurfaceDisplayMode,
 } from './services/TinService.ts';
+import { clipTinToPolygon, tinBoundaryPolygonFromLines } from './utils/tinClip.ts';
 import { importTinSurfaceFromSessionFileAsync } from './services/tinImportClient.ts';
 import { runSteepSlopeAnalysis, steepSlopeRunToSurveyLines } from './services/SteepSlopeService.ts';
 import { ESRI_STATE_SERVICES } from './utils/esriStateServices.ts';
@@ -186,6 +188,8 @@ import { ARAgentContent } from './components/landing/ARAgentContent.tsx';
 import { CadManagerContent } from './components/landing/CadManagerContent.tsx';
 import { CivilDrafterContent } from './components/landing/CivilDrafterContent.tsx';
 import { RoadingAgentContent } from './components/landing/RoadingAgentContent.tsx';
+import { StormwaterAgentContent } from './components/landing/StormwaterAgentContent.tsx';
+import { DirtVolumeAgentContent } from './components/landing/DirtVolumeAgentContent.tsx';
 import { Civil3DLandingPage } from './components/Civil3DLandingPage.tsx';
 
 // Import all modal and panel components
@@ -236,6 +240,8 @@ import FloodPanel from './components/FloodPanel.tsx';
 import type { FemaNfhlSummary } from './services/floodService.ts';
 import StructuresPanel from './components/StructuresPanel.tsx';
 import SoilsPanel from './components/SoilsPanel.tsx';
+import StormwaterPanel, { type StormwaterDrawnArea } from './components/StormwaterPanel.tsx';
+import DirtVolumePanel from './components/DirtVolumePanel.tsx';
 import StreamsPanel, { type StreamsPanelResult } from './components/StreamsPanel.tsx';
 import { buildAreaHatches, buildAreaLabels } from './services/areaHatchService.ts';
 import RoadingPanel from './components/RoadingPanel.tsx';
@@ -305,6 +311,8 @@ import { buildCivilDrafterLineworkContext } from './utils/civilDrafterLinework.t
 import {
   addLineToList,
   inheritConnectedLayer,
+  guessLineLayerFromPoints,
+  resolveLineLayerByCodePrefix,
   addPointToList,
   deleteLineFromList,
   deletePointFromLists,
@@ -315,7 +323,7 @@ import {
   toggleLineLabelRotation,
   swapLineBearingDirection,
 } from './utils/geometryOperations.ts';
-import { parseClFile, calculateCenterlineLength, calculatePointFromStationOffset, formatStation, getCenterlineKeyStations, resolveBeginStation } from './utils/stationing.ts';
+import { parseClFile, calculateCenterlineLength, calculatePointFromStationOffset, formatStation, formatStationLabel, getCenterlineKeyStations, resolveBeginStation } from './utils/stationing.ts';
 // FIX: Import the new `calculateClosure` function to enable robust, client-side closure calculations.
 import { parseBearingToRadians, parseDistance, inverse, direct, directCurve, calculateChordDistance, calculateClosure, formatBearing, swapBearingDirection, rotateBearing } from './utils/cogo.ts';
 // FIX: Import the new `generateProfile` function to enable client-side profile calculations.
@@ -353,11 +361,20 @@ import {
   markPendingA2UICompleted,
 } from './services/a2uiIntake.ts';
 import { buildA2UIInputFormFromNeedsInput, deriveA2UIInputForm } from './services/a2uiInput.ts';
+import { setProjectSurfaceNames } from './services/projectInputChoices.ts';
+import { BASELINE_START_PICK_LABEL, buildBaselineStartChoices, formatBaselineStartMessage, isBaselineStartCoordinateForm } from './services/baselineStartChoices.ts';
+import { parseStartStationEdit } from './services/centerlineEditIntent.ts';
+import {
+  applyStationingAnnotationPatch,
+  normalizeStationingAnnotationPatch,
+  parseStationingAnnotationIntent,
+} from './utils/stationingAnnotationSettings.ts';
 import {
   canMirrorInputFormAsFlash,
   closeCanvasFlashInput,
   flashCanvasMessage,
   openCanvasFlashForInputForm,
+  openCanvasFlashForOptions,
 } from './services/canvasFlashes.ts';
 import {
   extractInlineCheckboxes,
@@ -789,6 +806,11 @@ interface DrawingCanvasHandles {
   getMapOverlayTiles?: () => Array<{ image: CanvasImageSource; bbox: [number, number, number, number]; quad?: any; opacity?: number }>;
   getSelectedLineGeometry?: () => import('./types.ts').SurveyLine[];
   beginSelectionMode?: () => void;
+  /** Arm a one-click baseline start pick, returning a snapped world point. */
+  beginBaselineStartPick?: (
+    onPick: (coordinates: { northing: number; easting: number }) => void,
+    onCancel?: () => void,
+  ) => void;
   beginOtOriginPick?: () => void;
   beginOtLineAlign?: () => void;
   startHatchMode?: (options?: {
@@ -873,6 +895,8 @@ const generateSitemapXml = (): string => {
         { url: 'https://rinex.landsurv.ai', title: 'RINEX Agent' },
         { url: 'https://civildrafter.landsurv.ai', title: 'Civil Drafter Agent' },
         { url: 'https://roading.landsurv.ai', title: 'Roading Agent' },
+        { url: 'https://stormwater.landsurv.ai', title: 'Stormwater Agent' },
+        { url: 'https://dirtvolume.landsurv.ai', title: 'Dirt Volume Agent' },
     ];
 
     const allLinks = [...mainLinks, ...agentLinks];
@@ -934,6 +958,8 @@ const landingPageConfig = {
     // CAD Manager subdomain
     'cadmanager': { title: "CAD Manager - Description Key Builder", content: CadManagerContent },
     'roading': { title: "Roading Agent", content: RoadingAgentContent },
+    'stormwater': { title: "Stormwater Agent", content: StormwaterAgentContent },
+    'dirtvolume': { title: "Dirt Volume Agent", content: DirtVolumeAgentContent },
     // Civil Drafter subdomain
     'civildrafter': { title: "Civil Drafter Agent", content: CivilDrafterContent },
     // 2026 Roadmap subdomain
@@ -1302,6 +1328,10 @@ const AppContent = () => {
     soilsChatHistory, setSoilsChatHistory,
     roadingChat, setRoadingChat,
     roadingChatHistory, setRoadingChatHistory,
+    stormwaterChat, setStormwaterChat,
+    stormwaterChatHistory, setStormwaterChatHistory,
+    dirtVolumeChat, setDirtVolumeChat,
+    dirtVolumeChatHistory, setDirtVolumeChatHistory,
     fieldbookNotes, setFieldbookNotes,
   } = useChatState();
   
@@ -1558,6 +1588,8 @@ const AppContent = () => {
 
   // SOILS_AGENT � auto-shown floating panel; mirrors Structures Agent pattern.
   const [isSoilsPanelVisible, setIsSoilsPanelVisible] = useState(false);
+
+  // STORMWATER_AGENT — auto-shown floating panel; mirrors Soil/Structures pattern.
   const [isFetchingSoils, setIsFetchingSoils] = useState(false);
   const [isFetchingSoilReport, setIsFetchingSoilReport] = useState(false);
   const [isDownloadingSoilReport, setIsDownloadingSoilReport] = useState(false);
@@ -1600,6 +1632,7 @@ const AppContent = () => {
   const [isRoadingWorking, setIsRoadingWorking] = useState(false);
   const [roadCorridors, setRoadCorridors] = useState<import('./types.ts').RoadCorridorRun[]>([]);
   const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
+  const experimentalStormwaterEnabled = useExperimentalAgentEnabled(AgentType.STORMWATER_AGENT);
 
   // PROFILE_AGENT � direct UI panel (no AI round-trip; client-side generateProfile).
   const [isProfileGenPanelVisible, setIsProfileGenPanelVisible] = useState(false);
@@ -2262,9 +2295,9 @@ const AppContent = () => {
   }, [pointLists]);
 
   const centerlinesRef = useRef(centerlines);
-  useEffect(() => {
-    centerlinesRef.current = centerlines;
-  }, [centerlines]);
+  // Keep this synchronous: a station-edit command can arrive before the
+  // post-render effect has run after a baseline is created.
+  centerlinesRef.current = centerlines;
 
   // Live-draw follow: while the agent streams points/lines onto the canvas, keep
   // the viewport framed on the geometry that has landed so far. Without this,
@@ -2503,6 +2536,11 @@ const AppContent = () => {
   useEffect(() => {
     if (activeAgent !== AgentType.CONTOURING_AGENT) setContourLabelTool(null);
   }, [activeAgent]);
+  // Surface-name prompts can offer the TINs already loaded in this file as a
+  // dropdown, no matter which renderer draws the form.
+  useEffect(() => {
+    setProjectSurfaceNames(tinSurfaces.map(surface => surface.name));
+  }, [tinSurfaces]);
   /** Non-destructive FEMA/soils generation blocks, keyed by the ids on their output entities. */
   const [generationBlocks, setGenerationBlocks] = useState<GenerationBlock[]>([]);
   /** Incrementing token so double-clicking the same contour generation re-expands it. */
@@ -3128,7 +3166,11 @@ const AppContent = () => {
     resetChatSession(previous);
     resetChatSession(next);
 
-    if (next && (next !== AgentType.ROADING_AGENT || isExperimentalAgentEnabled(AgentType.ROADING_AGENT))) {
+    if (
+      next &&
+      (next !== AgentType.ROADING_AGENT || isExperimentalAgentEnabled(AgentType.ROADING_AGENT)) &&
+      (next !== AgentType.STORMWATER_AGENT || isExperimentalAgentEnabled(AgentType.STORMWATER_AGENT))
+    ) {
       setInitializedAgents(prev => new Set(prev).add(next));
       setActiveAgent(next);
     }
@@ -3141,6 +3183,7 @@ const AppContent = () => {
   useEffect(() => {
     return interAgentComm.onAgentFocusChange(focus => {
       if (focus.agent === AgentType.ROADING_AGENT && !isExperimentalAgentEnabled(AgentType.ROADING_AGENT)) return;
+      if (focus.agent === AgentType.STORMWATER_AGENT && !isExperimentalAgentEnabled(AgentType.STORMWATER_AGENT)) return;
       setInitializedAgents(prev => (prev.has(focus.agent) ? prev : new Set(prev).add(focus.agent)));
       setActiveAgent(focus.agent);
     });
@@ -7360,6 +7403,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       case AgentType.STRUCTURES_AGENT: return setStructuresChatHistory;
       case AgentType.SOILS_AGENT: return setSoilsChatHistory;
       case AgentType.ROADING_AGENT: return setRoadingChatHistory;
+      case AgentType.STORMWATER_AGENT: return setStormwaterChatHistory;
+      case AgentType.DIRT_VOLUME_AGENT: return setDirtVolumeChatHistory;
       default: return null;
     }
   }, [
@@ -7369,6 +7414,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setSteepSlopeChatHistory, setProfileChatHistory, setCogoChatHistory, setRinexChatHistory,
     setDroneChatHistory, setZoningChatHistory, setTitleSearchChatHistory, setCadManagerChatHistory,
     setStandardsComplianceChatHistory, setStructuresChatHistory, setSoilsChatHistory, setRoadingChatHistory,
+    setStormwaterChatHistory, setDirtVolumeChatHistory,
   ]);
 
   // FIX: Add initialization for the new Contouring Agent.
@@ -7938,6 +7984,64 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setError(null);
     } else {
       setIsSoilsPanelVisible(false);
+    }
+  }, [activeAgent, isInitialScreen, initializedAgents, startSession, startChatWithOverride, showView]);
+
+  // Stormwater Agent: the Quick-Check calculator is its primary tool. It is
+  // raised as an A2UI card in the agent chat (see openStormwaterQuickCheck),
+  // not a docked panel. Runoff math is deterministic, so the card works even
+  // when the AI chat session is deferred.
+  useEffect(() => {
+    if (activeAgent === AgentType.STORMWATER_AGENT && experimentalStormwaterEnabled && !isInitialScreen) {
+      if (!initializedAgents.has(AgentType.STORMWATER_AGENT)) {
+        startSession();
+        try {
+          const newChat = startChatWithOverride(AgentType.STORMWATER_AGENT, '');
+          setStormwaterChat(newChat);
+        } catch (chatErr) {
+          console.warn('[Stormwater Agent] AI chat deferred:', chatErr);
+        }
+        setInitializedAgents(prev => new Set(prev).add(AgentType.STORMWATER_AGENT));
+      }
+      setStormwaterChatHistory(prev => (
+        prev.length === 0
+          ? [{
+              role: MessageRole.MODEL,
+              text: buildAgentWelcome(AgentType.STORMWATER_AGENT, `Use <strong>Compute Peak Runoff</strong> for a Rational Method quick-check, or ask me about time of concentration and design storm duration.`),
+            }]
+          : prev
+      ));
+      setSuggestedQuestions(getAgentInitialQuickThoughtOptions(AgentType.STORMWATER_AGENT));
+      showView('canvas');
+      setError(null);
+    }
+  }, [activeAgent, isInitialScreen, initializedAgents, startSession, startChatWithOverride, showView]);
+
+  // Dirt Volume Agent: deterministic takeoffs, so the agent is usable before
+  // (or without) an AI chat session. The workspace opens as its primary tool.
+  useEffect(() => {
+    if (activeAgent === AgentType.DIRT_VOLUME_AGENT && !isInitialScreen) {
+      if (!initializedAgents.has(AgentType.DIRT_VOLUME_AGENT)) {
+        startSession();
+        try {
+          const newChat = startChatWithOverride(AgentType.DIRT_VOLUME_AGENT, '');
+          setDirtVolumeChat(newChat);
+        } catch (chatErr) {
+          console.warn('[Dirt Volume Agent] AI chat deferred:', chatErr);
+        }
+        setInitializedAgents(prev => new Set(prev).add(AgentType.DIRT_VOLUME_AGENT));
+      }
+      setDirtVolumeChatHistory(prev =>
+        prev.length === 0
+          ? [{
+              role: MessageRole.MODEL,
+              text: buildAgentWelcome(AgentType.DIRT_VOLUME_AGENT, `Use <strong>End Area</strong> for section takeoffs or <strong>TIN Comparison</strong> for existing vs proposed surfaces. Save scenarios to compare design options and export a PDF report.`),
+            }]
+          : prev
+      );
+      setSuggestedQuestions(getAgentInitialQuickThoughtOptions(AgentType.DIRT_VOLUME_AGENT));
+      showView('canvas');
+      setError(null);
     }
   }, [activeAgent, isInitialScreen, initializedAgents, startSession, startChatWithOverride, showView]);
 
@@ -9685,11 +9789,21 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }
     if (generationId) setCreatingTinGenerationId(generationId);
     try {
+      const activeBoundary = generation.activeInclusionBoundaryId
+        ? inclusionBoundaries.find(b => b.id === generation.activeInclusionBoundaryId) ?? null
+        : null;
+      const inclusionLines = lines.filter(
+        l => l.type === 'inclusion' && (!activeBoundary || l.polylineId === activeBoundary.polylineId),
+      );
+      const boundaryPolygon = tinBoundaryPolygonFromLines(inclusionLines);
       const built = buildTinFromContours(generation.isoPaths, { name: `${generation.name} TIN` });
       if (!built) {
         throw new Error('The contour generation does not contain enough elevation vertices to build a TIN.');
       }
-      const surface: TinSurface = { ...built, hidden: false };
+      const trimmed = boundaryPolygon
+        ? clipTinToPolygon(built, boundaryPolygon, generation.settings.inclusionMode ?? 'inside')
+        : built;
+      const surface: TinSurface = { ...trimmed, hidden: false };
       setTinSurfaces(prev => [...prev, surface]);
       setContourSettings(prev => ({ ...prev, sourceType: 'tin', sourceTinId: surface.id }));
       const fileName = uniqueTinExportName(surface, 'native');
@@ -9698,7 +9812,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setTimeout(() => setRecentlyCreatedTinGenerationId(current => current === generation.id ? null : current), 4000);
       logActionToFieldbook(
         `Created TIN "${surface.name}" from ${generation.isoPaths.length} contour paths ` +
-        `(${surface.vertices.length} vertices, ${surface.triangles.length} triangles). Saved ${fileName} to File Manager.`
+        `(${surface.vertices.length} vertices, ${surface.triangles.length} triangles)` +
+        `${boundaryPolygon ? ', trimmed to the inclusion boundary' : ''}. Saved ${fileName} to File Manager.`
       );
       addNotification({
         kind: 'points',
@@ -9716,7 +9831,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     } finally {
       if (generationId) setCreatingTinGenerationId(null);
     }
-  }, [contourGenerations, addGeneratedFile, addNotification, logActionToFieldbook]);
+  }, [contourGenerations, lines, inclusionBoundaries, addGeneratedFile, addNotification, logActionToFieldbook]);
 
   const handleExportTinSurface = useCallback((sourceTinId?: string, format: 'landxml' | 'native' = 'landxml'): SessionFile | null => {
     const tin = (sourceTinId ? tinSurfaces.find(t => t.id === sourceTinId) : undefined) ?? tinSurfaces[tinSurfaces.length - 1];
@@ -12242,7 +12357,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   // CACP — Centerline & Stationing skills (`cl_create_from_description`,
   // `cl_create_from_points`, `place_station_offset_point`, `generate_stationed_points`).
   useClSkills({ setCenterlines, pointListsRef, logActionToFieldbook });
-  useStationingSkills({ centerlinesRef, pointListsRef, setPointLists, logActionToFieldbook });
+  useStationingSkills({ centerlinesRef, pointListsRef, setPointLists, settings, setSettings, logActionToFieldbook });
 
   /**
    * Standard presentation for an A2UI surface launched outside the chat feed.
@@ -12550,6 +12665,73 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setStreamLayerError(null);
   }, [streamLayerNames, setLines, setGisFeatures]);
 
+  /** Pull the Stormwater Quick-Check into the agent chat as an inline A2UI card. */
+  const openStormwaterQuickCheck = useCallback(() => {
+    setStormwaterChatHistory(prev => {
+      const last = prev[prev.length - 1];
+      if (last?.a2ui?.widgetType === 'stormwater-quick-check') return prev;
+      return [
+        ...prev,
+        {
+          role: MessageRole.MODEL,
+          text:
+            'Stormwater Quick-Check — national Rational Method screening with editable surface coefficients, ' +
+            'NOAA Atlas 14 rainfall, detention routing, and Manning channel capacity.',
+          a2ui: {
+            kind: 'workspace-tool' as const,
+            agent: AgentType.STORMWATER_AGENT,
+            widgetType: 'stormwater-quick-check' as const,
+            workspaceTool: 'stormwater-quick-check' as const,
+            status: 'expanded' as const,
+          },
+        },
+      ];
+    });
+  }, [setStormwaterChatHistory]);
+
+  // Selecting the Stormwater Agent should surface its primary tool instead of
+  // leaving the chat and tool dock empty until the user guesses a command.
+  // openStormwaterQuickCheck is idempotent when the card is already last.
+  useEffect(() => {
+    if (
+      activeAgent === AgentType.STORMWATER_AGENT &&
+      experimentalStormwaterEnabled &&
+      !isInitialScreen
+    ) {
+      openStormwaterQuickCheck();
+    }
+  }, [activeAgent, experimentalStormwaterEnabled, isInitialScreen, openStormwaterQuickCheck]);
+
+  /** Pull the Dirt Volume workspace into the agent chat as an inline A2UI card. */
+  const openDirtVolumePanel = useCallback(() => {
+    setDirtVolumeChatHistory(prev => {
+      const last = prev[prev.length - 1];
+      if (last?.a2ui?.widgetType === 'dirt-volume-panel') return prev;
+      return [
+        ...prev,
+        {
+          role: MessageRole.MODEL,
+          text:
+            'Dirt Volume workspace — end-area and TIN-to-TIN takeoffs, scenario comparison, and PDF reports.',
+          a2ui: {
+            kind: 'workspace-tool' as const,
+            agent: AgentType.DIRT_VOLUME_AGENT,
+            widgetType: 'dirt-volume-panel' as const,
+            workspaceTool: 'dirt-volume-panel' as const,
+            status: 'expanded' as const,
+          },
+        },
+      ];
+    });
+  }, [setDirtVolumeChatHistory]);
+
+  // Selecting the Dirt Volume Agent surfaces its primary tool immediately.
+  useEffect(() => {
+    if (activeAgent === AgentType.DIRT_VOLUME_AGENT && !isInitialScreen) {
+      openDirtVolumePanel();
+    }
+  }, [activeAgent, isInitialScreen, openDirtVolumePanel]);
+
   // CACP — Domain skill handlers across Structures, Soils, Contouring, Steep
   // Slope, Profile, Voice, AR, DXF, Civil Drafter, Civil Plan Expert, CAD
   // Manager (`cad_set_active_drawing_layer`), and remaining survey agents.
@@ -12599,6 +12781,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     onShowTinSurfaceOnCanvas: handleShowTinSurfaceOnCanvas,
     openTinSurfaceStudio: openTinSurfacesSurface,
     openSpreadsheetSurface,
+    openStormwaterQuickCheck,
+    openDirtVolumePanel,
     openRoadPaintStudio: spec => {
       openRoadPaintStudioSurface({ centerlines, initialSpec: spec, onApply: requestRoadPaintApply });
     },
@@ -14079,6 +14263,21 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     });
   }, [openStandaloneA2UISurface]);
 
+  /** Open the live chip list of every generated/drawn centerline and baseline. */
+  const openCenterlineListSurface = useCallback(() => {
+    openStandaloneA2UISurface({
+      role: MessageRole.MODEL,
+      text: 'Centerlines & baselines — click a chip to make an alignment active, or double-click it to open its Stationing tools.',
+      a2ui: {
+        kind: 'workspace-tool',
+        agent: AgentType.CENTERLINE_STATIONING,
+        widgetType: 'centerline-list',
+        workspaceTool: 'centerline-list',
+        status: 'expanded',
+      },
+    });
+  }, [openStandaloneA2UISurface]);
+
   /** Open the Point Tools hub through the standard standalone A2UI path. */
   const openPointToolsSurface = useCallback(() => {
     openStandaloneA2UISurface({
@@ -14416,6 +14615,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         effectiveIntakeAgent === AgentType.CAD_MANAGER ? cadManagerChatHistory :
         effectiveIntakeAgent === AgentType.STANDARDS_COMPLIANCE ? standardsComplianceChatHistory :
         effectiveIntakeAgent === AgentType.ROADING_AGENT ? roadingChatHistory :
+        effectiveIntakeAgent === AgentType.STORMWATER_AGENT ? stormwaterChatHistory :
+        effectiveIntakeAgent === AgentType.DIRT_VOLUME_AGENT ? dirtVolumeChatHistory :
         lsvzChatHistory;
       const lastIntakeMsg = currentHistoryForIntake.length > 0
         ? currentHistoryForIntake[currentHistoryForIntake.length - 1]
@@ -15411,10 +15612,102 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
     }
 
+    // Start-station edits are deterministic host edits. Changing beginStation
+    // re-renders every station label immediately; the model used to acknowledge
+    // these requests without touching the Centerline.
+    if (askPeerDepth === 0 && !isInternalFollowUp) {
+      const liveCenterlines = centerlinesRef.current;
+      const startStationEdit = parseStartStationEdit(query, {
+        centerlineNames: liveCenterlines.map(centerline => centerline.name),
+        allowImplicitAlignment: liveCenterlines.length > 0,
+      });
+      if (startStationEdit) {
+        const alignmentName = startStationEdit.alignmentName;
+        const target = alignmentName
+          ? liveCenterlines.find(centerline => centerline.name.toLowerCase() === alignmentName.toLowerCase())
+          : liveCenterlines[0];
+        const commandSetHistory =
+          getSetHistoryForAgent(agentOverride || activeAgent || AgentType.LSVZ_AGENT) ??
+          getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
+        if (target && commandSetHistory) {
+          const oldStation = target.beginStation;
+          const newStation = startStationEdit.station;
+          const endStation = newStation + calculateCenterlineLength(target);
+          setCenterlines(prev => prev.map(centerline =>
+            centerline.id === target.id ? { ...centerline, beginStation: newStation } : centerline,
+          ));
+          logActionToFieldbook(
+            `Start station updated on centerline "${target.name}": ${formatStationLabel(oldStation)} → ${formatStationLabel(newStation)}.`,
+          );
+          commandSetHistory(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            {
+              role: MessageRole.MODEL,
+              text:
+                `Start station updated on <strong>${target.name}</strong>: ` +
+                `${formatStationLabel(oldStation)} → ${formatStationLabel(newStation)}. ` +
+                `Geometry is unchanged; station labels now run from ${formatStationLabel(newStation)} ` +
+                `to ${formatStationLabel(endStation)}.`,
+            },
+          ]);
+          setSuggestedQuestions(['Open Stationing Controls', 'Show station labels', 'Adjust the end station']);
+          requestAnimationFrame(() => canvas2dRef.current?.redraw());
+          return;
+        }
+      }
+    }
+
+    // Stationing annotation edits are deterministic host edits too. The model
+    // previously acknowledged "remove the STA prefix" while the canvas kept
+    // drawing STA; applying the parsed patch here guarantees the labels change.
+    if (askPeerDepth === 0 && !isInternalFollowUp) {
+      const annotationCenterlines = centerlinesRef.current;
+      const annotationPatch = parseStationingAnnotationIntent(query, annotationCenterlines);
+      if (annotationPatch) {
+        const annotationResult = applyStationingAnnotationPatch(
+          settings,
+          annotationCenterlines,
+          annotationPatch,
+        );
+        const annotationSetHistory =
+          getSetHistoryForAgent(agentOverride || activeAgent || AgentType.LSVZ_AGENT) ??
+          getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
+        if (annotationSetHistory) {
+          if (annotationResult.ok) {
+            setSettings(annotationResult.settings);
+            logActionToFieldbook(
+              `Stationing annotations updated: ${annotationResult.summary.join(' ')}`,
+            );
+            annotationSetHistory(prev => [
+              ...markPendingA2UICompleted(prev),
+              { role: MessageRole.USER, text: query },
+              {
+                role: MessageRole.MODEL,
+                text: annotationResult.summary.join('<br/>'),
+              },
+            ]);
+            setSuggestedQuestions([
+              'Open Stationing Controls',
+              'Hide station labels',
+              'Reset baseline label overrides',
+            ]);
+            requestAnimationFrame(() => canvas2dRef.current?.redraw());
+          } else {
+            setError(annotationResult.error ?? 'Could not apply the stationing annotation change.');
+            setTimeout(() => setError(null), 5000);
+          }
+          return;
+        }
+      }
+    }
+
     // Latent A2UI surfaces: construct protocol, settings, and workspace tool
     // surfaces on demand when the chat request calls for one.
     if (!agentOverride && askPeerDepth === 0) {
-      const surfaceIntent = resolveA2UISurfaceIntent(query);
+      const surfaceIntent = resolveA2UISurfaceIntent(query, {
+        centerlineNames: centerlines.map(centerline => centerline.name),
+      });
       const surfaceSetHistory = getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
       if (surfaceIntent && surfaceSetHistory) {
         if (surfaceIntent.surface === 'point-editor') {
@@ -15436,6 +15729,40 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
         let surfacePayload: A2UIPayload;
         let surfaceReplyText = surfaceIntent.replyText;
+        if (surfaceIntent.surface === 'centerline-picker') {
+          const form = {
+            title: 'Which centerline?',
+            description: 'Choose the alignment whose start station you want to adjust.',
+            submitLabel: 'Use this centerline',
+            fields: [
+              {
+                id: 'centerline',
+                label: 'Centerline',
+                type: 'select' as const,
+                options: surfaceIntent.centerlineNames,
+                required: true,
+              },
+            ],
+          };
+          surfaceSetHistory(prev => [
+            ...markPendingA2UICompleted(prev),
+            { role: MessageRole.USER, text: query },
+            {
+              role: MessageRole.MODEL,
+              text: surfaceIntent.replyText,
+              needsInput: true,
+              a2ui: {
+                kind: 'input-form',
+                agent: AgentType.CENTERLINE_STATIONING,
+                widgetType: 'input-form',
+                status: 'prompting',
+                inputForm: form,
+              },
+            },
+          ]);
+          setSuggestedQuestions(surfaceIntent.suggestedQuestions);
+          return;
+        }
         if (surfaceIntent.surface === 'cacp-manifests') {
           surfacePayload = {
             kind: 'cacp-manifests',
@@ -15453,6 +15780,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             widgetType: 'cacp-review',
             status: 'expanded',
             cacpReview: buildCacpReviewContext(notable.length > 0 ? notable : log),
+          };
+        } else if (surfaceIntent.surface === 'key-entry') {
+          surfacePayload = {
+            kind: 'key-entry',
+            agent: activeAgent || AgentType.LSVZ_AGENT,
+            widgetType: 'key-entry',
+            status: 'expanded',
+            keyEntry: { focus: surfaceIntent.focus },
           };
         } else if (surfaceIntent.surface === 'settings') {
           surfacePayload = {
@@ -15830,6 +16165,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         case AgentType.STRUCTURES_AGENT: chat = structuresChat; setHistory = setStructuresChatHistory; break;
         case AgentType.SOILS_AGENT: chat = soilsChat; setHistory = setSoilsChatHistory; break;
         case AgentType.ROADING_AGENT: chat = roadingChat; setHistory = setRoadingChatHistory; break;
+        case AgentType.STORMWATER_AGENT: chat = stormwaterChat; setHistory = setStormwaterChatHistory; break;
+        case AgentType.DIRT_VOLUME_AGENT: chat = dirtVolumeChat; setHistory = setDirtVolumeChatHistory; break;
         case AgentType.AR_AGENT: return; // AR agent doesn't use chat
         case AgentType.FIELD_BOOK: return; // Field book uses notepad, not chat
         case AgentType.FILE_MANAGER: return; // File manager doesn't use chat
@@ -18700,11 +19037,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 if (/\b(road|roadway|street|pavement|paved|curb|gutter|intersection|corridor|centerline|centreline|driveway|shoulder|right[- ]of[- ]way)\b/i.test(query)) return true;
                 return linesToPlot.some(line => {
                   const lineValue = `${line.layer ?? ''} ${line.polylineId ?? ''}`;
-                  if (/\b(road|roadway|street|pave|curb|gutter|edge|eop|ep|er|centerline|centreline)\b/i.test(lineValue)) return true;
+                  if (/\b(road|roadway|street|pave|curb|gutter|edge|eop|ep|er|dep|centerline|centreline)\b/i.test(lineValue)) return true;
                   const from = pointLookup.get(line.from);
                   const to = pointLookup.get(line.to);
                   return [from, to].some(point =>
-                    Boolean(point?.description && /\b(EP|EOP|ER|EDGE|CURB|GUTTER|CL|CTR|SHLD|TC|BC|EC)\b/i.test(point.description)),
+                    Boolean(point?.description && /\b(EP|EOP|ER|EDGE|CURB|GUTTER|CL|CTR|SHLD|TC|BC|DEP|EC)\b/i.test(point.description)),
                   );
                 });
               })();
@@ -19606,6 +19943,25 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             showView('canvas');
           }
           
+          if (parsedJson.stationingSettings) {
+            const patch = normalizeStationingAnnotationPatch(parsedJson.stationingSettings);
+            if (!patch) {
+              setError('Invalid stationingSettings payload from AI.');
+              setTimeout(() => setError(null), 5000);
+            } else {
+              const result = applyStationingAnnotationPatch(settings, centerlinesRef.current, patch);
+              if (!result.ok) {
+                setError(result.error ?? 'Could not apply the stationing annotation change.');
+                setTimeout(() => setError(null), 5000);
+              } else {
+                visualDataFound = true;
+                setSettings(result.settings);
+                logActionToFieldbook(`Stationing annotations updated: ${result.summary.join(' ')}`);
+                requestAnimationFrame(() => canvas2dRef.current?.redraw());
+              }
+            }
+          }
+
           if (parsedJson.stationingParameters) {
             const params = parsedJson.stationingParameters;
             const { startStation, endStation, interval, offset, pointNumberPrefix, description, keyStations } = params;
@@ -20855,6 +21211,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       return;
     }
 
+    if (agent === AgentType.STORMWATER_AGENT && !isExperimentalAgentEnabled(AgentType.STORMWATER_AGENT)) {
+      setError('Stormwater Agent is experimental and disabled. Enable it in Settings > Experimental Agents to use it.');
+      return;
+    }
+
     // Push current state to navigation history before changing
     if (isSessionActive && !isInitialScreen) {
       pushNavigation(activeAgent, activeVisualPanel);
@@ -20976,6 +21337,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     handleAgentChange(AgentType.CIVIL_DRAFTER);
   }, [activeAgent, experimentalRoadingEnabled, handleAgentChange]);
   
+  // If Stormwater is disabled while active (or a saved session restores it), move
+  // the workspace to Civil Drafter instead of leaving an experimental H&H agent in control.
+  useEffect(() => {
+    if (activeAgent !== AgentType.STORMWATER_AGENT || experimentalStormwaterEnabled) return;
+    setError('Stormwater Agent is experimental and disabled. Switched to Civil Drafter; enable Stormwater in Settings > Experimental Agents to use it.');
+    handleAgentChange(AgentType.CIVIL_DRAFTER);
+  }, [activeAgent, experimentalStormwaterEnabled, handleAgentChange]);
+
   const handleModelChange = useCallback((model: string) => {
     const normalizedModel = normalizeSelectedModel(model);
     if (normalizedModel === activeModel) return;
@@ -21084,6 +21453,28 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       return next;
     });
   }, []);
+
+  /** Selecting a chip reorders that alignment to the front, the active slot. */
+  const selectCenterline = useCallback((centerlineId: string) => {
+    setCenterlines(prev => {
+      const index = prev.findIndex(cl => cl.id === centerlineId);
+      if (index <= 0) return prev;
+      return [prev[index], ...prev.filter((_, i) => i !== index)];
+    });
+  }, []);
+
+  /** Shared by canvas double-click and the A2UI chip list. */
+  const openCenterlineTools = useCallback((centerlineId: string) => {
+    selectCenterline(centerlineId);
+    setActiveAgent(AgentType.CENTERLINE_STATIONING);
+    setIsToolShelfVisible(true);
+    toggleToolDock('stationing', true);
+    requestToolShelfTab('stationing');
+    const name = centerlinesRef.current.find(cl => cl.id === centerlineId)?.name;
+    logActionToFieldbook(
+      `Stationing & CL: opened alignment tools for ${name ?? 'the selected baseline'}.`,
+    );
+  }, [logActionToFieldbook, requestToolShelfTab, selectCenterline, toggleToolDock]);
   
   const handlePlaceStationOffsetPoint = useCallback((northing: number, easting: number, pointNumber: string, description: string) => {
     logActionToFieldbook(`Calculated and placed point ${pointNumber} by station/offset.`);
@@ -21271,11 +21662,47 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
   const handleAddLine = useCallback((newLine: SurveyLine) => {
     pushHistory(`Drew line ${newLine.from}�${newLine.to}`);
-    // A segment drawn onto an existing line's endpoint continues that line's
-    // layer rather than the ambient drawing layer.
-    setLines(prev => [...prev, addLineToList(inheritConnectedLayer(newLine, prev))]);
+    // Guess the layer from the field codes / CAD layers of the points being
+    // joined when the line has no explicit layer. A segment drawn onto an
+    // existing line's endpoint still continues that line's layer first, so a
+    // connected feature stays on one layer even if one shot is miscoded.
+    const pointLookup = new Map(
+      pointListsRef.current
+        .flatMap(list => list.points)
+        .map(point => [point.pointNumber, point] as const),
+    );
+    const standard = cadManagerContext.state.standard;
+    const resolveDescriptionLineLayer = (description: string): string | null => {
+      if (!standard) return null;
+      const resolution = cadManagerContext.resolveCode(description);
+      if (resolution.source !== 'unknown' && resolution.lineLayer) return resolution.lineLayer;
+      // Common field shorthand such as BLD for the standard's BLDG code.
+      return resolveLineLayerByCodePrefix(description, standard.codes);
+    };
+    const resolvePointLayerLineLayer = (pointLayer: string): string | null => {
+      if (!standard) return null;
+      const key = pointLayer.trim().toUpperCase();
+      const match = standard.codes.find(
+        code => code.lineLayer && code.pointLayer?.trim().toUpperCase() === key,
+      );
+      return match?.lineLayer ?? null;
+    };
+    const guessedLayer = newLine.layer
+      ? null
+      : guessLineLayerFromPoints(
+          newLine,
+          pointNumber => pointLookup.get(pointNumber),
+          resolveDescriptionLineLayer,
+          resolvePointLayerLineLayer,
+        );
+    setLines(prev => [
+      ...prev,
+      addLineToList(
+        inheritConnectedLayer(guessedLayer ? { ...newLine, layer: guessedLayer } : newLine, prev),
+      ),
+    ]);
     logActionToFieldbook(`Drew line from ${newLine.from} to ${newLine.to}.`);
-  }, [pushHistory, logActionToFieldbook]);
+  }, [pushHistory, logActionToFieldbook, cadManagerContext]);
 
   /** Apply a multi-entity CAD edit as one history entry and one state update. */
   const handleBatchLines = useCallback((removeIds: string[], newLines: SurveyLine[]) => {
@@ -25288,6 +25715,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     activeAgent === AgentType.STANDARDS_COMPLIANCE ? standardsComplianceChatHistory :
     activeAgent === AgentType.ROADING_AGENT ? roadingChatHistory :
     activeAgent === AgentType.SOILS_AGENT ? soilsChatHistory :
+    activeAgent === AgentType.STORMWATER_AGENT ? stormwaterChatHistory :
+    activeAgent === AgentType.DIRT_VOLUME_AGENT ? dirtVolumeChatHistory :
     gpsStakeoutChatHistory;
 
   // Cursor-anchored quick inputs: a flash mirrors a one/two-field plain form
@@ -25295,6 +25724,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   // Questions with option buttons, selects, checkboxes, or longer forms stay in
   // Quick Thought / the chat, so the same prompt is never raised twice at once.
   const canvasFlashInputKeyRef = useRef<string | null>(null);
+  const baselineStartSceneRef = useRef({ centerlines, points });
+  baselineStartSceneRef.current = { centerlines, points };
   useEffect(() => {
     const pending = (() => {
       for (let index = currentChatHistory.length - 1; index >= 0; index -= 1) {
@@ -25310,6 +25741,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           a2ui.status !== 'dismissed'
         ) {
           const form = a2ui.inputForm;
+          // Baseline starts are locations. Offer existing endpoints/points and a
+          // canvas pick instead of mirroring a typed N/E form into the flash.
+          if (isBaselineStartCoordinateForm(form)) {
+            return {
+              kind: 'baseline-start' as const,
+              key: `${index}:${msgAgent}:${form.title ?? ''}:baseline-start`,
+              form,
+              agent: msgAgent,
+            };
+          }
           // A flash exists to collect a quick value without crossing the screen.
           // Choices, checkboxes, and longer forms belong to Quick Thought.
           if (!canMirrorInputFormAsFlash(form)) {
@@ -25342,6 +25783,40 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
     const target = pending;
     canvasFlashInputKeyRef.current = target.key;
+    if (target.kind === 'baseline-start') {
+      const choices = buildBaselineStartChoices(baselineStartSceneRef.current);
+      openCanvasFlashForOptions({
+        id: target.key,
+        title: 'BASELINE START',
+        hint: 'Continue from an alignment end, or pick a start point on the canvas.',
+        options: [BASELINE_START_PICK_LABEL, ...choices.map(choice => choice.label)],
+        onSelect: option => {
+          if (option === BASELINE_START_PICK_LABEL) {
+            const canvas = canvas2dRef.current;
+            if (!canvas?.beginBaselineStartPick) {
+              flashCanvasMessage('Open the drawing canvas to pick a start point.', { tone: 'info' });
+              return;
+            }
+            canvas.beginBaselineStartPick(
+              coordinates => {
+                void handleSendMessage(
+                  `Start the baseline at N ${coordinates.northing.toFixed(2)}, E ${coordinates.easting.toFixed(2)}.`,
+                  target.agent,
+                );
+              },
+              () => {
+                flashCanvasMessage('Baseline start pick cancelled.', { tone: 'info' });
+              },
+            );
+            return;
+          }
+          const choice = choices.find(candidate => candidate.label === option);
+          if (!choice) return;
+          void handleSendMessage(formatBaselineStartMessage(choice), target.agent);
+        },
+      });
+      return;
+    }
     openCanvasFlashForInputForm({
       id: target.key,
       form: target.form,
@@ -25511,6 +25986,36 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     return list;
   }, [highlights, deedFile, planFiles, setPdfViewerFiles, showView, appNotifications]);
 
+  const stormwaterDrawnAreas = useMemo<StormwaterDrawnArea[]>(() => {
+    const areas: StormwaterDrawnArea[] = [];
+    for (const hatch of hatches) {
+      if (hatch.hidden || hatch.generationId || !hatch.areaSqFt || hatch.areaSqFt <= 0) continue;
+      areas.push({
+        id: `hatch:${hatch.id}`,
+        name: hatch.name?.trim() || hatch.patternName || 'Hatched area',
+        areaSqFt: hatch.areaSqFt,
+        source: 'hatch',
+      });
+    }
+    for (const boundary of boundaryFiles) {
+      if (boundary.hidden) continue;
+      const geometry = extractBoundaryGeometry([boundary]);
+      if (geometry.vertices.length < 3) continue;
+      const areaSqFt = computePolygonAreaAbs(
+        geometry.vertices.map((vertex) => ({ x: vertex.easting, y: vertex.northing })),
+      );
+      if (areaSqFt > 0) {
+        areas.push({
+          id: `boundary:${boundary.id}`,
+          name: boundary.name || 'Drawn boundary',
+          areaSqFt,
+          source: 'boundary',
+        });
+      }
+    }
+    return areas;
+  }, [hatches, boundaryFiles]);
+
   const renderWorkspaceTool = useCallback(
     (toolId: A2UIWorkspaceToolId): React.ReactNode => {
       switch (toolId) {
@@ -25607,6 +26112,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   onSettingsChange={setSettings}
                   agentDrawMode={agentDrawMode}
                   onAgentDrawModeChange={setAgentDrawMode}
+                  centerlines={centerlines}
                 />
               </div>
             </div>
@@ -25619,6 +26125,21 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 onSettingsChange={setSettings}
                 agentDrawMode={agentDrawMode}
                 onAgentDrawModeChange={setAgentDrawMode}
+                centerlines={centerlines}
+              />
+            </div>
+          );
+        case 'centerline-list':
+          return (
+            <div className="p-2">
+              <A2UICenterlineList
+                centerlines={centerlines}
+                activeCenterlineId={centerlines[0]?.id}
+                centerlinesVisible={centerlinesVisible}
+                onToggleVisibility={() => setCenterlinesVisible(visible => !visible)}
+                onSelect={selectCenterline}
+                onOpenTools={openCenterlineTools}
+                onOpenStationingControls={openStationingControlsSurface}
               />
             </div>
           );
@@ -25895,11 +26416,21 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               <A2UIRoadPaintStudio centerlines={centerlines} onApply={requestRoadPaintApply} />
             </div>
           );
+        case 'stormwater-quick-check':
+          return <StormwaterPanel chrome="surface" drawnAreas={stormwaterDrawnAreas} />;
+        case 'dirt-volume-panel':
+          return (
+            <DirtVolumePanel
+              chrome="surface"
+              tinSurfaces={tinSurfaces}
+              projectName={jobInfo?.jobName}
+            />
+          );
         case 'roading-panel':
           return (
             <div className="p-3">
               <RoadingPanel
-                roadSurveyPointCount={points.filter((p: SurveyPoint) => /\b(EP|EOP|CL|CURB|TBC|ROW|ROAD|PAVE)\b/i.test(p.description || '')).length}
+                roadSurveyPointCount={points.filter((p: SurveyPoint) => /\b(EP|EOP|CL|CURB|DEP|TBC|ROW|ROAD|PAVE)\b/i.test(p.description || '')).length}
                 totalPointCount={points.length}
                 centerlines={centerlines}
                 roadCorridors={roadCorridors}
@@ -26001,8 +26532,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       handleTogglePointListVisibility,
       linesVisible,
       setLinesVisible,
+      centerlines,
       centerlinesVisible,
       setCenterlinesVisible,
+      selectCenterline,
+      openCenterlineTools,
       pointLayers,
       handleLayerToggle,
       handleLayerColorChange,
@@ -26084,6 +26618,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       requestToolShelfTab,
       setIsToolShelfVisible,
       toggleToolDock,
+      stormwaterDrawnAreas,
     ]
   );
 
@@ -26179,6 +26714,28 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     onInspectCacpAgent: openCacpManifestSurface,
     onPointsUploaded: handlePointsUploaded,
     onPointEditorSessionStart: handlePointEditorSessionStart,
+    keyEntryStatus: {
+      hasLandSurvKey,
+      hasGoogleApiKey: Boolean(settings.userApiKey && !isDemoApiKey(settings.userApiKey)),
+      hasServiceAccess,
+      serviceAccessExpiresAt,
+      computeCredits,
+      connectedProviders: {
+        google: Boolean(getProviderApiKey('google')),
+        openai: Boolean(getProviderApiKey('openai')),
+        xai: Boolean(getProviderApiKey('xai')),
+        anthropic: Boolean(getProviderApiKey('anthropic')),
+      },
+      currentKeyDetails,
+    },
+    onSubmitServiceKey: handleServiceKeySubmit,
+    onSubmitApiKey: handleApiKeySubmit,
+    onSubmitProviderKey: handleProviderKeySubmit,
+    onClearProviderKey: (provider) => { handleProviderKeySubmit(provider, ''); },
+    onOpenKeyUpgrade: () => {
+      setShowApiKeyModal(false);
+      setShowUpgradeModal(true);
+    },
     onAddPointFromSurface: handleAddPointFromSurface,
     getNextPointNumber: getNextPointNumberFromSurface,
     isPointNumberTaken: isPointNumberTakenFromSurface,
@@ -26445,6 +27002,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     openCacpManifestSurface,
     handlePointsUploaded,
     handlePointEditorSessionStart,
+    hasLandSurvKey,
+    hasServiceAccess,
+    serviceAccessExpiresAt,
+    computeCredits,
+    currentKeyDetails,
+    settings.userApiKey,
+    settings.openaiApiKey,
+    settings.xaiApiKey,
+    settings.anthropicApiKey,
+    handleServiceKeySubmit,
+    handleProviderKeySubmit,
+    handleApiKeySubmit,
     handleAddPointFromSurface,
     getNextPointNumberFromSurface,
     isPointNumberTakenFromSurface,
@@ -27188,7 +27757,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       initialY={140}
     >
       <RoadingPanel
-        roadSurveyPointCount={points.filter((p: SurveyPoint) => /\b(EP|EOP|CL|CURB|TBC|ROW|ROAD|PAVE)\b/i.test(p.description || '')).length}
+        roadSurveyPointCount={points.filter((p: SurveyPoint) => /\b(EP|EOP|CL|CURB|DEP|TBC|ROW|ROAD|PAVE)\b/i.test(p.description || '')).length}
         totalPointCount={points.length}
         centerlines={centerlines}
         roadCorridors={roadCorridors}
@@ -27633,6 +28202,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         settings={settings}
         agentDrawMode={agentDrawMode}
         onOpenStationingSettings={openStationingControlsSurface}
+        onOpenCenterlineList={openCenterlineListSurface}
       />
     </FloatingPanel>
   );
@@ -28802,6 +29372,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onDeleteCenterline={(centerlineId) => setCenterlines(prev => prev.filter(cl => cl.id !== centerlineId))}
                                         onUpsertCenterline={handleUpsertCenterline}
                                         onOpenStationingSettings={openStationingControlsSurface}
+                                        onOpenCenterlineTools={openCenterlineTools}
                                         onBatchLinesChange={handleBatchLines}
                                         canUndo={canUndo}
                                         canRedo={canRedo}
@@ -28910,7 +29481,37 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onToggleExpandMessage={handleToggleExpandMessage}
                                         chatHeaderControls={chatHeaderControls}
                                         chatBarAccessories={
-                                            activeAgent === AgentType.CIVIL_DRAFTER ? (
+                                            activeAgent === AgentType.DIRT_VOLUME_AGENT ? (
+                                                <div className="flex items-center gap-2 px-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            openDirtVolumePanel();
+                                                            setAgentChatOpenSignal(n => n + 1);
+                                                        }}
+                                                        className="inline-flex items-center gap-1.5 rounded-md border border-amber-400/40 bg-amber-500/15 px-2.5 py-1 text-[11px] font-bold text-amber-100 shadow-sm transition-all hover:bg-amber-500/25 active:scale-95"
+                                                        title="Open earthwork quantity, comparison, and report tools"
+                                                    >
+                                                        <span>⛰</span>
+                                                        <span>Volume Tools</span>
+                                                    </button>
+                                                </div>
+                                            ) : activeAgent === AgentType.STORMWATER_AGENT ? (
+                                                <div className="flex items-center gap-2 px-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            openStormwaterQuickCheck();
+                                                            setAgentChatOpenSignal(n => n + 1);
+                                                        }}
+                                                        className="inline-flex items-center gap-1.5 rounded-md border border-sky-400/40 bg-sky-500/15 px-2.5 py-1 text-[11px] font-bold text-sky-100 shadow-sm transition-all hover:bg-sky-500/25 active:scale-95"
+                                                        title="Open stormwater runoff, detention, and channel tools"
+                                                    >
+                                                        <span>☔</span>
+                                                        <span>Hydrology Tools</span>
+                                                    </button>
+                                                </div>
+                                            ) : activeAgent === AgentType.CIVIL_DRAFTER ? (
                                                 <div className="flex items-center gap-2 px-1">
                                                     <button
                                                         type="button"
@@ -29649,6 +30250,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 settings={settings}
                                                 agentDrawMode={agentDrawMode}
                                                 onOpenStationingSettings={openStationingControlsSurface}
+                                                onOpenCenterlineList={openCenterlineListSurface}
                                             />
                                         ) : activeAgent === AgentType.DEED_READER ? (
                                             undefined
@@ -31019,6 +31621,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               }
               else if (definition.id === 'workspace-legend') openLegendStudioSurface(legendDrawingLayers, { onSetLayersViewVisible: handleApplyCadLayerVisibility });
               else if (definition.id === 'workspace-sheet-view') showView('sheetview');
+              else if (definition.id === 'workspace-stormwater') openStormwaterQuickCheck();
+              else if (definition.id === 'workspace-dirt-volume') openDirtVolumePanel();
               else if (definition.id === 'workspace-spreadsheet') {
                 openSpreadsheetSurface(createBlankSpreadsheetSpec());
               }

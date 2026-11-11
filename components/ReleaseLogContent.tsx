@@ -2,6 +2,14 @@
 
 const releases = [
     {
+        version: "26.11.11.01",
+        date: "November 11, 2026",
+        highlights: [
+            "📐 TIN Surfaces Now Truncate at the Inclusion Boundary: TINs created from contours are clipped to the generation's inclusion polygon instead of the Delaunay convex hull. Triangles that cross the boundary are split rather than dropped, new boundary vertices carry elevations interpolated from the source triangle, concave notches are no longer bridged, and generations using Outside inclusion mode keep the exterior portion. The fieldbook entry notes when a surface was trimmed, and the same behavior applies from the Contour panel, the A2UI TIN Surfaces surface and CACP. Existing TINs are unchanged until re-created from their generation.",
+            "〰️ Chained Lines and Arcs Gain Mend and Close: In the shared L / boundary / breakline / inclusion / exclusion line-arc engine, `m` offers a tangent closing curve with a live hover preview — `F` cycles the available solutions and Esc cancels — while `c` closes with a straight segment from the current point back to the chain start, AutoCAD-style. The circle command now accepts `TTR` (also `CIRCLE TANGENT` or standalone `TTR`) for a circle tangent to two selected objects at a chosen radius.",
+        ],
+    },
+    {
         version: "26.11.10.02",
         date: "November 10, 2026",
         highlights: [

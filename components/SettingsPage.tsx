@@ -10,7 +10,7 @@ import { PROVIDER_KEY_URLS, type ByokProvider } from '../services/providerKeys.t
 import { WebGpuBasemap, isWebGpuEnabled, getGpuPowerPreference, probeWebGpuAdapter, WEBGPU_ENABLED_KEY, WEBGPU_POWER_KEY, WEBGPU_PREF_EVENT, type GpuPowerPreference, type WebGpuProbeResult } from '../utils/webgpuBasemap.ts';
 import GlobalCrsPicker from './GlobalCrsPicker.tsx';
 import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnabled.ts';
-import { EXPERIMENTAL_ROADING_WARNING, setExperimentalAgentEnabled } from '../utils/experimentalAgents.ts';
+import { EXPERIMENTAL_ROADING_WARNING, EXPERIMENTAL_STORMWATER_WARNING, setExperimentalAgentEnabled } from '../utils/experimentalAgents.ts';
 import { detectProjectionFromBrowser } from '../utils/autoProjection.ts';
 
 const FORCE_AGENT_OPTIONS: AgentType[] = [
@@ -41,6 +41,8 @@ const FORCE_AGENT_OPTIONS: AgentType[] = [
     AgentType.VOICE_AGENT,
     AgentType.AR_AGENT,
     AgentType.FLOOD_AGENT,
+    AgentType.STORMWATER_AGENT,
+    AgentType.DIRT_VOLUME_AGENT,
 ].sort((a, b) => (agentConfig[a]?.label ?? a).localeCompare(agentConfig[b]?.label ?? b));
 
 const AUTO_SELECTOR_OPTION = 'auto';
@@ -98,6 +100,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     , projectBboxWgs84, gpsPosition
 }) => {
     const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
+    const experimentalStormwaterEnabled = useExperimentalAgentEnabled(AgentType.STORMWATER_AGENT);
     const [isConfirmingReset, setIsConfirmingReset] = useState(false);
     const [showScrollIndicator, setShowScrollIndicator] = useState(true);
     const [inputApiKey, setInputApiKey] = useState(settings.userApiKey || '');
@@ -442,6 +445,19 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                     </label>
                     <p className="text-xs text-amber-200/80 light-theme:text-amber-800">{EXPERIMENTAL_ROADING_WARNING}</p>
                     <p className="text-xs text-gray-400 light-theme:text-gray-600">Off by default. While off, Roading is listed as Experimental / Off, CACP ignores it, and road requests stay with Civil Drafter.</p>
+                    <div className="border-t border-amber-500/20 pt-3 light-theme:border-amber-300">
+                        <label className="flex items-center gap-3 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={experimentalStormwaterEnabled}
+                                onChange={e => setExperimentalAgentEnabled(AgentType.STORMWATER_AGENT, e.target.checked)}
+                                className={`w-4 h-4 ${themeAccent}`}
+                            />
+                            <span className="text-sm font-medium text-amber-200 light-theme:text-amber-800">Enable Stormwater Agent (Experimental)</span>
+                        </label>
+                        <p className="mt-2 text-xs text-amber-200/80 light-theme:text-amber-800">{EXPERIMENTAL_STORMWATER_WARNING}</p>
+                        <p className="mt-1 text-xs text-gray-400 light-theme:text-gray-600">Off by default. While off, Stormwater is listed as Experimental / Off and CACP ignores its skills.</p>
+                    </div>
                 </div>
             </div>
 

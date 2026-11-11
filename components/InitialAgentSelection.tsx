@@ -20,6 +20,8 @@ import { CadManagerContent } from './landing/CadManagerContent.tsx';
 import { CivilDrafterContent } from './landing/CivilDrafterContent.tsx';
 import { StandardsComplianceContent } from './landing/StandardsComplianceContent.tsx';
 import { RoadingAgentContent } from './landing/RoadingAgentContent.tsx';
+import { StormwaterAgentContent } from './landing/StormwaterAgentContent.tsx';
+import { StormwaterIcon, DirtVolumeIcon } from './icons.tsx';
 import { BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, DocumentDuplicateIcon, DxfAnalyzerIcon, LsvzIcon, CurrencyDollarIcon, CrosshairsIcon, CogoIcon, FolderIcon, DocumentTextIcon, ArrowUpTrayIcon, DownloadIcon, ScaleIcon, MapPinIcon, CameraIcon, DroneIcon, ClipboardDocumentListIcon, LogClockIcon, BugAntIcon, CpuChipIcon, GisAgentIcon, ContourIcon, ProfileIcon, SatelliteIcon, ARIcon, ZoningIcon, TitleSearchIcon, PlugIcon, LayersIcon, CadManagerIcon, CivilDrafterIcon, KeyIcon, CogIcon, FloodIcon, HomeIcon, StructuresIcon, SoilsIcon, SlopeIcon, StandardsComplianceIcon, EnvelopeIcon, InfoIcon, LegalScaleIcon, ProjectionGlobeIcon } from './icons.tsx';
 import { getRetiredAgents, type HomepageAgentType } from '../utils/retiredAgents.ts';
 import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnabled.ts';
@@ -530,6 +532,24 @@ export const homepageAgentCards = [
         releaseStage: 'pre-alpha' as ReleaseStage
     },
     {
+        type: AgentType.STORMWATER_AGENT,
+        title: 'Stormwater Agent (Experimental)',
+        description: 'Experimental — national stormwater runoff with NOAA Atlas 14 rainfall, Rational Method hydrographs, detention routing, and Manning channel capacity. Turn it on in Settings → Experimental Agents.',
+        icon: StormwaterIcon,
+        color: 'sky',
+        actionType: 'agent' as const,
+        releaseStage: 'pre-alpha' as ReleaseStage
+    },
+    {
+        type: AgentType.DIRT_VOLUME_AGENT,
+        title: 'Dirt Volume Agent',
+        description: 'Obtain and compare earthwork quantities — end-area cut/fill from cross sections, TIN-to-TIN surface comparisons, grid takeoffs, and stockpile volumes. Save scenarios, compare design options, and export quantity reports.',
+        icon: DirtVolumeIcon,
+        color: 'amber',
+        actionType: 'agent' as const,
+        releaseStage: 'pre-alpha' as ReleaseStage
+    },
+    {
         type: AgentType.LSVZ_AGENT,
         title: 'LSAI Agent',
         description: 'Your project assistant — ask anything, and it will handle the work or bring in the right specialist.',
@@ -792,6 +812,30 @@ const Card: React.FC<{ card: Card, onClick: () => void, onToolOptionClick?: () =
                 >
                     <StructuresIcon className="w-3 h-3" />
                     Overlay Structures
+                </button>
+            )}
+            {/* Stormwater Agent — Runoff Check CTA opens agent tool dock. */}
+            {card.actionType === 'agent' && card.type === AgentType.STORMWATER_AGENT && (
+                <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); (onToolOptionClick ?? onClick)(); }}
+                    title="Run a Rational Method runoff quick-check for this site"
+                    className={QUICK_CHIP_CLASS}
+                >
+                    <StormwaterIcon className="w-3 h-3" />
+                    Runoff Check
+                </button>
+            )}
+            {/* Dirt Volume Agent — Volume Report CTA opens the agent workspace. */}
+            {card.actionType === 'agent' && card.type === AgentType.DIRT_VOLUME_AGENT && (
+                <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); (onToolOptionClick ?? onClick)(); }}
+                    title="Compute and compare earthwork quantities"
+                    className={QUICK_CHIP_CLASS}
+                >
+                    <DirtVolumeIcon className="w-3 h-3" />
+                    Volume Report
                 </button>
             )}
             {/* Soils Agent — Overlay Soils CTA opens agent tool dock. */}
@@ -1277,6 +1321,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
     setJobInfo
 }) => {
   const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
+  const experimentalStormwaterEnabled = useExperimentalAgentEnabled(AgentType.STORMWATER_AGENT);
   const [isJobInfoOpen, setIsJobInfoOpen] = useState(false);
   const [activeInfoAgent, setActiveInfoAgent] = useState<AgentType | null>(null);
   const [showCallUsModal, setShowCallUsModal] = useState(false);
@@ -1352,7 +1397,10 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
   // Removed walking highlight effect - titles now pulse continuously with CSS animation
   
   const handleCardClick = (card: Card) => {
-    if (card.type === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) {
+    if (
+      (card.type === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) ||
+      (card.type === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled)
+    ) {
       onShowSettings();
       return;
     }
@@ -2143,7 +2191,10 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
                   card={cardWithRelease}
                   onClick={() => handleCardClick(cardWithRelease)}
                   onToolOptionClick={onSelectAgentToolOption ? () => {
-                    if (cardWithRelease.type === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) {
+                    if (
+                      (cardWithRelease.type === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) ||
+                      (cardWithRelease.type === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled)
+                    ) {
                       onShowSettings();
                       return;
                     }

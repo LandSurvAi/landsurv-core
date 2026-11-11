@@ -134,6 +134,87 @@ export const inheritConnectedLayer = (newLine: SurveyLine, lines: SurveyLine[]):
   return newLine;
 };
 
+/** Minimal point shape needed to infer a connecting line's layer. */
+export interface ConnectedPointLayerHint {
+  layer?: string | null;
+  description?: string | null;
+}
+
+/**
+ * Guess a line layer from the points a segment connects.
+ *
+ * Field-to-finish description keys are the strongest signal: a point's
+ * description resolves to its code's line layer. When the description is
+ * unknown, the point's own CAD layer is mapped to a line layer through the
+ * standard, falling back to the point layer itself. The start endpoint wins
+ * when the two ends disagree, mirroring {@link inheritConnectedLayer}.
+ * Circles (from === to) have no second point and never guess.
+ */
+export const guessLineLayerFromPoints = (
+  newLine: Pick<SurveyLine, 'from' | 'to'>,
+  getPoint: (pointNumber: string) => ConnectedPointLayerHint | undefined,
+  resolveDescriptionLineLayer?: (description: string) => string | null | undefined,
+  resolvePointLayerLineLayer?: (pointLayer: string) => string | null | undefined,
+): string | null => {
+  if (newLine.from === newLine.to) return null;
+
+  const layerFor = (pointNumber: string): string | null => {
+    const point = getPoint(pointNumber);
+    if (!point) return null;
+
+    const description = point.description?.trim();
+    if (description && resolveDescriptionLineLayer) {
+      const resolved = resolveDescriptionLineLayer(description);
+      if (resolved) return resolved;
+    }
+
+    const pointLayer = point.layer?.trim();
+    if (!pointLayer) return null;
+    const mapped = resolvePointLayerLineLayer?.(pointLayer);
+    return mapped || pointLayer;
+  };
+
+  return layerFor(newLine.from) ?? layerFor(newLine.to);
+};
+
+/** Minimal code definition needed to resolve a layer from a field description. */
+export interface LineLayerCodeHint {
+  code: string;
+  lineLayer?: string | null;
+  pointLayer?: string | null;
+}
+
+/**
+ * Conservative code-prefix fallback for field descriptions the CAD Manager
+ * cannot resolve. Handles common survey shorthand such as "BLD" for "BLDG"
+ * or "BLD1" for a numbered building shot. Two-letter tokens are ignored so
+ * short prefixes cannot collide with unrelated codes. When several codes share
+ * the prefix, the shortest one wins ("BLDG" over "BLDGS").
+ */
+export const resolveLineLayerByCodePrefix = (
+  description: string,
+  codes: ReadonlyArray<LineLayerCodeHint>,
+): string | null => {
+  const tokens = description.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+  for (const rawToken of tokens) {
+    const token = rawToken.replace(/\d+$/, '');
+    if (token.length < 3) continue;
+
+    let bestCodeLength = Infinity;
+    let bestLayer: string | null = null;
+    for (const code of codes) {
+      const key = code.code.trim().toUpperCase();
+      if (!key || !key.startsWith(token) || !code.lineLayer) continue;
+      if (key.length < bestCodeLength) {
+        bestCodeLength = key.length;
+        bestLayer = code.lineLayer;
+      }
+    }
+    if (bestLayer) return bestLayer;
+  }
+  return null;
+};
+
 /**
  * Delete a line from the lines list by ID. Matches either the explicit
  * `line.id` or the composite `from-to` key used by selection tooling.

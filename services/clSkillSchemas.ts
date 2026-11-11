@@ -154,4 +154,116 @@ export const CL_SKILLS: SkillSchema[] = [
         '{pointNumber:"3",northing:5400,easting:5100,description:"139+75.12 PT"}]})',
     ],
   },
+  {
+    id: 'stationing_update_annotation_settings',
+    name: 'Change Station / Baseline Annotation Settings',
+    type: 'action',
+    description:
+      'Changes how station labels and baseline annotations are drawn on the canvas. Use this whenever ' +
+      'the user asks to change the station prefix or suffix, decimal vs 1+00 format, precision, label ' +
+      'or point interval, text scale, screen offset, 180° rotation, label background, geometry/PI/' +
+      'PC-PT/BOP-EOP tags, or to show/hide station labels. Global fields apply to every existing and ' +
+      'future baseline; supply targetBaselineName to scope an offset or rotation override to one ' +
+      'named baseline. The host applies the change immediately and renders the updated labels.',
+    inputs: {
+      showStationLabels: {
+        type: 'boolean',
+        description: 'Show or hide station labels on the canvas.',
+      },
+      showStationPrefix: {
+        type: 'boolean',
+        description: 'Show or hide the station prefix (for example STA).',
+      },
+      stationPrefix: {
+        type: 'string',
+        description: 'Prefix text placed before each station value; "none" removes it.',
+      },
+      stationSuffix: {
+        type: 'string',
+        description: 'Suffix text placed after each station value; "none" removes it.',
+      },
+      stationLabelFormat: {
+        type: 'string',
+        description: '"hundreds" for survey notation (1+00.00) or "decimal" for plain feet.',
+      },
+      stationPrecision: {
+        type: 'number',
+        description: 'Decimal places in the station value (0, 1, or 2).',
+      },
+      labelInterval: {
+        type: 'number',
+        description: 'Feet between station labels along each baseline.',
+      },
+      pointInterval: {
+        type: 'number',
+        description: 'Feet between automatically plotted station points.',
+      },
+      labelScale: {
+        type: 'number',
+        description: 'Annotation text scale multiplier (0.25–4).',
+      },
+      labelOffsetPx: {
+        type: 'number',
+        description: 'Screen-pixel offset from the baseline; negative places labels on the other side.',
+      },
+      labelRotationDeg: {
+        type: 'number',
+        description: '0 for normal label rotation, 180 to flip labels upside down.',
+      },
+      showLabelBackground: {
+        type: 'boolean',
+        description: 'Draw a contrasting plate behind each station label.',
+      },
+      showGeometryLabels: {
+        type: 'boolean',
+        description: 'Master switch for PI/PC/PT/BOP/EOP geometry tags.',
+      },
+      showPiLabels: {
+        type: 'boolean',
+        description: 'Show PI tags when geometry tags are enabled.',
+      },
+      showPcPtLabels: {
+        type: 'boolean',
+        description: 'Show PC/PT tags when geometry tags are enabled.',
+      },
+      showEndpointLabels: {
+        type: 'boolean',
+        description: 'Show BOP/EOP tags when geometry tags are enabled.',
+      },
+      showStationPointLabels: {
+        type: 'boolean',
+        description: 'Show the automatically generated CL STA point descriptions.',
+      },
+      targetBaselineName: {
+        type: 'string',
+        description:
+          'Name of one baseline to scope offset/rotation to; omit to affect every baseline.',
+      },
+      resetBaselineOverrides: {
+        type: 'boolean',
+        description: 'Clear saved per-baseline offset and rotation overrides.',
+      },
+    },
+    outputs: {
+      applied: {
+        type: 'object',
+        description: 'The normalized settings patch that was applied.',
+      },
+      summary: {
+        type: 'array',
+        required: true,
+        description: 'Human-readable list of the changes that were made.',
+      },
+      targetBaseline: {
+        type: 'string',
+        description: 'Baseline the offset/rotation was scoped to, or null when global.',
+      },
+    },
+    examples: [
+      // user: "Remove the STA prefix and show station labels every 50 feet"
+      'stationing_update_annotation_settings({showStationPrefix:false, stationPrefix:"", labelInterval:50})',
+      // user: "Flip the station labels 180 degrees on Baseline B"
+      'stationing_update_annotation_settings({targetBaselineName:"Baseline B", labelRotationDeg:180})',
+    ],
+  },
 ];

@@ -1229,6 +1229,32 @@ export const StructuresIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) =
 );
 
 /** Soils Agent Glyph — Geotechnical Soil Core Pit with O/A/B/C/R Horizons, Prismatic Clay Peds, Bedrock Fractures & Auger T-Handle */
+export const StormwaterIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        {/* Falling drop with a grated inlet cross-section */}
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 2.6c3.1 4 5.1 6.7 5.1 9.2a5.1 5.1 0 1 1-10.2 0c0-2.5 2-5.2 5.1-9.2Z" />
+        <path strokeLinecap="round" strokeWidth={1.2} opacity={0.85} d="M9.4 10.6h5.2M9.8 13.1h4.4" />
+        {/* Runoff sheet flow along the surface */}
+        <path strokeLinecap="round" strokeWidth={1.1} opacity={0.6} d="M2.6 20.9c1.15-.85 2.3-.85 3.45 0 1.15.85 2.3.85 3.45 0 1.15-.85 2.3-.85 3.45 0 1.15.85 2.3.85 3.45 0 1.15-.85 2.3-.85 3.45 0" />
+    </svg>
+);
+
+/** Dirt Volume Agent Glyph — existing vs proposed ground with cut/fill arrows */
+export const DirtVolumeIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        {/* Existing ground (dashed) over proposed grade */}
+        <path strokeLinecap="round" strokeDasharray="2 1.6" opacity={0.8} d="M2.5 8.2c2.6 0 3.7-2.9 6-2.9 2.3 0 3 2.6 5.1 2.6 2.2 0 3.2-2.3 7.9-2.3" />
+        <path strokeLinecap="round" d="M2.5 13.1c2.7 0 3.9-1.5 6-1.5 2.2 0 3 1.3 5.1 1.3 2.1 0 3.2-1.2 7.9-1.2" />
+        {/* Cut arrow (material removed) */}
+        <path strokeLinecap="round" strokeLinejoin="round" d="M7.2 10.1V4.6m0 0L5.7 6.1m1.5-1.5 1.5 1.5" />
+        {/* Fill arrow (material placed) */}
+        <path strokeLinecap="round" strokeLinejoin="round" d="M16.8 10.7v5.5m0 0-1.5-1.5m1.5 1.5 1.5-1.5" />
+        {/* Base line and hatch marks */}
+        <path strokeLinecap="round" d="M2.5 20.5h19" />
+        <path strokeLinecap="round" opacity={0.55} d="M5 20.5l-1.4-2.1M9.5 20.5l-1.4-2.1M14 20.5l-1.4-2.1M18.5 20.5l-1.4-2.1" />
+    </svg>
+);
+
 export const SoilsIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
         {/* Top soil auger T-handle & surface grass/organic O-horizon */}

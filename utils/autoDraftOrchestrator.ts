@@ -433,7 +433,7 @@ function buildDraftStages(args: {
         '  DYL / DBL        → double-yellow paint (layer "L-ROAD-PAINT-Y", lineType "CONTINUOUS")',
         '  WL / SWL         → white paint (layer "L-ROAD-PAINT-W", lineType "CONTINUOUS")',
         '  CL / CTR         → REFERENCE ONLY — use for cross-section order; do not output a baseline/centerline unless explicitly requested',
-        '  CURB / TC / BC   → curb lines (layer "CURB")',
+        '  CURB / TC / BC / DEP → curb lines (layer "CURB")',
         '  SHLD / SH        → shoulder lines (layer "SHOULDER")',
         'PAINT FIRST: when DYL/DBL or WL/SWL shots exist, chain them in station order and emit paint linework on the paint layers. Paint points are deliverable linework — do not skip them because a centerline is easier.',
         'NO BASELINE BY DEFAULT: do not emit a CL, C-ROAD-CNTR, centerline, or baseline chain for a road drawing. Use CL shots only to order the corridor and measure width. Only emit a baseline/centerline when the user explicitly asks for a centerline, baseline, alignment, or stationing.',

@@ -12,9 +12,10 @@ interface StationingChatProps {
   settings: Settings;
   agentDrawMode?: 'both' | 'points' | 'lines';
   onOpenStationingSettings?: () => void;
+  onOpenCenterlineList?: () => void;
 }
 
-const StationingChat: React.FC<StationingChatProps> = ({ centerlines, onUpdateCenterline, onPlacePoint, activeAgent, settings, agentDrawMode = 'both', onOpenStationingSettings }) => {
+const StationingChat: React.FC<StationingChatProps> = ({ centerlines, onUpdateCenterline, onPlacePoint, activeAgent, settings, agentDrawMode = 'both', onOpenStationingSettings, onOpenCenterlineList }) => {
   const { coordinatePrecision } = settings;
   const activeCL = useMemo(() => centerlines[0], [centerlines]);
   const stationInterval = Math.max(1, Number(settings.stationing?.pointInterval) || 100);
@@ -135,11 +136,18 @@ const StationingChat: React.FC<StationingChatProps> = ({ centerlines, onUpdateCe
                 <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-cyan-300">{stationLabelPreview}</span>
                 <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-cyan-300">P/L SWITCH</span>
             </div>
-            {onOpenStationingSettings && (
-                <button type="button" onClick={onOpenStationingSettings} className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20">
-                    Stationing controls
-                </button>
-            )}
+            <div className="flex shrink-0 items-center gap-1">
+                {onOpenCenterlineList && (
+                    <button type="button" onClick={onOpenCenterlineList} className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20">
+                        Centerlines
+                    </button>
+                )}
+                {onOpenStationingSettings && (
+                    <button type="button" onClick={onOpenStationingSettings} className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20">
+                        Stationing controls
+                    </button>
+                )}
+            </div>
         </div>
         <div className="flex border-b border-gray-700 light-theme:border-gray-300">
             <TabButton tabName="pi" label="PI Editor" />

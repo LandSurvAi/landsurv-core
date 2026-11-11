@@ -9,21 +9,27 @@
 // Usage in App.tsx:
 //   useStationingSkills({ centerlinesRef, pointListsRef, setPointLists, logActionToFieldbook });
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { interAgentComm, type AgentMessage, type AgentResponse } from './InterAgentCommunication';
 import { AgentType } from '../types';
-import type { Centerline, PointList, SurveyPoint } from '../types';
+import type { Centerline, PointList, Settings, SurveyPoint } from '../types';
 import {
   calculatePointFromStationOffset,
   calculateCenterlineLength,
   formatStation,
   parseStation,
 } from '../utils/stationing';
+import {
+  applyStationingAnnotationPatch,
+  normalizeStationingAnnotationPatch,
+} from '../utils/stationingAnnotationSettings';
 
 export interface UseStationingSkillsOpts {
   centerlinesRef: React.MutableRefObject<Centerline[]>;
   pointListsRef: React.MutableRefObject<PointList[]>;
   setPointLists: React.Dispatch<React.SetStateAction<PointList[]>>;
+  settings: Settings;
+  setSettings: React.Dispatch<React.SetStateAction<Settings>>;
   logActionToFieldbook: (msg: string) => void;
 }
 
@@ -149,8 +155,13 @@ export function useStationingSkills({
   centerlinesRef,
   pointListsRef,
   setPointLists,
+  settings,
+  setSettings,
   logActionToFieldbook,
 }: UseStationingSkillsOpts): void {
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+
   useEffect(() => {
     // -----------------------------------------------------------------------
     // place_station_offset_point
@@ -342,9 +353,49 @@ export function useStationingSkills({
       },
     );
 
+    // -----------------------------------------------------------------------
+    // stationing_update_annotation_settings
+    // -----------------------------------------------------------------------
+    const unsubAnnotations = interAgentComm.onCommand(
+      'stationing_update_annotation_settings',
+      async (message): Promise<AgentResponse> => {
+        const d = (message.data ?? {}) as Record<string, unknown>;
+        const patch = normalizeStationingAnnotationPatch(
+          d.stationingSettings ?? d.settings ?? d.patch ?? d,
+        );
+        if (!patch) {
+          return respond(
+            message,
+            false,
+            undefined,
+            'No stationing annotation settings were supplied. Include at least one field to change.',
+          );
+        }
+
+        const result = applyStationingAnnotationPatch(
+          settingsRef.current,
+          centerlinesRef.current,
+          patch,
+        );
+        if (!result.ok) {
+          return respond(message, false, undefined, result.error);
+        }
+
+        setSettings(result.settings);
+        logActionToFieldbook(`Stationing annotations updated: ${result.summary.join(' ')}`);
+
+        return respond(message, true, {
+          applied: patch as unknown as Record<string, unknown>,
+          summary: result.summary,
+          targetBaseline: result.centerline?.name ?? null,
+        });
+      },
+    );
+
     return () => {
       unsubPlace();
       unsubGenerate();
+      unsubAnnotations();
     };
-  }, [centerlinesRef, pointListsRef, setPointLists, logActionToFieldbook]);
+  }, [centerlinesRef, pointListsRef, setPointLists, setSettings, logActionToFieldbook]);
 }

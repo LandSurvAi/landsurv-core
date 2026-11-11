@@ -439,6 +439,7 @@ export const SurveyorCodeMatcher: React.FC<SurveyorCodeMatcherProps> = ({
           'tc': ['top', 'curb'],
           'bc': ['back', 'curb'],
           'fl': ['flow line', 'flowline', 'invert'],
+          'dep': ['depression', 'curb depression', 'lowered curb', 'ada ramp'],
           'bldg': ['building', 'structure'],
           'conc': ['concrete'],
           'elec': ['electric', 'electrical'],

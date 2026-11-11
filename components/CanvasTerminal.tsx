@@ -18,7 +18,7 @@ import {
   deriveQuickThoughtPreview,
   getAgentInitialQuickThoughtOptions,
 } from '../services/a2uiQuickThought';
-import { rememberCanvasPointer } from '../services/canvasFlashes';
+import { canMirrorInputFormAsFlash, rememberCanvasPointer } from '../services/canvasFlashes';
 import { a2uiSurfaceBus } from '../services/a2uiSurfaces';
 import { scoutActivityStore } from '../services/scoutActivityStore';
 import { ChatToolDialogs } from './ChatToolDialogs';
@@ -799,10 +799,10 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   }, []);
 
   // A completed agent turn releases the command-bar feed so the canvas is
-  // clear. A plain choice prompt belongs to the Quick Thought card, so it must
-  // not auto-open the full feed — that hides the compact buttons. Only prompts
-  // that genuinely need the full feed (free-form input or an active A2UI)
-  // keep it open.
+  // clear. A plain choice prompt belongs to the Quick Thought card, and a
+  // one/two-field form is mirrored beside the cursor as a flash, so neither
+  // may auto-open the full feed. Only prompts that genuinely need the full
+  // feed (free-form input or a surface the flash cannot carry) keep it open.
   useEffect(() => {
     const wasLoading = wasAgentLoadingRef.current;
     wasAgentLoadingRef.current = isLoading;
@@ -820,6 +820,13 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
         finished.a2ui.status !== 'completed' &&
         finished.a2ui.status !== 'dismissed'
     );
+    const flashableForm =
+      finished.a2ui?.kind === 'input-form' ? finished.a2ui.inputForm : undefined;
+    if (flashableForm && canMirrorInputFormAsFlash(flashableForm)) {
+      // The cursor flash owns this prompt; opening the feed would show the same
+      // form twice.
+      return;
+    }
     if (needsInput || hasInteractiveA2UI) {
       setShowEarlierAgentMessages(false);
       openAgentConversation(false, false);
@@ -1127,6 +1134,14 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   }, [messages, agentLabel, effectiveAgent]);
 
   const handleKeyDownInput = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Space on an empty CAD line repeats the last command, matching the
+    // desktop CAD habit without stealing spaces while the user is typing.
+    if (e.key === ' ' && !inputText.trim() && !activePrompt && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      const lastCommand = commandHistoryRef.current[commandHistoryRef.current.length - 1];
+      if (lastCommand) runCommand(lastCommand);
+      return;
+    }
     // Enter on an empty command line confirms whatever the canvas is waiting on
     // (a command's picks) instead of being a dead key.
     if (e.key === 'Enter' && !inputText.trim()) {
@@ -2527,6 +2542,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                 <input
                   ref={inputRef}
                   data-no-drag
+                  data-canvas-command-input="true"
                   type="text"
                   value={inputText}
                   onChange={e => setInputText(e.target.value)}
@@ -2562,10 +2578,11 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
         </div>
 
         {/* Hidden in-bar socket slot on the left. The visible dock is portaled to <body> so
-            the plug and quick-thought card stack above the tool shelf and every
-            floating dialog; this anchor keeps that dock at the exact spot the
-            command bar was designed around, with the plug's top rising above the
-            bar for the accent rail to wrap as a socket tab. */}
+            the plug and quick-thought card stack above the tool shelf and floating
+            panels, but stay below full-screen dialogs (Settings and other modals sit
+            at z-9990+); this anchor keeps that dock at the exact spot the command bar
+            was designed around, with the plug's top rising above the bar for the accent
+            rail to wrap as a socket tab. */}
         <div
           ref={socketAnchorRef}
           aria-hidden="true"
@@ -2575,7 +2592,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
         {typeof document !== 'undefined' && createPortal(
           <div
             data-testid="agent-dock"
-            className="pointer-events-none fixed z-[10020] flex items-center"
+            className="pointer-events-none fixed z-[9985] flex items-center"
             style={agentDockPos
               ? { left: agentDockPos.left, top: agentDockPos.top, width: 56, height: 56 }
               : { left: 4, bottom: 3 }}
@@ -2597,7 +2614,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
               onFocusCapture={handleQuickThoughtInteraction}
               onMouseEnter={handleQuickThoughtPointerEnter}
               onMouseLeave={handleQuickThoughtPointerLeave}
-              className="absolute bottom-full left-0 z-[10030] mb-6 w-[min(336px,calc(100vw-24px))] animate-fade-in-up overflow-hidden rounded-xl border border-white/20 bg-[#0a1018]/[0.985] font-sans text-white shadow-[0_18px_44px_-12px_rgba(0,0,0,0.85)] backdrop-blur-xl"
+              className="absolute bottom-full left-0 z-[9986] mb-6 w-[min(336px,calc(100vw-24px))] animate-fade-in-up overflow-hidden rounded-xl border border-white/20 bg-[#0a1018]/[0.985] font-sans text-white shadow-[0_18px_44px_-12px_rgba(0,0,0,0.85)] backdrop-blur-xl"
             >
               <span
                 aria-hidden="true"

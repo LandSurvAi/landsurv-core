@@ -21,6 +21,8 @@ import {
   TitleSearchIcon,
   CadManagerIcon,
   RoadIcon,
+  StormwaterIcon,
+  DirtVolumeIcon,
 } from '../icons';
 
 export const AgentsPageContent: React.FC = () => {
@@ -198,6 +200,24 @@ export const AgentsPageContent: React.FC = () => {
       color: 'amber',
       description: 'Existing road synthesis and proposed roadway corridor design.',
       details: 'Synthesize existing roads from survey points, background imagery, and OpenStreetMap ways, or design proposed road corridors, typical sections, profiles, and cross sections with Stationing & CL and Profile integration.',
+    },
+    {
+      type: AgentType.STORMWATER_AGENT,
+      host: 'stormwater',
+      name: 'Stormwater Agent',
+      icon: StormwaterIcon,
+      color: 'sky',
+      description: 'National stormwater runoff, detention routing, and channel capacity (Experimental).',
+      details: 'Run the Rational Method (Q = CiA) anywhere in the U.S. with NOAA Atlas 14 rainfall, composite surface coefficients, FAA time of concentration, Modified Rational hydrographs, level-pool detention routing, and Manning channel capacity, then export a calculation report.',
+    },
+    {
+      type: AgentType.DIRT_VOLUME_AGENT,
+      host: 'dirtvolume',
+      name: 'Dirt Volume Agent',
+      icon: DirtVolumeIcon,
+      color: 'amber',
+      description: 'Earthwork quantities, scenario comparison, and volume reports.',
+      details: 'Compute cut and fill by average end area from cross sections, compare existing and proposed TIN surfaces, run grid and stockpile takeoffs, save scenarios with shrink/swell factors, and export copy-ready quantity reports and PDFs.',
     },
   ];
   const agents = agentCatalog.filter((agent) => !retiredAgents.includes(agent.type));

@@ -452,6 +452,8 @@ function getDefinitionGlyph(definitionId: string): string | undefined {
     'workspace-cad-manager': '⚙',
     'workspace-raster-underlay': '🖼',
     'workspace-text-editor': 'T',
+    'workspace-stormwater': '☔',
+    'workspace-dirt-volume': '⛰',
     'workspace-spreadsheet': '▦',
     'point-entry': 'P',
     'explore-cad-standards': '≡',

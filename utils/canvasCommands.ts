@@ -14,7 +14,8 @@ export interface ParsedCommand {
 export interface CommandContext {
   onAddPoint?: () => void;
   onStartLine?: () => void;
-  onStartCircle?: () => void;
+  /** Start CIRCLE; `ttr` opens the tangent-tangent-radius pick flow. */
+  onStartCircle?: (options?: { ttr?: boolean }) => void;
   /** Start the interactive aligned-dimension tool (D / DIMALIGNED). */
   onStartAlignedDimension?: () => void;
   onStartInclusion?: () => void;
@@ -286,7 +287,8 @@ const COMMAND_ALIASES: Record<string, string> = {
 /** Short human descriptions used by the command line's live hint chip. */
 export const COMMAND_DESCRIPTIONS: Record<string, string> = {
   line: 'Draw chained line/arc segments',
-  circle: 'Draw a circle by center and radius',
+  circle: 'Draw a circle by center and radius, or tangent-tangent-radius (TTR)',
+  ttr: 'Tangent-tangent-radius circle',
   hatch: 'Hatch a closed area (click inside) or selected object',
   rectangle: 'Rectangle from two corners',
   polygon: 'Regular polygon from a snapped center and drag radius',
@@ -338,7 +340,7 @@ export const HELP_GROUPS: HelpGroup[] = [
     entries: [
       { command: 'L / PLINE', description: 'Chained line and tangent-arc segments', note: 'A arc · L line' },
       { command: 'B (BASELINE)', description: 'Centerline alignment with the same chained line / tangent-arc flow', note: 'shared with Stationing & CL' },
-      { command: 'C / CIRCLE', description: 'Center + radius, or two tangents (TTR)', note: 'T toggles TTR' },
+      { command: 'C / CIRCLE', description: 'Center + radius, or tangent-tangent-radius (TTR)', note: 'C TTR · T toggles' },
       { command: 'H / HATCH', description: 'Hatch by clicking inside an enclosed area or selecting a closed object', note: 'S object · A area' },
       { command: 'D / DIMALIGNED', description: 'Aligned dimension — pick two points, then the offset line', note: 'annotation' },
       { command: 'TEXT / MTEXT', description: 'Place annotation text — click the insertion point, type in place', note: 'double-tap T to start · double-click text to edit' },
@@ -668,9 +670,25 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
       ctx.onStartLine?.();
       return { status: 'ok', message: 'LINE: Specify next point or length [A for Arc, Esc to cancel]' };
 
-    case 'circle':
-      ctx.onStartCircle?.();
-      return { status: 'ok', message: 'CIRCLE: Specify center point or [T] for TTR [Esc to cancel]' };
+    case 'circle': {
+      // TTR can ride along with the command: C TTR / CIRCLE TANGENT.
+      const wantsTtr = args.some(token => {
+        const upper = token.toUpperCase();
+        return upper === 'TTR' || upper === 'T' || upper === 'TAN' || upper === 'TANGENT';
+      });
+      ctx.onStartCircle?.(wantsTtr ? { ttr: true } : undefined);
+      return {
+        status: 'ok',
+        message: wantsTtr
+          ? 'CIRCLE (TTR): Select the first tangent entity [T for Center/Radius, Esc to cancel]'
+          : 'CIRCLE: Specify center point or [TTR] for tangent-tangent-radius [Esc to cancel]',
+      };
+    }
+
+    case 'ttr':
+      // Typing TTR alone enters the tangent-tangent-radius flow directly.
+      ctx.onStartCircle?.({ ttr: true });
+      return { status: 'ok', message: 'CIRCLE (TTR): Select the first tangent entity [T for Center/Radius, Esc to cancel]' };
 
     case 'text':
       ctx.onStartText?.();

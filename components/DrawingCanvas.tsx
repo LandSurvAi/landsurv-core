@@ -57,10 +57,12 @@ import {
 import {
     traceEnclosingLoopAtPoint,
     resolveHatchFromSelectedEntities,
+    isPointInPolygon,
     type TracedHatchRegion,
 } from '../utils/hatchBoundaryTracer.ts';
 import type { LinetypeDefinition } from '../contexts/types/CadManager.types.ts';
-import { calculateCenterlineLength, calculateCenterlineTangentBearing, calculateCurveGeometry, calculatePointFromStationOffset, formatAutoStationPointDescription, formatStationLabel, getCenterlineKeyStations, getStationAnnotationStations, normalizeStationLabelRotation, resolveBeginStation } from '../utils/stationing.ts';
+import { calculateCenterlineLength, calculateCenterlineTangentBearing, calculateCurveGeometry, calculatePointFromStationOffset, findNearestPointOnCenterline, formatAutoStationPointDescription, formatStationLabel, getCenterlineKeyStations, getStationAnnotationStations, resolveBeginStation, resolveStationLabelOrientation, resolveStationLabelOffsetPx, resolveStationLabelFlipRadians, withStationLabelOffset } from '../utils/stationing.ts';
+import { findBaselineContinuationSource } from '../services/baselineStartChoices.ts';
 import { buildTangentArcNodes } from '../utils/baselineGeometry.ts';
 import { buildChainLine, isChainLineMode, type ChainLineMode } from '../utils/lineDrawing.ts';
 import { parseBearingToRadians, parseDistance, direct, inverse, formatBearing, calculateClosure, directCurve, calculateChordDistance } from '../utils/cogo.ts';
@@ -263,6 +265,22 @@ export const computeFixedRadiusTangentArc = (
 };
 
 
+interface ChainSegmentSnapshot {
+    from: SurveyPoint;
+    to: SurveyPoint;
+    isCurve: boolean;
+    startTangent: { x: number; y: number } | null;
+}
+
+/** Live hover-pick state for MEND (M). */
+interface MendPreviewState {
+    line: SurveyLine;
+    lineId: string;
+    segment: { from: MendPoint; to: MendPoint };
+    candidates: MendCandidate[];
+    index: number;
+}
+
 export interface DrawingCanvasHandles {
   zoomExtents: () => void;
   /** Open/close the header Draw menu. */
@@ -287,6 +305,11 @@ export interface DrawingCanvasHandles {
   getSelectedLineGeometry?: () => SurveyLine[];
   /** Enter canvas entity-selection mode for an agent-driven operation. */
   beginSelectionMode?: () => void;
+  /** Arm a one-click baseline start pick, returning a snapped world point. */
+  beginBaselineStartPick?: (
+    onPick: (coordinates: { northing: number; easting: number }) => void,
+    onCancel?: () => void,
+  ) => void;
   /** Arms the Orientation Tuple pivot-origin picker from the toolbar instrument. */
   beginOtOriginPick?: () => void;
   /** Arms the Orientation Tuple align-to-line picker from the toolbar instrument. */
@@ -336,6 +359,7 @@ import {
     type PlanarTransform,
 } from '../utils/cadTransforms.ts';
 import { orderConnectedChain, offsetOrderedChain, offsetCircleRadius, resolveArcGeometry, type ChainSegment, type OffsetEntitySegment } from '../utils/offsetGeometry';
+import { resolveMendCandidates, type MendCandidate, type MendPoint } from '../utils/mendGeometry.ts';
 import { createLayerValueLookup, resolveCadEntityColor, resolveCadEntityLinetype } from '../utils/cadEntityStyle.ts';
 import { underlayContainsWorldPoint, underlayCorners, underlayImageToWorld } from '../utils/rasterUnderlay.ts';
 
@@ -488,6 +512,8 @@ interface DrawingCanvasProps {
     onUpsertCenterline?: (centerline: Centerline) => void;
     /** Open the shared A2UI Stationing Controls surface. */
     onOpenStationingSettings?: () => void;
+    /** Double-click a drawn CL / BASELINE to open its alignment tools. */
+    onOpenCenterlineTools?: (centerlineId: string) => void;
     /** Apply a multi-entity edit as a single undo step (used by typed CAD commands). */
     onBatchLinesChange?: (removeIds: string[], addLines: SurveyLine[]) => void;
     canUndo: boolean;
@@ -762,6 +788,16 @@ interface DrawingCanvasProps {
 }
 
 type OsnapMode = 'endpoint' | 'midpoint' | 'intersection' | 'center' | 'nearest' | 'perpendicular' | 'tangent';
+
+type StationLabelHitBox = {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    bearing: number;
+    centerlineId: string;
+    station: number;
+};
 type OsnapResult = {
     easting: number;
     northing: number;
@@ -1248,7 +1284,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         initialTransform,
         onTransformChange,
         points, lines, contourLabels, contourGenerations = [], onMoveContourLabel, centerlines, customSymbols, enabledBuiltinSymbolIds, pointLayers, attributeScale, setAttributeScale, lineLabelScale, setLineLabelScale, lineThickness, setLineThickness, contourLabelScale, onLayerColorChange, activeAgent, settings, zoomTarget, onZoomComplete,
-        onUpdatePointLabelOffset, onAddLine, onDeleteLine, onDeletePoints, onDeleteCenterline, onUpsertCenterline, onOpenStationingSettings, canUndo, canRedo, onUndo, onRedo, wmsServices, activeWmsLayers, offlineMapAreas, onRedrawAndShowAll, onOpenDxfExportModal,
+        onUpdatePointLabelOffset, onAddLine, onDeleteLine, onDeletePoints, onDeleteCenterline, onUpsertCenterline, onOpenStationingSettings, onOpenCenterlineTools, canUndo, canRedo, onUndo, onRedo, wmsServices, activeWmsLayers, offlineMapAreas, onRedrawAndShowAll, onOpenDxfExportModal,
         onUpdatePointAnnotationOffset,
         isLayerPanelOpen, setIsLayerPanelOpen, onLayerToggle, activeAccent, currentPosition, projectedPosition, onZoomToPoint,
         linesVisible, onSetLinesVisible, centerlinesVisible, onSetCenterlinesVisible, pointLists, onTogglePointListVisibility, deedMetadata, onToolStateChange, onShowSettings,
@@ -1322,6 +1358,30 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             if (screenX >= box.x && screenX <= box.x + box.w
                 && screenY >= box.y && screenY <= box.y + box.h) {
                 return index;
+            }
+        }
+        return null;
+    }, []);
+    const stationLabelHitBoxesRef = useRef<Map<string, StationLabelHitBox>>(new Map());
+    const stationLabelDragRef = useRef<{
+        startX: number;
+        startY: number;
+        startOffsetPx: number;
+        bearing: number;
+        centerlineId: string;
+    } | null>(null);
+    const [isStationLabelDragging, setIsStationLabelDragging] = useState(false);
+    const [hoveredStationLabelKey, setHoveredStationLabelKey] = useState<string | null>(null);
+    const findStationLabelAtScreenPoint = useCallback((screenX: number, screenY: number): (StationLabelHitBox & { key: string }) | null => {
+        for (const [key, box] of stationLabelHitBoxesRef.current) {
+            const pad = 3;
+            if (
+                screenX >= box.x - pad &&
+                screenX <= box.x + box.w + pad &&
+                screenY >= box.y - pad &&
+                screenY <= box.y + box.h + pad
+            ) {
+                return { ...box, key };
             }
         }
         return null;
@@ -1422,6 +1482,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [freehandStroke, setFreehandStroke] = useState<Array<{ x: number; y: number }>>([]);
     const freehandStrokeRef = useRef<Array<{ x: number; y: number }>>([]);
     const freehandDrawingRef = useRef(false);
+    // F in Select mode arms a freehand lasso; the same screen-space stroke
+    // buffer also drives the shrinkwrap lasso when that tool asks for it.
+    const [isFreehandSelectMode, setIsFreehandSelectMode] = useState(false);
+    const freehandSelectActiveRef = useRef(false);
     // Dynamic input / Cursor HUD screen position
     const [cursorScreenPos, setCursorScreenPos] = useState<{ x: number; y: number } | null>(null);
     // Multi-value command prompt (ARRAY / POLARARRAY / REC / POL / DI): values
@@ -1508,23 +1572,90 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     /** The live baseline is a real Centerline shared with Stationing & CL. */
     const baselineDraftRef = useRef<Centerline | null>(null);
     const baselinePiCounterRef = useRef(0);
+    const baselineStartPickRef = useRef<{
+        onPick: (coordinates: { northing: number; easting: number }) => void;
+        onCancel?: () => void;
+    } | null>(null);
+    const [isPickingBaselineStart, setIsPickingBaselineStart] = useState(false);
     const [typedSegmentLength, setTypedSegmentLength] = useState('');
     // AutoCAD-style Arc submode for the polyline tool (A toggles on, L back off).
     const [polylineArcMode, setPolylineArcMode] = useState(false);
     // Unit tangent (world frame) leaving the current polyline anchor — the arc
     // submode locks to this so chained segments stay tangent-continuous.
     const lastSegmentTangentRef = useRef<{ x: number; y: number } | null>(null);
-    // LINE-command switches: R enters a fixed arc radius, T forces the next
-    // straight segment to leave along the previous curve's end tangent.
+    // MEND (M) closes an open line/arc chain back to its first point. It only
+    // adds a tangent closing arc when the chain's last segment is a curve.
+    const polylineChainStartRef = useRef<SurveyPoint | null>(null);
+    // First and last committed segments of the live chain. The mend pick uses
+    // them to recognize the mating segment and to keep its committed joint put.
+    const polylineFirstSegmentRef = useRef<ChainSegmentSnapshot | null>(null);
+    const polylineLastSegmentRef = useRef<ChainSegmentSnapshot | null>(null);
+    // MEND (M) arms a hover pick: sweep the cursor over a straight segment to
+    // preview the tangent closing curve, then click to commit it. The refs
+    // mirror the state so the canvas handlers always see the current pick.
+    const [mendPickActive, setMendPickActive] = useState(false);
+    const [mendPickPreview, setMendPickPreview] = useState<MendPreviewState | null>(null);
+    const mendPickActiveRef = useRef(false);
+    const mendPickPreviewRef = useRef<MendPreviewState | null>(null);
+    const setMendPickPreviewValue = useCallback((preview: MendPreviewState | null) => {
+        mendPickPreviewRef.current = preview;
+        setMendPickPreview(preview);
+    }, []);
+    const armMendPick = useCallback(() => {
+        mendPickActiveRef.current = true;
+        mendPickPreviewRef.current = null;
+        setMendPickActive(true);
+        setMendPickPreview(null);
+    }, []);
+    const clearMendPick = useCallback(() => {
+        mendPickActiveRef.current = false;
+        mendPickPreviewRef.current = null;
+        setMendPickActive(false);
+        setMendPickPreview(null);
+    }, []);
+    const lastSegmentWasCurveRef = useRef(false);
+    const polylineSegmentCountRef = useRef(0);
+    // LINE-command switches: R enters a fixed arc radius. T either exits the
+    // current arc into a tangent line or continues from the previous segment's
+    // end tangent.
     const [polylineFixedRadius, setPolylineFixedRadius] = useState<number | null>(null);
     const [polylineRadiusInput, setPolylineRadiusInput] = useState('');
     const [polylineRadiusPrompt, setPolylineRadiusPrompt] = useState(false);
     const [polylineTangentExit, setPolylineTangentExit] = useState(false);
+    // T inside ARC: the next pick ends the arc, then the line submode starts
+    // with its tangent locked to the arc's true end tangent.
+    const [polylineArcExitToLine, setPolylineArcExitToLine] = useState(false);
+    const polylineArcJustCommittedRef = useRef(false);
+    // U inside LINE/ARC: each committed chain segment records the state needed
+    // to step back exactly one segment (committed line + local drawing state).
+    const linearChainUndoStackRef = useRef<Array<{
+        point: SurveyPoint;
+        tangent: { x: number; y: number } | null;
+        arcJustCommitted: boolean;
+        segmentCount: number;
+        baselineDraft: Centerline | null;
+        isBaseline: boolean;
+        arcMode: boolean;
+        fixedRadius: number | null;
+        tangentExit: boolean;
+        arcExitToLine: boolean;
+        lastSegmentWasCurve: boolean;
+        firstSegment: ChainSegmentSnapshot | null;
+        lastSegment: ChainSegmentSnapshot | null;
+    }>>([]);
+    // The capture-phase U listener is registered once; this ref always points
+    // at the current render's handler.
+    const undoLinearChainStepRef = useRef<() => boolean>(() => false);
     const [isMultiSegmentMode, setIsMultiSegmentMode] = useState(false); // For continuous polyline drawing
     const [isDeletingLines, setIsDeletingLines] = useState(false);
     const [isTrimmingLines, setIsTrimmingLines] = useState(false);
     const [trimPoint, setTrimPoint] = useState<{ x: number; y: number } | null>(null);
     const [trimHoverPreview, setTrimHoverPreview] = useState<TrimPreviewData | null>(null);
+    // TRIM FENCE: drag a temporary dashed cutter across entities.
+    const [isTrimFenceMode, setIsTrimFenceMode] = useState(false);
+    const [trimFence, setTrimFence] = useState<{ start: { x: number; y: number }; end: { x: number; y: number } } | null>(null);
+    const trimFenceDragRef = useRef(false);
+    const trimFenceRef = useRef<{ start: { x: number; y: number }; end: { x: number; y: number } } | null>(null);
     const [isExtendingLines, setIsExtendingLines] = useState(false);
     const [extendFromLine, setExtendFromLine] = useState<string | null>(null);
     // Dimension tool state
@@ -2004,6 +2135,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [isOffsetMode, setIsOffsetMode] = useState(false);
     const [offsetDistance, setOffsetDistance] = useState<number | null>(null);
     const [offsetTargetId, setOffsetTargetId] = useState<string | null>(null);
+    // OFFSET pick scope: one segment on click, the connected chain on
+    // double-click. Enter confirms it before the side pick.
+    const [offsetSelectionIds, setOffsetSelectionIds] = useState<Set<string>>(new Set());
+    const [offsetTargetConfirmed, setOffsetTargetConfirmed] = useState(false);
     const [offsetPickStart, setOffsetPickStart] = useState<{ easting: number; northing: number } | null>(null);
     const offsetPreviewSegmentsRef = useRef<OffsetEntitySegment[] | null>(null);
     const offsetPreviewKeyRef = useRef<string | null>(null);
@@ -2037,6 +2172,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     // Use ref for cursor position to avoid re-creating draw callback on every mouse move
     const cursorWorldPosRef = useRef<{ x: number, y: number } | null>(null);
     const drawRef = useRef<(() => void) | null>(null);
+    const [renderRevision, setRenderRevision] = useState(0);
     // Track pending animation frame to prevent multiple queued draws
     const animationFrameRef = useRef<number | null>(null);
     
@@ -2251,11 +2387,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             : 'LINE';
         setDrawingMode(mode);
         setPolylinePoints([]);
+        polylineFirstSegmentRef.current = null;
+        polylineLastSegmentRef.current = null;
+        clearMendPick();
         setPolylineArcMode(false);
         setPolylineFixedRadius(null);
         setPolylineRadiusInput('');
         setPolylineRadiusPrompt(false);
         setPolylineTangentExit(false);
+        setPolylineArcExitToLine(false);
+        polylineArcJustCommittedRef.current = false;
         lastSegmentTangentRef.current = null;
         setTypedSegmentLength('');
         setIsTrimmingLines(false);
@@ -2271,7 +2412,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setSelectedDimensionId(null);
         setActiveCommandPrompt(null);
         setCommandFocusRequest(n => n + 1);
-        setTerminalIncoming({ text: `Command: ${label} — pick start point or type length [A for Arc]`, tone: 'ok' });
+        setTerminalIncoming({ text: `Command: ${label} — pick start point or type length [A for Arc · C close · M mend]`, tone: 'ok' });
         requestAnimationFrame(() => drawRef.current?.());
     }, []);
 
@@ -2940,10 +3081,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
     /**
      * OFFSET: compute the offset geometry for the picked line/polyline/arc/circle
-     * without committing it. Connected segments are treated as one chain and
-     * mitered (line-line, line-arc, arc-arc) at their shared vertices.
+     * without committing it. A single-click scope offsets just that segment;
+     * a double-click scope offsets the selected connected chain.
      */
-    const buildOffsetGeometry = useCallback((targetLine: SurveyLine, clickPoint: { x: number; y: number }): {
+    const buildOffsetGeometry = useCallback((targetLine: SurveyLine, clickPoint: { x: number; y: number }, scopeIds?: ReadonlySet<string>): {
         ok: boolean;
         count: number;
         message: string;
@@ -2976,9 +3117,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         const seedId = targetLine.id || `${targetLine.from}-${targetLine.to}`;
-        const candidates = targetLine.polylineId
-            ? lines.filter(l => l.polylineId === targetLine.polylineId && !l.hidden && !isCircleLine(l))
-            : lines.filter(l => !l.hidden && !isCircleLine(l));
+        const candidates = scopeIds && scopeIds.size > 0
+            ? lines.filter(l => scopeIds.has(l.id || `${l.from}-${l.to}`) && !l.hidden && !isCircleLine(l))
+            : targetLine.polylineId
+                ? lines.filter(l => l.polylineId === targetLine.polylineId && !l.hidden && !isCircleLine(l))
+                : lines.filter(l => !l.hidden && !isCircleLine(l));
 
         const segments: ChainSegment[] = [];
         const segmentSources = new Map<string, SurveyLine>();
@@ -3133,8 +3276,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         return created;
     }, [onAddLine]);
 
-    const applyOffsetAtPoint = useCallback((targetLine: SurveyLine, clickPoint: { x: number; y: number }): { ok: boolean; count: number; message: string } => {
-        const built = buildOffsetGeometry(targetLine, clickPoint);
+    const applyOffsetAtPoint = useCallback((targetLine: SurveyLine, clickPoint: { x: number; y: number }, scopeIds?: ReadonlySet<string>): { ok: boolean; count: number; message: string } => {
+        const built = buildOffsetGeometry(targetLine, clickPoint, scopeIds);
         if (!built.ok || !built.segments) {
             return { ok: false, count: 0, message: built.message };
         }
@@ -3183,15 +3326,15 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         requestAnimationFrame(() => drawRef.current?.());
     }, []);
 
-    const updateOffsetPreview = useCallback((target: SurveyLine | null, clickPoint: { x: number; y: number }) => {
+    const updateOffsetPreview = useCallback((target: SurveyLine | null, clickPoint: { x: number; y: number }, scopeIds?: ReadonlySet<string>) => {
         if (!target || offsetDistance === null || offsetTargetId === null) {
             clearOffsetPreview();
             return;
         }
-        const key = `${offsetTargetId}|${offsetDistance}|${offsetSideKey(target, clickPoint)}`;
+        const key = `${offsetTargetId}|${offsetDistance}|${offsetSideKey(target, clickPoint)}|${scopeIds ? [...scopeIds].sort().join(',') : ''}`;
         if (key === offsetPreviewKeyRef.current) return;
         offsetPreviewKeyRef.current = key;
-        const built = buildOffsetGeometry(target, clickPoint);
+        const built = buildOffsetGeometry(target, clickPoint, scopeIds);
         offsetPreviewSegmentsRef.current = built.ok && built.segments ? built.segments : null;
         requestAnimationFrame(() => drawRef.current?.());
     }, [offsetDistance, offsetTargetId, offsetSideKey, buildOffsetGeometry, clearOffsetPreview]);
@@ -3915,8 +4058,38 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
         }
 
+        for (const cl of centerlines) {
+            if (cl.pis.length < 2) continue;
+            if (modes.has('endpoint')) {
+                for (const pi of cl.pis) {
+                    tryCandidate('endpoint', pi.easting, pi.northing);
+                }
+                for (const key of getCenterlineKeyStations(cl)) {
+                    if (!key.label.startsWith('PC-') && !key.label.startsWith('PT-')) continue;
+                    const point = calculatePointFromStationOffset(cl, key.station, 0);
+                    if (point) tryCandidate('endpoint', point.easting, point.northing);
+                }
+            }
+            if (modes.has('midpoint')) {
+                const keys = getCenterlineKeyStations(cl);
+                for (let index = 1; index < keys.length; index++) {
+                    const station = (keys[index - 1].station + keys[index].station) / 2;
+                    const point = calculatePointFromStationOffset(cl, station, 0);
+                    if (point) tryCandidate('midpoint', point.easting, point.northing);
+                }
+            }
+            if (modes.has('nearest')) {
+                const point = findNearestPointOnCenterline(cl, worldMouseE, worldMouseN);
+                if (point) tryCandidate('nearest', point.easting, point.northing);
+            }
+            if (modes.has('perpendicular') && anchorPoint) {
+                const point = findNearestPointOnCenterline(cl, anchorPoint.easting, anchorPoint.northing);
+                if (point) tryCandidate('perpendicular', point.easting, point.northing);
+            }
+        }
+
         return best;
-    }, [lines, pointMap, points, transform, worldToScreen, screenToWorld, boundaryFiles, isRunningOsnapsEnabled, inlineOsnapOverride]);
+    }, [lines, pointMap, points, centerlines, transform, worldToScreen, screenToWorld, boundaryFiles, isRunningOsnapsEnabled, inlineOsnapOverride]);
 
     const symbolMatchers = useMemo(() => buildSymbolMatchers(customSymbols), [customSymbols]);
 
@@ -5053,7 +5226,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         };
     }, []);
 
-    const computeTrimAction = useCallback((clickedLine: SurveyLine, worldX: number, worldY: number): {
+    const computeTrimAction = useCallback((clickedLine: SurveyLine, worldX: number, worldY: number, extraCutters: SurveyLine[] = []): {
         lineId: string;
         newLines: SurveyLine[];
         preview: TrimPreviewData;
@@ -5075,7 +5248,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
         const cuttingEntities: CuttingEntity[] = [];
 
-        for (const line of lines) {
+        for (const line of [...lines, ...extraCutters]) {
             if (line === clickedLine || line.hidden) continue;
             const lp1 = pointMap.get(line.from);
             const lp2 = pointMap.get(line.to);
@@ -5688,6 +5861,124 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         return { lineId, newLines, preview };
     }, [lines, pointMap, boundaryFiles]);
 
+    /** TRIM FENCE: trim every entity the temporary cutter crosses. */
+    const trimByFence = useCallback((fenceStart: { x: number; y: number }, fenceEnd: { x: number; y: number }) => {
+        const fenceDx = fenceEnd.x - fenceStart.x;
+        const fenceDy = fenceEnd.y - fenceStart.y;
+        const fenceLength = Math.hypot(fenceDx, fenceDy);
+        if (fenceLength < 1e-6) return;
+
+        const fenceLine: SurveyLine = {
+            id: '__TRIM_FENCE__',
+            from: '__TRIM_FENCE_A__',
+            to: '__TRIM_FENCE_B__',
+            fromPt: { x: fenceStart.x, y: fenceStart.y, z: 0 },
+            toPt: { x: fenceEnd.x, y: fenceEnd.y, z: 0 },
+        };
+
+        const segmentCrossesFence = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+            const rx = b.x - a.x;
+            const ry = b.y - a.y;
+            const denom = rx * fenceDy - ry * fenceDx;
+            if (Math.abs(denom) < 1e-12) return false;
+            const qpx = fenceStart.x - a.x;
+            const qpy = fenceStart.y - a.y;
+            const t = (qpx * fenceDy - qpy * fenceDx) / denom;
+            const u = (qpx * ry - qpy * rx) / denom;
+            return t > 1e-5 && t < 1 - 1e-5 && u >= 0 && u <= 1;
+        };
+
+        const circleCrossesFence = (center: { x: number; y: number }, radius: number) => {
+            const fx = fenceStart.x - center.x;
+            const fy = fenceStart.y - center.y;
+            const a = fenceLength * fenceLength;
+            const b = 2 * (fx * fenceDx + fy * fenceDy);
+            const c = fx * fx + fy * fy - radius * radius;
+            const disc = b * b - 4 * a * c;
+            if (disc < 0) return false;
+            const sqrtDisc = Math.sqrt(disc);
+            for (const t of [(-b - sqrtDisc) / (2 * a), (-b + sqrtDisc) / (2 * a)]) {
+                if (t >= 0 && t <= 1) return true;
+            }
+            return false;
+        };
+
+        let trimmed = 0;
+        let skipped = 0;
+        for (const entity of [...lines]) {
+            if (entity.hidden) continue;
+            const ends = resolveLineEndpoints(entity);
+            if (!ends) continue;
+
+            let hit = false;
+            let pick = ends.p1;
+            const d1 = Math.hypot(ends.p1.x - fenceStart.x, ends.p1.y - fenceStart.y);
+            const d2 = Math.hypot(ends.p2.x - fenceStart.x, ends.p2.y - fenceStart.y);
+
+            if (isCircleLine(entity) && entity.curveRadius) {
+                const center = entity.circleCenter
+                    ? { x: entity.circleCenter.x, y: entity.circleCenter.y }
+                    : ends.p1;
+                const radius = entity.curveRadius;
+                hit = circleCrossesFence(center, radius);
+                const dx = fenceStart.x - center.x;
+                const dy = fenceStart.y - center.y;
+                const dist = Math.hypot(dx, dy);
+                pick = dist > 1e-9
+                    ? { x: center.x + radius * dx / dist, y: center.y + radius * dy / dist }
+                    : { x: center.x + radius, y: center.y };
+            } else if (entity.isCurve && entity.curveRadius && entity.arcLength) {
+                const arc = resolveArcGeometry(ends.p1, ends.p2, {
+                    radius: entity.curveRadius,
+                    arcLength: entity.arcLength,
+                    center: entity.circleCenter ? { x: entity.circleCenter.x, y: entity.circleCenter.y } : undefined,
+                    curveDirection: entity.curveDirection,
+                    tangentBearing: entity.tangentBearing,
+                    chordBearing: entity.chordBearing,
+                    bearing: entity.bearing,
+                });
+                if (arc) {
+                    const steps = 32;
+                    const direction = arc.isLeftCurve ? 1 : -1;
+                    for (let i = 0; i < steps && !hit; i++) {
+                        const a1 = arc.startAngle + direction * arc.centralAngle * (i / steps);
+                        const a2 = arc.startAngle + direction * arc.centralAngle * ((i + 1) / steps);
+                        hit = segmentCrossesFence(
+                            { x: arc.center.x + arc.radius * Math.cos(a1), y: arc.center.y + arc.radius * Math.sin(a1) },
+                            { x: arc.center.x + arc.radius * Math.cos(a2), y: arc.center.y + arc.radius * Math.sin(a2) },
+                        );
+                    }
+                } else {
+                    hit = segmentCrossesFence(ends.p1, ends.p2);
+                }
+                pick = d1 <= d2 ? ends.p1 : ends.p2;
+            } else {
+                hit = segmentCrossesFence(ends.p1, ends.p2);
+                pick = d1 <= d2 ? ends.p1 : ends.p2;
+            }
+
+            if (!hit) continue;
+            const action = computeTrimAction(entity, pick.x, pick.y, [fenceLine]);
+            if (!action || action.newLines.length === 0) {
+                skipped += 1;
+                continue;
+            }
+            onDeleteLine(action.lineId);
+            action.newLines.forEach(newLine => onAddLine(newLine));
+            trimmed += 1;
+        }
+
+        setTerminalIncoming({
+            text: trimmed > 0
+                ? `TRIM FENCE: Cut ${trimmed} ${trimmed === 1 ? 'entity' : 'entities'} — drag another fence or press F for click trim`
+                : skipped > 0
+                    ? 'TRIM FENCE: That fence only grazed an entity — cross through the geometry to cut it'
+                    : 'TRIM FENCE: Nothing crossed — drag the dashed fence through entities to trim them',
+            tone: trimmed > 0 ? 'ok' : 'info',
+        });
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [lines, resolveLineEndpoints, isCircleLine, computeTrimAction, onDeleteLine, onAddLine]);
+
     const getGripsForSelectedLines = useCallback((): EntityGrip[] => {
         if (selectedLineIds.size === 0) return [];
         const result: EntityGrip[] = [];
@@ -6222,9 +6513,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     }, []);
 
     const redraw = useCallback(() => {
-        // This is a dummy function to trigger a re-render if needed, but the main draw effect depends on props.
-        // We can force a re-render by updating a dummy state if necessary, but it's usually not.
-        // For now, `draw` is called via useEffect on prop changes, which is sufficient.
+        // Host edits (station changes, agent edits) must force a fresh canvas
+        // pass even when the Centerline object identity was mutated in place.
+        setRenderRevision(prev => prev + 1);
     }, []);
 
     useImperativeHandle(ref, () => ({
@@ -6291,6 +6582,22 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             fromPt: { x: entity.ends.p1.x, y: entity.ends.p1.y, z: 0 },
             toPt: { x: entity.ends.p2.x, y: entity.ends.p2.y, z: 0 },
         })),
+        beginBaselineStartPick: (onPick, onCancel) => {
+            finishDrawingRef.current();
+            setActiveCommandPrompt(null);
+            setIsSelectionMode(false);
+            setIsBoxSelectMode(false);
+            setPendingSelectionCommand(null);
+            setIsTrimmingLines(false);
+            setIsExtendingLines(false);
+            setIsDeletingLines(false);
+            baselineStartPickRef.current = { onPick, onCancel };
+            setIsPickingBaselineStart(true);
+            setTerminalIncoming({
+                text: 'BASELINE START: Pick a start point on the canvas [Esc cancels]',
+                tone: 'ok',
+            });
+        },
         beginSelectionMode: () => {
             setDrawingMode('none');
             setIsSelectionMode(true);
@@ -7522,12 +7829,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
         };
 
-        // Draw selection highlights and grips (rendered before lines so highlight is under the line)
-        if (selectedLineIds.size > 0) {
+        // Draw selection highlights and grips (rendered before lines so highlight is under the line).
+        // OFFSET has its own pick scope (one segment, or a double-clicked
+        // chain), so show that scope without arming general selection grips.
+        const highlightedLineIds = new Set(selectedLineIds);
+        if (isOffsetMode) {
+            offsetSelectionIds.forEach(id => highlightedLineIds.add(id));
+        }
+        if (highlightedLineIds.size > 0) {
             const selStroke = isLightTheme ? '#0284C7' : '#38BDF8';
             const selWidth = Math.max(scaledLineWidth + 1.2 * inverseScale, minScreenPixelWidth * 1.5);
 
-            selectedLineIds.forEach(selId => {
+            highlightedLineIds.forEach(selId => {
                 const selLine = lines.find(l => (l.id || `${l.from}-${l.to}`) === selId);
                 if (!selLine) return;
                 const sp1 = pointMap.get(selLine.from);
@@ -8206,6 +8519,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
         // Draw curve lines (smooth arcs & full circles)
         curveLabelBoxesRef.current.clear();
+        stationLabelHitBoxesRef.current.clear();
         lines.forEach(line => {
             if (!line.isCurve && !line.isCircle) {
                 return; // Only process curve/circle lines
@@ -8576,15 +8890,24 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
             const clStationing = settings.stationing;
             const showStationLabels = clStationing?.showStationLabels !== false;
-            const showGeometryLabels = clStationing?.showGeometryLabels !== false;
-            if (showStationLabels || showGeometryLabels) {
+            const showGeometryLabels = clStationing?.showGeometryLabels === true;
+            const alignmentStationOffsetLabels = (clStationing?.stationOffsetLabels ?? [])
+                .filter(label => label.centerlineId === cl.id);
+            if (showStationLabels || showGeometryLabels || alignmentStationOffsetLabels.length > 0) {
                 const labelScale = Math.max(0.25, Number(clStationing?.labelScale) || 1);
                 // Station labels are model-space text, so they grow when the
                 // drawing is zoomed in just like the other annotation families.
                 const textHeight = 10 * labelScale;
-                const rawLabelOffset = Number(clStationing?.labelOffsetPx);
-                const labelOffsetPx = Math.max(-48, Math.min(48, Number.isFinite(rawLabelOffset) ? rawLabelOffset : 8));
+                const labelOffsetPx = resolveStationLabelOffsetPx(clStationing, cl.id);
+                const baselineFlipRad = resolveStationLabelFlipRadians(clStationing, cl.id);
                 const labelColor = isLightTheme ? '#0E7490' : '#A5F3FC';
+                const stationTextOptions = {
+                    prefix: clStationing?.stationPrefix,
+                    showPrefix: clStationing?.showStationPrefix,
+                    suffix: clStationing?.stationSuffix,
+                    format: clStationing?.stationLabelFormat,
+                    precision: clStationing?.stationPrecision,
+                };
                 const drawLabel = (
                     text: string,
                     easting: number,
@@ -8594,11 +8917,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         alongBaselinePx?: number;
                         upPx?: number;
                         align?: CanvasTextAlign;
+                        hitBox?: {
+                            key: string;
+                            bearing: number;
+                            centerlineId: string;
+                            station: number;
+                        };
                     } = {},
                 ) => {
                     const rotation = options.rotation ?? 0;
-                    const alongBaseline = (options.alongBaselinePx ?? 0) * inverseScale;
-                    const up = (options.upPx ?? labelOffsetPx) * inverseScale;
+                    // Keep annotation offsets in the same model-space units as
+                    // the text. Converting from screen pixels here made labels
+                    // drift away from the linework as the drawing zoomed out.
+                    const alongBaseline = ((options.alongBaselinePx ?? 0) / 10) * textHeight;
+                    const up = ((options.upPx ?? labelOffsetPx) / 10) * textHeight;
                     ctx.save();
                     ctx.translate(easting, northing);
                     ctx.scale(1, -1);
@@ -8608,6 +8940,51 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ctx.textAlign = options.align ?? 'center';
                     ctx.textBaseline = 'middle';
                     const width = ctx.measureText(text).width;
+                    if (options.hitBox) {
+                        // Capture the rotated label in screen space so Ctrl+drag
+                        // can hit-test exactly what is painted. getTransform()
+                        // already includes the device-pixel-ratio base transform.
+                        const matrix = typeof ctx.getTransform === 'function' ? ctx.getTransform() : null;
+                        const dpr = window.devicePixelRatio || 1;
+                        const pad = textHeight * 0.3;
+                        const localX0 = (ctx.textAlign === 'right'
+                            ? -width
+                            : ctx.textAlign === 'center'
+                                ? -width / 2
+                                : 0) - pad;
+                        const localX1 = (ctx.textAlign === 'right'
+                            ? 0
+                            : ctx.textAlign === 'center'
+                                ? width / 2
+                                : width) + pad;
+                        const localY0 = -textHeight * 0.75 - pad;
+                        const localY1 = textHeight * 0.75 + pad;
+                        if (matrix) {
+                            let minX = Infinity;
+                            let minY = Infinity;
+                            let maxX = -Infinity;
+                            let maxY = -Infinity;
+                            for (const lx of [localX0, localX1]) {
+                                for (const ly of [localY0, localY1]) {
+                                    const sx = (matrix.a * lx + matrix.c * ly + matrix.e) / dpr;
+                                    const sy = (matrix.b * lx + matrix.d * ly + matrix.f) / dpr;
+                                    minX = Math.min(minX, sx);
+                                    minY = Math.min(minY, sy);
+                                    maxX = Math.max(maxX, sx);
+                                    maxY = Math.max(maxY, sy);
+                                }
+                            }
+                            stationLabelHitBoxesRef.current.set(options.hitBox.key, {
+                                x: minX,
+                                y: minY,
+                                w: maxX - minX,
+                                h: maxY - minY,
+                                bearing: options.hitBox.bearing,
+                                centerlineId: options.hitBox.centerlineId,
+                                station: options.hitBox.station,
+                            });
+                        }
+                    }
                     if (clStationing?.showLabelBackground !== false) {
                         const pad = textHeight * 0.22;
                         const left = ctx.textAlign === 'center'
@@ -8623,6 +9000,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ctx.restore();
                 };
                 const endStation = cl.beginStation + calculateCenterlineLength(cl);
+                // One reference orientation per alignment keeps every station
+                // label reading the same way through the continuous chain.
+                const referenceBearing = calculateCenterlineTangentBearing(cl, cl.beginStation) ?? 0;
                 if (showStationLabels) {
                     const labelInterval = Math.max(
                         1,
@@ -8635,9 +9015,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         Math.min(50, labelInterval),
                     );
 
-                    // Station ticks run perpendicular to the alignment. Major
-                    // ticks land on labeled stations; 50 ft intermediates are
-                    // shorter so the annotation stays unobtrusive.
+                    // Station ticks run perpendicular to the alignment and
+                    // station labels now follow those ties. Major ticks land
+                    // on labeled stations; 50 ft intermediates are shorter so
+                    // the annotation stays unobtrusive.
                     ctx.save();
                     ctx.strokeStyle = isLightTheme ? 'rgba(14,116,144,0.82)' : 'rgba(165,243,252,0.86)';
                     ctx.lineCap = 'butt';
@@ -8666,24 +9047,30 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         const coords = calculatePointFromStationOffset(cl, station, 0);
                         if (!coords) continue;
                         const bearing = calculateCenterlineTangentBearing(cl, station);
-                        drawLabel(formatStationLabel(station, {
-                            prefix: clStationing?.stationPrefix,
-                            showPrefix: clStationing?.showStationPrefix,
-                            suffix: clStationing?.stationSuffix,
-                            format: clStationing?.stationLabelFormat,
-                            precision: clStationing?.stationPrecision,
-                        }), coords.easting, coords.northing, {
-                            rotation: bearing === null ? 0 : normalizeStationLabelRotation(bearing),
+                        const orientation = resolveStationLabelOrientation(bearing ?? 0, referenceBearing);
+                        drawLabel(formatStationLabel(station, stationTextOptions), coords.easting, coords.northing, {
+                            rotation: orientation.rotation + baselineFlipRad,
+                            // Ctrl+drag writes a per-baseline offset, which moves
+                            // only this alignment's words. Keep only a small
+                            // fixed tangent gap. Always anchor from the left
+                            // edge so a flipped angle cannot put the word 180°
+                            // around the tick.
                             alongBaselinePx: labelOffsetPx,
-                            upPx: 0,
+                            upPx: 6,
                             align: 'left',
+                            hitBox: {
+                                key: `${cl.id}:${station}`,
+                                bearing: bearing ?? 0,
+                                centerlineId: cl.id,
+                                station,
+                            },
                         });
                     }
                 }
                 if (showGeometryLabels) {
-                    const showPiLabels = clStationing?.showPiLabels !== false;
-                    const showPcPtLabels = clStationing?.showPcPtLabels !== false;
-                    const showEndpointLabels = clStationing?.showEndpointLabels !== false;
+                    const showPiLabels = clStationing?.showPiLabels === true;
+                    const showPcPtLabels = clStationing?.showPcPtLabels === true;
+                    const showEndpointLabels = clStationing?.showEndpointLabels === true;
                     for (const key of getCenterlineKeyStations(cl)) {
                         const isEndpoint = key.label === 'BOP' || key.label === 'EOP';
                         const isCurvePoint = key.label.startsWith('PC-') || key.label.startsWith('PT-');
@@ -8695,6 +9082,32 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     if (showPiLabels) {
                         cl.pis.forEach(pi => drawLabel(`PI ${pi.pointNumber}`, pi.easting, pi.northing));
                     }
+                }
+                for (const label of alignmentStationOffsetLabels) {
+                    const coords = calculatePointFromStationOffset(cl, label.station, label.offset);
+                    if (!coords) continue;
+                    const bearing = calculateCenterlineTangentBearing(cl, label.station);
+                    const orientation = resolveStationLabelOrientation(bearing ?? 0, referenceBearing);
+                    const offsetText = label.offset === 0
+                        ? 'ON CL'
+                        : `OFF ${Math.abs(label.offset).toFixed(2)}' ${label.offset > 0 ? 'RT' : 'LT'}`;
+                    ctx.save();
+                    ctx.fillStyle = labelColor;
+                    ctx.beginPath();
+                    ctx.arc(coords.easting, coords.northing, 2.4 * inverseScale, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                    drawLabel(
+                        `${formatStationLabel(label.station, stationTextOptions)} ${offsetText}`,
+                        coords.easting,
+                        coords.northing,
+                        {
+                            rotation: orientation.rotation + baselineFlipRad,
+                            alongBaselinePx: labelOffsetPx + 18,
+                            upPx: 10,
+                            align: 'left',
+                        },
+                    );
                 }
             }
             ctx.restore();
@@ -8756,8 +9169,53 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             ctx.restore();
         });
         
+        // MEND preview: highlight the mating segment, show the lengthen or
+        // shorten it needs, and draw the tangent closing curve that will commit.
+        if (mendPickActive && mendPickPreview) {
+            const candidate = mendPickPreview.candidates[mendPickPreview.index];
+            const lastPolyPoint = polylinePoints[polylinePoints.length - 1];
+            if (candidate && lastPolyPoint) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(mendPickPreview.segment.from.easting, mendPickPreview.segment.from.northing);
+                ctx.lineTo(mendPickPreview.segment.to.easting, mendPickPreview.segment.to.northing);
+                ctx.strokeStyle = 'rgba(34, 211, 238, 0.9)';
+                ctx.lineWidth = Math.max(2.5 * inverseScale, minScreenPixelWidth * 2);
+                ctx.setLineDash([]);
+                ctx.stroke();
+
+                const oldPoint = candidate.movedEnd === 'from'
+                    ? mendPickPreview.segment.from
+                    : mendPickPreview.segment.to;
+                ctx.beginPath();
+                ctx.moveTo(oldPoint.easting, oldPoint.northing);
+                ctx.lineTo(candidate.newPoint.easting, candidate.newPoint.northing);
+                ctx.strokeStyle = 'rgba(251, 191, 36, 0.95)';
+                ctx.lineWidth = Math.max(1.4 * inverseScale, minScreenPixelWidth);
+                ctx.setLineDash([4 * inverseScale, 3 * inverseScale]);
+                ctx.stroke();
+
+                const arc = candidate.arc;
+                const startAngle = Math.atan2(lastPolyPoint.northing - arc.centerNorthing, lastPolyPoint.easting - arc.centerEasting);
+                const endAngle = arc.direction === 'left' ? startAngle + arc.sweep : startAngle - arc.sweep;
+                ctx.beginPath();
+                ctx.arc(arc.centerEasting, arc.centerNorthing, arc.radius, startAngle, endAngle, arc.direction !== 'left');
+                ctx.strokeStyle = '#22d3ee';
+                ctx.lineWidth = Math.max(1.8 * inverseScale, minScreenPixelWidth * 1.5);
+                ctx.setLineDash([6 * inverseScale, 4 * inverseScale]);
+                ctx.stroke();
+
+                ctx.setLineDash([]);
+                ctx.beginPath();
+                ctx.arc(candidate.newPoint.easting, candidate.newPoint.northing, 4 * inverseScale, 0, 2 * Math.PI);
+                ctx.fillStyle = '#fbbf24';
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
         // Draw rubber band line for every shared chain mode.
-        if (isLinearDrawingMode(drawingMode) && polylinePoints.length > 0 && cursorWorldPosRef.current) {
+        if (isLinearDrawingMode(drawingMode) && polylinePoints.length > 0 && !mendPickActive && cursorWorldPosRef.current) {
             const lastPolyPoint = polylinePoints[polylinePoints.length - 1];
             if (lastPolyPoint) {
                 const cursorPos = cursorWorldPosRef.current;
@@ -9037,6 +9495,20 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     }
                 }
             }
+        }
+
+        // TRIM FENCE cutter — dashed, live, and never committed as geometry.
+        if (isTrimmingLines && trimFence) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(251, 191, 36, 0.95)';
+            ctx.lineWidth = Math.max(1.2 * inverseScale, minScreenPixelWidth);
+            ctx.setLineDash([7 * inverseScale, 4 * inverseScale]);
+            ctx.beginPath();
+            ctx.moveTo(trimFence.start.x, trimFence.start.y);
+            ctx.lineTo(trimFence.end.x, trimFence.end.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
         }
 
         // Draw Trim preview highlight (AutoCAD-style clean red dashed highlight with sleek '✕' cut badge)
@@ -11706,7 +12178,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         ctx.restore(); // --- End screen-space pass ---
-    }, [transform, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, contourLabelSlide, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.shrinkwrapAddPns, props.shrinkwrapExcludedPns, props.pendingDeletePointNumbers, freehandStroke, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id, rasterUnderlays, selectedRasterUnderlayId, rasterUnderlayImages]);
+    }, [transform, renderRevision, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, contourLabelSlide, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, isOffsetMode, offsetTargetId, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, trimFence, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.shrinkwrapAddPns, props.shrinkwrapExcludedPns, props.pendingDeletePointNumbers, freehandStroke, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id, rasterUnderlays, selectedRasterUnderlayId, rasterUnderlayImages, offsetSelectionIds, mendPickActive, mendPickPreview]);
 
     // Throttled draw using requestAnimationFrame to prevent flickering during rapid updates
     const scheduleDraw = useCallback(() => {
@@ -12289,6 +12761,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setDrawingMode('none');
         setPolylinePoints([]);
         setPolylineArcMode(false);
+        setPolylineArcExitToLine(false);
+        polylineArcJustCommittedRef.current = false;
         setTypedSegmentLength('');
         setCircleCenter(null);
         setTypedCircleValue('');
@@ -12480,6 +12954,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const startBaselineMode = useCallback(() => {
         setDrawingMode('baseline');
         setPolylinePoints([]);
+        polylineFirstSegmentRef.current = null;
+        polylineLastSegmentRef.current = null;
+        clearMendPick();
         setTypedSegmentLength('');
         setIsTrimmingLines(false);
         setIsExtendingLines(false);
@@ -12494,6 +12971,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setPolylineRadiusInput('');
         setPolylineRadiusPrompt(false);
         setPolylineTangentExit(false);
+        setPolylineArcExitToLine(false);
+        polylineArcJustCommittedRef.current = false;
         lastSegmentTangentRef.current = null;
         baselineDraftRef.current = null;
         baselinePiCounterRef.current = 0;
@@ -12501,10 +12980,113 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setInlineOsnapOverride(null);
         const interval = Math.max(1, Number(settings.stationing?.pointInterval) || 100);
         const autoOn = agentDrawMode !== 'lines';
-        setTerminalIncoming({ text: `Command: B (BASELINE) — pick start point, then chain line/arc segments [A arc · L line · Enter finish · Esc cancel] · Auto stations ${autoOn ? `every ${interval}'` : 'OFF (P/L = L)'}`, tone: 'ok' });
+        setTerminalIncoming({ text: `Command: B (BASELINE) — pick start point, then chain line/arc segments [A arc · L line · U undo · Enter finish · Esc cancel] · Auto stations ${autoOn ? `every ${interval}'` : 'OFF (P/L = L)'}`, tone: 'ok' });
         setCommandFocusRequest(n => n + 1);
         requestAnimationFrame(() => drawRef.current?.());
     }, [agentDrawMode, settings.stationing?.pointInterval]);
+
+    /**
+     * U inside a live LINE/ARC (and the other chain tools) steps back one
+     * segment: remove the committed line, restore the previous anchor, tangent,
+     * and arc switches, and continue drawing from there. With no committed
+     * segment it puts the start point back down. Returns false when there is no
+     * chain to undo, so the normal canvas-wide U shortcut can handle the key.
+     */
+    const undoLinearChainStep = useCallback((): boolean => {
+        if (!isLinearDrawingMode(drawingMode)) return false;
+        const chainLabel =
+            drawingMode === 'baseline' ? 'BASELINE'
+            : drawingMode === 'boundary-line' ? 'BOUNDARY'
+            : drawingMode === 'breaklines' ? 'BREAKLINE'
+            : drawingMode === 'inclusion' ? 'INCLUSION'
+            : drawingMode === 'exclusion' ? 'EXCLUSION'
+            : 'LINE/ARC';
+        const stack = linearChainUndoStackRef.current;
+        const snapshot = stack[stack.length - 1];
+        if (snapshot) {
+            if (!props.canUndo) {
+                setTerminalIncoming({ text: 'U: the last segment is still being committed — press U again', tone: 'info' });
+                return true;
+            }
+            stack.pop();
+            props.onUndo();
+            if (snapshot.isBaseline) {
+                baselineDraftRef.current = snapshot.baselineDraft;
+            } else {
+                polylineSegmentCountRef.current = snapshot.segmentCount;
+            }
+            lastSegmentTangentRef.current = snapshot.tangent;
+            polylineFirstSegmentRef.current = snapshot.firstSegment ?? null;
+            polylineLastSegmentRef.current = snapshot.lastSegment ?? null;
+            polylineArcJustCommittedRef.current = snapshot.arcJustCommitted;
+            lastSegmentWasCurveRef.current = snapshot.lastSegmentWasCurve;
+            setPolylineArcMode(snapshot.arcMode);
+            setPolylineFixedRadius(snapshot.fixedRadius);
+            setPolylineArcExitToLine(snapshot.arcExitToLine);
+            setPolylineTangentExit(snapshot.tangentExit);
+            setPolylineRadiusPrompt(false);
+            setPolylineRadiusInput('');
+            setTypedSegmentLength('');
+            setPolylinePoints([snapshot.point]);
+            setTerminalIncoming({
+                text: `${chainLabel}: undid the last segment — back at E ${snapshot.point.easting.toFixed(2)}, N ${snapshot.point.northing.toFixed(2)} [U again to step back]`,
+                tone: 'info',
+            });
+            requestAnimationFrame(() => drawRef.current?.());
+            return true;
+        }
+        if (polylinePoints.length > 0) {
+            setPolylinePoints([]);
+            polylineChainStartRef.current = null;
+            polylineFirstSegmentRef.current = null;
+            polylineLastSegmentRef.current = null;
+            clearMendPick();
+            polylineSegmentCountRef.current = 0;
+            lastSegmentTangentRef.current = null;
+            polylineArcJustCommittedRef.current = false;
+            lastSegmentWasCurveRef.current = false;
+            setPolylineArcMode(false);
+            setPolylineFixedRadius(null);
+            setPolylineArcExitToLine(false);
+            setPolylineTangentExit(false);
+            setPolylineRadiusPrompt(false);
+            setPolylineRadiusInput('');
+            setTypedSegmentLength('');
+            boundaryLinePolylineIdRef.current = null;
+            setTerminalIncoming({ text: `${chainLabel}: removed the start point — pick a new start point`, tone: 'info' });
+            requestAnimationFrame(() => drawRef.current?.());
+            return true;
+        }
+        return false;
+    }, [drawingMode, isLinearDrawingMode, polylinePoints, props.canUndo, props.onUndo]);
+
+    undoLinearChainStepRef.current = undoLinearChainStep;
+
+    // Bare U must win over the canvas-wide undo shortcut while a chain is live,
+    // including when the CAD command line owns focus (as it does during LINE/ARC).
+    // Capture phase guarantees this runs before the global bubble-phase handler.
+    useEffect(() => {
+        const onBareUndo = (event: KeyboardEvent) => {
+            if (
+                event.key.toLowerCase() !== 'u' ||
+                event.ctrlKey || event.metaKey || event.altKey ||
+                event.shiftKey || event.repeat || event.isComposing
+            ) return;
+            const target = event.target as HTMLElement | null;
+            const tag = target?.tagName;
+            const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || !!target?.isContentEditable;
+            if (isEditable) {
+                const isCadCommandLine = target instanceof HTMLInputElement && target.dataset.canvasCommandInput === 'true';
+                if (!isCadCommandLine || target.value.length > 0) return;
+            }
+            if (target?.closest('[data-owns-undo="true"]')) return;
+            if (!undoLinearChainStepRef.current()) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        };
+        window.addEventListener('keydown', onBareUndo, true);
+        return () => window.removeEventListener('keydown', onBareUndo, true);
+    }, []);
 
     /** Z enters a box-zoom command: drag a window, release to frame it. */
     const startBoxZoom = useCallback(() => {
@@ -12588,6 +13170,22 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 setZoomToPointNumber('');
                 return;
             }
+        }
+        if (e.key === 'Escape' && mendPickActiveRef.current) {
+            e.preventDefault();
+            clearMendPick();
+            setTerminalIncoming({ text: 'MEND: Cancelled — continue the line/arc chain', tone: 'info' });
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
+        if (e.key === 'Escape' && !isTextInput && baselineStartPickRef.current) {
+            e.preventDefault();
+            const pick = baselineStartPickRef.current;
+            baselineStartPickRef.current = null;
+            setIsPickingBaselineStart(false);
+            pick.onCancel?.();
+            setTerminalIncoming({ text: 'BASELINE START: Pick cancelled', tone: 'info' });
+            return;
         }
         if (e.key === 'Escape' && !isTextInput && isPlacingTextRef.current) {
             e.preventDefault();
@@ -12736,11 +13334,34 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTerminalIncoming({ text: 'COPY: Exited', tone: 'info' });
             return;
         }
+        if (e.key === 'Enter' && !isTextInput && isOffsetMode) {
+            e.preventDefault();
+            if (offsetDistance === null) {
+                setTerminalIncoming({ text: 'OFFSET: Specify the offset distance first', tone: 'info' });
+                return;
+            }
+            if (!offsetTargetId) {
+                setTerminalIncoming({ text: 'OFFSET: Select a segment first', tone: 'info' });
+                return;
+            }
+            if (!offsetTargetConfirmed) {
+                setOffsetTargetConfirmed(true);
+                offsetPreviewKeyRef.current = null;
+                setTerminalIncoming({
+                    text: 'OFFSET: Selection confirmed — click the side to offset toward [Esc to exit]',
+                    tone: 'ok',
+                });
+                requestAnimationFrame(() => drawRef.current?.());
+            }
+            return;
+        }
         if (e.key === 'Escape' && !isTextInput && isOffsetMode) {
             e.preventDefault();
             setIsOffsetMode(false);
             setOffsetDistance(null);
             setOffsetTargetId(null);
+            setOffsetSelectionIds(new Set());
+            setOffsetTargetConfirmed(false);
             setOffsetPickStart(null);
             offsetPreviewSegmentsRef.current = null;
             offsetPreviewKeyRef.current = null;
@@ -12748,8 +13369,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTerminalIncoming({ text: 'OFFSET: Exited', tone: 'info' });
             return;
         }
-        // LINE-command switches. R accepts a fixed arc radius; T forces the
-        // next straight segment to leave along the previous end tangent.
+        // LINE-command switches. R accepts a fixed arc radius; T exits an arc
+        // into a line locked to the curve's end tangent, or arms the next
+        // straight segment to leave along the previous end tangent.
         if (!isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey && isLinearDrawingMode(drawingMode)) {
             if (e.key === 'r' || e.key === 'R') {
                 e.preventDefault();
@@ -12759,6 +13381,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 }
                 setPolylineRadiusPrompt(true);
                 setPolylineRadiusInput('');
+                polylineArcJustCommittedRef.current = false;
+                setPolylineArcExitToLine(false);
                 setPolylineArcMode(true);
                 setPolylineTangentExit(false);
                 setTerminalIncoming({
@@ -12769,18 +13393,57 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
             if (e.key === 't' || e.key === 'T') {
                 e.preventDefault();
+                if (!lastSegmentTangentRef.current) {
+                    setTerminalIncoming({ text: 'TANGENT: draw a line or arc segment first', tone: 'error' });
+                    return;
+                }
+                if (polylineArcMode) {
+                    // T after the arc has been committed exits ARC immediately.
+                    // The next pick is a line from the arc's actual end tangent.
+                    if (polylineArcJustCommittedRef.current) {
+                        setPolylineArcMode(false);
+                        setPolylineArcExitToLine(false);
+                        setPolylineTangentExit(true);
+                        setPolylineRadiusPrompt(false);
+                        setPolylineRadiusInput('');
+                        setTerminalIncoming({
+                            text: 'TANGENT LINE: ON — next segment continues from the curve end tangent [click or type length]',
+                            tone: 'ok',
+                        });
+                        requestAnimationFrame(() => drawRef.current?.());
+                        return;
+                    }
+                    // T while the arc is still a preview arms the transition:
+                    // the next pick ends the arc (keeping the solved R and
+                    // included angle), then the following pick draws its
+                    // tangent line. Clearing R lets the arc adapt to the pick.
+                    if (polylineArcExitToLine) {
+                        setPolylineArcExitToLine(false);
+                        setTerminalIncoming({ text: 'TANGENT LINE: OFF — arc continues', tone: 'info' });
+                        return;
+                    }
+                    setPolylineFixedRadius(null);
+                    setPolylineRadiusPrompt(false);
+                    setPolylineRadiusInput('');
+                    setPolylineTangentExit(false);
+                    setPolylineArcExitToLine(true);
+                    setTerminalIncoming({
+                        text: 'TANGENT LINE: ARMED — next pick ends the arc; the following pick draws a line tangent to it [T to cancel]',
+                        tone: 'ok',
+                    });
+                    requestAnimationFrame(() => drawRef.current?.());
+                    return;
+                }
                 if (polylineTangentExit) {
                     setPolylineTangentExit(false);
                     setTerminalIncoming({ text: 'TANGENT: OFF — next segment is free', tone: 'info' });
                     return;
                 }
-                if (!lastSegmentTangentRef.current) {
-                    setTerminalIncoming({ text: 'TANGENT: draw a line or arc segment first', tone: 'error' });
-                    return;
-                }
                 setPolylineRadiusPrompt(false);
                 setPolylineRadiusInput('');
                 setPolylineArcMode(false);
+                setPolylineArcExitToLine(false);
+                polylineArcJustCommittedRef.current = false;
                 setPolylineTangentExit(true);
                 setTerminalIncoming({ text: 'TANGENT: ON — next LINE segment locks to the previous end tangent [click or type length]', tone: 'ok' });
                 return;
@@ -12837,6 +13500,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 setPolylineRadiusPrompt(false);
                 setPolylineArcMode(true);
                 setPolylineTangentExit(false);
+                polylineArcJustCommittedRef.current = false;
+                setPolylineArcExitToLine(false);
                 setTerminalIncoming({ text: `ARC RADIUS: ${typedRadius.toFixed(2)} ${getLinearUnitAbbreviation(settings.linearUnits)} fixed — click direction for the next arc`, tone: 'ok' });
                 requestAnimationFrame(() => drawRef.current?.());
                 return;
@@ -12959,24 +13624,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         if (!isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey && drawingMode === 'circle') {
             if (e.key === 't' || e.key === 'T') {
                 e.preventDefault();
-                setCircleSubMode(prev => {
-                    if (prev === 'ttr') {
-                        setTtrStep(1);
-                        setTtrEntity1(null);
-                        setTtrEntity2(null);
-                        setTtrHoverEntity(null);
-                        setTypedCircleValue('');
-                        return 'center-radius';
-                    } else {
-                        setCircleCenter(null);
-                        setTtrStep(1);
-                        setTtrEntity1(null);
-                        setTtrEntity2(null);
-                        setTtrHoverEntity(null);
-                        setTypedCircleValue('');
-                        return 'ttr';
-                    }
+                const enteringTtr = circleSubMode !== 'ttr';
+                if (enteringTtr) setCircleCenter(null);
+                setCircleSubMode(enteringTtr ? 'ttr' : 'center-radius');
+                setTtrStep(1);
+                setTtrEntity1(null);
+                setTtrEntity2(null);
+                setTtrHoverEntity(null);
+                setTypedCircleValue('');
+                setTerminalIncoming({
+                    text: enteringTtr
+                        ? 'CIRCLE (TTR): Select the first tangent entity, then the second, then type or pick the radius [T for Center/Radius, Esc]'
+                        : 'CIRCLE: Pick center point or type TTR for tangent-tangent-radius [Esc to cancel]',
+                    tone: enteringTtr ? 'ok' : 'info',
                 });
+                requestAnimationFrame(() => drawRef.current?.());
                 return;
             }
             if (/^[0-9.]$/.test(e.key)) {
@@ -13062,6 +13724,78 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
         // L / I / C / S / B / R / F / D / X — start drawing, selection, dimension, fillet and delete shortcuts.
         if (!isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            // CLOSE (C): AutoCAD-style point-to-point close. It adds one
+            // straight segment back to the chain start and never bends or
+            // resizes anything.
+            if ((e.key === 'c' || e.key === 'C') && isLinearDrawingMode(drawingMode) && drawingMode !== 'baseline') {
+                e.preventDefault();
+                clearMendPick();
+                const startPoint = polylineChainStartRef.current;
+                const endPoint = polylinePoints[polylinePoints.length - 1];
+                if (polylineSegmentCountRef.current < 2 || !startPoint || !endPoint) {
+                    setTerminalIncoming({ text: 'CLOSE: Draw at least two segments before closing the shape', tone: 'info' });
+                    return;
+                }
+                if (Math.hypot(endPoint.easting - startPoint.easting, endPoint.northing - startPoint.northing) < 1e-6) {
+                    setTerminalIncoming({ text: 'CLOSE: The chain is already closed', tone: 'info' });
+                    return;
+                }
+                const endLinePoint = buildLineEndpoint(makeTempWorldPoint(endPoint.easting, endPoint.northing));
+                const startLinePoint = buildLineEndpoint(makeTempWorldPoint(startPoint.easting, startPoint.northing));
+                onAddLine(buildChainLine({
+                    mode: drawingMode,
+                    from: endLinePoint.ref,
+                    to: startLinePoint.ref,
+                    fromPoint: endPoint,
+                    toPoint: startPoint,
+                    layer: activeDrawingLayer || undefined,
+                    polylineId: drawingMode === 'boundary-line'
+                        ? (boundaryLinePolylineIdRef.current ??= createManualBoundaryPolylineId())
+                        : undefined,
+                }));
+                setTerminalIncoming({ text: 'CLOSE: Closed the shape with a straight segment back to the first point', tone: 'ok' });
+                finishDrawing();
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+            // MEND (M): arm the hover pick. Moving the cursor over a straight
+            // segment previews the tangent closing curve; the mating segment is
+            // lengthened or shortened so the curve mates with it smoothly.
+            if ((e.key === 'm' || e.key === 'M') && isLinearDrawingMode(drawingMode) && drawingMode !== 'baseline' && polylinePoints.length > 0 && polylineChainStartRef.current) {
+                e.preventDefault();
+                const startPoint = polylineChainStartRef.current;
+                const endPoint = polylinePoints[polylinePoints.length - 1];
+                if (polylineSegmentCountRef.current < 2) {
+                    setTerminalIncoming({ text: 'MEND: Draw at least two segments before mending the shape', tone: 'info' });
+                    return;
+                }
+                if (Math.hypot(endPoint.easting - startPoint.easting, endPoint.northing - startPoint.northing) < 1e-6) {
+                    setTerminalIncoming({ text: 'MEND: The chain is already closed', tone: 'info' });
+                    return;
+                }
+                armMendPick();
+                setTerminalIncoming({ text: 'MEND: Move the cursor over the segment to tangent into — click applies the preview [F cycles options · C straight close · Esc cancel]', tone: 'ok' });
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+            // F cycles the alternate tangent solutions for the hovered segment.
+            if (mendPickActiveRef.current && (e.key === 'f' || e.key === 'F')) {
+                e.preventDefault();
+                const preview = mendPickPreviewRef.current;
+                if (!preview) {
+                    setTerminalIncoming({ text: 'MEND: Hover a straight segment first, then F cycles its tangent options', tone: 'info' });
+                    return;
+                }
+                if (preview.candidates.length < 2) {
+                    setTerminalIncoming({ text: 'MEND: Only one tangent option for this segment', tone: 'info' });
+                    return;
+                }
+                const index = (preview.index + 1) % preview.candidates.length;
+                setMendPickPreviewValue({ ...preview, index });
+                setTerminalIncoming({ text: `MEND: Option ${index + 1}/${preview.candidates.length} — click to apply · F next · C straight close · Esc cancel`, tone: 'info' });
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
             if (e.key === 'r' || e.key === 'R') {
                 e.preventDefault();
                 if (isRotatingSelection) {
@@ -13101,6 +13835,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 if (isSelectionMode) {
                     setIsSelectionMode(false);
                     setIsBoxSelectMode(false);
+                    setIsFreehandSelectMode(false);
                     setSelectedLineIds(new Set());
                     setSelectedHatchIds(new Set());
                     setSelectedHatchId(null);
@@ -13115,6 +13850,41 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 // Action is owned by useDoubleTapShortcuts below so `bb` can be
                 // distinguished from a single B; keep the browser default off.
                 e.preventDefault();
+                return;
+            }
+            // F inside TRIM switches between click trimming and the dashed fence.
+            if ((e.key === 'f' || e.key === 'F') && isTrimmingLines) {
+                e.preventDefault();
+                const next = !isTrimFenceMode;
+                setIsTrimFenceMode(next);
+                setTrimPoint(null);
+                setTrimHoverPreview(null);
+                setTrimFence(null);
+                trimFenceRef.current = null;
+                trimFenceDragRef.current = false;
+                setTerminalIncoming({
+                    text: next
+                        ? 'TRIM FENCE: drag a dashed line through entities to trim everything it crosses [F for click trim]'
+                        : 'TRIM: Click a segment to cut it at an intersection [F for fence]',
+                    tone: next ? 'ok' : 'info',
+                });
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+
+            // F in Select mode arms a freehand lasso before the FILLET command
+            // and its two-entity requirement are considered.
+            if ((e.key === 'f' || e.key === 'F') && isSelectionMode && !isBoxSelectMode) {
+                e.preventDefault();
+                const next = !isFreehandSelectMode;
+                setIsFreehandSelectMode(next);
+                setShiftBoxSelect(null);
+                setTerminalIncoming({
+                    text: next
+                        ? 'FREEHAND SELECT: drag a lasso around the entities to select [F to turn off]'
+                        : 'FREEHAND SELECT: OFF — back to click selection',
+                    tone: 'info',
+                });
                 return;
             }
             // T / TT are handled by useDoubleTapShortcuts below so a single tap
@@ -13156,7 +13926,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
             if (e.key === 'c' || e.key === 'C') {
                 e.preventDefault();
-                setTerminalIncoming({ text: 'Command: C (CIRCLE) — pick center point or type T for TTR', tone: 'ok' });
+                setTerminalIncoming({ text: 'Command: C (CIRCLE) — pick center point, or type TTR for tangent-tangent-radius', tone: 'ok' });
                 if (drawingMode === 'circle') {
                     finishDrawing();
                 } else {
@@ -13164,6 +13934,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     setCircleCenter(null);
                     setCircleSizeParam('radius');
                     setTypedCircleValue('');
+                    setCircleSubMode('center-radius');
+                    setTtrStep(1);
+                    setTtrEntity1(null);
+                    setTtrEntity2(null);
+                    setTtrHoverEntity(null);
                     setIsTrimmingLines(false);
                     setIsExtendingLines(false);
                     setIsDeletingLines(false);
@@ -13187,11 +13962,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
             if (e.key === 'l' || e.key === 'L') {
                 e.preventDefault();
-                setTerminalIncoming({ text: 'Command: L (LINE) — pick start point or type length [A for Arc · R fixed radius · T tangent]', tone: 'ok' });
+                setTerminalIncoming({ text: 'Command: L (LINE) — pick start point or type length [A for Arc · R fixed radius · T tangent line · C close · M mend]', tone: 'ok' });
                 // Mid-polyline: L switches back to straight segments (CAD
                 // polyline Line submode) instead of restarting the polyline.
                 if (isLinearDrawingMode(drawingMode) && polylinePoints.length > 0) {
                     setPolylineArcMode(false);
+                    setPolylineArcExitToLine(false);
+                    polylineArcJustCommittedRef.current = false;
                     setPolylineTangentExit(false);
                     return;
                 }
@@ -13203,7 +13980,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 // exists, since the arc locks tangent to the previous segment.
                 if (polylinePoints.length > 0 && lastSegmentTangentRef.current) {
                     e.preventDefault();
-                    setTerminalIncoming({ text: 'Polyline Submode: ARC (tangent to previous segment)', tone: 'info' });
+                    setTerminalIncoming({ text: 'Polyline Submode: ARC (tangent to previous segment) — [T] ends the arc into a tangent line', tone: 'info' });
+                    polylineArcJustCommittedRef.current = false;
+                    setPolylineArcExitToLine(false);
                     setPolylineArcMode(true);
                     setPolylineTangentExit(false);
                     return;
@@ -13459,7 +14238,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTtrEntity2(null);
             setTtrHoverEntity(null);
         }
-    }, [startBoxZoom, isZoomBoxMode, startBaselineMode, selectedTextAnnotationId, props, selectedLineIds, selectedHatchIds, selectedEntityCount, selectedPointNumbers, selectedCenterlineIds, isPickingMirrorLine, onDeletePoints, onDeleteCenterline, onDeleteHatch, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, polylineFixedRadius, polylineRadiusInput, polylineRadiusPrompt, polylineTangentExit, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, filletSelectionCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
+    }, [startBoxZoom, isZoomBoxMode, startBaselineMode, selectedTextAnnotationId, props, selectedLineIds, selectedHatchIds, selectedEntityCount, selectedPointNumbers, selectedCenterlineIds, isPickingMirrorLine, onDeletePoints, onDeleteCenterline, onDeleteHatch, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, activeDrawingLayer, onAddLine, isTrimmingLines, isTrimFenceMode, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, polylineArcMode, polylineFixedRadius, polylineRadiusInput, polylineRadiusPrompt, polylineTangentExit, polylineArcExitToLine, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, buildLineEndpoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, isFreehandSelectMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, filletSelectionCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
 
     const handleKeyUp = useCallback((e: KeyboardEvent) => {
         if (e.key === 'Control' || e.key === 'Meta') {
@@ -13642,8 +14421,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             if (foundLabel !== isOverLabel) {
                 setIsOverLabel(foundLabel);
             }
-        } else if (isOverLabel) {
-            setIsOverLabel(false);
+            const hoveredStationLabel = findStationLabelAtScreenPoint(mouseX, mouseY);
+            const nextStationLabelKey = hoveredStationLabel?.key ?? null;
+            if (nextStationLabelKey !== hoveredStationLabelKey) {
+                setHoveredStationLabelKey(nextStationLabelKey);
+            }
+        } else {
+            if (isOverLabel) {
+                setIsOverLabel(false);
+            }
+            if (hoveredStationLabelKey !== null) {
+                setHoveredStationLabelKey(null);
+            }
         }
 
         // Update hover state for line selection / trim / extend mode
@@ -13738,7 +14527,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
 
-        if (isTrimmingLines) {
+        if (isTrimmingLines && !isTrimFenceMode) {
             const mouseWorld = screenToWorld(mouseX, mouseY);
             cursorWorldPosRef.current = { x: mouseWorld.easting, y: mouseWorld.northing };
             const hoveredLine = findLineNearClick(mouseX, mouseY, 15);
@@ -13866,7 +14655,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     }, [
         isCtrlPressed, isLabelDragging, points, isOverLabel, isOverLabelArea,
         drawingMode, polylinePoints.length, transform,
-        isSelectionMode, isDeletingLines, isTrimmingLines, isExtendingLines, findLineNearClick, isOverLine,
+        isSelectionMode, isDeletingLines, isTrimmingLines, isTrimFenceMode, isExtendingLines, findLineNearClick, isOverLine,
         inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, dimPhase, dimP1, boundaryLineFrom, activeCommandPrompt, isPickingPolarCenter,
         isOrthoEnabled, applyOrthoConstraint, screenToWorld, isPickingOtOrigin,
         circleSubMode, ttrStep, polygonCenter, findTtrEntityNearClick, computeTrimAction, trimHoverPreview,
@@ -14273,6 +15062,29 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
 
+        // A baseline-start selection flash arms this pick; consume the next
+        // left click before any drawing/selection tool sees it.
+        if (e.button === 0 && baselineStartPickRef.current) {
+            e.preventDefault();
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const screenX = e.clientX - rect.left;
+            const screenY = e.clientY - rect.top;
+            const world = resolveSnappedWorld(screenX, screenY, activeOsnapPoint);
+            const pick = baselineStartPickRef.current;
+            baselineStartPickRef.current = null;
+            setIsPickingBaselineStart(false);
+            setActiveOsnapPoint(null);
+            setInlineOsnapOverride(null);
+            setTerminalIncoming({
+                text: `BASELINE START: N ${world.northing.toFixed(2)}, E ${world.easting.toFixed(2)} selected.`,
+                tone: 'ok',
+            });
+            pick.onPick({ northing: world.northing, easting: world.easting });
+            return;
+        }
+
         // Freehand shrinkwrap lasso — capture a rough screen-space loop. The
         // guide is intentionally ephemeral; it never becomes canvas linework.
         if (e.button === 0 && props.shrinkwrapFreehandActive && props.onShrinkwrapFreehandComplete) {
@@ -14284,6 +15096,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             freehandStrokeRef.current = [point];
             setFreehandStroke([point]);
             freehandDrawingRef.current = true;
+            freehandSelectActiveRef.current = false;
+            return;
+        }
+
+        // FREEHAND SELECT: F in Select mode turns the next drag into a lasso.
+        if (e.button === 0 && isFreehandSelectMode && isSelectionMode) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            freehandStrokeRef.current = [point];
+            setFreehandStroke([point]);
+            freehandDrawingRef.current = true;
+            freehandSelectActiveRef.current = true;
             return;
         }
 
@@ -14480,32 +15307,42 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 return;
             }
 
-            if (!offsetTargetId) {
+            if (!offsetTargetId || !offsetTargetConfirmed) {
                 const clicked = findLineNearClick(clickX, clickY, 15);
                 if (!clicked) {
-                    setTerminalIncoming({ text: 'OFFSET: Click a line, polyline, arc or circle to offset', tone: 'error' });
+                    setTerminalIncoming({
+                        text: 'OFFSET: Click a segment to select it, or double-click for the connected chain',
+                        tone: 'info',
+                    });
                     return;
                 }
-                setOffsetTargetId(clicked.id || `${clicked.from}-${clicked.to}`);
+                const clickedId = clicked.id || `${clicked.from}-${clicked.to}`;
+                setOffsetTargetId(clickedId);
+                setOffsetSelectionIds(new Set([clickedId]));
+                setOffsetTargetConfirmed(false);
                 offsetPreviewKeyRef.current = null;
+                clearOffsetPreview();
                 setTerminalIncoming({
                     text: isCircleLine(clicked)
-                        ? 'OFFSET: Click inside or outside the circle to choose the side [Esc to exit]'
-                        : 'OFFSET: Click the side to offset toward [Esc to exit]',
+                        ? 'OFFSET: Circle selected — press Enter to continue [Esc to exit]'
+                        : 'OFFSET: Segment selected — press Enter to continue, or double-click for the connected chain [Esc to exit]',
                     tone: 'info',
                 });
+                requestAnimationFrame(() => drawRef.current?.());
                 return;
             }
 
             const target = lines.find(l => (l.id || `${l.from}-${l.to}`) === offsetTargetId);
             if (!target) {
                 setOffsetTargetId(null);
+                setOffsetSelectionIds(new Set());
+                setOffsetTargetConfirmed(false);
                 clearOffsetPreview();
                 setTerminalIncoming({ text: 'OFFSET: That entity is no longer available — pick another', tone: 'error' });
                 return;
             }
 
-            const result = applyOffsetAtPoint(target, { x: world.easting, y: world.northing });
+            const result = applyOffsetAtPoint(target, { x: world.easting, y: world.northing }, offsetSelectionIds);
             if (result.ok) {
                 clearOffsetPreview();
                 setTerminalIncoming({
@@ -14513,6 +15350,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     tone: 'ok',
                 });
                 setOffsetTargetId(null);
+                setOffsetSelectionIds(new Set());
+                setOffsetTargetConfirmed(false);
             } else {
                 setTerminalIncoming({ text: result.message, tone: 'error' });
             }
@@ -15165,27 +16004,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
             const clickedLine = findLineNearClick(clickX, clickY, 15);
             if (clickedLine && !isBoxSelectMode) {
-                // If line belongs to a polyline group, select/deselect all segments of the polyline together
-                const targetPolylineId = clickedLine.polylineId;
-                const memberLineIds: string[] = [];
-                if (targetPolylineId) {
-                    lines.forEach(l => {
-                        if (l.polylineId === targetPolylineId && !l.hidden) {
-                            memberLineIds.push(l.id || `${l.from}-${l.to}`);
-                        }
-                    });
-                } else {
-                    memberLineIds.push(clickedLine.id || `${clickedLine.from}-${clickedLine.to}`);
-                }
-
+                // A single click selects only the segment under the cursor. The
+                // connected chain is selected by double-click instead.
+                const clickedLineId = clickedLine.id || `${clickedLine.from}-${clickedLine.to}`;
                 setSelectedLineIds(prev => {
                     const next = new Set(prev);
-                    const allSelected = memberLineIds.every(id => next.has(id));
-                    if (allSelected) {
-                        memberLineIds.forEach(id => next.delete(id));
-                    } else {
-                        memberLineIds.forEach(id => next.add(id));
-                    }
+                    if (next.has(clickedLineId)) next.delete(clickedLineId);
+                    else next.add(clickedLineId);
                     return next;
                 });
                 return;
@@ -15271,6 +16096,17 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const rect = canvas.getBoundingClientRect();
             const clickX = e.clientX - rect.left;
             const clickY = e.clientY - rect.top;
+
+            if (isTrimFenceMode) {
+                const world = screenToWorld(clickX, clickY);
+                const point = { x: world.easting, y: world.northing };
+                const next = { start: point, end: point };
+                trimFenceRef.current = next;
+                trimFenceDragRef.current = true;
+                setTrimFence(next);
+                setTrimHoverPreview(null);
+                return;
+            }
             
             // Convert screen to world coordinates
             const worldCoords = screenToWorld(clickX, clickY);
@@ -15399,6 +16235,23 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const rect = canvas.getBoundingClientRect();
             const clickX = e.clientX - rect.left;
             const clickY = e.clientY - rect.top;
+
+            // Ctrl+click a station label to slide that baseline's labels
+            // perpendicular to the baseline. Other baselines keep their offset.
+            const stationLabelHit = findStationLabelAtScreenPoint(clickX, clickY);
+            if (stationLabelHit) {
+                e.preventDefault();
+                document.body.classList.add('label-dragging');
+                setIsStationLabelDragging(true);
+                stationLabelDragRef.current = {
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    startOffsetPx: resolveStationLabelOffsetPx(settings.stationing, stationLabelHit.centerlineId),
+                    bearing: stationLabelHit.bearing,
+                    centerlineId: stationLabelHit.centerlineId,
+                };
+                return;
+            }
 
             // Prioritize owner name over deed metadata if both are visible
             if (isOverOwnerNameArea(clickX, clickY)) {
@@ -15547,6 +16400,32 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const clickX = e.clientX - rect.left;
             const clickY = e.clientY - rect.top;
 
+            // Shift+click a station label to flip that baseline's labels 180°.
+            const stationLabelHit = findStationLabelAtScreenPoint(clickX, clickY);
+            if (stationLabelHit) {
+                e.preventDefault();
+                const currentFlip = Number(settings.stationing?.labelRotationByBaseline?.[stationLabelHit.centerlineId]) || 0;
+                const nextFlip = ((currentFlip % 360) + 360) % 360 === 180 ? 0 : 180;
+                setSettings(prev => ({
+                    ...prev,
+                    stationing: {
+                        ...prev.stationing,
+                        labelRotationByBaseline: {
+                            ...(prev.stationing?.labelRotationByBaseline ?? {}),
+                            [stationLabelHit.centerlineId]: nextFlip,
+                        },
+                    },
+                }));
+                setTerminalIncoming({
+                    text: nextFlip === 180
+                        ? 'STATION LABELS: Rotated 180° for this baseline [Shift+click again to reset]'
+                        : 'STATION LABELS: Rotation reset for this baseline',
+                    tone: 'ok',
+                });
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+
             // Check annotation notes first — Shift+click mirrors dx left↔right.
             if (onUpdatePointAnnotationOffset) {
                 for (const p of [...points].reverse()) {
@@ -15591,6 +16470,76 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         if (isLinearDrawingMode(drawingMode)) {
+            if (mendPickActiveRef.current && e.button === 0) {
+                e.preventDefault();
+                const preview = mendPickPreviewRef.current;
+                const candidate = preview ? preview.candidates[preview.index] : null;
+                const lastPoint = polylinePoints[polylinePoints.length - 1];
+                const ends = preview ? resolveLineEndpoints(preview.line) : null;
+                if (!preview || !candidate || !lastPoint || !ends || !props.onUpdateLine) {
+                    setTerminalIncoming({ text: 'MEND: No tangent closure there — hover a straight segment, or press C for a straight close', tone: 'info' });
+                    return;
+                }
+                const stays = candidate.movedEnd === 'from' ? ends.p2 : ends.p1;
+                const mateVector = candidate.movedEnd === 'from'
+                    ? { east: stays.x - candidate.newPoint.easting, north: stays.y - candidate.newPoint.northing }
+                    : { east: candidate.newPoint.easting - stays.x, north: candidate.newPoint.northing - stays.y };
+                const mateLength = Math.hypot(mateVector.east, mateVector.north);
+                if (mateLength < 1e-6) {
+                    setTerminalIncoming({ text: 'MEND: That option would collapse the mating segment — press F for another option', tone: 'error' });
+                    return;
+                }
+                const mateAzimuth = (() => {
+                    let azimuth = Math.atan2(mateVector.east, mateVector.north);
+                    if (azimuth < 0) azimuth += 2 * Math.PI;
+                    return azimuth;
+                })();
+                const mateDistance = mateLength.toFixed(2);
+                const movedPoint = makeTempWorldPoint(candidate.newPoint.easting, candidate.newPoint.northing);
+                const movedEndpoint = buildLineEndpoint(movedPoint);
+                const movedCoords = movedEndpoint.coords ?? { x: candidate.newPoint.easting, y: candidate.newPoint.northing, z: 0 };
+                const changes: Partial<SurveyLine> = candidate.movedEnd === 'from'
+                    ? {
+                        from: movedEndpoint.ref,
+                        fromPt: movedCoords,
+                        bearing: formatBearing(mateAzimuth),
+                        distance: mateDistance,
+                        chordDistance: mateDistance,
+                    }
+                    : {
+                        to: movedEndpoint.ref,
+                        toPt: movedCoords,
+                        bearing: formatBearing(mateAzimuth),
+                        distance: mateDistance,
+                        chordDistance: mateDistance,
+                    };
+                props.onUpdateLine(preview.lineId, changes);
+                const fromEndpoint = buildLineEndpoint(makeTempWorldPoint(lastPoint.easting, lastPoint.northing));
+                onAddLine(buildChainLine({
+                    mode: drawingMode,
+                    from: fromEndpoint.ref,
+                    to: movedEndpoint.ref,
+                    fromPoint: lastPoint,
+                    toPoint: movedPoint,
+                    layer: activeDrawingLayer || undefined,
+                    polylineId: drawingMode === 'boundary-line'
+                        ? (boundaryLinePolylineIdRef.current ??= createManualBoundaryPolylineId())
+                        : undefined,
+                    arc: candidate.arc,
+                }));
+                const fromUnit: LinearUnit = settings.linearUnits || 'usSurveyFoot';
+                const unitAbbrev = getLinearUnitAbbreviation(fromUnit);
+                const radiusLabel = convertLinearUnits(candidate.arc.radius, 'foot', fromUnit).toFixed(2);
+                const adjustmentLabel = convertLinearUnits(Math.abs(candidate.adjustment), 'foot', fromUnit).toFixed(2);
+                setTerminalIncoming({
+                    text: `MEND: Closed with a tangent curve R ${radiusLabel} ${unitAbbrev} — mating segment ${candidate.adjustment >= 0 ? 'lengthened' : 'shortened'} ${adjustmentLabel} ${unitAbbrev}`,
+                    tone: 'ok',
+                });
+                clearMendPick();
+                finishDrawing();
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
             const canvas = canvasRef.current;
             if (!canvas) return;
             const rect = canvas.getBoundingClientRect();
@@ -15647,6 +16596,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
             if (nextPoint) {
                 if (typedSegmentLength.length > 0) setTypedSegmentLength('');
+                if (polylinePoints.length === 0) {
+                    polylineChainStartRef.current = nextPoint;
+                    polylineSegmentCountRef.current = 0;
+                    lastSegmentWasCurveRef.current = false;
+                    linearChainUndoStackRef.current = [];
+                }
                 setPolylinePoints(prev => [...prev, nextPoint]);
             }
             return;
@@ -16166,9 +17121,83 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         document.body.classList.add('panning');
         setIsPanning(true);
         lastMousePos.current = { x: e.clientX, y: e.clientY };
-    }, [contourLabelSlide, isZoomBoxMode, drawingMode, isDeletingLines, isTrimmingLines, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, selectedLineIds, hatches, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, polylineTangentExit, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter, rasterUnderlays, selectedRasterUnderlayId, beginRasterUnderlayDrag]);
+    }, [contourLabelSlide, findStationLabelAtScreenPoint, isZoomBoxMode, drawingMode, isDeletingLines, isTrimmingLines, isTrimFenceMode, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, isFreehandSelectMode, selectedLineIds, hatches, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, polylineTangentExit, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter, rasterUnderlays, selectedRasterUnderlayId, beginRasterUnderlayDrag]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
+        if (mendPickActiveRef.current) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const screenX = e.clientX - rect.left;
+            const screenY = e.clientY - rect.top;
+            const hovered = findLineNearClick(screenX, screenY, 18);
+            const clearPreview = () => {
+                if (mendPickPreviewRef.current) setMendPickPreviewValue(null);
+            };
+            if (!hovered || hovered.isCurve || hovered.isCircle) {
+                clearPreview();
+                return;
+            }
+            const ends = resolveLineEndpoints(hovered);
+            const lastPoint = polylinePoints[polylinePoints.length - 1];
+            const tangent = lastSegmentTangentRef.current;
+            if (!ends || !lastPoint || !tangent) {
+                clearPreview();
+                return;
+            }
+            const first = polylineFirstSegmentRef.current;
+            const last = polylineLastSegmentRef.current;
+            const samePoint = (a: MendPoint, b: { easting: number; northing: number }) =>
+                Math.hypot(a.easting - b.easting, a.northing - b.northing) < 1e-6;
+            const isChainStart = !!first
+                && samePoint(first.from, { easting: ends.p1.x, northing: ends.p1.y })
+                && samePoint(first.to, { easting: ends.p2.x, northing: ends.p2.y });
+            const isChainEnd = !!last
+                && samePoint(last.from, { easting: ends.p1.x, northing: ends.p1.y })
+                && samePoint(last.to, { easting: ends.p2.x, northing: ends.p2.y });
+            if (isChainEnd && !isChainStart) {
+                clearPreview();
+                return;
+            }
+            const segment = {
+                from: { easting: ends.p1.x, northing: ends.p1.y },
+                to: { easting: ends.p2.x, northing: ends.p2.y },
+            };
+            let candidates = resolveMendCandidates(
+                { easting: lastPoint.easting, northing: lastPoint.northing },
+                tangent,
+                segment,
+                isChainStart ? { onlyMove: 'from' } : undefined,
+            );
+            // A proper mend into the chain's first segment merges in that
+            // segment's direction instead of doubling back along it.
+            if (isChainStart) candidates = candidates.filter(candidate => candidate.alongSegment);
+            if (candidates.length === 0) {
+                clearPreview();
+                return;
+            }
+            const lineId = hovered.id || `${hovered.from}-${hovered.to}`;
+            const current = mendPickPreviewRef.current;
+            if (current && current.lineId === lineId && current.candidates.length === candidates.length) return;
+            setMendPickPreviewValue({ line: hovered, lineId, segment, candidates, index: 0 });
+            return;
+        }
+
+        if (trimFenceDragRef.current) {
+            const canvas = canvasRef.current;
+            if (canvas) {
+                const rect = canvas.getBoundingClientRect();
+                const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+                const current = trimFenceRef.current;
+                if (current) {
+                    const next = { start: current.start, end: { x: world.easting, y: world.northing } };
+                    trimFenceRef.current = next;
+                    setTrimFence(next);
+                }
+            }
+            return;
+        }
+
         // Freehand lasso capture — append screen-space points while the mouse is down.
         if (freehandDrawingRef.current) {
             const canvas = canvasRef.current;
@@ -16228,6 +17257,33 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
 
+        const stationLabelDrag = stationLabelDragRef.current;
+        if (stationLabelDrag) {
+            // Project the pointer delta onto the label normal so only the
+            // grabbed label's baseline slides.
+            const perpendicularPx =
+                (e.clientX - stationLabelDrag.startX) * Math.cos(stationLabelDrag.bearing) +
+                (e.clientY - stationLabelDrag.startY) * Math.sin(stationLabelDrag.bearing);
+            // The offset is expressed at the reference text size. Divide by
+            // the live text scale so the dragged label follows the pointer at
+            // every zoom level.
+            const labelScale = Math.max(0.25, Number(settings.stationing?.labelScale) || 1);
+            const dragScale = Math.max(1e-9, transform.scale * labelScale);
+            const nextOffset = Math.max(-600, Math.min(600, stationLabelDrag.startOffsetPx + perpendicularPx / dragScale));
+            setSettings(prev => {
+                const offsets = prev.stationing?.labelOffsetPxByBaseline ?? {};
+                if ((Number(offsets[stationLabelDrag.centerlineId]) || 0) === nextOffset) return prev;
+                return {
+                    ...prev,
+                    stationing: {
+                        ...prev.stationing,
+                        labelOffsetPxByBaseline: withStationLabelOffset(offsets, stationLabelDrag.centerlineId, nextOffset),
+                    },
+                };
+            });
+            return;
+        }
+
         if (contourLabelSlide) {
             const slideCanvas = canvasRef.current;
             if (slideCanvas) {
@@ -16256,13 +17312,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         // OFFSET ghost preview — mostly redrawn only when the picked side flips.
-        if (isOffsetMode && offsetDistance !== null && offsetTargetId) {
+        if (isOffsetMode && offsetDistance !== null && offsetTargetId && offsetTargetConfirmed) {
             const canvas = canvasRef.current;
             if (canvas) {
                 const rect = canvas.getBoundingClientRect();
                 const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
                 const target = lines.find(l => (l.id || `${l.from}-${l.to}`) === offsetTargetId) ?? null;
-                updateOffsetPreview(target, { x: world.easting, y: world.northing });
+                updateOffsetPreview(target, { x: world.easting, y: world.northing }, offsetSelectionIds);
             }
         } else if (offsetPreviewSegmentsRef.current) {
             clearOffsetPreview();
@@ -16666,15 +17722,125 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 shiftHoverAnchorRef.current = null;
             }
         }
-    }, [zoomBox, isPanning, isLabelDragging, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview, inlineOsnapOverride, runningOsnaps, findNearestSurveyPoint, resolveOsnapAtScreen, contourLabelSlide, onMoveContourLabel, findContourLabelAtScreenPoint, hoveredContourLabelIndex, rasterUnderlays, onUpdateRasterUnderlay]);
+    }, [zoomBox, isPanning, isLabelDragging, isStationLabelDragging, hoveredStationLabelKey, findStationLabelAtScreenPoint, onUpdatePointLabelOffset, onUpdatePointAnnotationOffset, props, transform, points, hoveredShrinkwrapPn, shiftHoverPoints, boundaryAlignSliding, boundaryAlignTarget, getBoundaryCornersWorld, symbolExclusionMode, excludedSymbolDescriptions, explainSymbolAssociation, exclusionHover, shiftBoxSelect, drawingMode, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, cornerAlignHover, hitTestBoundaryCorner, isRotatingSelection, rotatePivot, updateRotatePreview, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, isCopyingSelection, copyBasePoint, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, showTransformPreview, isScalingSelection, scaleBasePoint, showScalePreview, inlineOsnapOverride, runningOsnaps, findNearestSurveyPoint, resolveOsnapAtScreen, contourLabelSlide, onMoveContourLabel, findContourLabelAtScreenPoint, hoveredContourLabelIndex, rasterUnderlays, onUpdateRasterUnderlay]);
 
     const handleMouseUp = useCallback((e: React.MouseEvent) => {
+        if (trimFenceDragRef.current) {
+            trimFenceDragRef.current = false;
+            const fence = trimFenceRef.current;
+            trimFenceRef.current = null;
+            setTrimFence(null);
+            if (fence) trimByFence(fence.start, fence.end);
+            return;
+        }
+
         // Finish the ephemeral lasso before any normal mouse-up handling.
         if (freehandDrawingRef.current) {
             freehandDrawingRef.current = false;
+            const selecting = freehandSelectActiveRef.current;
+            freehandSelectActiveRef.current = false;
             const stroke = freehandStrokeRef.current;
             freehandStrokeRef.current = [];
             setFreehandStroke([]);
+            if (selecting) {
+                if (stroke.length >= 3) {
+                    const lasso = stroke;
+                    const pointInside = (x: number, y: number) => isPointInPolygon({ x, y }, lasso);
+                    const cross = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number) =>
+                        (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+                    const segmentsCross = (
+                        ax: number, ay: number, bx: number, by: number,
+                        cx: number, cy: number, dx: number, dy: number,
+                    ) => {
+                        const d1 = cross(ax, ay, bx, by, cx, cy);
+                        const d2 = cross(ax, ay, bx, by, dx, dy);
+                        const d3 = cross(cx, cy, dx, dy, ax, ay);
+                        const d4 = cross(cx, cy, dx, dy, bx, by);
+                        return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+                    };
+                    const touchesLasso = (x1: number, y1: number, x2: number, y2: number) => {
+                        if (pointInside(x1, y1) || pointInside(x2, y2)) return true;
+                        for (let i = 0; i < lasso.length; i++) {
+                            const a = lasso[i];
+                            const b = lasso[(i + 1) % lasso.length];
+                            if (segmentsCross(x1, y1, x2, y2, a.x, a.y, b.x, b.y)) return true;
+                        }
+                        return false;
+                    };
+
+                    const selectedLines = new Set<string>();
+                    for (const line of lines) {
+                        if (line.hidden) continue;
+                        const p1 = pointMap.get(line.from);
+                        const p2 = pointMap.get(line.to);
+                        const x1w = p1 ? p1.easting : line.fromPt?.x;
+                        const y1w = p1 ? p1.northing : line.fromPt?.y;
+                        const x2w = p2 ? p2.easting : line.toPt?.x;
+                        const y2w = p2 ? p2.northing : line.toPt?.y;
+                        if (x1w === undefined || y1w === undefined) continue;
+                        const lineId = line.id || `${line.from}-${line.to}`;
+                        const isCircleEntity = line.isCircle || (line.isCurve && line.curveRadius && (!line.fromPt || (x1w === x2w && y1w === y2w)) && !line.tangentBearing && !line.chordBearing);
+                        if (isCircleEntity && line.curveRadius) {
+                            const center = line.circleCenter ? { x: line.circleCenter.x, y: line.circleCenter.y } : { x: x1w, y: y1w };
+                            const sc = worldToScreen(center.x, center.y);
+                            const sr = line.curveRadius * transform.scale;
+                            let hit = pointInside(sc.x, sc.y);
+                            for (let k = 0; k < 24 && !hit; k++) {
+                                const a = (k / 24) * Math.PI * 2;
+                                const b = ((k + 1) / 24) * Math.PI * 2;
+                                const ax = sc.x + Math.cos(a) * sr;
+                                const ay = sc.y + Math.sin(a) * sr;
+                                const bx = sc.x + Math.cos(b) * sr;
+                                const by = sc.y + Math.sin(b) * sr;
+                                hit = pointInside(ax, ay);
+                                if (!hit) {
+                                    for (let i = 0; i < lasso.length; i++) {
+                                        const l1 = lasso[i];
+                                        const l2 = lasso[(i + 1) % lasso.length];
+                                        if (segmentsCross(ax, ay, bx, by, l1.x, l1.y, l2.x, l2.y)) { hit = true; break; }
+                                    }
+                                }
+                            }
+                            if (hit) selectedLines.add(lineId);
+                            continue;
+                        }
+                        if (x2w === undefined || y2w === undefined) continue;
+                        const s1 = worldToScreen(x1w, y1w);
+                        const s2 = worldToScreen(x2w, y2w);
+                        if (touchesLasso(s1.x, s1.y, s2.x, s2.y)) selectedLines.add(lineId);
+                    }
+
+                    const selectedHatches = new Set<string>();
+                    for (const hatch of hatches) {
+                        if (hatch.hidden) continue;
+                        const screenPoints = hatch.loops
+                            .flatMap(loop => loop.vertices ?? [])
+                            .map(vertex => worldToScreen(vertex.x, vertex.y));
+                        if (screenPoints.length < 3) continue;
+                        let hit = screenPoints.some(point => pointInside(point.x, point.y));
+                        for (let i = 0; i < screenPoints.length && !hit; i++) {
+                            const a = screenPoints[i];
+                            const b = screenPoints[(i + 1) % screenPoints.length];
+                            hit = touchesLasso(a.x, a.y, b.x, b.y);
+                        }
+                        if (hit) selectedHatches.add(hatch.id);
+                    }
+
+                    setSelectedLineIds(selectedLines);
+                    setSelectedHatchIds(selectedHatches);
+                    setSelectedHatchId(null);
+                    setIsSelectionMode(true);
+                    const total = selectedLines.size + selectedHatches.size;
+                    setTerminalIncoming({
+                        text: total > 0
+                            ? `FREEHAND SELECT: ${total} ${total === 1 ? 'entity' : 'entities'} selected — drag another lasso or press F to turn off`
+                            : 'FREEHAND SELECT: Nothing inside that loop — drag another lasso or press F to turn off',
+                        tone: total > 0 ? 'ok' : 'info',
+                    });
+                    requestAnimationFrame(() => drawRef.current?.());
+                }
+                return;
+            }
             if (stroke.length >= 3) {
                 props.onShrinkwrapFreehandComplete?.(stroke.map(point => {
                     const world = screenToWorld(point.x, point.y);
@@ -16938,11 +18104,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             ownerNameDragTarget.current = null;
             annotationDragTarget.current = null;
         }
+        if (isStationLabelDragging || stationLabelDragRef.current) {
+            document.body.classList.remove('label-dragging');
+            stationLabelDragRef.current = null;
+            setIsStationLabelDragging(false);
+        }
         if (isPanning) {
             document.body.classList.remove('panning');
             setIsPanning(false);
         }
-    }, [zoomBox, isZoomBoxMode, isLabelDragging, isPanning, shiftBoxSelect, lines, pointMap, transform, activeGrip, isBoxSelectMode, selectedLineIds, selectedHatchIds, selectedEntityCount, hatches, commitActiveGrip, screenToWorld, activeOsnapPoint, isOffsetMode, offsetDistance, offsetTargetId, updateOffsetPreview, clearOffsetPreview, zoomToBbox, props]);
+    }, [zoomBox, isZoomBoxMode, isLabelDragging, isStationLabelDragging, isPanning, shiftBoxSelect, lines, pointMap, transform, activeGrip, isBoxSelectMode, selectedLineIds, selectedHatchIds, selectedEntityCount, hatches, commitActiveGrip, screenToWorld, activeOsnapPoint, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, updateOffsetPreview, clearOffsetPreview, trimByFence, zoomToBbox, props]);
     
     const handleTouchStart = useCallback((e: React.TouchEvent) => {
         if (drawingMode !== 'none') return;
@@ -17016,7 +18187,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 lineType
             });
         }
-    }, [drawingMode, isTrimmingLines, isExtendingLines, isDeletingLines, polylinePoints.length, onToolStateChange, selectedEntityCount, selectedPointNumbers.size, selectedCenterlineIds.size]);
+    }, [drawingMode, isTrimmingLines, isTrimFenceMode, isExtendingLines, isDeletingLines, polylinePoints.length, onToolStateChange, selectedEntityCount, selectedPointNumbers.size, selectedCenterlineIds.size]);
 
     const handleZoomToPointSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -17058,6 +18229,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     useEffect(() => {
         if (drawingMode !== 'baseline') baselineDraftRef.current = null;
         setPolylineArcMode(false);
+        setPolylineArcExitToLine(false);
+        polylineArcJustCommittedRef.current = false;
         lastSegmentTangentRef.current = null;
     }, [drawingMode]);
 
@@ -17077,15 +18250,23 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         if (!onUpsertCenterline) return;
         let draft = baselineDraftRef.current;
         if (!draft) {
-            const usedNames = new Set(centerlines.map(cl => cl.name));
-            let index = 1;
-            while (usedNames.has(`BASELINE-${index}`)) index += 1;
-            draft = {
-                id: `baseline-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-                name: `BASELINE-${index}`,
-                beginStation: resolveBeginStation(undefined, p1.description),
-                pis: [],
-            };
+            // Starting a BASELINE on a snapped existing endpoint continues that
+            // alignment in place. Keeping the same Centerline is what preserves
+            // its beginStation, EOP, and station sequence.
+            const continuation = findBaselineContinuationSource(centerlines, p1);
+            if (continuation) {
+                draft = { ...continuation, pis: [...continuation.pis] };
+            } else {
+                const usedNames = new Set(centerlines.map(cl => cl.name));
+                let index = 1;
+                while (usedNames.has(`BASELINE-${index}`)) index += 1;
+                draft = {
+                    id: `baseline-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                    name: `BASELINE-${index}`,
+                    beginStation: resolveBeginStation(undefined, p1.description),
+                    pis: [],
+                };
+            }
         }
         const draftId = draft.id;
         const pis = [...draft.pis];
@@ -17163,12 +18344,31 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         if (arc) p2 = makeTempWorldPoint(arc.end.easting, arc.end.northing);
         const p2Line = buildLineEndpoint(p2);
 
+        const isFirstSegment = polylineSegmentCountRef.current === 0;
+        const undoSnapshot = {
+            point: p1,
+            tangent: incomingTangent,
+            arcJustCommitted: polylineArcJustCommittedRef.current,
+            segmentCount: polylineSegmentCountRef.current,
+            baselineDraft: baselineDraftRef.current,
+            isBaseline: drawingMode === 'baseline',
+            arcMode: polylineArcMode,
+            fixedRadius: polylineFixedRadius,
+            tangentExit: polylineTangentExit,
+            arcExitToLine: polylineArcExitToLine,
+            lastSegmentWasCurve: lastSegmentWasCurveRef.current,
+            firstSegment: polylineFirstSegmentRef.current,
+            lastSegment: polylineLastSegmentRef.current,
+        };
+        let committed = false;
+
         if (drawingMode === 'baseline') {
             if (Math.hypot(p2.easting - p1.easting, p2.northing - p1.northing) > 1e-9) {
                 appendBaselineSegment(p1, p2, arc, incomingTangent);
+                committed = true;
             }
         } else {
-            onAddLine(buildChainLine({
+            const chainLine = buildChainLine({
                 mode: drawingMode,
                 from: p1Line.ref,
                 to: p2Line.ref,
@@ -17181,12 +18381,33 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ? (boundaryLinePolylineIdRef.current ??= createManualBoundaryPolylineId())
                     : undefined,
                 arc,
-            }));
+            });
+            onAddLine(chainLine);
+            polylineSegmentCountRef.current += 1;
+            committed = true;
+        }
+        if (committed) {
+            lastSegmentWasCurveRef.current = !!arc;
+            const segmentLength = Math.hypot(p2.easting - p1.easting, p2.northing - p1.northing);
+            const segmentStartTangent = arc
+                ? (incomingTangent ? { x: incomingTangent.x, y: incomingTangent.y } : null)
+                : segmentLength > 1e-9
+                    ? { x: (p2.easting - p1.easting) / segmentLength, y: (p2.northing - p1.northing) / segmentLength }
+                    : null;
+            const segmentSnapshot: ChainSegmentSnapshot = { from: p1, to: p2, isCurve: !!arc, startTangent: segmentStartTangent };
+            if (drawingMode !== 'baseline') {
+                if (isFirstSegment) polylineFirstSegmentRef.current = segmentSnapshot;
+                polylineLastSegmentRef.current = segmentSnapshot;
+            }
+            linearChainUndoStackRef.current.push(undoSnapshot);
         }
 
+        const exitingArcToLine = polylineArcMode && polylineArcExitToLine;
         if (arc) {
             lastSegmentTangentRef.current = arc.endTangent;
+            polylineArcJustCommittedRef.current = true;
         } else {
+            polylineArcJustCommittedRef.current = false;
             const segLen = Math.hypot(p2.easting - p1.easting, p2.northing - p1.northing);
             if (segLen > 1e-9) {
                 lastSegmentTangentRef.current = { x: (p2.easting - p1.easting) / segLen, y: (p2.northing - p1.northing) / segLen };
@@ -17199,8 +18420,22 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
         // Keep last point as start for next segment (continuous drawing)
         setPolylinePoints([p2]);
-        if (polylineTangentExit) setPolylineTangentExit(false);
-    }, [polylinePoints, onAddLine, drawingMode, draw, buildLineEndpoint, activeDrawingLayer, polylineArcMode, polylineFixedRadius, polylineTangentExit, appendBaselineSegment, makeTempWorldPoint]);
+        if (exitingArcToLine) {
+            // The arc endpoint is now the line's start. Lock the next segment
+            // to the arc's computed end tangent instead of the incoming one.
+            setPolylineArcMode(false);
+            setPolylineArcExitToLine(false);
+            setPolylineTangentExit(true);
+            setTerminalIncoming({
+                text: arc
+                    ? 'ARC → TANGENT LINE: next pick continues from the curve end tangent [click or type length]'
+                    : 'TANGENT LINE: arc was degenerate; next pick continues tangent to the previous segment',
+                tone: 'ok',
+            });
+        } else if (polylineTangentExit) {
+            setPolylineTangentExit(false);
+        }
+    }, [polylinePoints, onAddLine, drawingMode, draw, buildLineEndpoint, activeDrawingLayer, polylineArcMode, polylineFixedRadius, polylineTangentExit, polylineArcExitToLine, appendBaselineSegment, makeTempWorldPoint]);
     
     const finishDrawing = () => {
         setDrawingMode('none');
@@ -17211,6 +18446,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setPolylineRadiusInput('');
         setPolylineRadiusPrompt(false);
         setPolylineTangentExit(false);
+        setPolylineArcExitToLine(false);
+        polylineArcJustCommittedRef.current = false;
         setCircleCenter(null);
         setTypedCircleValue('');
         setPolygonCenter(null);
@@ -17221,6 +18458,17 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setTtrEntity2(null);
         setTtrHoverEntity(null);
         setIsTrimmingLines(false);
+        setIsTrimFenceMode(false);
+        setTrimFence(null);
+        trimFenceRef.current = null;
+        trimFenceDragRef.current = false;
+        polylineChainStartRef.current = null;
+        polylineFirstSegmentRef.current = null;
+        polylineLastSegmentRef.current = null;
+        clearMendPick();
+        polylineSegmentCountRef.current = 0;
+        lastSegmentWasCurveRef.current = false;
+        linearChainUndoStackRef.current = [];
         setTrimPoint(null);
         setTrimHoverPreview(null);
         setIsExtendingLines(false);
@@ -17245,13 +18493,21 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             key: 't',
             onDoubleTap: startTextPlacement,
             onSingleTap: () => {
-                setTerminalIncoming({ text: 'Command: T (TRIM) — click line segment to cut at intersection', tone: 'ok' });
+                setTerminalIncoming({ text: 'Command: T (TRIM) — click a segment or press F for fence', tone: 'ok' });
                 if (isTrimmingLines) {
                     setIsTrimmingLines(false);
+                    setIsTrimFenceMode(false);
+                    setTrimFence(null);
+                    trimFenceRef.current = null;
+                    trimFenceDragRef.current = false;
                     setTrimPoint(null);
                 } else {
                     finishDrawing();
                     setIsTrimmingLines(true);
+                    setIsTrimFenceMode(false);
+                    setTrimFence(null);
+                    trimFenceRef.current = null;
+                    trimFenceDragRef.current = false;
                     setIsExtendingLines(false);
                     setIsDeletingLines(false);
                     setTrimPoint(null);
@@ -17345,7 +18601,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setIsCopyingSelection(false);
         setCopyBasePoint(null);
         setIsOffsetMode(true);
+        setIsFreehandSelectMode(false);
         setOffsetTargetId(null);
+        setOffsetSelectionIds(new Set());
+        setOffsetTargetConfirmed(false);
         setOffsetPickStart(null);
         clearOffsetPreview();
         setOffsetDistance(
@@ -17619,15 +18878,82 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         return findHatchAtWorldPoint(hatches, world.easting, world.northing);
     }, [hatches, screenToWorld]);
 
+    /** All segments sharing a polyline id plus every segment connected end-to-end. */
+    const collectConnectedLineIds = useCallback((clickedLine: SurveyLine): Set<string> => {
+        const matchingIds = new Set<string>();
+        const targetPolylineId = clickedLine.polylineId;
+        if (targetPolylineId) {
+            lines.forEach(l => {
+                if (l.polylineId === targetPolylineId && !l.hidden) {
+                    matchingIds.add(l.id || `${l.from}-${l.to}`);
+                }
+            });
+        }
+
+        const getEndpoints = (l: SurveyLine) => {
+            const p1 = pointMap.get(l.from);
+            const p2 = pointMap.get(l.to);
+            const pt1 = p1 ? { x: p1.easting, y: p1.northing } : (l.fromPt ? { x: l.fromPt.x, y: l.fromPt.y } : null);
+            const pt2 = p2 ? { x: p2.easting, y: p2.northing } : (l.toPt ? { x: l.toPt.x, y: l.toPt.y } : null);
+            return { fromPn: l.from, toPn: l.to, pt1, pt2 };
+        };
+
+        const queue: SurveyLine[] = [clickedLine];
+        const visited = new Set<SurveyLine>([clickedLine]);
+        while (queue.length > 0) {
+            const curr = queue.shift()!;
+            matchingIds.add(curr.id || `${curr.from}-${curr.to}`);
+            const currEnds = getEndpoints(curr);
+            for (const other of lines) {
+                if (visited.has(other) || other.hidden) continue;
+                const otherEnds = getEndpoints(other);
+                let connected = false;
+                if (currEnds.fromPn && (currEnds.fromPn === otherEnds.fromPn || currEnds.fromPn === otherEnds.toPn)) connected = true;
+                if (currEnds.toPn && (currEnds.toPn === otherEnds.fromPn || currEnds.toPn === otherEnds.toPn)) connected = true;
+                if (!connected && currEnds.pt1 && currEnds.pt2 && otherEnds.pt1 && otherEnds.pt2) {
+                    const d11 = Math.hypot(currEnds.pt1.x - otherEnds.pt1.x, currEnds.pt1.y - otherEnds.pt1.y);
+                    const d12 = Math.hypot(currEnds.pt1.x - otherEnds.pt2.x, currEnds.pt1.y - otherEnds.pt2.y);
+                    const d21 = Math.hypot(currEnds.pt2.x - otherEnds.pt1.x, currEnds.pt2.y - otherEnds.pt1.y);
+                    const d22 = Math.hypot(currEnds.pt2.x - otherEnds.pt2.x, currEnds.pt2.y - otherEnds.pt2.y);
+                    if (d11 < 0.05 || d12 < 0.05 || d21 < 0.05 || d22 < 0.05) connected = true;
+                }
+                if (connected) {
+                    visited.add(other);
+                    queue.push(other);
+                }
+            }
+        }
+        return matchingIds;
+    }, [lines, pointMap]);
+
     const handleDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-        // COPY/OFFSET consume canvas clicks; a double-click must not hijack
-        // the second pick (copy destination / offset side) into a selection.
-        if (isCopyingSelection || isOffsetMode) return;
+        if (isCopyingSelection) return;
         const canvas = canvasRef.current;
         if (!canvas) return;
         const rect = canvas.getBoundingClientRect();
         const clickX = e.clientX - rect.left;
         const clickY = e.clientY - rect.top;
+
+        // OFFSET keeps clicks for its own pick flow. Double-click expands the
+        // current segment pick to the connected chain before Enter confirms it.
+        if (isOffsetMode) {
+            if (offsetDistance === null || offsetTargetConfirmed) return;
+            const clickedLine = findLineNearClick(clickX, clickY, 15);
+            if (!clickedLine) return;
+            const seedId = clickedLine.id || `${clickedLine.from}-${clickedLine.to}`;
+            const chainIds = collectConnectedLineIds(clickedLine);
+            setOffsetTargetId(seedId);
+            setOffsetSelectionIds(chainIds);
+            setOffsetTargetConfirmed(false);
+            offsetPreviewKeyRef.current = null;
+            clearOffsetPreview();
+            setTerminalIncoming({
+                text: `OFFSET: ${chainIds.size} connected ${chainIds.size === 1 ? 'segment' : 'segments'} selected — press Enter to continue [Esc to exit]`,
+                tone: 'ok',
+            });
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
 
         // Double-click a contour elevation to slide it along its contour.
         const contourLabelIndex = findContourLabelAtScreenPoint(clickX, clickY);
@@ -17659,6 +18985,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const clickedText = findTextAnnotationAtScreenPoint(clickX, clickY);
         if (clickedText) {
             openTextEditorForAnnotation(clickedText);
+            return;
+        }
+
+        // Double-click a drawn centerline / BASELINE to open its alignment tools.
+        const clickedCenterline = findCenterlineNearClick(clickX, clickY, 12);
+        if (clickedCenterline) {
+            setSelectedCenterlineIds(new Set([clickedCenterline.id]));
+            setIsSelectionMode(true);
+            onOpenCenterlineTools?.(clickedCenterline.id);
+            requestAnimationFrame(() => drawRef.current?.());
             return;
         }
 
@@ -17698,67 +19034,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setSelectedHatchId(null);
         setSelectedHatchIds(new Set());
 
-        const targetPolylineId = clickedLine.polylineId;
-        const matchingIds = new Set<string>();
-
-        // Step 1: If polylineId exists, add all lines with the same polylineId
-        if (targetPolylineId) {
-            lines.forEach(l => {
-                if (l.polylineId === targetPolylineId && !l.hidden) {
-                    matchingIds.add(l.id || `${l.from}-${l.to}`);
-                }
-            });
-        }
-
-        // Step 2: Continuous connected chain traversal
-        const getEndpoints = (l: SurveyLine) => {
-            const p1 = pointMap.get(l.from);
-            const p2 = pointMap.get(l.to);
-            const pt1 = p1 ? { x: p1.easting, y: p1.northing } : (l.fromPt ? { x: l.fromPt.x, y: l.fromPt.y } : null);
-            const pt2 = p2 ? { x: p2.easting, y: p2.northing } : (l.toPt ? { x: l.toPt.x, y: l.toPt.y } : null);
-            return { fromPn: l.from, toPn: l.to, pt1, pt2 };
-        };
-
-        const queue: SurveyLine[] = [clickedLine];
-        const visited = new Set<SurveyLine>([clickedLine]);
-
-        while (queue.length > 0) {
-            const curr = queue.shift()!;
-            const currId = curr.id || `${curr.from}-${curr.to}`;
-            matchingIds.add(currId);
-            const currEnds = getEndpoints(curr);
-
-            for (const other of lines) {
-                if (visited.has(other) || other.hidden) continue;
-                const otherEnds = getEndpoints(other);
-
-                let connected = false;
-                // Point Number ID matching
-                if (currEnds.fromPn && (currEnds.fromPn === otherEnds.fromPn || currEnds.fromPn === otherEnds.toPn)) connected = true;
-                if (currEnds.toPn && (currEnds.toPn === otherEnds.fromPn || currEnds.toPn === otherEnds.toPn)) connected = true;
-
-                // Coordinate proximity matching (< 0.05 ft)
-                if (!connected && currEnds.pt1 && currEnds.pt2 && otherEnds.pt1 && otherEnds.pt2) {
-                    const d11 = Math.hypot(currEnds.pt1.x - otherEnds.pt1.x, currEnds.pt1.y - otherEnds.pt1.y);
-                    const d12 = Math.hypot(currEnds.pt1.x - otherEnds.pt2.x, currEnds.pt1.y - otherEnds.pt2.y);
-                    const d21 = Math.hypot(currEnds.pt2.x - otherEnds.pt1.x, currEnds.pt2.y - otherEnds.pt1.y);
-                    const d22 = Math.hypot(currEnds.pt2.x - otherEnds.pt2.x, currEnds.pt2.y - otherEnds.pt2.y);
-                    if (d11 < 0.05 || d12 < 0.05 || d21 < 0.05 || d22 < 0.05) {
-                        connected = true;
-                    }
-                }
-
-                if (connected) {
-                    visited.add(other);
-                    queue.push(other);
-                }
-            }
-        }
-
+        const matchingIds = collectConnectedLineIds(clickedLine);
         setSelectedLineIds(matchingIds);
         setIsSelectionMode(true);
         requestAnimationFrame(() => drawRef.current?.());
-    }, [findLineNearClick, findHatchAtScreenPoint, findTextAnnotationAtScreenPoint, openTextEditorForAnnotation, findContourLabelAtScreenPoint, contourLabels, contourPathsByGeneration, contourPathsFromLines, onMoveContourLabel, lines, hatches, pointMap, isCopyingSelection, isOffsetMode, onOpenGeneration]);
+    }, [findCenterlineNearClick, findLineNearClick, findHatchAtScreenPoint, findTextAnnotationAtScreenPoint, openTextEditorForAnnotation, findContourLabelAtScreenPoint, contourLabels, contourPathsByGeneration, contourPathsFromLines, onMoveContourLabel, lines, hatches, pointMap, isCopyingSelection, isOffsetMode, offsetDistance, offsetTargetConfirmed, collectConnectedLineIds, clearOffsetPreview, onOpenGeneration, onOpenCenterlineTools]);
 
     // Live rotation angle for the ROTATE prompt (base point already picked).
     const rotateAnglePreview = (() => {
@@ -17800,6 +19080,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 setCursorScreenPos(null);
                 cursorWorldPosRef.current = null;
                 clearOffsetPreview();
+                if (stationLabelDragRef.current) {
+                    stationLabelDragRef.current = null;
+                    setIsStationLabelDragging(false);
+                    document.body.classList.remove('label-dragging');
+                }
                 // Clear shift-hover tooltip when pointer leaves the canvas area
                 if (shiftHoverTimerRef.current !== null) {
                     clearTimeout(shiftHoverTimerRef.current);
@@ -17811,7 +19096,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     shiftHoverAnchorRef.current = null;
                 }
             }}
-            style={{ cursor: isDraggingUnderlay ? 'move' : isPanning ? 'grabbing' : (contourLabelSlide || hoveredContourLabelIndex !== null ? 'move' : (isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && isOverLabel ? 'grab' : (isZoomBoxMode || drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))))), overflow: 'visible', isolation: 'isolate' }}
+            style={{ cursor: isPickingBaselineStart ? 'crosshair' : isDraggingUnderlay ? 'move' : isStationLabelDragging ? 'grabbing' : isPanning ? 'grabbing' : (contourLabelSlide || hoveredContourLabelIndex !== null ? 'move' : (isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && (isOverLabel || hoveredStationLabelKey !== null) ? 'grab' : (isZoomBoxMode || drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))))), overflow: 'visible', isolation: 'isolate' }}
         >
             <CanvasFlashLayer />
             <canvas
@@ -18324,7 +19609,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 {polylineRadiusPrompt ? (
                                     <span className="text-[10px] text-gray-400">Type a fixed radius · <span className="text-cyan-300 font-semibold">[Enter]</span> Apply · <span className="text-gray-300 font-semibold">[Esc]</span> Cancel</span>
                                 ) : (
-                                    <span className="text-[10px] text-gray-400"><span className="text-gray-300 font-semibold">[A]</span> Arc · <span className="text-gray-300 font-semibold">[L]</span> Line · <span className="text-gray-300 font-semibold">[R]</span> Radius{radiusDisplay ? ` ${radiusDisplay}` : ''} · <span className="text-gray-300 font-semibold">[T]</span> Tangent{polylineTangentExit ? ' ✓' : ''} · <span className="text-gray-300 font-semibold">[Enter]</span> Finish · <span className="text-gray-300 font-semibold">[O]</span> Ortho {isOrthoEnabled ? 'ON' : 'OFF'}</span>
+                                    <span className="text-[10px] text-gray-400"><span className="text-gray-300 font-semibold">[A]</span> Arc · <span className="text-gray-300 font-semibold">[L]</span> Line · <span className="text-gray-300 font-semibold">[R]</span> Radius{radiusDisplay ? ` ${radiusDisplay}` : ''} · <span className="text-gray-300 font-semibold">[T]</span> Tangent{(polylineTangentExit || polylineArcExitToLine) ? ' ✓' : ''} · <span className="text-gray-300 font-semibold">[C]</span> Close · <span className="text-gray-300 font-semibold">[M]</span> Mend · <span className="text-gray-300 font-semibold">[Enter]</span> Finish · <span className="text-gray-300 font-semibold">[O]</span> Ortho {isOrthoEnabled ? 'ON' : 'OFF'}</span>
                                 )}
                             </div>
                         );
@@ -19525,6 +20810,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setIsOffsetMode(false);
                                                 setOffsetDistance(null);
                                                 setOffsetTargetId(null);
+                                                setOffsetSelectionIds(new Set());
+                                                setOffsetTargetConfirmed(false);
                                                 setOffsetPickStart(null);
                                                 clearOffsetPreview();
                                             } else {
@@ -20471,14 +21758,18 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 ? 'OFFSET: Click a second point to set the distance [Esc to exit]'
                                 : 'OFFSET: Specify offset distance — type a number or click two points [Esc to exit]'
                             : !offsetTargetId
-                            ? 'OFFSET: Select a line, polyline, arc or circle to offset [Esc to exit]'
+                            ? 'OFFSET: Click a segment to select it, or double-click for the connected chain [Esc to exit]'
+                            : !offsetTargetConfirmed
+                            ? `OFFSET: ${offsetSelectionIds.size} ${offsetSelectionIds.size === 1 ? 'segment' : 'segments'} selected — press Enter to continue, or double-click for the chain [Esc to exit]`
                             : 'OFFSET: Click the side to offset toward [Esc to exit]'
                         : drawingMode === 'baseline'
                         ? polylinePoints.length === 0
                             ? 'BASELINE: Pick start point [Esc to cancel]'
-                            : `BASELINE ${polylineArcMode ? 'ARC' : 'LINE'}: Pick next point [A arc · L line · R radius · T tangent · Enter finish · Esc cancel]`
+                            : `BASELINE ${polylineArcMode ? 'ARC' : 'LINE'}${polylineArcExitToLine ? ' → TANGENT LINE' : ''}: Pick next point [A arc · L line · R radius · T tangent · U undo · Enter finish · Esc cancel]`
+                        : mendPickActive
+                        ? `MEND: Hover a segment to preview the tangent closure${mendPickPreview ? ` — option ${mendPickPreview.index + 1}/${mendPickPreview.candidates.length}` : ''} [click apply · F option · C straight close · Esc cancel]`
                         : drawingMode === 'polylines' && polylinePoints.length > 0
-                        ? `${polylineArcMode ? 'ARC' : 'LINE'}${polylineFixedRadius !== null ? ` R=${convertLinearUnits(polylineFixedRadius, 'foot', settings.linearUnits || 'usSurveyFoot').toFixed(2)}` : ''}${polylineTangentExit ? ' TANGENT' : ''} — Length: ${typedSegmentLength || '_'} ${getLinearUnitAbbreviation(settings.linearUnits)} (Enter commit · A Arc · L Line · R Radius · T Tangent · Esc finish)`
+                        ? `${polylineArcMode ? 'ARC' : 'LINE'}${polylineArcExitToLine ? ' → TANGENT LINE' : ''}${polylineFixedRadius !== null ? ` R=${convertLinearUnits(polylineFixedRadius, 'foot', settings.linearUnits || 'usSurveyFoot').toFixed(2)}` : ''}${polylineTangentExit ? ' TANGENT' : ''} — Length: ${typedSegmentLength || '_'} ${getLinearUnitAbbreviation(settings.linearUnits)} (Enter commit · A Arc · L Line · R Radius · T Tangent · U Undo · Esc finish)`
                         : drawingMode === 'polygon'
                         ? !polygonCenter
                             ? `POLYGON: Pick center — ${polygonSides} sides; scroll or [ ] changes sides [Esc to cancel]`
@@ -20491,7 +21782,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 ? 'CIRCLE (TTR): Select second tangent entity [Esc]'
                                 : `CIRCLE (TTR): ${circleSizeParam.toUpperCase()} = ${typedCircleValue || '_'} ${getLinearUnitAbbreviation(settings.linearUnits)} [D to switch, Enter]`
                             : !circleCenter
-                            ? 'CIRCLE: Pick center point or type T for TTR [Esc to cancel]'
+                            ? 'CIRCLE: Pick center point or type TTR for tangent-tangent-radius [Esc to cancel]'
                             : `CIRCLE: ${circleSizeParam.toUpperCase()} = ${typedCircleValue || (cursorWorldPosRef.current ? (Math.hypot(cursorWorldPosRef.current.x - circleCenter.easting, cursorWorldPosRef.current.y - circleCenter.northing) * (circleSizeParam === 'diameter' ? 2 : 1)).toFixed(2) : '_')} [D to switch, Enter]`
                         : drawingMode === 'add-point'
                         ? `ADD POINT: Click canvas to drop PT ${addPointNumber || nextAvailablePointNumber || '1'} [Osnap active · Esc to finish]`
@@ -20536,11 +21827,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         setTerminalIncoming({ text: 'Command: P (ADD POINT) — pick directly on the canvas [Esc to finish]', tone: 'ok' });
                     },
                     onStartLine: () => startChainLineMode('polylines'),
-                    onStartCircle: () => {
+                    onStartCircle: (options?: { ttr?: boolean }) => {
                         setDrawingMode('circle');
                         setCircleCenter(null);
                         setCircleSizeParam('radius');
                         setTypedCircleValue('');
+                        setCircleSubMode(options?.ttr ? 'ttr' : 'center-radius');
+                        setTtrStep(1);
+                        setTtrEntity1(null);
+                        setTtrEntity2(null);
+                        setTtrHoverEntity(null);
                         setIsTrimmingLines(false);
                         setIsExtendingLines(false);
                         setIsDeletingLines(false);
@@ -20706,6 +22002,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         setIsOffsetMode(false);
                         setOffsetDistance(null);
                         setOffsetTargetId(null);
+                        setOffsetSelectionIds(new Set());
+                        setOffsetTargetConfirmed(false);
                         setOffsetPickStart(null);
                         clearOffsetPreview();
                         setSelectedLineIds(new Set());
@@ -20751,6 +22049,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             }
                             setOffsetDistance(convertLinearUnits(val, settings.linearUnits || 'usSurveyFoot', 'foot'));
                             setOffsetTargetId(null);
+                            setOffsetSelectionIds(new Set());
+                            setOffsetTargetConfirmed(false);
                             setOffsetPickStart(null);
                             clearOffsetPreview();
                             setTerminalIncoming({

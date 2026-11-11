@@ -141,7 +141,7 @@ const MARGIN    = 48; // px padding around rendered survey bounds
 const DESC_PALETTE: Array<[RegExp, string]> = [
   [/^(EP|EOP|EDGE|ROAD|ROW|DYL|DBL)/i,                      '#FFD700'], // road edge/paint – gold
   [/^(WL|SWL|W\/L)/i,                                       '#FFFFFF'], // white line paint – white
-  [/^(TC|BC|CURB|GUTTER|GR|FL|RAMP)/i,                     '#FFC107'], // curb / flow   – amber
+  [/^(TC|BC|DEP|CURB|GUTTER|GR|FL|RAMP)/i,                     '#FFC107'], // curb / flow   – amber
   [/^(BLDG|WALL|COR|CORNER|FOUND|FOOTING|FND)/i,           '#FF8C00'], // building      – orange
   [/^(TREE|VEG|SHRUB|PLANT|BRUSH|HEDGE)/i,                 '#4CAF50'], // vegetation    – green
   [/^(CL|CENTER|C\/L|STA|STAT)/i,                          '#FF4081'], // centreline    – pink
@@ -162,7 +162,7 @@ function descColor(desc: string | undefined): string {
   return '#B0BEC5'; // default silver
 }
 
-const ROAD_CORRIDOR_POINT_RE = /^(EP|EOP|EDGE|ER|ES|EG|EC|ET|ROAD|ROW|CL|C\/L|CENTER|CTR|CURB|GUTTER|TC|BC|TBC|FL|FLOW|PAV|PVMT|DYL|WL|SWL|SHOULDER|SHLD)/i;
+const ROAD_CORRIDOR_POINT_RE = /^(EP|EOP|EDGE|ER|ES|EG|EC|ET|ROAD|ROW|CL|C\/L|CENTER|CTR|CURB|GUTTER|TC|BC|DEP|TBC|FL|FLOW|PAV|PVMT|DYL|WL|SWL|SHOULDER|SHLD)/i;
 
 /** True when a shot belongs to the road corridor rather than site/topo clutter. */
 export function isRoadCorridorPoint(p: SurveyPoint): boolean {
@@ -610,15 +610,17 @@ export function isPointRelevantForCorridor(desc: string | undefined, featureType
   // Road-specific tokens (edges of pavement/road, curbs, centerlines)
   const ROAD_TOKENS = /\b(ER\d*|EP\d*|EOP\d*|ET\d*|ES\d*|EG\d*|EC\d*|EDGE\d*|PAV\d*|PVMT\d*|ROAD\d*|CURB\d*|TC\d*|BC\d*|TBC\d*|GUTTER\d*|FL\d*|FLOW\d*|CL\d*|CTR\d*|TIE)\b/;
 
+  const DEP_CURB_TOKEN = /(^| )DEP[0-9]*( |$)/i;
+
   if (f.includes('drive')) {
     return DRIVEWAY_TOKENS.test(d);
   }
   if (f.includes('road')) {
-    return ROAD_TOKENS.test(d);
+    return ROAD_TOKENS.test(d) || DEP_CURB_TOKEN.test(d);
   }
 
   // General corridor check (either road or driveway)
-  if (DRIVEWAY_TOKENS.test(d) || ROAD_TOKENS.test(d)) {
+  if (DRIVEWAY_TOKENS.test(d) || ROAD_TOKENS.test(d) || DEP_CURB_TOKEN.test(d)) {
     return true;
   }
 

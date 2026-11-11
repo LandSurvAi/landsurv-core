@@ -844,7 +844,7 @@ function findStitchCandidate(
   return best;
 }
 
-const ROAD_EDGE_SHOT_RE = /\b(?:ER\d*|EP\d*|EOP\d*|EDGE\d*|PAV\w*|PVMT\d*|CURB\d*|TC\d*|BC\d*|TBC\d*|GUTTER\d*|FL\d*|FLOW\d*|TIE|ROAD)\b/i;
+const ROAD_EDGE_SHOT_RE = /\b(?:ER\d*|EP\d*|EOP\d*|EDGE\d*|PAV\w*|PVMT\d*|CURB\d*|TC\d*|BC\d*|TBC\d*|GUTTER\d*|FL\d*|FLOW\d*|TIE|ROAD|DEP[0-9]*)\b/i;
 const ROAD_CENTERLINE_SHOT_RE = /\b(?:CL\d*|CTR\d*|CENTERLINE)\b/i;
 
 function surveyPointMatchesFeature(point: RoadSurveyPoint, role: RoadFeature['role']): boolean {

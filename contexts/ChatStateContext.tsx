@@ -45,6 +45,8 @@ interface ChatState {
   structuresChat: Chat | null;
   soilsChat: Chat | null;
   roadingChat: Chat | null;
+  stormwaterChat: Chat | null;
+  dirtVolumeChat: Chat | null;
   
   // Chat histories (message arrays)
   rawChatHistory: ChatMessage[];
@@ -73,6 +75,8 @@ interface ChatState {
   structuresChatHistory: ChatMessage[];
   soilsChatHistory: ChatMessage[];
   roadingChatHistory: ChatMessage[];
+  stormwaterChatHistory: ChatMessage[];
+  dirtVolumeChatHistory: ChatMessage[];
   
   // Fieldbook notes
   fieldbookNotes: string;
@@ -105,6 +109,8 @@ interface ChatActions {
   setStructuresChat: (chat: Chat | null) => void;
   setSoilsChat: (chat: Chat | null) => void;
   setRoadingChat: (chat: Chat | null) => void;
+  setStormwaterChat: (chat: Chat | null) => void;
+  setDirtVolumeChat: (chat: Chat | null) => void;
   
   // Chat history setters
   setRawChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
@@ -133,6 +139,8 @@ interface ChatActions {
   setStructuresChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   setSoilsChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   setRoadingChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
+  setStormwaterChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
+  setDirtVolumeChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   
   // Fieldbook notes
   setFieldbookNotes: (notes: string) => void;
@@ -186,6 +194,8 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
   const [structuresChat, setStructuresChat] = useState<Chat | null>(null);
   const [soilsChat, setSoilsChat] = useState<Chat | null>(null);
   const [roadingChat, setRoadingChat] = useState<Chat | null>(null);
+  const [stormwaterChat, setStormwaterChat] = useState<Chat | null>(null);
+  const [dirtVolumeChat, setDirtVolumeChat] = useState<Chat | null>(null);
   
   // Chat histories
   const [rawChatHistory, setRawChatHistory] = useState<ChatMessage[]>([]);
@@ -214,6 +224,8 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
   const [structuresChatHistory, setStructuresChatHistory] = useState<ChatMessage[]>([]);
   const [soilsChatHistory, setSoilsChatHistory] = useState<ChatMessage[]>([]);
   const [roadingChatHistory, setRoadingChatHistory] = useState<ChatMessage[]>([]);
+  const [stormwaterChatHistory, setStormwaterChatHistory] = useState<ChatMessage[]>([]);
+  const [dirtVolumeChatHistory, setDirtVolumeChatHistory] = useState<ChatMessage[]>([]);
   
   // Fieldbook notes
   const [fieldbookNotes, setFieldbookNotes] = useState<string>('');
@@ -299,6 +311,8 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setCivilDrafterChat(null);
     setStandardsComplianceChat(null);
     setRoadingChat(null);
+    setStormwaterChat(null);
+    setDirtVolumeChat(null);
     
     // Reset chat histories
     setRawChatHistory([]);
@@ -320,6 +334,8 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setCivilDrafterChatHistory([]);
     setStandardsComplianceChatHistory([]);
     setRoadingChatHistory([]);
+    setStormwaterChatHistory([]);
+    setDirtVolumeChatHistory([]);
     
     // Reset fieldbook notes
     setFieldbookNotes('');
@@ -352,6 +368,8 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     structuresChat,
     soilsChat,
     roadingChat,
+    stormwaterChat,
+    dirtVolumeChat,
     rawChatHistory,
     deedChatHistory,
     dxfChatHistory,
@@ -378,6 +396,8 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     structuresChatHistory,
     soilsChatHistory,
     roadingChatHistory,
+    stormwaterChatHistory,
+    dirtVolumeChatHistory,
     fieldbookNotes,
     
     // Setters
@@ -406,6 +426,8 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setStructuresChat,
     setSoilsChat,
     setRoadingChat,
+    setStormwaterChat,
+    setDirtVolumeChat,
     setRawChatHistory,
     setDeedChatHistory,
     setDxfChatHistory,
@@ -432,6 +454,8 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setStructuresChatHistory,
     setSoilsChatHistory,
     setRoadingChatHistory,
+    setStormwaterChatHistory,
+    setDirtVolumeChatHistory,
     setFieldbookNotes,
     
     // Helpers

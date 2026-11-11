@@ -9,6 +9,7 @@
  */
 
 import { AgentType } from '../types.ts';
+import { StormwaterIcon, DirtVolumeIcon } from '../components/icons.tsx';
 import {
   BrainCircuitIcon,
   CivilDrafterIcon,
@@ -78,6 +79,8 @@ export const agentConfig: { [key in AgentType]?: AgentConfig } = {
   [AgentType.STRUCTURES_AGENT]: { icon: StructuresIcon, label: 'Structures', color: 'orange' },
   [AgentType.SOILS_AGENT]: { icon: SoilsIcon, label: 'Soils Agent', color: 'stone' },
   [AgentType.ROADING_AGENT]: { icon: RoadIcon, label: 'Roading Agent', color: 'amber' },
+  [AgentType.STORMWATER_AGENT]: { icon: StormwaterIcon, label: 'Stormwater Agent', color: 'sky' },
+  [AgentType.DIRT_VOLUME_AGENT]: { icon: DirtVolumeIcon, label: 'Dirt Volume Agent', color: 'amber' },
 };
 
 // ============================================================================
@@ -105,6 +108,7 @@ export const agentPrimaryToolKey: Partial<Record<AgentType, string>> = {
   [AgentType.STRUCTURES_AGENT]: 'structures',
   [AgentType.SOILS_AGENT]: 'soils',
   [AgentType.ROADING_AGENT]: 'roading',
+  [AgentType.STORMWATER_AGENT]: 'stormwater',
 };
 
 // ============================================================================
@@ -140,6 +144,8 @@ export const agentThemeColors: { [key in AgentType]?: string } = {
   [AgentType.STRUCTURES_AGENT]: '#fb923c', // orange-400
   [AgentType.SOILS_AGENT]: '#a8a29e', // stone-400 (earthy, distinct)
   [AgentType.ROADING_AGENT]: '#f59e0b', // amber-500
+  [AgentType.STORMWATER_AGENT]: '#38bdf8', // sky-400
+  [AgentType.DIRT_VOLUME_AGENT]: '#d97706', // amber-600
 };
 
 /**
@@ -183,6 +189,8 @@ export const agentIcons: { [key in AgentType]?: React.FC<any> } = {
   [AgentType.STRUCTURES_AGENT]: StructuresIcon,
   [AgentType.SOILS_AGENT]: SoilsIcon,
   [AgentType.ROADING_AGENT]: RoadIcon,
+  [AgentType.STORMWATER_AGENT]: StormwaterIcon,
+  [AgentType.DIRT_VOLUME_AGENT]: DirtVolumeIcon,
 };
 
 // ============================================================================
@@ -218,6 +226,8 @@ export const agentGradientClasses: { [key in AgentType]?: string } = {
   [AgentType.STRUCTURES_AGENT]: 'from-orange-500 to-amber-600',
   [AgentType.SOILS_AGENT]: 'from-stone-400 to-amber-700',
   [AgentType.ROADING_AGENT]: 'from-amber-500 to-orange-600',
+  [AgentType.STORMWATER_AGENT]: 'from-sky-500 to-blue-600',
+  [AgentType.DIRT_VOLUME_AGENT]: 'from-amber-600 to-stone-700',
 };
 
 // ============================================================================

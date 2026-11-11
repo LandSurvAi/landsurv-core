@@ -56,6 +56,8 @@ export enum AgentType {
   STRUCTURES_AGENT = 'STRUCTURES_AGENT',
   SOILS_AGENT = 'SOILS_AGENT',
   ROADING_AGENT = 'ROADING_AGENT',
+  STORMWATER_AGENT = 'STORMWATER_AGENT',
+  DIRT_VOLUME_AGENT = 'DIRT_VOLUME_AGENT',
 }
 
 // FUTURE GEMINI: This type defines the available panels in the main view area.
@@ -222,6 +224,7 @@ export type A2UISettingsSection =
 
 export type A2UIWorkspaceToolId =
   | 'stationing-controls'
+  | 'centerline-list'
   | 'symbol-manager'
   | 'linetype-manager'
   | 'hatch-manager'
@@ -240,6 +243,8 @@ export type A2UIWorkspaceToolId =
   | 'legal-writer'
   | 'sheet-view'
   | 'roading-panel'
+  | 'stormwater-quick-check'
+  | 'dirt-volume-panel'
   | 'road-paint-studio'
   | 'tin-surfaces'
   | 'point-tools'
@@ -291,6 +296,13 @@ export interface A2UIContourChipSpec {
   generationId?: string;
 }
 
+export type A2UIKeySourceId = 'landsurv' | 'google' | 'openai' | 'xai' | 'anthropic';
+
+export interface A2UIKeyEntrySpec {
+  /** Credential row to emphasise when the request named a provider. */
+  focus?: A2UIKeySourceId;
+}
+
 export type A2UIWidgetType =
   | 'input-form'
   | 'deed-summary'
@@ -327,6 +339,7 @@ export type A2UIWidgetType =
   | 'cacp-manifests'
   | 'cacp-inspector'
   | 'settings'
+  | 'key-entry'
   | 'properties'
   | 'help'
   | 'page-guide'
@@ -733,6 +746,7 @@ export interface A2UIPayload {
     | 'cacp-manifests'
     | 'cacp-inspector'
     | 'settings'
+    | 'key-entry'
     | 'properties'
     | 'workspace-tool'
     | 'contour-chip'
@@ -780,6 +794,8 @@ export interface A2UIPayload {
   settingsSummary?: A2UISettingsSummary;
   /** Specific settings section focused inside the interactive settings surface. */
   settingsSection?: A2UISettingsSection;
+  /** Credential source to emphasise in the inline key-entry surface. */
+  keyEntry?: A2UIKeyEntrySpec;
   /** Live property snapshot for the current selection. */
   properties?: A2UIPropertiesSpec;
   /** Specific workspace manager/tool mounted inside the surface. */
@@ -1712,6 +1728,16 @@ export interface NotionIntegration {
 export type StationLabelFormat = 'hundreds' | 'decimal';
 export type StationPrecision = 0 | 1 | 2;
 
+export interface StationOffsetLabel {
+    id: string;
+    /** Alignment the station/offset is measured from. */
+    centerlineId: string;
+    /** Station along that alignment, in feet. */
+    station: number;
+    /** Signed offset in feet; positive is right of the alignment. */
+    offset: number;
+}
+
 export interface StationingSettings {
     /** Feet between automatically plotted station points on a baseline. */
     pointInterval: number;
@@ -1733,8 +1759,18 @@ export interface StationingSettings {
     stationLabelFormat: StationLabelFormat;
     /** Decimal places used by the station value. */
     stationPrecision: StationPrecision;
-    /** Vertical label offset in CSS pixels; negative places labels below. */
+    /** Offset from the baseline in CSS pixels; negative places labels on the other side. */
     labelOffsetPx: number;
+    /** Global 180° flip preference used by baselines without a per-baseline override. */
+    labelRotationDeg?: number;
+    /** Per-baseline Ctrl+drag offsets, keyed by centerline id. */
+    labelOffsetPxByBaseline?: Record<string, number>;
+    /** Per-baseline 180° flips, keyed by centerline id. */
+    labelRotationByBaseline?: Record<string, number>;
+    /** Ctrl+drag slide along the baseline in CSS pixels, shared by every station label. */
+    labelAlongOffsetPx: number;
+    /** Saved station/offset annotations placed relative to any alignment. */
+    stationOffsetLabels: StationOffsetLabel[];
     /** Draw a contrasting background behind station labels. */
     showLabelBackground: boolean;
     /** Show PI labels when geometry tags are enabled. */

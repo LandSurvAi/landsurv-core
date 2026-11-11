@@ -142,6 +142,15 @@ const AGENT_CAPABILITY_PHRASES: Partial<Record<AgentType, string[]>> = {
   [AgentType.TITLE_SEARCH]: [
     'title', 'title search', 'chain of title', 'deed book', 'county records',
   ],
+  [AgentType.DIRT_VOLUME_AGENT]: [
+    'dirt volume', 'earthwork', 'cut and fill', 'cut/fill', 'cut fill', 'volume calculation',
+    'cubic yards', 'excavation', 'grading quantities', 'stockpile', 'mass haul', 'haul balance',
+    'borrow', 'site balance', 'end area', 'section area', 'tin comparison', 'volume report',
+  ],
+  [AgentType.STORMWATER_AGENT]: [
+    'stormwater', 'storm water', 'runoff', 'peak runoff', 'peak flow', 'rational method',
+    'time of concentration', 'drainage area', 'design storm', 'cfs', 'detention', 'conveyance',
+  ],
   [AgentType.FLOOD_AGENT]: [
     'flood', 'fema', 'floodplain', 'base flood elevation', 'flood insurance', 'flood zone',
   ],

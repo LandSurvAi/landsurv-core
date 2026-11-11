@@ -1,12 +1,12 @@
-import React from 'react';
-import type { Settings, StationingSettings } from '../types';
-import { formatStationLabel } from '../utils/stationing.ts';
+import React, { useState } from 'react';
+import type { Centerline, Settings, StationOffsetLabel, StationingSettings } from '../types';
+import { calculateCenterlineLength, calculatePointFromStationOffset, formatStationLabel, parseStation } from '../utils/stationing.ts';
 
 const DEFAULTS: StationingSettings = {
   pointInterval: 100,
   showStationLabels: true,
   labelInterval: 100,
-  showGeometryLabels: true,
+  showGeometryLabels: false,
   labelScale: 1,
   stationPrefix: 'STA',
   showStationPrefix: true,
@@ -14,10 +14,12 @@ const DEFAULTS: StationingSettings = {
   stationLabelFormat: 'hundreds',
   stationPrecision: 2,
   labelOffsetPx: 8,
+  labelAlongOffsetPx: 0,
+  stationOffsetLabels: [],
   showLabelBackground: true,
-  showPiLabels: true,
-  showPcPtLabels: true,
-  showEndpointLabels: true,
+  showPiLabels: false,
+  showPcPtLabels: false,
+  showEndpointLabels: false,
   showStationPointLabels: true,
 };
 
@@ -42,6 +44,8 @@ interface A2UIStationingControlsProps {
   onSettingsChange: React.Dispatch<React.SetStateAction<Settings>>;
   agentDrawMode: 'both' | 'points' | 'lines';
   onAgentDrawModeChange: (mode: 'both' | 'points' | 'lines') => void;
+  /** Alignments available for station/offset annotations. */
+  centerlines?: Centerline[];
 }
 
 const CheckRow: React.FC<{
@@ -103,8 +107,16 @@ export const A2UIStationingControls: React.FC<A2UIStationingControlsProps> = ({
   onSettingsChange,
   agentDrawMode,
   onAgentDrawModeChange,
+  centerlines = [],
 }) => {
   const stationing: StationingSettings = { ...DEFAULTS, ...(settings.stationing ?? {}) };
+  const [stationOffsetAlignmentId, setStationOffsetAlignmentId] = useState('');
+  const [stationOffsetStation, setStationOffsetStation] = useState('');
+  const [stationOffsetOffset, setStationOffsetOffset] = useState('0');
+  const [stationOffsetError, setStationOffsetError] = useState<string | null>(null);
+  const stationOffsetLabels = stationing.stationOffsetLabels ?? [];
+  const selectedAlignment =
+    centerlines.find(centerline => centerline.id === stationOffsetAlignmentId) ?? centerlines[0] ?? null;
   const autoStationPoints = agentDrawMode !== 'lines';
   const preview = formatStationLabel(1234.56, {
     prefix: stationing.stationPrefix,
@@ -123,6 +135,43 @@ export const A2UIStationingControls: React.FC<A2UIStationingControlsProps> = ({
 
   const setAutoStationPoints = (enabled: boolean) => {
     onAgentDrawModeChange(enabled ? (agentDrawMode === 'lines' ? 'both' : agentDrawMode) : 'lines');
+  };
+
+  const addStationOffsetLabel = () => {
+    setStationOffsetError(null);
+    if (!selectedAlignment) {
+      setStationOffsetError('Draw or load an alignment first.');
+      return;
+    }
+    const station = parseStation(stationOffsetStation.trim());
+    if (station === null) {
+      setStationOffsetError('Enter a station such as 12+34.56.');
+      return;
+    }
+    const offset = Number(stationOffsetOffset);
+    if (!Number.isFinite(offset)) {
+      setStationOffsetError('Offset must be numeric feet (RT positive, LT negative).');
+      return;
+    }
+    if (!calculatePointFromStationOffset(selectedAlignment, station, offset)) {
+      const begin = formatStationLabel(selectedAlignment.beginStation);
+      const end = formatStationLabel(selectedAlignment.beginStation + calculateCenterlineLength(selectedAlignment));
+      setStationOffsetError(`Station must be between ${begin} and ${end}.`);
+      return;
+    }
+    const label: StationOffsetLabel = {
+      id: `sta-offset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      centerlineId: selectedAlignment.id,
+      station,
+      offset,
+    };
+    update({ stationOffsetLabels: [...stationOffsetLabels, label] });
+    setStationOffsetStation('');
+    setStationOffsetOffset('0');
+  };
+
+  const deleteStationOffsetLabel = (id: string) => {
+    update({ stationOffsetLabels: stationOffsetLabels.filter(label => label.id !== id) });
   };
 
   return (
@@ -356,17 +405,17 @@ export const A2UIStationingControls: React.FC<A2UIStationingControlsProps> = ({
             </div>
             <div>
               <label htmlFor="a2ui-station-label-offset" className={fieldLabelClass}>
-                Vertical offset (px)
+                Offset from baseline (px)
               </label>
               <input
                 id="a2ui-station-label-offset"
                 type="number"
-                min={-48}
-                max={48}
+                min={-600}
+                max={600}
                 step={2}
                 value={stationing.labelOffsetPx}
                 onChange={event =>
-                  update({ labelOffsetPx: Math.max(-48, Math.min(48, Number(event.target.value) || 0)) })
+                  update({ labelOffsetPx: Math.max(-600, Math.min(600, Number(event.target.value) || 0)) })
                 }
                 aria-label="Station label offset"
                 className={inputClass}
@@ -402,6 +451,136 @@ export const A2UIStationingControls: React.FC<A2UIStationingControlsProps> = ({
             checked={stationing.showLabelBackground}
             onChange={checked => update({ showLabelBackground: checked })}
           />
+
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2 py-1.5">
+            <span className="text-[9.5px] leading-snug text-slate-400">
+              Ctrl+drag any station label to move only that baseline's labels. Shift+click a label to flip them 180°.
+            </span>
+            <span className="shrink-0 font-mono text-[10px] text-cyan-200">
+              {stationing.labelOffsetPx.toFixed(0)} px
+            </span>
+            <button
+              type="button"
+              onClick={() => update({ labelOffsetPx: 8, labelOffsetPxByBaseline: {}, labelRotationDeg: 0, labelRotationByBaseline: {} })}
+              disabled={stationing.labelOffsetPx === 8 && !stationing.labelRotationDeg && Object.keys(stationing.labelOffsetPxByBaseline ?? {}).length === 0 && Object.keys(stationing.labelRotationByBaseline ?? {}).length === 0}
+              className="shrink-0 rounded-md border border-white/[0.1] px-1.5 py-0.5 text-[9px] font-semibold text-slate-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className={sectionClass}>
+        <div className="border-b border-white/[0.07] px-2.5 py-2">
+          <h4 className="text-[11px] font-bold uppercase tracking-[0.12em] text-cyan-200">
+            Station / Offset Labels
+          </h4>
+          <p className="mt-0.5 text-[9.5px] leading-snug text-slate-500">
+            Print a labeled spot at any station and offset on any alignment.
+          </p>
+        </div>
+        <div className={sectionBodyClass}>
+          <div>
+            <label htmlFor="a2ui-station-offset-alignment" className={fieldLabelClass}>
+              Alignment
+            </label>
+            <select
+              id="a2ui-station-offset-alignment"
+              value={selectedAlignment?.id ?? ''}
+              onChange={event => setStationOffsetAlignmentId(event.target.value)}
+              disabled={centerlines.length === 0}
+              aria-label="Station / offset alignment"
+              className={inputClass}
+            >
+              {centerlines.length === 0 ? (
+                <option value="">No alignments loaded</option>
+              ) : centerlines.map(centerline => (
+                <option key={centerline.id} value={centerline.id}>
+                  {centerline.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="a2ui-station-offset-station" className={fieldLabelClass}>
+                Station
+              </label>
+              <input
+                id="a2ui-station-offset-station"
+                type="text"
+                placeholder="12+34.56"
+                value={stationOffsetStation}
+                onChange={event => setStationOffsetStation(event.target.value)}
+                aria-label="Station / offset station"
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="a2ui-station-offset-feet" className={fieldLabelClass}>
+                Offset (ft, RT + / LT −)
+              </label>
+              <input
+                id="a2ui-station-offset-feet"
+                type="number"
+                step={0.01}
+                value={stationOffsetOffset}
+                onChange={event => setStationOffsetOffset(event.target.value)}
+                aria-label="Station / offset feet"
+                className={inputClass}
+              />
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={addStationOffsetLabel}
+            disabled={centerlines.length === 0}
+            className="w-full rounded-md border border-cyan-400/40 bg-cyan-400/10 px-2 py-1.5 text-[10px] font-semibold text-cyan-100 transition-colors hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Add station / offset label
+          </button>
+          {stationOffsetError && (
+            <p className="text-[10px] leading-snug text-amber-300">{stationOffsetError}</p>
+          )}
+          {stationOffsetLabels.length > 0 && (
+            <ul className="space-y-1">
+              {stationOffsetLabels.map(label => {
+                const alignment = centerlines.find(centerline => centerline.id === label.centerlineId);
+                const offsetText = label.offset === 0
+                  ? 'ON CL'
+                  : `OFF ${Math.abs(label.offset).toFixed(2)}' ${label.offset > 0 ? 'RT' : 'LT'}`;
+                return (
+                  <li
+                    key={label.id}
+                    className="flex items-center justify-between gap-2 rounded-md border border-white/[0.07] bg-black/15 px-2 py-1"
+                  >
+                    <span className="min-w-0 truncate text-[10px] text-slate-300">
+                      <span className="font-mono text-cyan-200">
+                        {formatStationLabel(label.station, {
+                          prefix: stationing.stationPrefix,
+                          showPrefix: stationing.showStationPrefix,
+                          suffix: stationing.stationSuffix,
+                          format: stationing.stationLabelFormat,
+                          precision: stationing.stationPrecision,
+                        })}
+                      </span>{' '}
+                      {offsetText}
+                      <span className="text-slate-500">{alignment ? ` · ${alignment.name}` : ' · missing alignment'}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => deleteStationOffsetLabel(label.id)}
+                      aria-label={`Remove station offset label ${label.id}`}
+                      className="shrink-0 rounded px-1 text-[11px] text-slate-500 transition-colors hover:text-red-300"
+                    >
+                      ×
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
       </section>
 
@@ -421,9 +600,22 @@ export const A2UIStationingControls: React.FC<A2UIStationingControlsProps> = ({
             checked={stationing.showGeometryLabels}
             onChange={checked => update({ showGeometryLabels: checked })}
           />
+          <button
+            type="button"
+            onClick={() => update({
+              showGeometryLabels: false,
+              showPiLabels: false,
+              showPcPtLabels: false,
+              showEndpointLabels: false,
+            })}
+            className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-2 py-1 text-[10px] font-semibold text-cyan-100 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/15"
+          >
+            Stations only
+          </button>
           <div className="grid grid-cols-3 gap-2 rounded-lg border border-white/[0.06] bg-black/10 p-2">
             <CheckRow
               label="PI labels"
+              hint="Off by default; turn on to print PI tags."
               checked={stationing.showPiLabels}
               onChange={checked => update({ showPiLabels: checked })}
               disabled={!stationing.showGeometryLabels}

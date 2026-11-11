@@ -186,13 +186,14 @@ Ground shots for EVERY surface type:
 - GS (general), GRS (grass), DIRT, GRVL (gravel), ASP (asphalt), CONC (concrete)
 - ROCK, SAND, MULCH, PAVER, BRICK
 Elevation features:
-- SPOT (spot elevation), GB (grade break), TC (top of curb), FL (flow line)
+- SPOT (spot elevation), GB (grade break), TC (top of curb), FL (flow line), DEP (curb depression / lowered curb at an ADA ramp)
 - TW (top of wall), BW (bottom of wall), FW (face of wall)
 - TS (top of slope), BS (bottom of slope), TOE (toe of slope), CREST
 - RIDGE, VALLEY, SWALE, BERM, DITCH (top, bottom, flow)
 Curb types (EACH with separate code):
 - CRB (generic curb), VCURB (vertical), RCURB (rolled), MCURB (mountable)
 - VG (valley gutter), CRBGUT (curb & gutter), VCRBFL (vertical curb flow line)
+- DEP (curb depression / lowered curb at an ADA ramp) — still a curb-line shot
 Pavement features:
 - EP (edge pavement), EOP (edge of pavement), EG (edge gravel), EC (edge concrete)
 - EOA (edge asphalt), CL (centerline road), PVMT, STPBAR (stop bar)
@@ -426,6 +427,7 @@ When requested, include:
 | EP | Edge Pavement | C-TOPO-PVMT | C-TOPO-PVMT | CONTINUOUS | - | Topo |
 | TC | Top of Curb | C-ROAD-CURB | C-ROAD-CURB | CONTINUOUS | - | Topo |
 | FL | Flowline | C-ROAD-CURB | C-ROAD-CURB | CONTINUOUS | - | Topo |
+| DEP | Curb Depression / ADA Ramp | C-ROAD-CURB | C-ROAD-CURB | CONTINUOUS | - | Topo |
 | EWAT | Edge Water | C-TOPO-WATR | C-TOPO-WATR | CONTINUOUS | - | Water Feature |
 | GB | Grade Break | C-TOPO-BRKL | C-TOPO-BRKL | CONTINUOUS | - | Topo |
 | TW | Top of Wall | C-SITE-WALL | C-SITE-WALL | CONTINUOUS | - | Site |

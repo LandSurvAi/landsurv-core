@@ -182,6 +182,18 @@ export const AGENT_INITIAL_QUICK_THOUGHTS: Record<AgentType, string[]> = {
     'Show soil limitations',
     'Open Soils tools',
   ],
+  [AgentType.DIRT_VOLUME_AGENT]: [
+    'Compute cut and fill from my sections',
+    'Compare two TIN surfaces',
+    'Compare saved volume scenarios',
+    'Open Dirt Volume workspace',
+  ],
+  [AgentType.STORMWATER_AGENT]: [
+    'Run a 25-year runoff quick-check',
+    'Size a detention basin',
+    'Check a channel capacity',
+    'Open Stormwater Quick-Check',
+  ],
   [AgentType.ROADING_AGENT]: [
     'Synthesize an existing road',
     'Design a new road corridor',

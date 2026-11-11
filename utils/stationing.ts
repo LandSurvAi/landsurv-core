@@ -1,5 +1,5 @@
 
-import { type Centerline, type CenterlinePI } from '../types.ts';
+import { type Centerline, type CenterlinePI, type StationingSettings } from '../types.ts';
 
 export const formatStation = (station: number): string => {
   const hundreds = Math.floor(station / 100);
@@ -536,6 +536,67 @@ export const calculatePointFromStationOffset = (
   return null;
 };
 
+export interface CenterlineNearestPoint {
+  station: number;
+  easting: number;
+  northing: number;
+  distance: number;
+}
+
+/**
+ * Projects a world point onto a centerline and returns the closest station and
+ * coordinates. Used by the running osnap so BASELINE geometry can serve
+ * endpoint / nearest snaps like ordinary linework.
+ */
+export const findNearestPointOnCenterline = (
+  centerline: Centerline,
+  easting: number,
+  northing: number,
+  samples = 160,
+): CenterlineNearestPoint | null => {
+  if (centerline.pis.length < 2) return null;
+  const length = calculateCenterlineLength(centerline);
+  if (!Number.isFinite(length) || length <= 0) return null;
+
+  const beginStation = centerline.beginStation;
+  const endStation = beginStation + length;
+  const sampleCount = Math.max(8, Math.round(samples));
+  let bestStation = beginStation;
+  let bestDistanceSq = Infinity;
+
+  const evaluate = (station: number) => {
+    const point = calculatePointFromStationOffset(centerline, station, 0);
+    if (!point) return;
+    const dSq = (point.easting - easting) ** 2 + (point.northing - northing) ** 2;
+    if (dSq < bestDistanceSq) {
+      bestDistanceSq = dSq;
+      bestStation = Math.max(beginStation, Math.min(endStation, station));
+    }
+  };
+
+  for (let index = 0; index <= sampleCount; index++) {
+    evaluate(beginStation + (length * index) / sampleCount);
+  }
+
+  // Refine the sampled station by halving the bracket a few times. This keeps
+  // the snap smooth without an expensive full geometric projection.
+  let step = length / sampleCount;
+  for (let pass = 0; pass < 10; pass++) {
+    step /= 2;
+    evaluate(Math.max(beginStation, bestStation - step));
+    evaluate(Math.min(endStation, bestStation + step));
+  }
+
+  const point = calculatePointFromStationOffset(centerline, bestStation, 0);
+  if (!point) return null;
+  return {
+    station: bestStation,
+    easting: point.easting,
+    northing: point.northing,
+    distance: Math.sqrt(bestDistanceSq),
+  };
+};
+
 export interface StationAnnotationTick {
   station: number;
   isMajor: boolean;
@@ -620,10 +681,94 @@ export const calculateCenterlineTangentBearing = (
   return Math.atan2(deltaEasting, deltaNorthing);
 };
 
+export interface StationLabelOrientation {
+  /** Canvas rotation so the text baseline crosses the alignment like a railroad tie. */
+  rotation: number;
+  /** The readable direction points away from up-station, so anchor at the right end. */
+  flipped: boolean;
+}
+
+const readableStationRotation = (bearing: number): StationLabelOrientation => {
+  const fullTurn = Math.PI * 2;
+  // A tangent bearing is measured clockwise from north. The parallel canvas
+  // rotation is bearing - 90°; the perpendicular railroad-tie rotation is the
+  // bearing itself.
+  let rotation = bearing;
+  rotation = ((rotation + Math.PI) % fullTurn + fullTurn) % fullTurn - Math.PI;
+
+  let flipped = false;
+  if (rotation > Math.PI / 2) {
+    rotation -= Math.PI;
+    flipped = true;
+  } else if (rotation <= -Math.PI / 2) {
+    // Keep vertical labels reading bottom-to-top instead of top-to-bottom.
+    rotation += Math.PI;
+    flipped = true;
+  }
+
+  return { rotation, flipped };
+};
+
+/**
+ * Orient a station label across the alignment, matching the perpendicular
+ * station ticks. When a reference bearing is supplied, every label keeps the
+ * same reading sense as the alignment's starting tangent; it rotates with the
+ * alignment instead of flipping 180° when the tangent crosses vertical.
+ */
+export const resolveStationLabelOrientation = (
+  bearing: number,
+  referenceBearing?: number,
+): StationLabelOrientation => {
+  if (!Number.isFinite(bearing)) return { rotation: 0, flipped: false };
+  if (referenceBearing === undefined || !Number.isFinite(referenceBearing)) {
+    return readableStationRotation(bearing);
+  }
+
+  const fullTurn = Math.PI * 2;
+  const reference = readableStationRotation(referenceBearing);
+  const delta = bearing - referenceBearing;
+  const continuousDelta = ((delta + Math.PI) % fullTurn + fullTurn) % fullTurn - Math.PI;
+  const rotation = reference.rotation + continuousDelta;
+  return {
+    rotation,
+    flipped: Math.abs(rotation) > Math.PI / 2,
+  };
+};
+
 /**
  * Converts a tangent bearing into a readable canvas rotation perpendicular to
  * the centerline. Vertical text is normalized to read bottom-to-top.
  */
+/** Resolve a station label's perpendicular offset, honoring a baseline override. */
+export const resolveStationLabelOffsetPx = (
+  stationing: Pick<StationingSettings, 'labelOffsetPx' | 'labelOffsetPxByBaseline'> | undefined,
+  centerlineId: string,
+): number => {
+  const baselineOffset = stationing?.labelOffsetPxByBaseline?.[centerlineId];
+  const raw = Number(baselineOffset ?? stationing?.labelOffsetPx);
+  return Math.max(-600, Math.min(600, Number.isFinite(raw) ? raw : 8));
+};
+
+/** Resolve a baseline's 180° flip as a canvas rotation offset in radians. */
+export const resolveStationLabelFlipRadians = (
+  stationing: Pick<StationingSettings, 'labelRotationByBaseline' | 'labelRotationDeg'> | undefined,
+  centerlineId: string,
+): number => {
+  const degrees =
+    Number(stationing?.labelRotationByBaseline?.[centerlineId] ?? stationing?.labelRotationDeg) || 0;
+  return ((degrees % 360) + 360) % 360 === 180 ? Math.PI : 0;
+};
+
+/** Write one baseline's label offset without disturbing any other baseline. */
+export const withStationLabelOffset = (
+  offsets: Record<string, number> | undefined,
+  centerlineId: string,
+  offsetPx: number,
+): Record<string, number> => ({
+  ...(offsets ?? {}),
+  [centerlineId]: Math.max(-600, Math.min(600, Number.isFinite(offsetPx) ? offsetPx : 8)),
+});
+
 export const normalizeStationLabelRotation = (bearing: number): number => {
   if (!Number.isFinite(bearing)) return 0;
 

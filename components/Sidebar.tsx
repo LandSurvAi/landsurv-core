@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AgentType, JobInfo, useAgent, useUI } from '../types.ts';
+import { StormwaterIcon, DirtVolumeIcon } from './icons.tsx';
 import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnabled.ts';
 import { 
     BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, BookOpenIcon, 
@@ -143,6 +144,8 @@ const agentConfig: Partial<Record<AgentType, SidebarAgentEntry>> = {
     [AgentType.FLOOD_AGENT]: { icon: FloodIcon, label: 'Flood Zone', color: 'cyan' },
     [AgentType.STRUCTURES_AGENT]: { icon: StructuresIcon, label: 'Structures', color: 'orange' },
     [AgentType.SOILS_AGENT]: { icon: SoilsIcon, label: 'Soils Agent', color: 'stone' },
+    [AgentType.STORMWATER_AGENT]: { icon: StormwaterIcon, label: 'Stormwater Agent', color: 'sky' },
+    [AgentType.DIRT_VOLUME_AGENT]: { icon: DirtVolumeIcon, label: 'Dirt Volume Agent', color: 'amber' },
     [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSAI Agent', color: 'cyan' },
 };
 
@@ -194,6 +197,8 @@ const agentThemeColors: { [key in AgentType]?: string } = {
     [AgentType.STRUCTURES_AGENT]: '#fb923c', // orange-400
     [AgentType.SOILS_AGENT]: '#a8a29e', // stone-400
     [AgentType.ROADING_AGENT]: '#f59e0b', // amber-500
+    [AgentType.STORMWATER_AGENT]: '#38bdf8', // sky-400
+    [AgentType.DIRT_VOLUME_AGENT]: '#d97706', // amber-600
 };
 
 const hexToRgb = (hex: string): string => {
@@ -216,7 +221,7 @@ const SidebarButton = ({ agent, isDesktop, isActive, isThinking, isExperimentalO
 }) => {
     const config = agentConfig[agent];
     if (!config) return null;
-    const isLocked = agent === AgentType.ROADING_AGENT && isExperimentalOff;
+    const isLocked = isExperimentalOff;
 
     const hexColor = agentThemeColors[agent] || '#94a3b8'; // slate-400 fallback
     const rgbColor = hexToRgb(hexColor);
@@ -343,10 +348,14 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     const { isSessionActive, jobInfo, isLoading } = props;
     const { activeAgent, onAgentChange } = useAgent();
     const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
+    const experimentalStormwaterEnabled = useExperimentalAgentEnabled(AgentType.STORMWATER_AGENT);
     const { activeVisualPanel, showView, showDoc, showTech, showInvestorForm, showReleaseLog, showSettings, showAbout } = useUI();
 
     const handleAgentSelect = (agent: AgentType) => {
-        if (agent === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) {
+        if (
+            (agent === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) ||
+            (agent === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled)
+        ) {
             showSettings();
             return;
         }
@@ -727,7 +736,10 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                                         isDesktop={props.isDesktop}
                                         isActive={agent === activeAgent}
                                         isThinking={agent === activeAgent && props.isLoading}
-                                        isExperimentalOff={agent === AgentType.ROADING_AGENT && !experimentalRoadingEnabled}
+                                        isExperimentalOff={
+                                            (agent === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) ||
+                                            (agent === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled)
+                                        }
                                         onSelect={handleAgentSelect}
                                     />
                                 );
@@ -959,7 +971,9 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                         const hexColor = agentThemeColors[agentKey] || '#94a3b8';
                         const rgbColor = hexToRgb(hexColor);
                         const isActive = activeAgent === agentKey;
-                        const isExperimentalOff = agentKey === AgentType.ROADING_AGENT && !experimentalRoadingEnabled;
+                        const isExperimentalOff =
+                            (agentKey === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) ||
+                            (agentKey === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled);
                         return (
                             <button
                                 key={agentKey}

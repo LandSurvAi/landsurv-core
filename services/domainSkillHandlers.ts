@@ -52,6 +52,8 @@ import {
 import { rectifyBuildings, type RectifyStats } from './buildingRectifier';
 import { registerRoadingSkillHandlers } from './roadingSkillHandlers';
 import { registerRoadPaintSkillHandlers } from './roadPaintSkillHandlers';
+import { registerStormwaterSkillHandlers } from './stormwaterSkillHandlers';
+import { registerDirtVolumeSkillHandlers } from './dirtVolumeSkillHandlers';
 import { runSteepSlopeAnalysis, steepSlopeRunToSurveyLines } from './SteepSlopeService';import {
   generateContoursAsIsoPaths,
   isoPathsToSurveyLines,
@@ -226,6 +228,10 @@ export interface DomainSkillHandlersOpts {
   gisFeatures: GisFeature[];
   activeWmsLayers: ActiveWmsLayer[];
   availableCadLayers: string[];
+  /** Raise the Stormwater Quick-Check calculator in chat. */
+  openStormwaterQuickCheck?: () => void;
+  /** Raise the Dirt Volume workspace in chat. */
+  openDirtVolumePanel?: () => void;
   logActionToFieldbook: (msg: string) => void;
 }
 
@@ -318,6 +324,29 @@ export function registerDomainSkillHandlers(
   getOpts: () => DomainSkillHandlersOpts,
 ): () => void {
   const unsubs: Array<() => void> = [];
+
+  // ── 0. Stormwater Agent skills ───────────────────────────────────────────
+  unsubs.push(
+    registerStormwaterSkillHandlers(() => {
+      const opts = getOpts();
+      return {
+        openQuickCheck: opts.openStormwaterQuickCheck,
+        logActionToFieldbook: opts.logActionToFieldbook,
+      };
+    }),
+  );
+
+  // ── 0b. Dirt Volume Agent skills ──────────────────────────────────────────
+  unsubs.push(
+    registerDirtVolumeSkillHandlers(() => {
+      const opts = getOpts();
+      return {
+        getTinSurfaces: () => opts.tinSurfaces,
+        openPanel: opts.openDirtVolumePanel,
+        logActionToFieldbook: opts.logActionToFieldbook,
+      };
+    }),
+  );
 
   // ── 1. CAD Manager: cad_set_active_drawing_layer ─────────────────────────
   unsubs.push(
