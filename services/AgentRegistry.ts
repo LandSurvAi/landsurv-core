@@ -19,6 +19,7 @@ import { ROADING_SKILLS } from './roadingSkillSchemas';
 import { ROAD_PAINT_SKILLS } from './roadPaintSkillSchemas';
 import { STORMWATER_SKILLS } from './stormwaterSkillSchemas';
 import { DIRT_VOLUME_SKILLS } from './dirtVolumeSkillSchemas';
+import { CIVIL_DRAFTER_REDLINE_PATCH_SKILL, REDLINE_SKILLS } from './redlineSkillSchemas';
 
 /** A loose JSON-Schema-ish descriptor. Kept narrow on purpose. */
 export interface SkillFieldSchema {
@@ -353,6 +354,7 @@ agentRegistry.register({
     },
     ...GEO_AI_SKILLS,
     ...ROAD_PAINT_SKILLS,
+    CIVIL_DRAFTER_REDLINE_PATCH_SKILL,
   ],
 });
 
@@ -420,6 +422,7 @@ agentRegistry.register({
         pointNumber: { type: 'string', required: true },
         northing:    { type: 'number', required: true },
         easting:     { type: 'number', required: true },
+        associationId: { type: 'string', description: 'Parametric link that follows the baseline when it is edited.' },
       },
     },
     {
@@ -434,7 +437,10 @@ agentRegistry.register({
         offset:       { type: 'number',  default: 0 },
         description:  { type: 'string' },
       },
-      outputs: { points: { type: 'array', items: { type: 'object' }, required: true } },
+      outputs: {
+        points: { type: 'array', items: { type: 'object' }, required: true },
+        associationIds: { type: 'array', items: { type: 'string' }, description: 'Parametric link for each generated point.' },
+      },
     },
     ...CL_SKILLS,
   ],
@@ -2153,6 +2159,17 @@ agentRegistry.register({
   cacpEnabled: true,
   version: '1.0.0',
   skills: [...DIRT_VOLUME_SKILLS],
+});
+
+// ---------------------------------------------------------------------------
+// Redline Agent — annotated PDF intake, worklist, and Civil Drafter coordination
+// ---------------------------------------------------------------------------
+agentRegistry.register({
+  agent: AgentType.REDLINE_AGENT,
+  displayName: 'Redline Agent',
+  cacpEnabled: true,
+  version: '0.1.0',
+  skills: [...REDLINE_SKILLS],
 });
 
 // ---------------------------------------------------------------------------

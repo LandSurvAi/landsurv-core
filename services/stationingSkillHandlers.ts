@@ -23,6 +23,7 @@ import {
   applyStationingAnnotationPatch,
   normalizeStationingAnnotationPatch,
 } from '../utils/stationingAnnotationSettings';
+import { createCenterlineStationPointAssociation } from './parametricAssociations';
 
 export interface UseStationingSkillsOpts {
   centerlinesRef: React.MutableRefObject<Centerline[]>;
@@ -213,12 +214,16 @@ export function useStationingSkills({
             ? d.description.trim()
             : `STA ${formatStation(station)} OFF ${Math.abs(offset)}' ${offset >= 0 ? 'RT' : 'LT'}`;
 
+        const association = createCenterlineStationPointAssociation(cl, station, offset, {
+          label: desc,
+        });
         const newPoint: SurveyPoint = {
           pointNumber: pn,
           northing: coords.northing,
           easting: coords.easting,
           elevation: 0,
           description: desc,
+          parametricAssociation: association,
         };
 
         addToWorkingList([newPoint], setPointLists);
@@ -228,6 +233,7 @@ export function useStationingSkills({
           pointNumber: pn,
           northing: coords.northing,
           easting: coords.easting,
+          associationId: association.id,
         });
       },
     );
@@ -330,12 +336,19 @@ export function useStationingSkills({
           const stationLabel = formatStation(e.station);
           const sideTag = `${Math.abs(e.offset)}' ${e.offset >= 0 ? 'RT' : 'LT'}`;
           const pointDesc = desc || `${prefix ? prefix + ' ' : ''}STA ${stationLabel} OFF ${sideTag}`;
+          const association = createCenterlineStationPointAssociation(
+            cl,
+            e.station,
+            e.offset,
+            { label: pointDesc },
+          );
           return {
             pointNumber: pns[i],
             northing: e.coords.northing,
             easting: e.coords.easting,
             elevation: 0,
             description: pointDesc,
+            parametricAssociation: association,
           };
         });
 
@@ -349,6 +362,9 @@ export function useStationingSkills({
         return respond(message, true, {
           points: newPoints as unknown as Record<string, unknown>[],
           count: newPoints.length,
+          associationIds: newPoints
+            .map(point => point.parametricAssociation?.id)
+            .filter((id): id is string => Boolean(id)),
         });
       },
     );

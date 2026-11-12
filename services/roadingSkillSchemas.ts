@@ -4,7 +4,7 @@
 
 import type { SkillSchema } from './AgentRegistry';
 
-export const ROADING_SKILLS: SkillSchema[] = [
+const ALL_ROADING_SKILLS: SkillSchema[] = [
   {
     id: 'roading_synthesize_existing',
     name: 'Synthesize Existing Roads (Points + Imagery + OSM)',
@@ -78,6 +78,7 @@ export const ROADING_SKILLS: SkillSchema[] = [
       },
     },
     examples: [
+      'User: "Draw the road from my shots" -> roading_synthesize_existing({}) draws immediately with defaults; no baseline or parameters are required.',
       'User: "Draw the existing road from my EP points and aerial imagery" -> roading_synthesize_existing({useSurveyPoints:true, useBackgroundImagery:true})',
       'User: "Synthesize the street in front of the lot with a 50ft ROW" -> roading_synthesize_existing({rowWidthFt:50})',
     ],
@@ -87,9 +88,10 @@ export const ROADING_SKILLS: SkillSchema[] = [
     name: 'Design Proposed Road Corridor & Typical Section',
     type: 'action',
     description:
-      'Designs a proposed horizontal road corridor along a Stationing & CL alignment (or creates one from point numbers / bearing-distance legs) ' +
-      'using a full civil engineering Typical Section: travel lanes, crown/cross-slope %, curb & gutter offsets, sidewalk offsets, and right-of-way (ROW) lines. ' +
-      'Coordinates with CENTERLINE_STATIONING for alignment & stationing, POINT_EDITOR for sequential point numbers, and CAD_MANAGER for standard layers.',
+      'Builds a SAVED, parametric road model on an existing Stationing & CL baseline. ' +
+      'The model owns the civil Typical Section (lanes, crown/cross-slope, curb & gutter, sidewalks, ROW) ' +
+      'and all generated linework is associated to the baseline, so editing the baseline rebuilds the model. ' +
+      'A baseline is required only for this parametric model path. To draw an existing road from survey points with no baseline or parameters, use roading_synthesize_existing.',
     inputs: {
       name: {
         type: 'string',
@@ -98,14 +100,11 @@ export const ROADING_SKILLS: SkillSchema[] = [
       },
       centerlineId: {
         type: 'string',
-        description: 'Existing Centerline ID or name from Stationing & CL. If omitted, uses the active centerline or builds one from pointNumbers / legs.',
+        description: 'Centerline ID or name from Stationing & CL. If omitted, the active baseline is used. Required only for this parametric model; use roading_synthesize_existing for point-driven road drawing.',
       },
-      pointNumbers: {
-        type: 'array',
-        items: { type: 'string' },
-        description:
-          'Optional ordered list of point numbers to chain into a new centerline alignment before generating the corridor. ' +
-          'When the first point description contains a station (e.g. "138+37.12 PC"), that station becomes the alignment begin station.',
+      roadModelId: {
+        type: 'string',
+        description: 'Optional saved road-model id to update. If omitted, a model with the same name is updated; otherwise a new model is created.',
       },
       laneCount: {
         type: 'integer',
@@ -184,12 +183,14 @@ export const ROADING_SKILLS: SkillSchema[] = [
       },
       addedPoints: { type: 'integer', required: true },
       addedLines: { type: 'integer', required: true },
+      associationIds: { type: 'array', items: { type: 'string' }, required: true, description: 'Parametric associations owned by the saved road model.' },
+      updatedModel: { type: 'boolean', description: 'True when an existing saved model was updated instead of created.' },
       layersCreated: { type: 'array', items: { type: 'string' } },
       profileGenerated: { type: 'boolean' },
     },
     examples: [
-      'User: "Design a 24ft wide road with curb, 5ft sidewalks, and a 50ft ROW along the centerline" -> roading_design_corridor({laneCount:2, laneWidthFt:12, includeCurbAndGutter:true, includeSidewalk:true, sidewalkWidthFt:5, rowWidthFt:50})',
-      'User: "Create a road corridor connecting points 10, 11, 12 with 11ft lanes" -> roading_design_corridor({pointNumbers:["10","11","12"], laneCount:2, laneWidthFt:11})',
+      'User: "Model a 24ft road with curb, sidewalks, and a 50ft ROW on Baseline-1" -> roading_design_corridor({centerlineId:"Baseline-1", laneCount:2, laneWidthFt:12, includeCurbAndGutter:true, includeSidewalk:true, sidewalkWidthFt:5, rowWidthFt:50})',
+      'User: "Use 11ft lanes on the active baseline" -> roading_design_corridor({laneCount:2, laneWidthFt:11})',
     ],
   },
   {
@@ -321,3 +322,5 @@ export const ROADING_SKILLS: SkillSchema[] = [
     ],
   },
 ];
+
+export const ROADING_SKILLS: SkillSchema[] = ALL_ROADING_SKILLS;

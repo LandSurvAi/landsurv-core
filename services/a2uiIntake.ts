@@ -47,7 +47,6 @@ export type A2UICustomActionId =
   | 'open-zoning-intake'
   | 'open-title-search-panel'
   | 'open-compliance-panel'
-  | 'roading-synthesize-existing'
   | 'roading-design-corridor'
   | 'open-roading-studio'
   | 'decline-upload';
@@ -85,6 +84,7 @@ export const A2UI_INTAKE_AGENTS: readonly AgentType[] = [
   AgentType.STANDARDS_COMPLIANCE,
   AgentType.CAD_MANAGER,
   AgentType.ROADING_AGENT,
+  AgentType.REDLINE_AGENT,
 ] as const;
 
 export function getAgentA2UIWidgetType(agent: AgentType): A2UIWidgetType | null {
@@ -117,6 +117,8 @@ export function getAgentA2UIWidgetType(agent: AgentType): A2UIWidgetType | null 
       return 'cad-manager-intake';
     case AgentType.ROADING_AGENT:
       return 'roading-intake';
+    case AgentType.REDLINE_AGENT:
+      return 'redline-upload';
     case AgentType.CONTOURING_AGENT:
     case AgentType.STEEP_SLOPE_AGENT:
     case AgentType.PROFILE_AGENT:
@@ -155,6 +157,8 @@ export function getUploadPromptCopy(agent: AgentType, widgetType: A2UIWidgetType
       return 'Configure your compliance audit below — select a subject PDF, optional reference PDFs, source mode, and checks to run:';
     case 'cad-manager-intake':
       return 'Drop your CAD standards file (<strong>.lay</strong>, <strong>.dsc</strong>, <strong>.lin</strong>, <strong>.json</strong>, <strong>.md</strong>, <strong>.csv</strong>, <strong>.fxl</strong>, <strong>.fcl</strong>) below, or start a new standards session:';
+    case 'redline-upload':
+      return 'Drop one or more <strong>annotated PDF</strong> plan files below. I will read the reviewer markup, build a numbered worklist, and coordinate every approved correction with the Civil Drafter:';
     case 'roading-intake':
       return 'All fields are optional. Press <strong>Synthesize Existing Road</strong> to draw from the loaded survey points with the defaults shown, or <strong>Generate Road Corridor</strong> for a proposed design — refine lanes, curb, sidewalk, ROW, and Stationing/Profile coupling whenever you like:';
     default:
@@ -352,6 +356,16 @@ export function buildA2UIIntakeGreeting(
       ];
       break;
 
+    case AgentType.REDLINE_AGENT:
+      detail =
+        'Welcome to the Redline workspace! Upload one or more <strong>annotated plan PDFs</strong> (Bluebeam or Acrobat markup). I will turn every cloud, callout, highlight, and note into a numbered correction item, calibrate the sheets to the drawing, and work with the <strong>Civil Drafter</strong> on the corrections you approve.';
+      questionOptions = [
+        'Upload a marked-up plan package',
+        'Use PDFs already in this project',
+        'How does the worklist work?',
+      ];
+      break;
+
     case AgentType.ROADING_AGENT:
       detail =
         ptCount > 0
@@ -466,6 +480,14 @@ export function getDefaultSuggestedQuestions(agent: AgentType): string[] {
         'Run compliance now.',
         'Run compliance using CAD Manager mode.',
         'Show likely layer and linetype mismatches.',
+      ];
+    case AgentType.REDLINE_AGENT:
+      return [
+        'Upload a marked-up plan package',
+        'What did the reviewer ask for?',
+        'Show unresolved items',
+        'Apply the low-risk text fixes',
+        'Summarize this redline run',
       ];
     case AgentType.ROADING_AGENT:
       return [
@@ -678,11 +700,11 @@ export function classifyA2UIIntakeReply(
 
   if (/^synthesize\s+existing\s+road(?:\s+from\s+points\s*&\s*imagery)?$/i.test(trimmed)) {
     return {
-      action: 'custom-action',
-      customActionId: 'roading-synthesize-existing',
+      action: 'show-upload-widget',
+      widgetType: 'roading-intake',
+      agent: AgentType.ROADING_AGENT,
       replyText:
-        'Synthesizing the existing road from your points and imagery now. Inputs are optional — if you know the deeded <strong>right-of-way (ROW) width</strong>, give it to me afterwards and I will add the ROW lines without redrawing.',
-      suggestedQuestions: getDefaultSuggestedQuestions(AgentType.ROADING_AGENT),
+        'The Roading Agent builds parametric road models from a baseline and no longer drafts existing road linework from survey points. Draw or import a baseline first. If you need the existing paved edges drafted from field shots, the Civil Drafter owns that workflow.',
     };
   }
 

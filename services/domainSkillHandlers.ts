@@ -54,6 +54,8 @@ import { registerRoadingSkillHandlers } from './roadingSkillHandlers';
 import { registerRoadPaintSkillHandlers } from './roadPaintSkillHandlers';
 import { registerStormwaterSkillHandlers } from './stormwaterSkillHandlers';
 import { registerDirtVolumeSkillHandlers } from './dirtVolumeSkillHandlers';
+import { registerCivilDrafterRedlinePatchHandlers, registerRedlineSkillHandlers } from './redlineSkillHandlers';
+import type { CanvasTextAnnotation } from '../types';
 import { runSteepSlopeAnalysis, steepSlopeRunToSurveyLines } from './SteepSlopeService';import {
   generateContoursAsIsoPaths,
   isoPathsToSurveyLines,
@@ -87,6 +89,9 @@ export interface DomainSkillHandlersOpts {
   setPointLists: React.Dispatch<React.SetStateAction<PointList[]>>;
   lines: SurveyLine[];
   setLines: React.Dispatch<React.SetStateAction<SurveyLine[]>>;
+  textAnnotations?: CanvasTextAnnotation[];
+  setTextAnnotations?: React.Dispatch<React.SetStateAction<CanvasTextAnnotation[]>>;
+  withCanvasHistoryLabel?: <T>(label: string, fn: () => T) => T;
   centerlines: Centerline[];
   setCenterlines?: React.Dispatch<React.SetStateAction<Centerline[]>>;
   roadCorridors?: RoadCorridorRun[];
@@ -2050,7 +2055,25 @@ export function registerDomainSkillHandlers(
     }),
   );
 
-  // ── 12. Roading Agent skills ─────────────────────────────────────────────
+  // ── 12. Redline Agent skills + Civil Drafter redline patch ──────────────
+  unsubs.push(registerRedlineSkillHandlers());
+  unsubs.push(
+    registerCivilDrafterRedlinePatchHandlers(() => {
+      const opts = getOpts();
+      return {
+        textAnnotations: opts.textAnnotations ?? [],
+        setTextAnnotations: opts.setTextAnnotations ?? (() => {}),
+        lines: opts.lines,
+        setLines: opts.setLines,
+        pointLists: opts.pointLists,
+        setPointLists: opts.setPointLists,
+        withCanvasHistoryLabel: opts.withCanvasHistoryLabel,
+        logActionToFieldbook: opts.logActionToFieldbook,
+      };
+    }),
+  );
+
+  // ── 13. Roading Agent skills ─────────────────────────────────────────────
   unsubs.push(
     registerRoadingSkillHandlers(() => {
       const opts = getOpts();

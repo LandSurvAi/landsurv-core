@@ -187,8 +187,8 @@ export function OpenSourceSubdomainPage() {
                 </span>
               </div>
               <p className="text-sm text-gray-300 mb-3">
-                The AI-native survey workspace container format: an open, auditable ZIP archive containing
-                structured JSON manifests for points, linework, deeds, closures, and CACP state. Implemented in{' '}
+                The AI-native survey workspace container format: an open, auditable ZIP archive containing a
+                typed manifest.json plus the original RAW, PDF, DXF, and image files, with CACP, A2UI, and Redline state carried in the manifest. Implemented in{' '}
                 <code>utils/sessionZip.ts</code>, <code>utils/lsvzSchema.ts</code>, and <code>services/LsvzPersistence.ts</code>.
               </p>
             </div>

@@ -132,9 +132,8 @@ export function StandardsSubdomainPage() {
           />
           <StandardCard
             title=".RAW Point File Format"
-            description="LandSurv.ai native format for survey points and observations. Documented, open specification for point exchange."
+            description="Field-survey point and observation format parsed by the RAW Crawler. Handles coordinate, description, and elevation records from common total-station and data-collector exports."
             status="supported"
-            link="https://lsvz.landsurv.ai"
           />
           <StandardCard
             title="Deed Format (.DEED)"
@@ -270,13 +269,13 @@ export function StandardsSubdomainPage() {
         <Section title="5. Standards Documentation & Specifications" accent="text-indigo-400">
           <StandardCard
             title="LSVZ Format Documentation"
-            description="Complete technical specification for LandSurv.ai's native .lsvz file format."
+            description="Open CC BY 4.0 ZIP container with a typed manifest.json, original source files, CACP state, A2UI chat payloads, and Redline review records. Current specification v1.3."
             status="supported"
             link="https://lsvz.landsurv.ai"
           />
           <StandardCard
             title="CACP (Cross-Agent Communications Protocol)"
-            description="Open specification for inter-agent and multi-system communication in the LandSurv.ai ecosystem."
+            description="Open CC BY 4.0 specification for inter-agent skill discovery, delegation, and project knowledge sharing."
             status="supported"
             link="https://cacp.landsurv.ai"
           />
@@ -288,7 +287,7 @@ export function StandardsSubdomainPage() {
           />
           <StandardCard
             title="RFC Standards Compliance"
-            description="JSON (RFC 7158), UTF-8 encoding (RFC 3629), and HTTP/HTTPS protocols per IETF standards."
+            description="JSON (RFC 8259), UTF-8 encoding (RFC 3629), and HTTP/HTTPS protocols per IETF standards."
             status="supported"
           />
         </Section>
@@ -296,7 +295,7 @@ export function StandardsSubdomainPage() {
         <Section title="6. Professional Practice Standards">
           <StandardCard
             title="RICS (Royal Institution of Chartered Surveyors)"
-            description="Professional practice guidance for surveying. LandSurv.ai compliance with RICS standards documented in legal disclosures."
+            description="International professional practice reference for surveying and valuation. LandSurv.ai references RICS guidance as an industry framework; it is not RICS-certified and does not claim RICS accreditation."
             status="partial"
             link="https://www.rics.org/"
           />

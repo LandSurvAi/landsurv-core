@@ -439,13 +439,18 @@ export function CacpSubdomainPage({ onClose }: { onClose?: () => void }) {
             },
             {
               icon: CpuIcon,
+              title: 'A2UI Surfaces over CACP',
+              body: 'A2UI messages travel inside per-agent chat histories as typed, catalog-addressed surface descriptors. Surfaces are allow-listed, schema-validated, and restored with the conversation from .lsvz; they cannot bypass CACP skill ownership or policy checks.',
+            },
+            {
+              icon: CpuIcon,
               title: 'LSAI Agent & Live Memory',
               body: 'The LSAI Agent owns lsvz_dispatch and kb_query / kb_record. On every chat turn, the host injects live Project Knowledge Base facts and recent specialist results so newly learned session facts are immediately visible to all initialized agents.',
             },
             {
               icon: BroadcastIcon,
               title: 'Intent Router & cacp:offer',
-              body: 'Before an agent acts on a user turn, cacpIntentRouter scores the request against all 26 agent capability profiles and broadcasts a cacp:offer event so mismatched domain requests are logged and can be claimed or handed off.',
+              body: `Before an agent acts on a user turn, cacpIntentRouter scores the request against all ${cacpAgents.length} agent capability profiles and broadcasts a cacp:offer event so mismatched domain requests are logged and can be claimed or handed off.`,
             },
             {
               icon: NetworkIcon,
@@ -823,7 +828,7 @@ export function CacpSubdomainPage({ onClose }: { onClose?: () => void }) {
             {
               category: 'zoning.requirements',
               example: 'predicate: "setbackFront", value: 25, units: "ft" — plus setbackSide/Rear, maxHeight, minLotArea, lotCoverage, permittedUses[], sources[]',
-              label: 'Setbacks & dimensional standards from live zoning research (auto-pinned by Zoning Agent from permissive sources only — v1.2)',
+              label: `Setbacks & dimensional standards from live zoning research (auto-pinned by Zoning Agent from permissive sources only — v${CACP_SPEC_VERSION})`,
             },
             {
               category: 'deed.metadata',
@@ -864,7 +869,7 @@ export function CacpSubdomainPage({ onClose }: { onClose?: () => void }) {
       <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 border-t border-gray-800">
         <div className="flex items-center gap-3 mb-2">
           <h2 className="text-2xl font-bold text-white">Authoritative Source Provenance</h2>
-          <span className="px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/40 text-xs text-amber-300 font-mono">v1.2 · PERMISSIVE-ONLY</span>
+          <span className="px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/40 text-xs text-amber-300 font-mono">v{CACP_SPEC_VERSION} · PERMISSIVE-ONLY</span>
         </div>
         <p className="text-gray-400 mb-6 max-w-3xl text-sm">
           Some KB categories — most notably <code className="text-emerald-400 font-mono">zoning.requirements</code> — are populated from

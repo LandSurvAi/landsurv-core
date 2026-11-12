@@ -8,7 +8,7 @@ import { AgentType, JobInfo, useAgent, useUI } from '../types.ts';
 import { StormwaterIcon, DirtVolumeIcon } from './icons.tsx';
 import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnabled.ts';
 import { 
-    BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, BookOpenIcon, 
+    BrainCircuitIcon, CourthouseIcon, RoadIcon, RedlineIcon, PlumbBobIcon, BookOpenIcon,
     MapIcon, CutSheetIcon, DownloadIcon, ArrowUpTrayIcon, EraserIcon, XMarkIcon, 
     QuestionMarkCircleIcon, DocumentDuplicateIcon, CpuChipIcon, ClipboardDocumentListIcon, CurrencyDollarIcon, CogIcon,
     LsvzIcon, DxfAnalyzerIcon, AdjustmentsHorizontalIcon, FolderIcon, DocumentTextIcon, CrosshairsIcon, CogoIcon, ScaleIcon, CameraIcon, GlobeAltIcon, BugAntIcon,
@@ -92,6 +92,11 @@ interface SidebarProps {
     onGoHome?: () => void;
     /** Reports the desktop rail's collapsed state so the canvas header can take over Back/Home. */
     onCollapsedChange?: (collapsed: boolean) => void;
+    /**
+     * Surface an experimental agent's opt-in chip in Quick Thought instead of
+     * opening Settings. Falls back to Settings when not provided.
+     */
+    onExperimentalAgentPrompt?: (agent: AgentType) => void;
 }
 
 const SIDEBAR_DEFAULT_WIDTH = 264;
@@ -146,6 +151,7 @@ const agentConfig: Partial<Record<AgentType, SidebarAgentEntry>> = {
     [AgentType.SOILS_AGENT]: { icon: SoilsIcon, label: 'Soils Agent', color: 'stone' },
     [AgentType.STORMWATER_AGENT]: { icon: StormwaterIcon, label: 'Stormwater Agent', color: 'sky' },
     [AgentType.DIRT_VOLUME_AGENT]: { icon: DirtVolumeIcon, label: 'Dirt Volume Agent', color: 'amber' },
+    [AgentType.REDLINE_AGENT]: { icon: RedlineIcon, label: 'Redline Agent', color: 'red' },
     [AgentType.LSVZ_AGENT]: { icon: LsvzIcon, label: 'LSAI Agent', color: 'cyan' },
 };
 
@@ -198,6 +204,7 @@ const agentThemeColors: { [key in AgentType]?: string } = {
     [AgentType.SOILS_AGENT]: '#a8a29e', // stone-400
     [AgentType.ROADING_AGENT]: '#f59e0b', // amber-500
     [AgentType.STORMWATER_AGENT]: '#38bdf8', // sky-400
+    [AgentType.REDLINE_AGENT]: '#ef4444', // red-500
     [AgentType.DIRT_VOLUME_AGENT]: '#d97706', // amber-600
 };
 
@@ -349,14 +356,17 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     const { activeAgent, onAgentChange } = useAgent();
     const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
     const experimentalStormwaterEnabled = useExperimentalAgentEnabled(AgentType.STORMWATER_AGENT);
+    const experimentalRedlineEnabled = useExperimentalAgentEnabled(AgentType.REDLINE_AGENT);
     const { activeVisualPanel, showView, showDoc, showTech, showInvestorForm, showReleaseLog, showSettings, showAbout } = useUI();
 
     const handleAgentSelect = (agent: AgentType) => {
         if (
             (agent === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) ||
-            (agent === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled)
+            (agent === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled) ||
+            (agent === AgentType.REDLINE_AGENT && !experimentalRedlineEnabled)
         ) {
-            showSettings();
+            if (props.onExperimentalAgentPrompt) props.onExperimentalAgentPrompt(agent);
+            else showSettings();
             return;
         }
         onAgentChange(agent);
@@ -738,7 +748,8 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                                         isThinking={agent === activeAgent && props.isLoading}
                                         isExperimentalOff={
                                             (agent === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) ||
-                                            (agent === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled)
+                                            (agent === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled) ||
+            (agent === AgentType.REDLINE_AGENT && !experimentalRedlineEnabled)
                                         }
                                         onSelect={handleAgentSelect}
                                     />
@@ -973,7 +984,8 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                         const isActive = activeAgent === agentKey;
                         const isExperimentalOff =
                             (agentKey === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) ||
-                            (agentKey === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled);
+                            (agentKey === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled) ||
+                            (agentKey === AgentType.REDLINE_AGENT && !experimentalRedlineEnabled);
                         return (
                             <button
                                 key={agentKey}

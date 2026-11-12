@@ -199,6 +199,13 @@ export const AGENT_INITIAL_QUICK_THOUGHTS: Record<AgentType, string[]> = {
     'Design a new road corridor',
     'Open Roading Studio',
   ],
+  [AgentType.REDLINE_AGENT]: [
+    'Upload a marked-up plan package',
+    'What did the reviewer ask for?',
+    'Show unresolved items',
+    'Apply the low-risk text fixes',
+    'Summarize this redline run',
+  ],
 };
 
 export interface AgentInitialQuickThoughtContext {
@@ -234,6 +241,7 @@ export type A2UIQuickThoughtKind =
   | 'zoning-research'
   | 'zoning-sources'
   | 'settings'
+  | 'experimental-agent'
   | 'hatch-studio'
   | 'workspace-tool'
   | 'deed-summary'
@@ -601,6 +609,15 @@ export function decomposeMessageForQuickThought(
           kind: 'settings',
           agent: effectiveAgent,
           datasetTooLarge: a2ui.settingsSection === 'all',
+          a2ui,
+        };
+
+      case 'experimental-agent':
+        return {
+          hasActionablePrompt: true,
+          kind: 'experimental-agent',
+          agent: effectiveAgent,
+          datasetTooLarge: false,
           a2ui,
         };
 

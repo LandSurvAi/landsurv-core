@@ -73,7 +73,7 @@ export const DOC_PILLARS: DocPillar[] = [
     id: 'agents',
     title: 'Agent Guides & Survey Workflows',
     badge: 'AI Agents',
-    description: 'Field-to-finish workflows spanning deed analysis, plan review, COGO math, point clouds, RINEX GNSS, and contouring.',
+    description: 'Field-to-finish workflows spanning deed analysis, plan review, redline resolution, COGO math, point clouds, RINEX GNSS, contouring, and corridor design.',
     iconName: 'Bot',
   },
   {
@@ -94,7 +94,7 @@ export const DOC_PILLARS: DocPillar[] = [
     id: 'specs',
     title: 'Open Specs & File Formats',
     badge: 'Open Standards',
-    description: 'CC BY 4.0 specifications for .lsvz project archives, CACP v1.2 inter-agent protocol, and geodetic coordinate engines.',
+    description: 'CC BY 4.0 specifications for .lsvz project archives, CACP v1.3 inter-agent protocol, A2UI surfaces, and geodetic coordinate engines.',
     iconName: 'FileCode',
   },
 ];
@@ -109,8 +109,8 @@ export const DOC_ARTICLES: DocArticle[] = [
     title: 'Platform Architecture & Vision',
     description: 'An introduction to LandSurv.ai: the AI-native workspace designed for licensed surveyors, civil drafters, and field crews.',
     readTimeMinutes: 5,
-    lastUpdated: '2026-09-30',
-    statusBadge: 'v26.09 Production',
+    lastUpdated: '2026-11-12',
+    statusBadge: 'v26.11 Production',
     tags: ['architecture', 'overview', 'surveying', 'canvas', 'ai-brain'],
     sections: [
       {
@@ -589,75 +589,213 @@ export const DOC_ARTICLES: DocArticle[] = [
   {
     id: 'lsvz-quickstart',
     pillarId: 'specs',
-    title: '.lsvz File Format Specification v1.0',
-    description: 'Open-source (CC BY 4.0) survey container archive: ZIP packaging, typed manifest.json, coordinate tables, and GIS layers.',
-    readTimeMinutes: 7,
-    lastUpdated: '2026-09-28',
-    statusBadge: 'CC BY 4.0 Standard',
-    tags: ['lsvz', 'zip', 'manifest', 'open-format', 'interoperability'],
+    title: '.lsvz File Format Specification v1.3',
+    description: 'Open CC BY 4.0 project archive: a ZIP container with a typed manifest.json, original source files, CACP state, A2UI conversation payloads, and Redline review records.',
+    readTimeMinutes: 9,
+    lastUpdated: '2026-11-12',
+    statusBadge: 'Spec v1.3',
+    tags: ['lsvz', 'zip', 'manifest', 'open-format', 'interoperability', 'a2ui', 'redline'],
     sections: [
       {
         title: 'Container Structure',
         content: [
-          'The `.lsvz` (LandSurv Zip) file format is a modern, open-standard container designed to preserve complete surveying workspaces in a single, portable file.',
-          'An `.lsvz` archive is a standard PKZIP archive containing JSON metadata and standardized coordinate and vector streams:',
+          'The `.lsvz` file is a standard ZIP archive. The only reserved entry is `manifest.json` at the root; every other entry is an original source file or an agent-produced artifact.',
+          'There is no proprietary index, encrypted database, or required network service. A reader can list the ZIP directory and inspect the typed manifest without LandSurv.ai running.',
         ],
         codeBlock: {
           language: 'text',
-          caption: 'Archive Internal Hierarchy',
-          code: `my_project.lsvz\n├── manifest.json       (Typed project metadata, version, bounds, CRS)\n├── points.csv          (Raw PNEZD survey coordinate records)\n├── linework.json       (Vector linework, arcs, and survey lines)\n├── deed_calls.json     (Boundary calls, closure reports, legal text)\n├── styles.json         (CAD description keys and layer mappings)\n└── assets/\n    └── aerial.png      (Registered geo-referenced background imagery)`,
+          caption: 'Archive layout',
+          code: `project.lsvz
+├── manifest.json          Typed SessionState + provenance
+├── job123.raw             Original RAW file
+├── parcel_a.pdf           Original deed
+├── C-101.pdf              Original plan sheet
+├── topo.dxf               Original DXF
+└── photo_01.jpg           Original site photo`,
         },
       },
       {
-        title: 'manifest.json Schema',
+        title: 'manifest.json Contract',
         content: [
-          'The manifest file declares coordinate reference systems (CRS), bounding boxes, author credentials, and agent histories:',
+          'The manifest is UTF-8 JSON. Its top-level groups cover project context, source and generated files, geometry, mapping, stakeout, PDF markup, CACP state, fieldbook, Redline runs, per-agent chat histories, and UI restoration state.',
+          'The public schema is compile-time checked against the live `SessionState` type, so a new session field cannot silently enter the archive without being documented here. Additive optional fields do not bump the spec; a new top-level group or semantic contract change does.',
         ],
         codeBlock: {
           language: 'json',
-          caption: 'manifest.json Example',
-          code: `{\n  "$schema": "https://specs.landsurv.ai/schemas/lsvz-v1.json",\n  "version": "1.0",\n  "project": {\n    "name": "Oakridge Boundary Retracement",\n    "job_number": "2026-084",\n    "created_at": "2026-09-28T14:32:00Z",\n    "crs": "EPSG:6588"\n  },\n  "extents": {\n    "min_northing": 2045000.0,\n    "max_northing": 2046500.0,\n    "min_easting": 1423000.0,\n    "max_easting": 1424800.0\n  }\n}`,
+          caption: 'Manifest identity and provenance',
+          code: `{
+  "version": "26.11.12.01",
+  "savedAt": "2026-11-12T15:30:00.000Z",
+  "sessionMetadata": {
+    "author": "Jane Doe",
+    "note": "60% QA package",
+    "exportFileName": "oakridge_boundary.lsvz"
+  },
+  "jobInfo": {
+    "jobName": "Oakridge Boundary Retracement",
+    "jobNo": "2026-084"
+  }
+}`,
         },
       },
+      {
+        title: 'CACP, A2UI & Redline State',
+        content: [
+          'CACP project memory travels with the archive: point-number reservations, sourced Knowledge Base facts, description-key mappings, and event-linked keyframes. Ephemeral caches and the activity log remain runtime diagnostics.',
+          'A2UI payloads ride inside each agent chat history. The restored transcript includes the typed surface descriptor, lifecycle status, and relay attribution, so the conversation and its generated surface reopen together. Redline runs add sheet calibration, markups, numbered worklist items, decisions, revision assignment, and metrics.',
+        ],
+      },
+      {
+        title: 'Compatibility & Licensing',
+        content: [
+          'The app normalizes older manifests before hydrating session state. Unknown keys are ignored or preserved rather than treated as fatal, and legacy `roadCorridors` records remain readable beside the v1.3 baseline-linked `road-model` contract.',
+          'The specification is published under Creative Commons Attribution 4.0 International (CC BY 4.0). The application, agents, and third-party source files retain their own terms.',
+        ],
+      },
     ],
-    relatedDocs: ['cacp-spec-guide', 'workspace-navigation'],
+    relatedDocs: ['cacp-spec-guide', 'a2ui-cacp-integration', 'redline-agent-guide'],
     externalLinks: [
       { label: '.lsvz Specification Subdomain', url: 'https://lsvz.landsurv.ai' },
+      { label: 'CC BY 4.0 License', url: 'https://creativecommons.org/licenses/by/4.0/' },
     ],
   },
   {
     id: 'cacp-spec-guide',
     pillarId: 'specs',
-    title: 'CACP v1.2: Cross-Agent Communications Protocol',
-    description: 'The inter-agent messaging protocol for autonomous survey collaboration, task decomposition, and verifiable skill contracts.',
-    readTimeMinutes: 8,
-    lastUpdated: '2026-08-21',
-    statusBadge: 'Spec v1.2',
+    title: 'CACP v1.3: Cross-Agent Communications Protocol',
+    description: 'The typed inter-agent protocol for survey collaboration: manifests, skill dispatch, askPeer envelopes, policy gates, and the Project Knowledge Base.',
+    readTimeMinutes: 9,
+    lastUpdated: '2026-11-03',
+    statusBadge: 'Spec v1.3',
     tags: ['cacp', 'protocol', 'agents', 'skills', 'envelope', 'open-source'],
     sections: [
       {
         title: 'Protocol Principles',
         content: [
-          'CACP (Cross-Agent Communications Protocol) specifies how specialized surveying agents communicate, delegate tasks, and exchange geometric state.',
-          'Published under Creative Commons Attribution 4.0 (CC BY 4.0), CACP is vendor-agnostic and freely implementable in both cloud and local environments.',
+          'CACP (Cross-Agent Communications Protocol) specifies how specialized surveying agents discover capabilities, delegate deterministic work, and exchange project state without hard-coded routing tables.',
+          'Published under CC BY 4.0, the protocol is vendor-agnostic and implementable in cloud or local deployments. The registry is the source of truth for skill ownership; agents are instructed to delegate rather than guess when another agent owns the knowledge.',
         ],
       },
       {
-        title: 'Message Envelope Format',
+        title: 'Message Envelope',
         content: [
-          'All CACP messages are exchanged as typed JSON payloads adhering to the standardized envelope:',
+          'Messages use a compact typed envelope with a stable id, sender, recipient, command, command data, optional metadata, and a millisecond timestamp. Action skills bypass the result cache; query skills use the documented 10-minute cache.',
         ],
         codeBlock: {
           language: 'json',
-          caption: 'CACP v1.2 Request Envelope',
-          code: `{\n  "cacp_version": "1.2",\n  "message_id": "msg_984f18a2-11c0-4389-9801",\n  "sender": {\n    "agent_id": "boundary_agent",\n    "session_id": "sess_8102"\n  },\n  "recipient": {\n    "agent_id": "cogo_agent"\n  },\n  "intent": "solve_intersection",\n  "payload": {\n    "point_a": 101,\n    "bearing_a": "N 45° 00' 00\\" E",\n    "point_b": 102,\n    "bearing_b": "N 30° 00' 00\\" W"\n  },\n  "timestamp": "2026-09-30T16:00:00Z"\n}`,
+          caption: 'CACP v1.3 request envelope',
+          code: `{
+  "id": "msg_01J8Z5K4W7",
+  "from": "BOUNDARY_AGENT",
+  "to": "POINT_EDITOR",
+  "command": "request_next_point_number",
+  "data": {
+    "count": 6
+  },
+  "metadata": {
+    "traceId": "trace-4f81",
+    "requiresResponse": true
+  },
+  "timestamp": 1762891200000
+}`,
         },
       },
+      {
+        title: 'Policy, Caching & Knowledge',
+        content: [
+          'Runtime policy checks validate skill ownership, payload shape, and rate behavior. The activity log records send, handler, response, error, and no-handler phases in a 500-entry ring buffer with trace ids; cached results avoid redundant peer calls.',
+          'Project Knowledge Base facts are session-scoped and persisted in `.lsvz`. Zoning facts are sourced from permissive-only hosts; commercial codification platforms whose terms prohibit automation are hard-blocked before any network call.',
+        ],
+      },
     ],
-    relatedDocs: ['lsvz-quickstart', 'boundary-agent-guide', 'ai-gateway-reference'],
+    relatedDocs: ['lsvz-quickstart', 'a2ui-cacp-integration', 'boundary-agent-guide'],
     externalLinks: [
       { label: 'CACP Subdomain & Live Registry', url: 'https://cacp.landsurv.ai' },
       { label: 'Open Source Initiative Portal', url: 'https://opensource.landsurv.ai' },
+    ],
+  },
+  {
+    id: 'a2ui-cacp-integration',
+    pillarId: 'specs',
+    title: 'A2UI Surfaces over CACP',
+    description: 'How catalog-addressed A2UI surfaces are produced, relayed, rendered, and restored inside .lsvz conversations.',
+    readTimeMinutes: 6,
+    lastUpdated: '2026-11-12',
+    statusBadge: 'Integrated',
+    tags: ['a2ui', 'cacp', 'surfaces', 'chat', 'lsvz', 'integration'],
+    sections: [
+      {
+        title: 'What A2UI Is',
+        content: [
+          'A2UI is the declarative surface layer for agent-generated UI. A payload names a catalog widget type and carries typed props; the host renders the corresponding React component. No remote React, HTML, or executable UI is accepted.',
+          'Surfaces are used when a chat response needs a spreadsheet, settings form, hatch studio, GPS rover control, or another structured interaction that is clearer than prose.',
+        ],
+      },
+      {
+        title: 'How It Travels',
+        content: [
+          'A2UI messages ride inside the existing per-agent chat history as typed payloads with a lifecycle status. CACP remains the transport for deterministic peer work; A2UI is the presentation contract carried alongside the conversation.',
+          'Because the payload is stored with the transcript, reopening an `.lsvz` restores the surface and the conversation together. Relay attribution identifies when a specialist composed the body returned by the LSAI Agent.',
+        ],
+        codeBlock: {
+          language: 'json',
+          caption: 'A2UI payload carried in a chat message',
+          code: `{
+  "kind": "a2ui",
+  "agent": "LSAI_AGENT",
+  "widgetType": "spreadsheet",
+  "status": "completed",
+  "props": {
+    "title": "Point List",
+    "columns": ["Point #", "Elevation"],
+    "rows": [["101", 812.25]],
+    "editable": false
+  }
+}`,
+        },
+      },
+      {
+        title: 'Safety Boundary',
+        content: [
+          'The catalog is allow-listed. Props are validated against the widget schema, spreadsheet cells are normalized, and unknown widget types are rejected rather than rendered.',
+          'A2UI does not grant tool access. State changes still go through CACP skills and their policy checks, so a surface cannot bypass ownership, validation, or permission gates.',
+        ],
+      },
+    ],
+    relatedDocs: ['cacp-spec-guide', 'lsvz-quickstart'],
+    externalLinks: [
+      { label: 'A2UI/CACP Integration Plan', url: 'https://documentation.landsurv.ai' },
+      { label: 'CACP Specification', url: 'https://cacp.landsurv.ai' },
+    ],
+  },
+  {
+    id: 'redline-agent-guide',
+    pillarId: 'agents',
+    title: 'Redline Agent: Plan Markup to Worklist',
+    description: 'Upload marked-up plan sets, calibrate sheets, inventory annotations, and turn review comments into a numbered, auditable worklist.',
+    readTimeMinutes: 6,
+    lastUpdated: '2026-11-12',
+    statusBadge: 'New in 26.11',
+    tags: ['redline', 'plan-review', 'markups', 'worklist', 'revision', 'quality-control'],
+    sections: [
+      {
+        title: 'Workflow',
+        content: [
+          'The Redline Agent accepts a PDF package, registers one or more sheets, and calibrates each sheet with a two-point scale. It then inventories marked-up annotations, groups them into review items, and proposes a numbered worklist.',
+          'Each item carries the reviewer text, sheet reference, status, and the revision it was assigned to. The run records warnings and local metrics so a reviewer can audit what was proposed without reopening every sheet.',
+        ],
+      },
+      {
+        title: 'Persistence & Review',
+        content: [
+          'Redline runs are saved in the manifest as `redlineRuns`. Source PDFs remain in the project PDF store and are referenced by file name. Reopening the `.lsvz` restores the sheet registrations, markups, worklist decisions, revision block, and metrics.',
+          'The agent is intentionally review-oriented: it proposes and organizes; the licensed professional remains responsible for accepting, rejecting, and revising the work.',
+        ],
+      },
+    ],
+    relatedDocs: ['lsvz-quickstart', 'platform-overview'],
+    externalLinks: [
+      { label: 'Platform Documentation', url: 'https://documentation.landsurv.ai' },
     ],
   },
 ];

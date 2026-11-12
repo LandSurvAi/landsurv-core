@@ -485,7 +485,7 @@ export const Civil3DLandingPage: React.FC<{ onClose?: () => void }> = ({ onClose
         <footer className="border-t border-gray-800 bg-gray-900/50 mt-16 py-8">
           <div className="max-w-6xl mx-auto px-4 text-center text-gray-500 text-sm">
             <p>LandsurvConnector v0.1.0-alpha | Thin Client for LandSurv.ai Cloud Brain</p>
-            <p className="mt-2">© 2025 LandSurv.ai. All rights reserved.</p>
+            <p className="mt-2">© {new Date().getFullYear()} LandSurv.ai. All rights reserved.</p>
           </div>
         </footer>
     </div>

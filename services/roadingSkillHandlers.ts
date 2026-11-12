@@ -65,6 +65,10 @@ import {
 } from '../utils/roadTakeReview';
 import { knowledgeBase } from './KnowledgeBase';
 import { isExperimentalAgentEnabled } from '../utils/experimentalAgents';
+import {
+  createCenterlineOffsetAssociation,
+  tagCenterlineOffsetLines,
+} from './parametricAssociations';
 
 export interface RoadingHandlerDeps {
   points: SurveyPoint[];
@@ -1071,6 +1075,9 @@ export function generateParallelOffsetLinesForCenterline(
   pushOffsetVertex(vertices, offsetVertexOnBearing(pis[0].easting, pis[0].northing, firstBearing, offsetFt));
 
   let last = { x: pis[0].easting, y: pis[0].northing };
+  let lastBearing = firstBearing;
+  const bearingDiff = (a: number, b: number) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+  const normalizeBearing = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
   for (let i = 1; i < pis.length; i++) {
     const prev = pis[i - 1];
@@ -1080,8 +1087,24 @@ export function generateParallelOffsetLinesForCenterline(
       : null;
 
     if (curve) {
-      const inBearing = Math.atan2(curve.pcEasting - last.x, curve.pcNorthing - last.y);
-      pushOffsetVertex(vertices, offsetVertexOnBearing(curve.pcEasting, curve.pcNorthing, inBearing, offsetFt));
+      // A baseline built from a tangent arc stores the curve as a radius PI
+      // followed by its PT node. When the previous node is already the PC
+      // (curve starts at BOP, or two curves meet), the incoming segment has
+      // zero length; the last vertex is already the correct PC offset.
+      const curveInBearing = Math.atan2(
+        curr.easting - prev.easting,
+        curr.northing - prev.northing,
+      );
+      const pcGap = Math.hypot(curve.pcEasting - last.x, curve.pcNorthing - last.y);
+      if (pcGap > 1e-6) {
+        const pcBearing = Math.atan2(curve.pcEasting - last.x, curve.pcNorthing - last.y);
+        pushOffsetVertex(vertices, offsetVertexOnBearing(curve.pcEasting, curve.pcNorthing, pcBearing, offsetFt));
+        lastBearing = pcBearing;
+      } else if (Math.abs(bearingDiff(curveInBearing, lastBearing)) > 1e-6) {
+        // PC coincides with the previous vertex and the alignment turns there.
+        pushOffsetVertex(vertices, miteredOffsetVertex(curve.pcEasting, curve.pcNorthing, lastBearing, curveInBearing, offsetFt));
+        lastBearing = curveInBearing;
+      }
 
       // Sample the arc in chords; tight radii get a smaller chord so they stay round.
       const chord = Math.max(2, Math.min(stepFt, curve.radius * 0.2));
@@ -1097,7 +1120,24 @@ export function generateParallelOffsetLinesForCenterline(
         });
       }
 
+      lastBearing = normalizeBearing(curveInBearing + curve.delta);
       last = { x: curve.ptEasting, y: curve.ptNorthing };
+      continue;
+    }
+
+    // The PT node emitted after a curve duplicates the previous arc endpoint.
+    // Its incoming segment has zero length, so use the curve's outgoing bearing
+    // instead of atan2(0, 0) = north. A tangent continuation needs no extra
+    // vertex; a genuine corner gets a miter at the PT.
+    if (Math.hypot(curr.easting - last.x, curr.northing - last.y) <= 1e-6) {
+      if (i < pis.length - 1) {
+        const outBearing = Math.atan2(pis[i + 1].easting - curr.easting, pis[i + 1].northing - curr.northing);
+        if (Math.abs(bearingDiff(outBearing, lastBearing)) > 1e-6) {
+          pushOffsetVertex(vertices, miteredOffsetVertex(curr.easting, curr.northing, lastBearing, outBearing, offsetFt));
+          lastBearing = outBearing;
+        }
+      }
+      last = { x: curr.easting, y: curr.northing };
       continue;
     }
 
@@ -1105,8 +1145,10 @@ export function generateParallelOffsetLinesForCenterline(
     if (i < pis.length - 1) {
       const outBearing = Math.atan2(pis[i + 1].easting - curr.easting, pis[i + 1].northing - curr.northing);
       pushOffsetVertex(vertices, miteredOffsetVertex(curr.easting, curr.northing, inBearing, outBearing, offsetFt));
+      lastBearing = outBearing;
     } else {
       pushOffsetVertex(vertices, offsetVertexOnBearing(curr.easting, curr.northing, inBearing, offsetFt));
+      lastBearing = inBearing;
     }
     last = { x: curr.easting, y: curr.northing };
   }
@@ -1137,8 +1179,10 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
       const blocked = roadingExperimentalGate(message);
       if (blocked) return blocked;
       const deps = getDeps();
-      const d = (message.data ?? {}) as Record<string, unknown>;
+      const d = (message.data ?? {}) as Record<string, any>;
 
+      // Existing-road drawing is the no-parameter default: every input below is
+      // optional and the handler draws from the loaded survey shots first.
       const defaultRoadWidthProvided =
         typeof d.defaultRoadWidthFt === 'number' && Number.isFinite(d.defaultRoadWidthFt) && d.defaultRoadWidthFt > 0;
       const defaultRoadWidthFt = defaultRoadWidthProvided ? (d.defaultRoadWidthFt as number) : 24;
@@ -1585,74 +1629,92 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         );
       }
 
-      if (!targetCl && Array.isArray(d.pointNumbers) && d.pointNumbers.length >= 2) {
-        const pns = (d.pointNumbers as unknown[]).map(String);
-        const matchedPts = pns
-          .map((pn) => deps.points.find((p) => p.pointNumber === pn))
-          .filter((p): p is SurveyPoint => Boolean(p));
-        if (matchedPts.length >= 2) {
-          // Fit real curves through the shot chain instead of forcing a sharp PI
-          // at every surveyed vertex.
-          targetCl = buildCenterlineFromVertices(
-            matchedPts.map((pt) => ({ easting: pt.easting, northing: pt.northing })),
-            name,
-            'cl-road',
-            resolveBeginStation(undefined, matchedPts[0].description),
-          );
-          deps.setCenterlines?.((prev) => [targetCl!, ...prev]);
-        }
-      }
-
       if (!targetCl) {
         targetCl = deps.centerlines.find((c) => (c.pis?.length ?? 0) >= 2 && calculateCenterlineLength(c) > 0);
       }
 
-      // Fallback: create a centerline across the project bounds or first two points
       if (!targetCl) {
-        const bounds = computeProjectBounds(deps.points, deps.lines);
-        const p0 = deps.points[0] ?? {
-          pointNumber: 'POB',
-          easting: bounds.minE + 50,
-          northing: (bounds.minN + bounds.maxN) / 2,
-        };
-        const p1 = deps.points[1] ?? {
-          pointNumber: 'END',
-          easting: bounds.maxE - 50,
-          northing: (bounds.minN + bounds.maxN) / 2,
-        };
-        targetCl = {
-          id: `cl-road-${Date.now()}`,
-          name,
-          beginStation: resolveBeginStation(undefined, (p0 as { description?: string }).description),
-          pis: [
-            { id: `pi-${Date.now()}-0`, pointNumber: p0.pointNumber || 'POB', northing: p0.northing, easting: p0.easting },
-            { id: `pi-${Date.now()}-1`, pointNumber: p1.pointNumber || 'END', northing: p1.northing, easting: p1.easting },
-          ],
-        };
-        deps.setCenterlines?.((prev) => [targetCl!, ...prev]);
+        return respond(
+          message,
+          false,
+          undefined,
+          'Road models require a Stationing & CL baseline. Use roading_synthesize_existing to draw an existing road directly from survey points, or draw/import a baseline first.',
+        );
       }
 
       const totalTravelWidth = laneCount * laneWidthFt;
       const halfTravel = totalTravelWidth / 2;
       const newLines: SurveyLine[] = [];
       const layersCreated = new Set<string>(['C-ROAD-CNTR', 'L-ROAD']);
+      // Rebuilding a model with the same name (or explicit roadModelId) edits
+      // that model instead of stacking a duplicate on the same baseline.
+      const requestedModelId =
+        typeof d.roadModelId === 'string' ? d.roadModelId.trim() : '';
+      // An explicit roadModelId is authoritative; otherwise update by name.
+      const existingModel = requestedModelId
+        ? deps.roadCorridors?.find(model => model.id === requestedModelId)
+        : deps.roadCorridors?.find(
+            model => model.name.trim().toLowerCase() === name.trim().toLowerCase(),
+          );
+      const corridorId = existingModel?.id ?? `road-model-${Date.now()}`;
+      const associationIds: string[] = [];
+      if (existingModel) {
+        const previousAssociationIds = new Set(existingModel.associationIds ?? []);
+        deps.setLines(prev =>
+          prev.filter(line => {
+            const association = line.parametricAssociation;
+            return (
+              association?.ownerId !== corridorId &&
+              !(association && previousAssociationIds.has(association.id))
+            );
+          }),
+        );
+      }
+
+      // Every road-model offset is a live parametric association to the
+      // baseline. Editing the baseline regenerates these lines automatically.
+      const addOffsetLines = (
+        offsetFt: number,
+        offsetLayer: string,
+        offsetLineType: string,
+        offsetPrefix: string,
+        label: string,
+      ) => {
+        const association = createCenterlineOffsetAssociation(
+          targetCl!,
+          offsetFt,
+          offsetLayer,
+          offsetLineType,
+          offsetPrefix,
+          { ownerKind: 'road-model', ownerId: corridorId, label },
+        );
+        associationIds.push(association.id);
+        newLines.push(
+          ...tagCenterlineOffsetLines(
+            generateParallelOffsetLinesForCenterline(
+              targetCl!,
+              offsetFt,
+              offsetLayer,
+              offsetLineType,
+              offsetPrefix,
+            ),
+            association,
+          ),
+        );
+      };
 
       // Centerline & Travelway Edges
-      newLines.push(
-        ...generateParallelOffsetLinesForCenterline(targetCl, 0, 'C-ROAD-CNTR', ROAD_CENTERLINE_LINETYPE, 'corridor-cl'),
-        ...generateParallelOffsetLinesForCenterline(targetCl, -halfTravel, 'L-ROAD', 'CONTINUOUS', 'corridor-ep-lt'),
-        ...generateParallelOffsetLinesForCenterline(targetCl, halfTravel, 'L-ROAD', 'CONTINUOUS', 'corridor-ep-rt'),
-      );
+      addOffsetLines(0, 'C-ROAD-CNTR', ROAD_CENTERLINE_LINETYPE, 'corridor-cl', 'Road centerline');
+      addOffsetLines(-halfTravel, 'L-ROAD', 'CONTINUOUS', 'corridor-ep-lt', 'Left pavement edge');
+      addOffsetLines(halfTravel, 'L-ROAD', 'CONTINUOUS', 'corridor-ep-rt', 'Right pavement edge');
 
       // Multi-lane interior striping when laneCount > 2
       if (laneCount > 2) {
         layersCreated.add('C-ROAD-LANE');
         for (let laneIdx = 1; laneIdx < laneCount / 2; laneIdx++) {
           const off = laneIdx * laneWidthFt;
-          newLines.push(
-            ...generateParallelOffsetLinesForCenterline(targetCl, -off, 'C-ROAD-LANE', 'DASHED', `corridor-lane-lt-${laneIdx}`),
-            ...generateParallelOffsetLinesForCenterline(targetCl, off, 'C-ROAD-LANE', 'DASHED', `corridor-lane-rt-${laneIdx}`),
-          );
+          addOffsetLines(-off, 'C-ROAD-LANE', 'DASHED', `corridor-lane-lt-${laneIdx}`, `Left lane line ${laneIdx}`);
+          addOffsetLines(off, 'C-ROAD-LANE', 'DASHED', `corridor-lane-rt-${laneIdx}`, `Right lane line ${laneIdx}`);
         }
       }
 
@@ -1663,12 +1725,10 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         const faceOfCurb = halfTravel + gutterWidthFt;
         const backOfCurb = faceOfCurb + curbWidthFt;
         outerCurbOffset = backOfCurb;
-        newLines.push(
-          ...generateParallelOffsetLinesForCenterline(targetCl, -faceOfCurb, 'V-ROAD-CURB', 'CONTINUOUS', 'corridor-foc-lt'),
-          ...generateParallelOffsetLinesForCenterline(targetCl, faceOfCurb, 'V-ROAD-CURB', 'CONTINUOUS', 'corridor-foc-rt'),
-          ...generateParallelOffsetLinesForCenterline(targetCl, -backOfCurb, 'V-ROAD-CURB', 'CONTINUOUS', 'corridor-boc-lt'),
-          ...generateParallelOffsetLinesForCenterline(targetCl, backOfCurb, 'V-ROAD-CURB', 'CONTINUOUS', 'corridor-boc-rt'),
-        );
+        addOffsetLines(-faceOfCurb, 'V-ROAD-CURB', 'CONTINUOUS', 'corridor-foc-lt', 'Left face of curb');
+        addOffsetLines(faceOfCurb, 'V-ROAD-CURB', 'CONTINUOUS', 'corridor-foc-rt', 'Right face of curb');
+        addOffsetLines(-backOfCurb, 'V-ROAD-CURB', 'CONTINUOUS', 'corridor-boc-lt', 'Left back of curb');
+        addOffsetLines(backOfCurb, 'V-ROAD-CURB', 'CONTINUOUS', 'corridor-boc-rt', 'Right back of curb');
       }
 
       // Sidewalks
@@ -1676,22 +1736,18 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         layersCreated.add('V-SITE-SWLK');
         const swInner = outerCurbOffset + sidewalkOffsetFt;
         const swOuter = swInner + sidewalkWidthFt;
-        newLines.push(
-          ...generateParallelOffsetLinesForCenterline(targetCl, -swInner, 'V-SITE-SWLK', 'CONTINUOUS', 'corridor-sw-in-lt'),
-          ...generateParallelOffsetLinesForCenterline(targetCl, swInner, 'V-SITE-SWLK', 'CONTINUOUS', 'corridor-sw-in-rt'),
-          ...generateParallelOffsetLinesForCenterline(targetCl, -swOuter, 'V-SITE-SWLK', 'CONTINUOUS', 'corridor-sw-out-lt'),
-          ...generateParallelOffsetLinesForCenterline(targetCl, swOuter, 'V-SITE-SWLK', 'CONTINUOUS', 'corridor-sw-out-rt'),
-        );
+        addOffsetLines(-swInner, 'V-SITE-SWLK', 'CONTINUOUS', 'corridor-sw-in-lt', 'Left sidewalk inside edge');
+        addOffsetLines(swInner, 'V-SITE-SWLK', 'CONTINUOUS', 'corridor-sw-in-rt', 'Right sidewalk inside edge');
+        addOffsetLines(-swOuter, 'V-SITE-SWLK', 'CONTINUOUS', 'corridor-sw-out-lt', 'Left sidewalk outside edge');
+        addOffsetLines(swOuter, 'V-SITE-SWLK', 'CONTINUOUS', 'corridor-sw-out-rt', 'Right sidewalk outside edge');
       }
 
       // Right-of-Way (ROW)
       if (rowWidthSpecified) {
         layersCreated.add('V-ROAD-ROW');
         const halfRow = rowWidthFt / 2;
-        newLines.push(
-          ...generateParallelOffsetLinesForCenterline(targetCl, -halfRow, 'V-ROAD-ROW', 'DASHED', 'corridor-row-lt'),
-          ...generateParallelOffsetLinesForCenterline(targetCl, halfRow, 'V-ROAD-ROW', 'DASHED', 'corridor-row-rt'),
-        );
+        addOffsetLines(-halfRow, 'V-ROAD-ROW', 'DASHED', 'corridor-row-lt', 'Left right-of-way');
+        addOffsetLines(halfRow, 'V-ROAD-ROW', 'DASHED', 'corridor-row-rt', 'Right right-of-way');
       }
 
       // Stationed template points along CL and pavement edges
@@ -1870,20 +1926,26 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         designGradePct,
       };
 
-      const corridorId = `road-design-${Date.now()}`;
+      const now = new Date().toISOString();
       const run: RoadCorridorRun = {
         id: corridorId,
         name,
-        mode: 'corridor-design',
+        mode: 'road-model',
         centerlineId: targetCl.id,
         typicalSection,
         drawnPointIds: generatedPts.map((p) => p.pointNumber),
         drawnLineIds: newLines.map((l) => l.id || '').filter(Boolean),
+        associationIds,
         roadNames: obtainedStreetLabels.length > 0 ? obtainedStreetLabels.map((label) => label.text) : undefined,
         profileGenerated,
-        createdAt: new Date().toISOString(),
+        createdAt: existingModel?.createdAt ?? now,
+        updatedAt: now,
       };
-      deps.setRoadCorridors?.((prev) => [...prev, run]);
+      deps.setRoadCorridors?.((prev) =>
+        existingModel
+          ? [...prev.filter((model) => model.id !== corridorId), run]
+          : [...prev, run],
+      );
 
       deps.logActionToFieldbook(
         `Roading Agent: designed "${name}" corridor (${totalTravelWidth}' travelway, ${rowWidthSpecified ? `${rowWidthFt}' ROW` : 'ROW width not specified \u2014 no ROW lines drawn'}, ${newLines.length} segments, ${generatedPts.length} stationed points).`,
@@ -1898,6 +1960,8 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         totalWidthFt: totalTravelWidth,
         rowWidthFt,
         addedPoints: generatedPts.length,
+        associationIds,
+        updatedModel: Boolean(existingModel),
         rowLinesDrawn: rowWidthSpecified,
         notice: rowWidthSpecified
           ? undefined
@@ -2212,32 +2276,41 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         'V-ROAD-ROW',
       ]);
 
+      // Count from the current snapshot, not inside the state updater: React
+      // runs updaters later, so counts read at response time would still be 0.
+      const currentLines = deps.lines ?? [];
       let removedLines = 0;
       let removedCorridors = 0;
 
       if (corridorId && deps.roadCorridors) {
         const target = deps.roadCorridors.find((c) => c.id === corridorId);
         const lineIds = new Set(target?.drawnLineIds ?? []);
-        deps.setLines((prev) => {
-          const kept = prev.filter((l) => !lineIds.has(l.id || ''));
-          removedLines = prev.length - kept.length;
-          return kept;
+        const associationIds = new Set(target?.associationIds ?? []);
+        const keptLines = currentLines.filter((l) => {
+          const association = l.parametricAssociation;
+          return (
+            !lineIds.has(l.id || '') &&
+            association?.ownerId !== corridorId &&
+            !(association && associationIds.has(association.id))
+          );
         });
-        deps.setRoadCorridors?.((prev) => {
-          const kept = prev.filter((c) => c.id !== corridorId);
-          removedCorridors = prev.length - kept.length;
-          return kept;
-        });
+        removedLines = currentLines.length - keptLines.length;
+        deps.setLines(keptLines);
+
+        const keptCorridors = deps.roadCorridors.filter((c) => c.id !== corridorId);
+        removedCorridors = deps.roadCorridors.length - keptCorridors.length;
+        deps.setRoadCorridors?.(keptCorridors);
       } else {
-        deps.setLines((prev) => {
-          const kept = prev.filter((l) => !roadLayers.has(l.layer || ''));
-          removedLines = prev.length - kept.length;
-          return kept;
-        });
-        deps.setRoadCorridors?.((prev) => {
-          removedCorridors = prev.length;
-          return [];
-        });
+        const keptLines = currentLines.filter(
+          (l) =>
+            !roadLayers.has(l.layer || '') &&
+            l.parametricAssociation?.ownerKind !== 'road-model',
+        );
+        removedLines = currentLines.length - keptLines.length;
+        deps.setLines(keptLines);
+
+        removedCorridors = (deps.roadCorridors ?? []).length;
+        deps.setRoadCorridors?.([]);
       }
 
       deps.logActionToFieldbook(`Roading Agent: cleared ${removedLines} road corridor line segment(s).`);

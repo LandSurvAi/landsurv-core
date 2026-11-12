@@ -21,9 +21,10 @@ import type { SessionState } from '../types';
 // .lsvz spec version — bump on backwards-incompatible manifest/schema
 // changes, and update LSVZ_SPEC_RELEASE to the publication date (ISO 8601).
 // Additive fields under existing groups DO NOT require a bump because the
-// schema is compile-time-checked against SessionState and rendered live.
-export const LSVZ_SPEC_VERSION = '1.2';
-export const LSVZ_SPEC_RELEASE = '2026-11-03';
+// schema is compile-time-checked against SessionState and rendered live. A new
+// top-level group or a semantic contract change is a minor-version release.
+export const LSVZ_SPEC_VERSION = '1.3';
+export const LSVZ_SPEC_RELEASE = '2026-11-12';
 
 // Fields that are saved for restore-on-load but aren't part of the publicly
 // documented .lsvz schema (chat histories listed separately to keep the
@@ -41,6 +42,7 @@ export type LsvzGroupId =
   | 'pdf'
   | 'cacp'
   | 'fieldbook'
+  | 'redline'
   | 'chat'
   | 'ui';
 
@@ -70,9 +72,9 @@ export const LSVZ_SCHEMA = [
     description: 'Always present at the root of manifest.json.',
     fields: [
       { key: 'version',  description: 'App version string that wrote the file (date-based YY.MM.DD.xx since v26.x).',
-        example: '"26.05.17.20"' },
+        example: '"26.11.12.01"' },
       { key: 'savedAt',  description: 'ISO timestamp of when the .lsvz was packaged.',
-        example: '"2026-05-17T20:00:00.000Z"' },
+        example: '"2026-11-12T15:30:00.000Z"' },
       { key: 'sessionMetadata', description: 'Optional save provenance metadata: author, note, exportFileName, exportedByAgent, and filename segment toggles.',
         example: '{ "author": "Jane Doe", "note": "60% QA package", "exportFileName": "landsurvai_session.lsvz" }' },
     ],
@@ -129,8 +131,8 @@ export const LSVZ_SCHEMA = [
       { key: 'tinSurfaces',       description: 'Triangulated Irregular Networks derived from contours / points.',             example: '[ ... ]' },
       { key: 'steepSlopeRuns',    description: 'Saved steep-slope analysis runs keyed to TIN surfaces: run settings, per-triangle slope-band assignments, connected-component summaries (elevation span, linear span, kept flag), and analyzed/kept/removed triangle counts.',
         example: '[ { "id":"run-1", "name":"25% Ordinance", "createdAt":"...", "settings":{...}, "sourceTinId":"tin-1", "analyzedTriangleCount":1204, "keptTriangleCount":211, "removedTriangleCount":993, "components":[...], "triangles":[...] } ]' },
-      { key: 'roadCorridors',     description: 'Saved Roading Agent synthesis and proposed corridor design runs: mode ("existing-synthesis" | "corridor-design"), linked centerlineId, RoadTypicalSection parameters (lane count/width, crown %, curb & gutter, sidewalk, ROW width, station interval, design grade %), cul-de-sac/fillet radii, and generated point/line ids.',
-        example: '[ { "id":"road-1", "name":"Main St Corridor", "mode":"corridor-design", "centerlineId":"cl-1", "typicalSection":{"laneCount":2,"laneWidthFt":12,"crownSlopePct":2,"includeCurbAndGutter":true,"curbWidthFt":0.5,"gutterWidthFt":1.5,"includeSidewalk":true,"sidewalkWidthFt":5,"sidewalkOffsetFt":4,"rowWidthFt":50,"stationIntervalFt":50}, "drawnPointIds":[], "drawnLineIds":[], "createdAt":"..." } ]' },
+      { key: 'roadCorridors',     description: 'Saved Roading Agent road models: mode ("road-model" | legacy "existing-synthesis" | "corridor-design"), required linked centerlineId baseline, RoadTypicalSection parameters (lane count/width, crown %, curb & gutter, sidewalk, ROW width, station interval, design grade %), parametric associationIds owned by the model, cul-de-sac/fillet radii, and generated point/line ids. Associated linework is regenerated when the baseline changes.',
+        example: '[ { "id":"road-1", "name":"Main St Road Model", "mode":"road-model", "centerlineId":"cl-1", "typicalSection":{"laneCount":2,"laneWidthFt":12,"crownSlopePct":2,"includeCurbAndGutter":true,"curbWidthFt":0.5,"gutterWidthFt":1.5,"includeSidewalk":true,"sidewalkWidthFt":5,"sidewalkOffsetFt":4,"rowWidthFt":50,"stationIntervalFt":50}, "associationIds":["assoc-cl-..."], "drawnPointIds":[], "drawnLineIds":[], "createdAt":"...", "updatedAt":"..." } ]' },
       { key: 'streetLabels',      description: 'Street-name text labels aligned to road bearings, derived from OpenStreetMap/Google road geometry within the inclusion boundary. Each stores world x/y, name text, and rotation angle.',
         example: '[ { "x":1000.0, "y":2000.0, "text":"Main Street", "angle":12.5 } ]' },
       { key: 'parcelLabels',      description: 'GIS parcel centroid labels rendered as styled "N/F [OWNER]" annotation text (not survey points). Each carries parcel id, owner of record, deed book/page, block/unit, and world position/rotation.',
@@ -220,6 +222,15 @@ export const LSVZ_SCHEMA = [
     ],
   },
   {
+    id: 'redline',
+    title: 'Redline Agent',
+    description: 'Marked-up plan runs: sheet registrations, annotation inventory, numbered worklist, decisions, revision assignment, and local metrics. Source PDFs stay in the project PDF store; the run references them by file name.',
+    fields: [
+      { key: 'redlineRuns', description: 'One entry per uploaded redline package. Includes sheets (with two-point calibration), markups, worklist items and their statuses, the revision block, warnings, and metrics.',
+        example: '[ { "id":"rdl-...", "mode":"fast", "sheets":[ ... ], "markups":[ ... ], "items":[ { "number":"R-03-014", "reviewerText":["REMOVE FENCE"], "status":"applied" } ], "revision":{ "assignedRevision":3 }, "metrics":{ "itemsProposed":18 } } ]' },
+    ],
+  },
+  {
     id: 'chat',
     title: 'Per-agent chat histories',
     description: 'Every conversation with every agent is preserved verbatim so reopening the .lsvz restores the full context — including AI rationale and tool calls. One array per agent.',
@@ -240,6 +251,7 @@ export const LSVZ_SCHEMA = [
       { key: 'soilsChatHistory',         description: 'Soils Agent conversation.',               example: '[ ... ]' },
       { key: 'structuresChatHistory',    description: 'Structures Agent conversation.',          example: '[ ... ]' },
       { key: 'roadingChatHistory',       description: 'Roading Agent conversation.',             example: '[ ... ]' },
+      { key: 'redlineChatHistory',       description: 'Redline Agent conversation.',             example: '[ ... ]' },
       { key: 'standardsComplianceChatHistory', description: 'Standards Compliance Agent conversation.', example: '[ ... ]' },
       { key: 'profileChatHistory',       description: 'Profile & Cross Section conversation.',   example: '[ ... ]' },
       { key: 'cogoChatHistory',          description: 'COGO conversation.',                      example: '[ ... ]' },

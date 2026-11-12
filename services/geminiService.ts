@@ -178,7 +178,7 @@ const getAi = (userApiKey?: string): GoogleGenAI => {
 const responseFormattingInstruction = `
 **CRITICAL RESPONSE FORMATTING RULES:**
 1.  **YOUR RESPONSE MUST be structured into two distinct sections: \`THINKING\` and \`RESULT\`.**
-2.  The \`THINKING\` section is for your internal monologue, reasoning, and analysis. It MUST NOT contain the final answer.
+2.  The \`THINKING\` section is for your internal monologue, reasoning, and analysis. It MUST NOT contain the final answer. **Action JSON (askPeer, points, lines, chains, stationingParameters, stationingSettings, newFile, etc.) placed in THINKING is ignored by the host — every action payload MUST be in RESULT.**
 3.  The \`RESULT\` section MUST contain ONLY the direct, final answer to the user's query. This could be a text response or a JSON object. NO additional conversational text, apologies, or explanations are allowed in the RESULT section.
 4.  **You MUST use \`---\` (three hyphens on a new line) to separate the \`THINKING\` and \`RESULT\` sections.** This separator is mandatory if a thinking process exists.
 5.  **If there is no thinking process, your entire response is the \`RESULT\` section.** Do NOT include the \`THINKING\` section or the \`---\` separator in this case.
@@ -513,15 +513,15 @@ ONCE THE USER SELECTS AN OPTION (or when the user explicitly asks to synthesize 
   Delegate via CACP:
   \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "Extract driveway corridor" } }\`
 - **Roads are NOT drawn by this skill.** Any request to draw, synthesize, trace, or design a road, street, centerline, corridor, or right-of-way belongs to the Roading Agent:
-  Emit \`askPeer\` with \`roading_synthesize_existing\` (existing road) or \`roading_design_corridor\` (proposed). Call the Roading Agent immediately with whatever values are known — it draws from points alone. Never call \`geo_extract_*\` for a road request, and never invent a ROW width: omit it and the skill draws the pavement/centerline without ROW lines.
+  Existing-road drawing from survey shots goes to the Roading Agent via roading_synthesize_existing, with no baseline or parameters required. Road models go via \`roading_design_corridor\`, which requires an existing Stationing & CL baseline. Never call \`geo_extract_*\` for a road request, and never invent a ROW width.
 - **If the user chooses "Use Survey Points Only":**
   Connect only field survey points matching feature descriptions (DW, DRV, EP, EDGE) into chains. If no DW/EP points exist, report which points exist (e.g. Point 1 TSPK SET, Point 2 TSPK SET) and ask if they'd like to synthesize.
 The host application deterministically queries OpenStreetMap building footprints and survey control shots to draft exact driveway linework with smooth curves and bell return fillets. Road corridors are owned by the Roading Agent.` : `8. **DRIVEWAYS & SITE FEATURE VECTORIZATION (SamGeo) — DELEGATE.** If the user asks to "draw the driveways", "draw driveways", "trace driveways", "extract parking", "trace driveway for this property", or extract aerial/orthophoto site features, emit \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "User requested driveway feature extraction from aerial imagery" } }\`. The host application and Geospatial AI engine extract the vector polygons and place them directly onto the canvas. After the result returns, confirm the outcome in one natural sentence and do NOT emit duplicate linework.
 9. **ROAD CENTERLINE EXTRACTION (SAM-Road) — NOT A ROAD-DRAWING WORKFLOW.** Use \`geo_extract_roads\` only when the user explicitly asks to extract or trace centerlines / the road network from imagery. Any request to draw, synthesize, or design the road itself belongs to the Roading Agent under rule 10. `}
 ${selfAgent === AgentType.ROADING_AGENT
-  ? `10. **ROADS, STREETS, CORRIDORS & ROW — YOU ARE THE ROADING AGENT (CIVIL DRAFTER POINT-DRAFTING ENGINE ENABLED).** When field-collected road survey points (\`EP\`, \`EOP\`, \`ER\`, \`EDGE\`, \`CURB\`, \`TC\`, \`BC\`, \`TBC\`, \`GUTTER\`, \`CL\`, \`CTR\`, \`SHLD\`, \`ROW\`, \`PC\`, \`POC\`, \`PT\`) exist in the \`POINT DATABASE\` and the user asks to draw, draft, trace, or connect the road, street, pavement edges, curbs, or centerline, **draft them directly from the survey points using the Civil Drafter \`chains\` (and \`lines\` for PC–POC–PT curves) output format** so the host deterministically orders each side along the corridor without crossing. Do NOT call \`roading_synthesize_existing\` when road survey points exist unless the user explicitly asks to synthesize from OpenStreetMap/aerial imagery or apply a parametric deeded \`rowWidthFt\` offset. Use \`roading_design_corridor\` for proposed typical-section corridors, \`roading_generate_profile_and_sections\` for profiles/cross-sections, and \`roading_add_culdesac_or_fillet\` for cul-de-sacs/fillets. Never invent a ROW width.`
+  ? `10. **ROADS, STREETS, CORRIDORS & ROW — YOU OWN EXISTING-ROAD DRAWING AND PARAMETRIC MODELS.** Draw an existing road directly from loaded survey shots with roading_synthesize_existing; no baseline and no required parameters. For a saved parametric road model, use roading_design_corridor, which requires an existing Stationing & CL Centerline baseline; if none exists, ask the user to draw or import one first and never manufacture a baseline from points, OSM, imagery, or bounds. Use \`roading_design_corridor\` to build the saved parametric model, \`roading_generate_profile_and_sections\` for profiles/cross-sections, and \`roading_add_culdesac_or_fillet\` for terminus/tie-in features. Never invent a ROW width.`
   : experimentalRoadingEnabled
-  ? `10. **ROADS, STREETS, CORRIDORS & ROW — ALWAYS THE ROADING AGENT (NO EXCEPTIONS).** Whenever the user asks to draw, synthesize, trace, design, model, or extract any road, street, roadway, centerline, corridor, typical section, curb & gutter, sidewalk, cul-de-sac, profile, or right-of-way, delegate via CACP to the **Roading Agent** (\`roading_synthesize_existing\` for existing roads, \`roading_design_corridor\` for proposed corridors, \`roading_generate_profile_and_sections\`, or \`roading_add_culdesac_or_fillet\`). Do NOT call \`geo_extract_features\` or \`geo_extract_roads\` for a road request, do NOT draw road or ROW linework yourself, and NEVER invent a ROW width — call the Roading Agent immediately and let it draw without ROW lines when the width is unknown.`
+  ? `10. **ROADS, STREETS, CORRIDORS & ROW — DELEGATE TO THE ROADING AGENT.** Roading owns existing-road drawing from survey shots, road parameters, saved models, typical sections, profiles, and ROW. Delegate existing-road requests via roading_synthesize_existing (no baseline or parameters required), and proposed road models via \`roading_design_corridor\` only when a Stationing & CL baseline exists (or the user is asking to create/configure that model). Never call \`geo_extract_features\` or \`geo_extract_roads\` for a road-model request, and NEVER invent a ROW width.`
   : `10. **ROADS, STREETS, CORRIDORS & ROW — ROADING AGENT IS EXPERIMENTAL AND DISABLED. YOU DRAW ROADS.** Whenever the user asks to draw, synthesize, trace, design, model, or extract any road, street, roadway, centerline, corridor, pavement edge, curb, gutter, sidewalk, cul-de-sac, profile, or right-of-way, do it yourself using the Civil Drafter point-to-linework chains engine and the field survey points. Do NOT delegate to the Roading Agent, do NOT emit any roading_* skill, and do NOT call geo_extract_features or geo_extract_roads for a road request. Never invent a ROW width. If a proposed design needs a typical section or profile that the shots do not support, ask for the missing dimensions and draft only what the evidence supports.`}
 ${!experimentalRoadingEnabled ? `
 **ROADING DISABLED — OVERRIDE:** Ignore any earlier instruction to delegate roads, streets, corridors, or ROW to the Roading Agent. Draw them yourself from the field survey points with the Civil Drafter chains engine, and do not emit roading_* skills.` : ''}
@@ -715,19 +715,19 @@ STRICT DISCRIMINATION RULES:
 4. If "Use Survey Points Only" is chosen and NO points with road codes (EP, CL, EDGE, CURB, DEP) exist in the database, DO NOT FABRICATE POINTS! Inform the user:
    "No field-collected survey shots with road codes (EP, CL, EDGE, CURB) were found in your point database. Loaded points 1 & 2 (TSPK SET) and 2000 & 2001 (IP FD RB) are boundary/traverse control, not road pavement." and provide options: ["Synthesize Survey Points & Imagery (Recommended)", "Use Aerial Imagery Only"].
 
-**#0C SPATIAL DRIVEWAY EXTRACTION & ROAD DRAFTING (EXISTING ROADS STAY WITH YOU):**
+**#0C SPATIAL DRIVEWAY EXTRACTION & ROAD DRAFTING:**
 To ensure surveyor-grade precision and prevent false hallucinations, NEVER guess raw coordinate numbers in JSON!
 Always delegate to the CACP specialist that owns the feature via \`askPeer\`:
 - When a driveway is requested:
   \`{ "askPeer": { "skillId": "geo_extract_features", "payload": { "featureType": "driveway", "targetLayer": "L-DRIVEWAY" }, "reason": "Synthesize driveway corridor" } }\`
 - When a PROPOSED road, street, corridor, or right-of-way is requested (design, typical section, profile, cul-de-sac, widening):
-  Delegate the proposed design to the Roading Agent with \`roading_design_corridor\` (or \`roading_add_culdesac_or_fillet\`). Never invent a ROW width — omit it and the Roading Agent draws immediately without ROW lines.
-- **EXISTING ROAD — DO NOT DELEGATE:** when the road/street already exists and field shots or OSM ways describe it, draft it YOURSELF with chains and run the #0E multi-take review. Do NOT call \`geo_extract_features\`, \`geo_extract_roads\` or \`roading_synthesize_existing\` for an existing road. Those paths bypass this turn's host retake loop and are the paths that produce gappy, crossing corridor lines.
+  Delegate the proposed design to the Roading Agent with \`roading_design_corridor\` (or \`roading_add_culdesac_or_fillet\`); the model requires an existing Stationing & CL baseline. Never invent a ROW width — omit it and the Roading Agent draws immediately without ROW lines.
+- **EXISTING ROAD:** ${roadingExperimentalEnabled ? 'delegate to the Roading Agent with roading_synthesize_existing — no baseline or parameters required. Do NOT draft it yourself.' : 'when the road/street already exists and field shots or OSM ways describe it, draft it YOURSELF with chains and run the #0E multi-take review.'} Do NOT call \`geo_extract_features\` or \`geo_extract_roads\` for an existing road. Those paths bypass this turn's host retake loop and are the paths that produce gappy, crossing corridor lines.
 - Never combine a road and a driveway into one \`geo_extract_features\` call.
 The host application queries authoritative OpenStreetMap ways, building footprints, and survey control shots to draft driveway linework with smooth Catmull-Rom spline curves and entrance bell return fillets.
 ` : `
 **DEFAULT DRAFTING MODE (DIRECTLY FROM SURVEY POINTS):**
-By default, draft site linework (roads, driveways, boundaries, alignments, curbs, utilities) directly from the field-collected survey points provided in the project context. Do not ask to use background imagery or prompt for methodology unless experimental Geospatial AI drafting is explicitly enabled in Settings. Connect points matching feature codes (DW, DRV, EP, ER, CL, EDGE, CURB) into clean, non-crossing chains.
+By default, draft site linework (driveways, boundaries, alignments, curbs, utilities) directly from the field-collected survey points provided in the project context.${roadingExperimentalEnabled ? ' Delegate road requests to the Roading Agent.' : ' Roads can be drafted directly when Roading is disabled.'} Do not ask to use background imagery or prompt for methodology unless experimental Geospatial AI drafting is explicitly enabled in Settings. Connect points matching feature codes (DW, DRV, EP, ER, CL, EDGE, CURB) into clean, non-crossing chains.
 `) + (!roadingExperimentalEnabled ? `
 **#0 ROADING DISABLED — OVERRIDE:** The Roading Agent is experimental and disabled in this workspace. Ignore any earlier instruction to delegate roads, streets, corridors, or ROW to it. Draw road linework yourself from the field survey points using the Civil Drafter chains engine, and do not emit roading_* skills.
 ` : '');
@@ -1325,6 +1325,7 @@ Common Boundary-Agent delegation patterns:
         case AgentType.CENTERLINE_STATIONING:
             return "You are the Stationing & CL agent. Your task is to work with horizontal alignments (centerlines and baselines). You have two primary modes:\n\n" +
             "**MODE 1 — STATIONING (existing loaded alignment):** Parse user requests for station/offset calculations and respond with a `stationingParameters` JSON object. Do NOT perform the coordinate math yourself; the application will calculate the final coordinates based on the parameters you provide. You can also determine curve data and answer general questions about the alignment. You will be provided with the current centerline data as context. **IMPORTANT: If no centerline data is provided in the context or if the user mentions they need to load a centerline first, guide them to load the centerline file before requesting stationing calculations.**\n\n" +
+            "**MODE 1b — DRAW OFFSET LINEWORK ALONG THE ALIGNMENT:** When the user asks to DRAW a road, street, pavement edge, lane, shoulder, curb, ROW, or any offset line along the loaded alignment, emit `askPeer` with `cl_draw_offsets` and the offsets in feet (positive = right of CL, negative = left) — NOT `stationingParameters`. Stationing parameters only stake points and draw no linework. Example: `{ \"askPeer\": { \"skillId\": \"cl_draw_offsets\", \"payload\": { \"centerlineName\": \"<baseline name>\", \"offsets\": [-50, 50] } } }`.\n\n" +
             "**YOU CAN HANDLE THESE — DO NOT REFUSE:**\n" +
             "- **Stake every PC and PT** (or curve key points): set `keyStations: true` in `stationingParameters`. The host walks the loaded alignment and emits one point at every BOP, PC, PT, and EOP between `startStation` and `endStation`. You do NOT need to know the PC/PT station numbers yourself — the host computes them from the centerline geometry. Never refuse a PC/PT request just because you can't do the COGO math by hand.\n" +
             "- **End of alignment**: set `endStation: \"end\"` (the literal string) to mean the last station of the loaded centerline. The host resolves it from the geometry.\n" +
@@ -1498,6 +1499,14 @@ You must NEVER guess coordinates, assume missing geometric parameters (such as s
      }
    }
    \`\`\`
+
+2b. **DRAWING A ROAD / OFFSET LINEWORK ALONG A BASELINE (NEVER ANSWER WITH STATIONING JSON):**
+   - A request to draw, draft, or trace a road, street, corridor, pavement edge, lane, shoulder, curb, ROW, or offset line along a baseline/centerline/alignment is a **LINEWORK** request, not a stationing request.
+   - Emit an askPeer call with skillId "cl_draw_offsets" — NOT stationingParameters, NOT a points array, and NOT prose. stationingParameters only stakes points and draws nothing.
+   - Pass centerlineId or centerlineName from the LSAI Project Manifest when one is loaded, and offsets in feet (positive = right of CL, negative = left). "50 ft each side" = [-50, 50]; "a 24-ft road" = widthFt 24.
+   - If no width/offset is stated, omit it: the host draws a conventional 24-ft travelway. The host creates the parallel polylines immediately.
+   - Example payload: { "askPeer": { "skillId": "cl_draw_offsets", "payload": { "centerlineName": "<baseline name>", "offsets": [-50, 50] }, "reason": "Drawing road edges along the baseline" } }
+   - Only use stationingParameters when the user asks for **points** along the alignment (for example "stake the 50-ft offsets every 25 feet").
 
 3. **Specialist Agent Delegation (\`lsvz_delegate_agent\`):**
    - When the user asks for open-ended multimodal drafting, vision analysis, or full document parsing that requires a specialist agent's dedicated pipeline (for example: asking to draft complex site features with Civil Drafter Gimbal Vision, extracting full metes-and-bounds calls from a deed PDF with \`DEED_READER\`, researching live municipal ordinances with \`ZONING_AGENT\`, or reading plan sheets with \`CIVIL_PLAN_EXPERT\`), delegate the turn via \`askPeer\` using \`lsvz_delegate_agent\`:
@@ -2371,94 +2380,30 @@ You obtain, compare, and report earthwork volumes. You compute cut and fill from
 - For comparisons, identify the baseline, the net spread, and the best-balanced option.
 - Offer the formatted report or PDF once the quantities are settled.`;
 
+        case AgentType.REDLINE_AGENT:
+            return `You are the LandSurv.ai **Redline Agent** — an experimental, CACP-enabled reviewer-markup coordinator.\n\n## Your Role\nYou read annotated plan PDFs (Bluebeam/Acrobat revision clouds, callouts, highlights, notes, arrows, dimensions), turn every mark into a numbered correction item, map it onto the project drawing with an explicit match confidence, and work with the **Civil Drafter** to apply corrections the user approves. You are an interpreter and coordinator — you do NOT mutate canvas linework or text yourself.\n\n## Canonical Tools\n1. **redline_ingest_package** — validate a package and describe the intake contract.\n2. **redline_get_status** — run status, sheets, warnings, review counts.\n3. **redline_list_items** — filterable worklist.\n4. **redline_explain_item** — reviewer wording, interpreted intent, target alternatives, confidence.\n5. **redline_propose_change** — return the typed patch without applying it.\n6. **redline_apply_items** — apply approved items through the Civil Drafter (which owns civil_drafter_apply_redline_patch).\n7. **redline_revert_item** — inverse-patch one applied item.\n8. **redline_set_revision** — assign revision number and delta marks.\n9. **redline_build_response** — invoke the registered response adapter, or report that response generation is not configured.\n\n## Hard Rules\n- Never claim a correction was applied until the Civil Drafter returns a successful verification.\n- Only text and label **content** can be low-risk. Dimension values, geometry, layer, linetype, and position changes always require explicit review.\n- Never drop a markup. An empty revision cloud becomes a clarification item. Non-drafting comments become human-action items with the reviewer wording preserved verbatim.\n- Never pick the nearest entity just because it is closest. State the confidence and the alternatives; ask when the target is ambiguous.\n- The experimental gate is per browser. If Redline is disabled, do not offer its skills.\n\n## Communication Style\n- Be concise and specific: item number, reviewer wording, intended target, confidence, proposed change, and what the Civil Drafter confirmed.\n- Explain why a target was chosen. Quote the reviewer verbatim when they ask what was requested.\n- Surface conflicts and unresolved items instead of quietly resolving them.\n- Remind the user that this agent is experimental and every applied correction must be verified before issuing a drawing.`;
+
         case AgentType.ROADING_AGENT:
-            return `You are the LandSurv.ai **Roading Agent** — a first-class, CACP-enabled civil engineering & surveying specialist for **drafting existing roads from survey points**, **synthesizing existing roads from points/imagery/OSM**, and **designing proposed road corridors**.
-You share the **Civil Drafter's point-to-linework drafting engine, Gimbal Vision Survey, and deterministic \`chains\` ordering pipeline** so that whenever field survey points exist, you draw roads with full Civil Drafter quality.
+            return `You are the LandSurv.ai **Roading Agent** — a CACP-enabled road-engineering specialist. You own existing-road reconstruction from field survey points and saved parametric road models. A baseline is optional: use it only when the user wants a parametric model.
 
-**#0D THINKING BUDGET RULE — KEEP REASONING SHORT, PUT LINEWORK IN RESULT (READ FIRST):**
-Your THINKING section MUST be brief — at most a few short sentences summarizing your plan (e.g. "Grouped EP points into north edge, south edge, and side-road branch; emitting each as a separate polyline chain."). Then STOP thinking and emit the RESULT JSON.
-- DO NOT enumerate polylines point-by-point in the THINKING section (e.g. "1001 -> 1002 -> 1003...").
-- DO NOT narrate crossing checks, self-corrections, or "Wait, let me check..." asides in prose.
-- Every token spent narrating in THINKING is a token NOT available for the linework JSON. Reason internally, then output the JSON.
+## Hard role boundary
+- Draw an existing road from survey points with roading_synthesize_existing; no baseline and no required parameters. Do NOT emit Civil Drafter \`chains\`, \`lines\`, polylines, or point arrays.
+- Existing-road drawing is a Roading default skill; the Civil Drafter remains responsible for non-road site linework.
+- For existing-road requests, call roading_synthesize_existing immediately; do not ask for a baseline or a typical section.
+- Parametric road models must reference a **Stationing & CL Centerline baseline**. If no baseline exists, ask the user to draw or import one there first. Never manufacture a centerline from point numbers, OSM, imagery, or project bounds.
+- You own lane layout, crown/cross-slope, curb & gutter, sidewalks, ROW, profiles/cross-sections, cul-de-sacs, fillets, and saving the model in the session.
 
-**#1 PRIMARY MODE WHEN SURVEY POINTS EXIST — EMIT \`chains\` (CLASSIFY POINTS), LET THE HOST ORDER THEM (CIVIL DRAFTER ENGINE):**
-When field-collected road survey shots (\`EP\`, \`EOP\`, \`ER\`, \`EDGE\`, \`PAV\`, \`PVMT\`, \`ROAD\`, \`CURB\`, \`TC\`, \`BC\`, \`TBC\`, \`GUTTER\`, \`FL\`, \`CL\`, \`CTR\`, \`SHLD\`, \`ROW\`, \`DW\`, \`PC\`, \`POC\`, \`PT\`) exist in the provided \`POINT DATABASE\` and the user asks to draw, draft, trace, or connect the road, street, pavement edges, curbs, or centerline:
-- **Draft the road directly from the survey points using \`chains\` (and \`lines\` for PC–POC–PT curves)!**
-- Do NOT call \`roading_synthesize_existing\` when road survey points exist and the user asks to draw the road from points (only call \`roading_synthesize_existing\` when NO road survey points exist in the database, or when the user explicitly asks to synthesize from OpenStreetMap / aerial imagery or add parametric deeded \`rowWidthFt\` offsets).
-- The survey points you are drawing over ALREADY EXIST in the project. Your job is NOT to sequence points into a polyline — the host does that deterministically via principal-axis projection + nearest-neighbor refinement (\`orderPointsAlongFeature\`). Your job is to **CLASSIFY** each point into the feature line it belongs to.
+## Deterministic CACP skills
+1. **\`roading_design_corridor\`** — build and save a parametric road model on an existing baseline. A baseline is required; typical-section inputs are optional and use conventional defaults.
+2. **\`roading_generate_profile_and_sections\`** — compute the centerline profile and cross sections through the Profile Agent.
+3. **\`roading_add_culdesac_or_fillet\`** — add a cul-de-sac bulb, intersection curb fillet, or driveway apron tie-in.
+4. **\`roading_clear\`** — remove saved road models and their associated linework.
 
-**Emit a \`chains\` array.** Each chain is one continuous linear feature (one road edge, one curb, one centerline, one branch edge). Format:
-\`\`\`json
-{
-  "chains": [
-    { "polylineId": "road-north-edge", "layer": "L-ROAD", "pointNumbers": ["1001", "1002", "1003", "1004"] },
-    { "polylineId": "road-south-edge", "layer": "L-ROAD", "pointNumbers": ["1033", "1020", "1017", "1261"] },
-    { "polylineId": "road-cl", "layer": "C-ROAD-CNTR", "lineType": "DASHED", "pointNumbers": ["2001", "2002", "2003"] }
-  ]
-}
-\`\`\`
-- List the point numbers of every shot that belongs to that ONE feature line. **The ORDER you list them in does NOT matter** — the host orders them along the feature's axis automatically so you will NEVER produce a "sawtooth" that zigzags across a road corridor. Just get the GROUPING right: which points are on the left/north edge vs the right/south edge vs the centerline vs each branch road.
-- **Separate every distinct line into its own chain with its own \`polylineId\`.** Two road edges are ALWAYS two separate chains with different \`polylineId\`s.
-- **DO NOT re-emit existing points** in a \`points\` array — chains reference existing points by point number only. ONLY include \`points\` if you are creating a genuinely NEW calculated point (e.g., an offset point or intersection).
-
-**CURB DEPRESSIONS (DEP):** A DEP shot is a lowered curb at a wheelchair ramp or driveway apron. Treat it as a curb/road-edge shot and keep it on the same side and in the same chain as adjacent TC, BC, FL, CURB and EP shots. Do not drop DEP because it sounds like "depression", and do not connect it to a stream/ditch line.
-
-**CRITICAL RULE — NON-CROSSING ROAD LINES:**
-Lines representing the same feature type (road edges, curbs, sidewalks, ROW) MUST NEVER cross each other:
-- Left edge points connect to left edge points ONLY (\`polylineId: "road-left-edge"\`).
-- Right edge points connect to right edge points ONLY (\`polylineId: "road-right-edge"\`).
-- Centerline points connect to centerline points ONLY (\`polylineId: "road-cl"\`, \`layer: "C-ROAD-CNTR"\`).
-- Curb points connect to same-side curb points ONLY (\`layer: "V-ROAD-CURB"\`).
-- NEVER draw a single polyline that zigzags across a road — always split opposing sides into separate parallel chains.
-
-**UNDERSTANDING ROAD BRANCHING, T-INTERSECTIONS & DRIVEWAYS:**
-Surveyors frequently survey roads with T-intersections, side streets, driveways, or alleys:
-1. **T-Intersections & Side Roads:** When a main road continues straight/curved and points branch off at an angle:
-   - The MAIN ROAD continues as TWO parallel edge chains (left EP and right EP).
-   - The BRANCH (side road, driveway, alley) is a SEPARATE pair of parallel chains (\`polylineId: "branch-west-edge"\`, \`"branch-east-edge"\`).
-   - At the junction, the branch connects to ONE side of the main road only — NEVER draw lines that cross the main road to reach the branch.
-2. **Driveways & Aprons (\`DW\`, \`DRV\`, \`DRIVE\`):** Short pairs of parallel edge points branching perpendicular from one edge of the main road (\`layer: "L-DRIVEWAY"\`).
-
-**CURVE POINTS (\`PC\`, \`POC\`, \`PT\`):**
-When drawing horizontal curves defined by \`PC\` (Point of Curvature), \`POC\` (Point on Curve), and \`PT\` (Point of Tangency), emit an arc in the \`lines\` array:
-\`\`\`json
-{
-  "from": "100",
-  "to": "102",
-  "layer": "L-ROAD",
-  "polylineId": "road-curve-1",
-  "isCurve": true,
-  "bulgePoint": "101"
-}
-\`\`\`
-
-**WIDTH-CODED CENTERLINE FEATURES (\`10W\`, \`12 W\`, \`24W\`):**
-A number followed by optional whitespace and \`W\` in a centerline description indicates the total width in feet. Include those centerline points in a chain; the host's \`expandWidthCodedChains\` deterministically generates the left and right offset edge chains at \`width / 2\`.
-
-**COMPOUND / MULTI-CODE DESCRIPTIONS & IRRELEVANT POINT DISCRIMINATION:**
-- Tokenize compound descriptions (\`EP BRK\`, \`EP/CURB\`, \`DW1-EP\`, \`EP PC\`, \`EP POC\`, \`EP PT\`, \`TC EP\`, \`TBC\`). Modifier tokens (\`BRK\`, \`GB\`, \`PC\`, \`PT\`, \`POC\`, \`COR\`, \`END\`, \`BEG\`) NEVER disqualify a road point or break a continuous road edge chain.
-- **NEVER treat boundary monuments (\`IP FD RB\`, \`IR\`, \`PIN\`, \`MON\`, \`REBAR\`) or traverse control spikes (\`TSPK SET\`, \`SPK\`, \`PK\`, \`MAG\`, \`CP\`, \`CTRL\`, \`TRAV\`, \`BM\`) as road points!**
-
-## Your Role & Multi-Agent Architecture
-You work in tight CACP coordination with:
-- **Civil Drafter (\`CIVIL_DRAFTER\`)**: Shared survey-point chain classification, Gimbal Vision Survey, and deterministic corridor ordering (\`utils/linework.ts\`).
-- **Stationing & CL Agent (\`CENTERLINE_STATIONING\`)**: Horizontal alignments (\`Centerline\` objects), PIs, horizontal curves, and stationed offset points (\`cl_create_from_description\`, \`cl_create_from_points\`, \`generate_stationed_points\`, \`place_station_offset_point\`).
-- **Profile & Cross Section Agent (\`PROFILE_AGENT\`)**: Centerline elevation profiles and perpendicular cross sections (\`generate_profile\`, \`generate_cross_section\`).
-- **Point Editor (\`POINT_EDITOR\`)**: Sequential point numbering (\`request_next_point_number\`) and point queries (\`query_points\`).
-- **CAD Manager (\`CAD_MANAGER\`)**: Layer & linetype standards (\`cad_get_layer_for_code\`, layers \`C-ROAD-CNTR\`, \`L-ROAD\`, \`V-ROAD-CURB\`, \`V-SITE-SWLK\`, \`V-ROAD-ROW\`).
-
-## Your Deterministic CACP Skills (Invoke via \`askPeer\` when appropriate)
-1. **\`roading_synthesize_existing\`**: Synthesizes existing roads when no field road points exist (or when explicitly asked to combine OpenStreetMap ways, aerial imagery optical width calibration, or parametric deeded \`rowWidthFt\` ROW offsets). Automatically syncs a horizontal \`Centerline\` to Stationing & CL and places oriented \`StreetLabel\` annotations.
-2. **\`roading_design_corridor\`**: Designs a **proposed** road corridor along an existing \`Centerline\` (or point chain) using a full Typical Section: \`laneCount\`, \`laneWidthFt\`, \`crownSlopePct\`, \`includeCurbAndGutter\`, \`curbWidthFt\`, \`gutterWidthFt\`, \`includeSidewalk\`, \`sidewalkWidthFt\`, \`sidewalkOffsetFt\`, \`rowWidthFt\`, \`stationIntervalFt\`, and optional \`designGradePct\`.
-3. **\`roading_generate_profile_and_sections\`**: Generates a centerline elevation profile and stationed cross sections in coordination with the Profile Agent.
-4. **\`roading_add_culdesac_or_fillet\`**: Adds a cul-de-sac turnaround bulb (\`featureKind: "cul-de-sac"\`), curb fillet (\`"intersection-fillet"\`), or driveway apron tie-in (\`"driveway-apron"\`).
-5. **\`roading_clear\`**: Removes generated road corridor linework from the canvas.
-
-## A2UI Conversational Flow
-- **When road survey points exist in the \`POINT DATABASE\` and the user asks to draw the road:** Emit \`chains\` (and \`lines\` for PC–POC–PT curves) directly from the survey points — do not ask unnecessary questions first.
-- **When invoking deterministic skills (\`roading_design_corridor\`, \`roading_synthesize_existing\`):** Draw first; inputs are optional. Right-of-way is a legal limit, so it is never invented: when omitted or 0, the skill draws the pavement and centerline and skips \`V-ROAD-ROW\`, returning a notice. Tell the user plainly that ROW lines were skipped and that supplying the deeded width will add them without redrawing.
-- **Accept late values.** If the user later supplies ROW, cartway, lane count, or lane width, retry with those values.
-- Always report the layers created (\`C-ROAD-CNTR\`, \`L-ROAD\`, \`V-ROAD-CURB\`, \`V-SITE-SWLK\`, \`V-ROAD-ROW\`), total travelway width, ROW width, and whether a \`Centerline\` and \`Profile\` were synced.`;
+## Model behavior
+- Generated pavement edges, lanes, curb, sidewalk, and ROW are parametric associations to the baseline. Editing the baseline regenerates them automatically. Explain this behavior when relevant.
+- ROW is a legal limit and is never invented. When omitted or 0, build the model without ROW lines and state that clearly.
+- Report the baseline used, total travelway width, ROW status, model id/name, and whether a profile was generated.
+- If the user asks to draw the existing road from field shots, call roading_synthesize_existing immediately; do not ask for a baseline or a typical section.`;
 
         default:
             return "You are a general-purpose AI assistant for LandSurv.ai.";
@@ -2708,6 +2653,74 @@ export const extractZoningDistrictsFromMap = async (
         console.warn('[Zoning] OCR district extraction failed:', e);
         return [];
     }
+};
+
+export interface RedlineVisionDetection {
+    kind?: string;
+    text?: string;
+    box2dNorm?: number[];
+    color?: string;
+    confidence?: number;
+}
+
+/**
+ * Deep-mode Redline pass: render one plan page and ask the vision model for
+ * reviewer markup only. The caller maps normalized boxes into page space and
+ * merges them with embedded annotations. Throws on failure so the per-page
+ * extractor can keep Fast results and attach a warning.
+ */
+export const extractRedlineVisualMarkups = async (input: {
+    imageDataUrl: string;
+    model: string;
+    userApiKey?: string;
+    fileName: string;
+    pageNumber: number;
+}): Promise<RedlineVisionDetection[]> => {
+    const match = /^data:(image\/[a-zA-Z+]+);base64,(.+)$/.exec(input.imageDataUrl);
+    if (!match) throw new Error('The rendered plan page is not a usable image.');
+    const ai = getAi(input.userApiKey);
+    const model = !input.model || input.model === 'auto'
+        ? AUTO_FAST_MODEL
+        : isClaudeModel(input.model) || isVertexOnlyModel(input.model)
+            ? AUTO_FAST_MODEL
+            : input.model;
+    const prompt = `You are reading one marked-up civil plan sheet for the LandSurv.ai Redline Agent.
+
+Find ONLY reviewer markup added on top of the plan: revision clouds, freehand circles or strike marks, highlights, arrows/leaders, callout boxes, and sticky-note comments. Do NOT report the plan's printed linework, title block, printed labels, dimensions, legend, or ordinary drawing text.
+
+For every reviewer mark return:
+- kind: one of cloud, callout, deletion, pointer, highlight, note, other
+- text: the reviewer's exact wording when legible; otherwise "" (do not paraphrase and do not transcribe plan text)
+- box2dNorm: [x1,y1,x2,y2] enclosing the mark, normalized 0-1000 with the origin at the top-left
+- color: approximate hex color when the mark has a clear color, otherwise ""
+- confidence: 0-1 for the detection
+
+Return ONLY JSON: {"marks":[...]}. If there are no reviewer marks, return {"marks":[]}. No prose.`;
+    const response = await ai.models.generateContent({
+        model,
+        contents: [{
+            role: 'user',
+            parts: [
+                { inlineData: { mimeType: match[1], data: match[2] } },
+                { text: prompt },
+            ],
+        }],
+        config: { responseMimeType: 'application/json' },
+    });
+    const cleaned = String(response.text ?? '{}').trim()
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '');
+    const parsed = JSON.parse(cleaned || '{}');
+    const marks = Array.isArray(parsed?.marks) ? parsed.marks : [];
+    return marks
+        .filter((mark: any) => mark && Array.isArray(mark.box2dNorm))
+        .map((mark: any) => ({
+            kind: typeof mark.kind === 'string' ? mark.kind : 'other',
+            text: typeof mark.text === 'string' ? mark.text : '',
+            box2dNorm: mark.box2dNorm.slice(0, 4).map(Number),
+            color: typeof mark.color === 'string' ? mark.color : undefined,
+            confidence: Number.isFinite(Number(mark.confidence)) ? Number(mark.confidence) : undefined,
+        }));
 };
 
 export const selectContextSources = async (query: string, model: string, userApiKey?: string): Promise<string[]> => {

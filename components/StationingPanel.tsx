@@ -1,13 +1,14 @@
 
 import React, { useState, useCallback, useMemo } from 'react';
-import { type Centerline, type CenterlinePI, AgentType, type Settings } from '../types';
+import { type Centerline, type CenterlinePI, type ParametricAssociation, AgentType, type Settings } from '../types';
 import { calculatePointFromStationOffset, parseStation, formatStation } from '../utils/stationing';
+import { createCenterlineStationPointAssociation } from '../services/parametricAssociations';
 import { useErrorReporter } from '../contexts/AppStateContext';
 
 interface StationingPanelProps {
   centerlines: Centerline[];
   onUpdateCenterline: (updatedCenterline: Centerline) => void;
-  onPlacePoint: (northing: number, easting: number, pointNumber: string, description: string) => void;
+  onPlacePoint: (northing: number, easting: number, pointNumber: string, description: string, parametricAssociation?: ParametricAssociation) => void;
   activeAgent: AgentType;
   settings: Settings;
 }
@@ -73,11 +74,17 @@ const StationingPanel: React.FC<StationingPanelProps> = ({ centerlines, onUpdate
     const coords = calculatePointFromStationOffset(activeCL, stationNum, finalOffset);
 
     if (coords) {
+        const description =
+            stationing.description ||
+            `STA ${stationing.station} OFF ${Math.abs(offsetNum)}' ${stationing.isRight ? 'RT' : 'LT'}`;
         onPlacePoint(
-            coords.northing, 
-            coords.easting, 
-            stationing.pointNumber || `STK-${stationing.station.replace('+','')}`, 
-            stationing.description || `STA ${stationing.station} OFF ${Math.abs(offsetNum)}' ${stationing.isRight ? 'RT' : 'LT'}`
+            coords.northing,
+            coords.easting,
+            stationing.pointNumber || `STK-${stationing.station.replace('+','')}`,
+            description,
+            createCenterlineStationPointAssociation(activeCL, stationNum, finalOffset, {
+                label: description,
+            }),
         );
         setStationing(prev => ({ ...prev, pointNumber: '', description: '' }));
     } else {

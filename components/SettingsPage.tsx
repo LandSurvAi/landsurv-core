@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { XMarkIcon, AdjustmentsHorizontalIcon, CogIcon } from './icons.tsx';
 import { AgentType, type Settings, type NtripSettings, type JobInfo, type PointLabelingSettings } from '../types.ts';
-import { agentConfig } from '../constants/agents.ts';
+import { agentConfig, agentThemeColors } from '../constants/agents.ts';
 import { projectionStates, projectionZones } from '../utils/projections.ts';
 import { LINEAR_UNIT_OPTIONS, getLinearUnitAbbreviation, type LinearUnit } from '../utils/linearUnits.ts';
 import { setHolidayThemeOverride } from './InitialAgentSelection.tsx';
@@ -10,7 +10,8 @@ import { PROVIDER_KEY_URLS, type ByokProvider } from '../services/providerKeys.t
 import { WebGpuBasemap, isWebGpuEnabled, getGpuPowerPreference, probeWebGpuAdapter, WEBGPU_ENABLED_KEY, WEBGPU_POWER_KEY, WEBGPU_PREF_EVENT, type GpuPowerPreference, type WebGpuProbeResult } from '../utils/webgpuBasemap.ts';
 import GlobalCrsPicker from './GlobalCrsPicker.tsx';
 import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnabled.ts';
-import { EXPERIMENTAL_ROADING_WARNING, EXPERIMENTAL_STORMWATER_WARNING, setExperimentalAgentEnabled } from '../utils/experimentalAgents.ts';
+import { A2UIExperimentalAgentDialog } from './A2UIExperimentalAgentDialog.tsx';
+import { EXPERIMENTAL_REDLINE_WARNING, EXPERIMENTAL_ROADING_WARNING, EXPERIMENTAL_STORMWATER_WARNING, setExperimentalAgentEnabled } from '../utils/experimentalAgents.ts';
 import { detectProjectionFromBrowser } from '../utils/autoProjection.ts';
 
 const FORCE_AGENT_OPTIONS: AgentType[] = [
@@ -101,6 +102,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
 }) => {
     const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
     const experimentalStormwaterEnabled = useExperimentalAgentEnabled(AgentType.STORMWATER_AGENT);
+    const experimentalRedlineEnabled = useExperimentalAgentEnabled(AgentType.REDLINE_AGENT);
     const [isConfirmingReset, setIsConfirmingReset] = useState(false);
     const [showScrollIndicator, setShowScrollIndicator] = useState(true);
     const [inputApiKey, setInputApiKey] = useState(settings.userApiKey || '');
@@ -116,6 +118,39 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     const [gpuPower, setGpuPower] = useState<GpuPowerPreference>(() => getGpuPowerPreference());
     const webgpuSupported = WebGpuBasemap.isSupported();
     const [gpuProbe, setGpuProbe] = useState<WebGpuProbeResult | null>(null);
+    const [expandedExperimentalAgent, setExpandedExperimentalAgent] = useState<AgentType | null>(null);
+
+    // Settings exposes the same A2UI opt-in card as the agent cards and Quick
+    // Thought, so the experimental warning stays readable in one place.
+    const renderExperimentalAgentChip = (agent: AgentType, enabled: boolean) => {
+        const isOpen = expandedExperimentalAgent === agent;
+        const accent = agentThemeColors[agent] ?? '#94a3b8';
+        return (
+            <>
+                <button
+                    type="button"
+                    data-testid={`experimental-agent-chip-${agent}`}
+                    onClick={() => setExpandedExperimentalAgent(current => (current === agent ? null : agent))}
+                    aria-expanded={isOpen}
+                    className="mt-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition hover:brightness-110"
+                    style={{ borderColor: `${accent}73`, backgroundColor: `${accent}1a`, color: accent }}
+                >
+                    {enabled ? 'Review experimental terms' : 'Review before enabling'}
+                    <span aria-hidden="true">{isOpen ? '▴' : '▾'}</span>
+                </button>
+                {isOpen && (
+                    <div className="mt-2">
+                        <A2UIExperimentalAgentDialog
+                            agent={agent}
+                            enabled={enabled}
+                            presentation="inline"
+                            onEnable={() => setExperimentalAgentEnabled(agent, true)}
+                        />
+                    </div>
+                )}
+            </>
+        );
+    };
 
     useEffect(() => {
         if (!webgpuEnabled || !webgpuSupported) {
@@ -433,7 +468,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             {/* Experimental Agents */}
             <div>
                 <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Experimental Agents</h3>
-                <div className="bg-amber-500/10 p-4 rounded-lg border border-amber-500/30 space-y-3 light-theme:bg-amber-50 light-theme:border-amber-300">
+                <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-3 light-theme:bg-gray-100 light-theme:border-gray-300">
                     <label className="flex items-center gap-3 cursor-pointer select-none">
                         <input
                             type="checkbox"
@@ -441,11 +476,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             onChange={e => setExperimentalAgentEnabled(AgentType.ROADING_AGENT, e.target.checked)}
                             className={`w-4 h-4 ${themeAccent}`}
                         />
-                        <span className="text-sm font-medium text-amber-200 light-theme:text-amber-800">Enable Roading Agent (Experimental)</span>
+                        <span className="text-sm font-medium text-gray-200 light-theme:text-gray-800">Enable Roading Agent (Experimental)</span>
                     </label>
-                    <p className="text-xs text-amber-200/80 light-theme:text-amber-800">{EXPERIMENTAL_ROADING_WARNING}</p>
+                    <p className="text-xs text-gray-300/80 light-theme:text-gray-600">{EXPERIMENTAL_ROADING_WARNING}</p>
                     <p className="text-xs text-gray-400 light-theme:text-gray-600">Off by default. While off, Roading is listed as Experimental / Off, CACP ignores it, and road requests stay with Civil Drafter.</p>
-                    <div className="border-t border-amber-500/20 pt-3 light-theme:border-amber-300">
+                    {renderExperimentalAgentChip(AgentType.ROADING_AGENT, experimentalRoadingEnabled)}
+                    <div className="border-t border-gray-600/60 pt-3 light-theme:border-gray-300">
                         <label className="flex items-center gap-3 cursor-pointer select-none">
                             <input
                                 type="checkbox"
@@ -453,10 +489,25 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                 onChange={e => setExperimentalAgentEnabled(AgentType.STORMWATER_AGENT, e.target.checked)}
                                 className={`w-4 h-4 ${themeAccent}`}
                             />
-                            <span className="text-sm font-medium text-amber-200 light-theme:text-amber-800">Enable Stormwater Agent (Experimental)</span>
+                            <span className="text-sm font-medium text-gray-200 light-theme:text-gray-800">Enable Stormwater Agent (Experimental)</span>
                         </label>
-                        <p className="mt-2 text-xs text-amber-200/80 light-theme:text-amber-800">{EXPERIMENTAL_STORMWATER_WARNING}</p>
+                        <p className="mt-2 text-xs text-gray-300/80 light-theme:text-gray-600">{EXPERIMENTAL_STORMWATER_WARNING}</p>
                         <p className="mt-1 text-xs text-gray-400 light-theme:text-gray-600">Off by default. While off, Stormwater is listed as Experimental / Off and CACP ignores its skills.</p>
+                        {renderExperimentalAgentChip(AgentType.STORMWATER_AGENT, experimentalStormwaterEnabled)}
+                    </div>
+                    <div className="border-t border-gray-600/60 pt-3 light-theme:border-gray-300">
+                        <label className="flex items-center gap-3 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={experimentalRedlineEnabled}
+                                onChange={e => setExperimentalAgentEnabled(AgentType.REDLINE_AGENT, e.target.checked)}
+                                className={`w-4 h-4 ${themeAccent}`}
+                            />
+                            <span className="text-sm font-medium text-gray-200 light-theme:text-gray-800">Enable Redline Agent (Experimental)</span>
+                        </label>
+                        <p className="mt-2 text-xs text-gray-300/80 light-theme:text-gray-600">{EXPERIMENTAL_REDLINE_WARNING}</p>
+                        <p className="mt-1 text-xs text-gray-400 light-theme:text-gray-600">On by default. While off, Redline is listed as Experimental / Off, its card raises the opt-in chip, and CACP ignores its skills.</p>
+                        {renderExperimentalAgentChip(AgentType.REDLINE_AGENT, experimentalRedlineEnabled)}
                     </div>
                 </div>
             </div>

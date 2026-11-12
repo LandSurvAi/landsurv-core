@@ -266,4 +266,68 @@ export const CL_SKILLS: SkillSchema[] = [
       'stationing_update_annotation_settings({targetBaselineName:"Baseline B", labelRotationDeg:180})',
     ],
   },
+  {
+    id: 'cl_draw_offsets',
+    name: 'Draw Offset Linework Along a Centerline / Baseline',
+    type: 'action',
+    description:
+      'Draws continuous parallel linework (road edges, pavement limits, lanes, shoulders, curbs, or ROW) ' +
+      'along a loaded centerline/baseline at fixed offsets. Use this for any request to DRAW a road, ' +
+      'street, corridor, edge, or offset line along an alignment. Do NOT use stationingParameters for a ' +
+      'drawing request — that only stakes points and draws no linework.',
+    inputs: {
+      centerlineId: {
+        type: 'string',
+        description: 'Existing Centerline ID or name. Omit to use the only/active alignment.',
+      },
+      centerlineName: {
+        type: 'string',
+        description: 'Baseline/alignment name as shown in the project manifest.',
+      },
+      offsets: {
+        type: 'array',
+        description:
+          'Offsets in feet from the centerline; positive = right, negative = left. ' +
+          'For example "50 ft each side" = [-50, 50].',
+        items: { type: 'number' },
+      },
+      widthFt: {
+        type: 'number',
+        description:
+          'Total width in feet when offsets are not supplied (for example 24 for a 24-ft road). ' +
+          'The host draws both edges at ±width/2. Defaults to a 24-ft travelway.',
+      },
+      layer: {
+        type: 'string',
+        description: 'CAD layer for the offset linework (default "L-ROAD").',
+      },
+      lineType: {
+        type: 'string',
+        description: 'Linetype for the offset linework (default "CONTINUOUS").',
+      },
+      polylinePrefix: {
+        type: 'string',
+        description: 'Optional polyline id prefix (default "cl-offset").',
+      },
+      parametric: {
+        type: 'boolean',
+        default: true,
+        description:
+          'Keep the offsets associated with the baseline. When the baseline is edited, the offset linework is regenerated automatically. Defaults to true.',
+      },
+    },
+    outputs: {
+      centerlineId: { type: 'string', required: true },
+      centerlineName: { type: 'string', required: true },
+      offsets: { type: 'array', items: { type: 'number' }, required: true },
+      addedLines: { type: 'integer', required: true },
+      layer: { type: 'string', required: true },
+    },
+    examples: [
+      // user: "Draw a road along the baseline with a 50-ft offset each side"
+      'cl_draw_offsets({centerlineName:"Main St CL", offsets:[-50, 50]})',
+      // user: "Draw a 24-ft road along the baseline"
+      'cl_draw_offsets({widthFt:24})',
+    ],
+  },
 ];

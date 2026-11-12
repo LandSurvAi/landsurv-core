@@ -47,6 +47,7 @@ interface ChatState {
   roadingChat: Chat | null;
   stormwaterChat: Chat | null;
   dirtVolumeChat: Chat | null;
+  redlineChat: Chat | null;
   
   // Chat histories (message arrays)
   rawChatHistory: ChatMessage[];
@@ -77,6 +78,7 @@ interface ChatState {
   roadingChatHistory: ChatMessage[];
   stormwaterChatHistory: ChatMessage[];
   dirtVolumeChatHistory: ChatMessage[];
+  redlineChatHistory: ChatMessage[];
   
   // Fieldbook notes
   fieldbookNotes: string;
@@ -111,6 +113,7 @@ interface ChatActions {
   setRoadingChat: (chat: Chat | null) => void;
   setStormwaterChat: (chat: Chat | null) => void;
   setDirtVolumeChat: (chat: Chat | null) => void;
+  setRedlineChat: (chat: Chat | null) => void;
   
   // Chat history setters
   setRawChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
@@ -141,6 +144,7 @@ interface ChatActions {
   setRoadingChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   setStormwaterChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   setDirtVolumeChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
+  setRedlineChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   
   // Fieldbook notes
   setFieldbookNotes: (notes: string) => void;
@@ -196,6 +200,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
   const [roadingChat, setRoadingChat] = useState<Chat | null>(null);
   const [stormwaterChat, setStormwaterChat] = useState<Chat | null>(null);
   const [dirtVolumeChat, setDirtVolumeChat] = useState<Chat | null>(null);
+  const [redlineChat, setRedlineChat] = useState<Chat | null>(null);
   
   // Chat histories
   const [rawChatHistory, setRawChatHistory] = useState<ChatMessage[]>([]);
@@ -226,6 +231,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
   const [roadingChatHistory, setRoadingChatHistory] = useState<ChatMessage[]>([]);
   const [stormwaterChatHistory, setStormwaterChatHistory] = useState<ChatMessage[]>([]);
   const [dirtVolumeChatHistory, setDirtVolumeChatHistory] = useState<ChatMessage[]>([]);
+  const [redlineChatHistory, setRedlineChatHistory] = useState<ChatMessage[]>([]);
   
   // Fieldbook notes
   const [fieldbookNotes, setFieldbookNotes] = useState<string>('');
@@ -313,6 +319,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setRoadingChat(null);
     setStormwaterChat(null);
     setDirtVolumeChat(null);
+    setRedlineChat(null);
     
     // Reset chat histories
     setRawChatHistory([]);
@@ -336,6 +343,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setRoadingChatHistory([]);
     setStormwaterChatHistory([]);
     setDirtVolumeChatHistory([]);
+    setRedlineChatHistory([]);
     
     // Reset fieldbook notes
     setFieldbookNotes('');
@@ -370,6 +378,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     roadingChat,
     stormwaterChat,
     dirtVolumeChat,
+    redlineChat,
     rawChatHistory,
     deedChatHistory,
     dxfChatHistory,
@@ -398,6 +407,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     roadingChatHistory,
     stormwaterChatHistory,
     dirtVolumeChatHistory,
+    redlineChatHistory,
     fieldbookNotes,
     
     // Setters
@@ -428,6 +438,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setRoadingChat,
     setStormwaterChat,
     setDirtVolumeChat,
+    setRedlineChat,
     setRawChatHistory,
     setDeedChatHistory,
     setDxfChatHistory,
@@ -456,6 +467,7 @@ export const ChatStateProvider: React.FC<ChatStateProviderProps> = ({ children }
     setRoadingChatHistory,
     setStormwaterChatHistory,
     setDirtVolumeChatHistory,
+    setRedlineChatHistory,
     setFieldbookNotes,
     
     // Helpers

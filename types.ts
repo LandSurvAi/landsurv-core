@@ -58,6 +58,7 @@ export enum AgentType {
   ROADING_AGENT = 'ROADING_AGENT',
   STORMWATER_AGENT = 'STORMWATER_AGENT',
   DIRT_VOLUME_AGENT = 'DIRT_VOLUME_AGENT',
+  REDLINE_AGENT = 'REDLINE_AGENT',
 }
 
 // FUTURE GEMINI: This type defines the available panels in the main view area.
@@ -245,6 +246,7 @@ export type A2UIWorkspaceToolId =
   | 'roading-panel'
   | 'stormwater-quick-check'
   | 'dirt-volume-panel'
+  | 'redline-workspace'
   | 'road-paint-studio'
   | 'tin-surfaces'
   | 'point-tools'
@@ -321,6 +323,7 @@ export type A2UIWidgetType =
   | 'image-upload'
   | 'centerline-upload'
   | 'roading-intake'
+  | 'redline-upload'
   | 'roading-designer'
   | 'cad-manager-intake'
   | 'cad-manager-workspace'
@@ -339,6 +342,7 @@ export type A2UIWidgetType =
   | 'cacp-manifests'
   | 'cacp-inspector'
   | 'settings'
+  | 'experimental-agent'
   | 'key-entry'
   | 'properties'
   | 'help'
@@ -722,6 +726,14 @@ export interface A2UISoilLimitationsSpec {
   boundaryAdvisory?: string;
 }
 
+/** Copy and capability list for the A2UI experimental-agent opt-in dialog. */
+export interface A2UIExperimentalAgentSpec {
+  label: string;
+  summary: string;
+  warning: string;
+  capabilities: string[];
+}
+
 export interface A2UIPayload {
   /** Surface kind: inquisitive prompt, upload/intake widget, data explorer, or bridge surface. */
   kind:
@@ -746,6 +758,7 @@ export interface A2UIPayload {
     | 'cacp-manifests'
     | 'cacp-inspector'
     | 'settings'
+    | 'experimental-agent'
     | 'key-entry'
     | 'properties'
     | 'workspace-tool'
@@ -758,6 +771,8 @@ export interface A2UIPayload {
   widgetType: A2UIWidgetType;
   /** Current lifecycle state of the A2UI surface */
   status?: 'prompting' | 'expanded' | 'completed' | 'dismissed';
+  /** Keep this prompt in Quick Thought; the chat feed shows the message without the surface. */
+  quickThoughtOnly?: boolean;
   /** Optional summary displayed once completed */
   completedSummary?: string;
   /** Deed summary bound to a chat-hosted boundary summary surface. */
@@ -794,6 +809,8 @@ export interface A2UIPayload {
   settingsSummary?: A2UISettingsSummary;
   /** Specific settings section focused inside the interactive settings surface. */
   settingsSection?: A2UISettingsSection;
+  /** Copy for the experimental-agent opt-in dialog and Quick Thought chip. */
+  experimentalAgent?: A2UIExperimentalAgentSpec;
   /** Credential source to emphasise in the inline key-entry surface. */
   keyEntry?: A2UIKeyEntrySpec;
   /** Live property snapshot for the current selection. */
@@ -805,7 +822,7 @@ export interface A2UIPayload {
   /** Initial manifest selection for an in-chat CACP explorer. */
   cacpManifests?: { initialAgent?: AgentType };
   /** Roading Agent intake/design parameters bound to the A2UI surface. */
-  roadingDesign?: Partial<RoadTypicalSection & { mode?: 'existing-synthesis' | 'corridor-design'; centerlineId?: string }>;
+  roadingDesign?: Partial<RoadTypicalSection & { mode?: 'existing-synthesis' | 'corridor-design' | 'road-model'; centerlineId?: string }>;
 }
 
 /** Live state for the LSAI-owned project-location A2UI surface. */
@@ -844,9 +861,75 @@ export interface ChatMessage {
   /** A2UI (Agent-to-UI) interactive surface embedded directly in the chat message */
   a2ui?: A2UIPayload;
   sources?: any[];
+  /** Agent whose domain behavior produced this message (LSAI for plain turns). */
+  behaviorAgent?: AgentType;
+  /** LSAI-voiced call-in or release marker in the single visible thread. */
+  callInEvent?: {
+    kind: 'called-in' | 'released';
+    agent: AgentType;
+  };
+  /** Set when a specialist composed the body and LSAI relayed it. */
+  relay?: {
+    /** The specialist LSAI addressed. */
+    agent: AgentType;
+    /** Final composer when a CACP hand-off happened inside the relay. */
+    composedBy?: AgentType;
+    model?: string;
+    status: 'streaming' | 'complete' | 'failed' | 'stopped';
+    label?: string;
+  };
 }
 
 export type PointSymbol = 'circle' | 'square' | 'triangle' | 'cross' | 'x';
+
+/**
+ * A live link between generated linework and the geometry that defines it.
+ *
+ * Centerline offsets and station/offset points are the first two kinds: when
+ * the baseline is edited, the associated polyline or point is regenerated from
+ * the stored parameters rather than being treated as dumb CAD geometry. Future
+ * kinds can add station ranges, widening transitions, or attachments to other
+ * source objects without changing the entity storage model.
+ */
+export type ParametricAssociationKind = 'centerline-offset' | 'centerline-station-point';
+
+interface ParametricAssociationBase {
+  /** Stable id shared by every segment of this generated geometry. */
+  id: string;
+  kind: ParametricAssociationKind;
+  sourceType: 'centerline';
+  sourceId: string;
+  sourceName?: string;
+  /** Road model or manual drawing session that owns this association. */
+  ownerKind?: 'road-model' | 'manual';
+  ownerId?: string;
+  label?: string;
+  /** Geometry signature of the baseline this geometry was last built from. */
+  sourceSignature?: string;
+}
+
+/** Parallel linework generated at a fixed perpendicular offset from a baseline. */
+export interface CenterlineOffsetAssociation extends ParametricAssociationBase {
+  kind: 'centerline-offset';
+  /** Positive offsets are right of the baseline direction of travel. */
+  offsetFt: number;
+  layer: string;
+  lineType: string;
+  /** Prefix used to name the generated polyline segments. */
+  polylinePrefix: string;
+}
+
+/** A point placed at a fixed station/offset on a baseline. */
+export interface CenterlineStationPointAssociation extends ParametricAssociationBase {
+  kind: 'centerline-station-point';
+  station: number;
+  /** Positive offsets are right of the baseline direction of travel. */
+  offsetFt: number;
+}
+
+export type ParametricAssociation =
+  | CenterlineOffsetAssociation
+  | CenterlineStationPointAssociation;
 
 export interface SurveyPoint {
   pointNumber: string;
@@ -865,6 +948,8 @@ export interface SurveyPoint {
   latitude?: number; // Optional geographic coordinates
   longitude?: number; // Optional geographic coordinates
   layer?: string; // CAD layer this point belongs to (from CAD Manager standard)
+  /** Live parametric link; this point is rebuilt when its source changes. */
+  parametricAssociation?: ParametricAssociation;
   hidden?: boolean; // When true, hidden from canvas/exports — toggled by Boundary visibility (drawn + associated points).
 }
 
@@ -899,6 +984,8 @@ export interface SurveyLine {
   /** Per-entity linetype scale multiplier (AutoCAD CELTSCALE equivalent). 1.0 = no change. */
   lineTypeScale?: number;
   polylineId?: string; // Groups connected line segments into a single polyline for C3D export
+  /** Live parametric link; associated linework is rebuilt when its source changes. */
+  parametricAssociation?: ParametricAssociation;
   hidden?: boolean; // When true, hidden from canvas/exports
   /** ID of the ContourGeneration that produced this line (survey-generated contours). */
   contourGenId?: string;
@@ -2622,16 +2709,21 @@ export interface RoadTypicalSection {
 export interface RoadCorridorRun {
     id: string;
     name: string;
-    mode: 'existing-synthesis' | 'corridor-design';
+    /** Old sessions may still contain the legacy 'existing-synthesis' mode. */
+    mode: 'existing-synthesis' | 'corridor-design' | 'road-model';
+    /** Baseline this road model is built on. Required for parametric models; point-driven existing-road runs may omit it. */
     centerlineId?: string;
     typicalSection: RoadTypicalSection;
     culDeSacRadiusFt?: number;
     filletRadiusFt?: number;
     drawnPointIds: string[];
     drawnLineIds: string[];
+    /** Parametric associations owned by this model. */
+    associationIds?: string[];
     roadNames?: string[];
     profileGenerated?: boolean;
     createdAt: string;
+    updatedAt?: string;
 }
 
 export type ToolWorkflowId = 'points' | 'underlays';
@@ -2641,6 +2733,231 @@ export interface ToolWorkflowProgress {
     started: boolean;
     panelSeen: boolean;
     dismissedKey: string | null;
+}
+
+// =============================================================================
+// Redline Agent — marked-up plan intake, worklist, review, and revision record.
+// =============================================================================
+
+export type RedlineRunStatus =
+  | 'draft' | 'interpreting' | 'ready' | 'applying' | 'complete' | 'cancelled';
+
+export type RedlineReadingMode = 'fast' | 'deep';
+
+export type RedlineItemStatus =
+  | 'proposed'
+  | 'needs_clarification'
+  | 'approved'
+  | 'rejected'
+  | 'deferred'
+  | 'human_action'
+  | 'blocked'
+  | 'applied'
+  | 'verified'
+  | 'superseded';
+
+export type RedlineRisk = 'low' | 'standard';
+export type RedlineConfidence = 'high' | 'medium' | 'low';
+
+export type RedlineMarkupKind =
+  | 'callout' | 'abbreviation' | 'deletion' | 'pointer' | 'cloud'
+  | 'dimension' | 'highlight' | 'note' | 'non_drafting' | 'other';
+
+export type RedlineChangeKind =
+  | 'text_content'
+  | 'dimension_text'
+  | 'text_style'
+  | 'annotation_position'
+  | 'layer'
+  | 'linetype'
+  | 'geometry_move'
+  | 'geometry_trim'
+  | 'entity_delete'
+  | 'entity_add'
+  | 'revision_stamp'
+  | 'none';
+
+export interface RedlineSheetRegistration {
+  /** PDF user-space points after /Rotate, with the y-axis flipped to bottom-left. */
+  pdfA: { x: number; y: number };
+  pdfB: { x: number; y: number };
+  worldA: { easting: number; northing: number };
+  worldB: { easting: number; northing: number };
+  /** Project units per PDF point. */
+  scale: number;
+  /** Radians, counter-clockwise. */
+  rotation: number;
+  translation: { easting: number; northing: number };
+  /** True when scale/rotation/shape sanity checks pass. */
+  valid: boolean;
+  warnings: string[];
+  calibratedAt: string;
+}
+
+export interface RedlineSheet {
+  id: string;
+  /** Session file name of the source PDF. */
+  fileId: string;
+  fileName: string;
+  pageIndex: number;
+  /** PDF page size in points, after rotation. */
+  pageWidth: number;
+  pageHeight: number;
+  registration: RedlineSheetRegistration | null;
+  markupCount: number;
+  itemCount: number;
+}
+
+export interface RedlineMarkup {
+  id: string;
+  sheetId: string;
+  /** Annotation object subtype or 'visual' for Deep-mode detections. */
+  subtype: string;
+  /** Verbatim reviewer text; never paraphrased. */
+  rawText: string;
+  author?: string;
+  color?: string;
+  /** PDF-space rect [x1, y1, x2, y2] in top-left page space. */
+  rect: [number, number, number, number];
+  /** Normalized 0–1000 box for visual marks. */
+  box2dNorm?: [number, number, number, number];
+  kind: RedlineMarkupKind;
+  /** Stable source reference: annotation id, or visual-<hash>. */
+  sourceRef: string;
+}
+
+export interface RedlineTarget {
+  entityType: 'point' | 'line' | 'text' | 'hatch' | 'centerline' | 'contour';
+  entityId: string;
+  /** Human-readable label used in the worklist. */
+  label: string;
+  /** 0–1 combined geometric, label, layer, and direction score. */
+  matchConfidence: number;
+  alternatives?: Array<{ entityType: string; entityId: string; label: string; score: number }>;
+  /** True when the user corrected the target during review. */
+  correctedByUser?: boolean;
+}
+
+/** Read-only canvas projection of an unapplied worklist item. */
+export interface RedlineGhost {
+  id: string;
+  number: string;
+  sheetId: string;
+  anchor: { easting: number; northing: number };
+  reviewerText: string;
+  targetLabel: string;
+  action: string;
+  kind: 'text' | 'delete' | 'review';
+  beforeText?: string;
+  afterText?: string;
+  status: RedlineItemStatus;
+  confidence: RedlineConfidence;
+}
+
+export interface RedlinePatchOp {
+  op: 'update_text' | 'update_style' | 'update_layer' | 'update_linetype'
+    | 'move_entity' | 'trim_entity' | 'delete_entity' | 'add_entity';
+  entityType: RedlineTarget['entityType'];
+  entityId: string;
+  /** Full values before the change, for inverse apply. */
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+}
+
+export interface RedlineItem {
+  id: string;
+  number: string;
+  sheetId: string;
+  markupIds: string[];
+  reviewerText: string[];
+  interpretedIntent: string;
+  markupKind: RedlineMarkupKind;
+  changeKind: RedlineChangeKind;
+  risk: RedlineRisk;
+  target: RedlineTarget | null;
+  proposal: RedlinePatchOp[] | null;
+  status: RedlineItemStatus;
+  confidence: RedlineConfidence;
+  question?: string;
+  conflictWith?: string[];
+  humanActionNote?: string;
+  revision?: { number: number; delta: number; label: string };
+  notes: string;
+  manual?: boolean;
+  createdAt: string;
+  decidedAt?: string;
+  appliedAt?: string;
+  proposedAt: string;
+}
+
+export interface RedlineRunMetrics {
+  itemsProposed: number;
+  itemsAccepted: number;
+  itemsRejected: number;
+  itemsEdited: number;
+  itemsDeferred: number;
+  itemsHumanAction: number;
+  autoApplied: number;
+  autoAppliedReverted: number;
+  targetCorrected: number;
+  meanMatchConfidence: number;
+  timeToFirstDecisionMs?: number;
+  totalReviewMs?: number;
+}
+
+export interface RedlineRun {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  status: RedlineRunStatus;
+  mode: RedlineReadingMode;
+  sheets: RedlineSheet[];
+  markups: RedlineMarkup[];
+  items: RedlineItem[];
+  revision: {
+    baseRevision: number;
+    assignedRevision: number;
+    description: string;
+    by?: string;
+    checkedBy?: string;
+    date: string;
+  };
+  metrics: RedlineRunMetrics;
+  /** Session file names of the uploaded package, for the response adapter. */
+  sourceFileIds: string[];
+  warnings: string[];
+  /** Review preferences captured at run creation. */
+  options?: {
+    autoApplyLowRisk?: boolean;
+    precedence?: 'reviewer' | 'standard' | 'ask';
+  };
+}
+
+export interface RedlineResponseManifest {
+  runId: string;
+  items: Array<{
+    number: string;
+    reviewerText: string;
+    disposition: 'done' | 'not_done' | 'see_note' | 'deferred' | 'human_action';
+    responseText: string;
+    revision?: { number: number; delta: number };
+    sheet: { fileId: string; pageIndex: number };
+  }>;
+  revision: RedlineRun['revision'];
+}
+
+export interface RedlineResponsePackage {
+  blob: Blob;
+  fileName: string;
+  mimeType: string;
+  manifest: RedlineResponseManifest;
+}
+
+export interface RedlineResponseAdapter {
+  id: string;
+  label: string;
+  isAvailable(run: RedlineRun): boolean;
+  build(run: RedlineRun, sourceFiles: SessionFile[]): Promise<RedlineResponsePackage>;
 }
 
 export interface SessionState {
@@ -2680,6 +2997,8 @@ export interface SessionState {
     steepSlopeRuns?: SteepSlopeRunResult[];
     /** Saved Roading Agent synthesis & corridor design runs. */
     roadCorridors?: RoadCorridorRun[];
+    /** Redline Agent runs (marked-up plan packages, worklists, decisions). */
+    redlineRuns?: RedlineRun[];
     /** Street-name labels placed on the plan (v26.05.19.4). Each label is a
      *  rotated text annotation aligned to the nearest road bearing, derived
      *  from OpenStreetMap road geometry within the inclusion boundary. */
@@ -2748,6 +3067,7 @@ export interface SessionState {
     soilsChatHistory?: ChatMessage[];
     structuresChatHistory?: ChatMessage[];
     roadingChatHistory?: ChatMessage[];
+    redlineChatHistory?: ChatMessage[];
     standardsComplianceChatHistory?: ChatMessage[];
     /** @deprecated use standardsComplianceControlFiles — kept for loading older saved sessions. */
     standardsComplianceControlFile?: SessionFile | null;

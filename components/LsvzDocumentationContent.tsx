@@ -1,291 +1,531 @@
-
-import React, { useEffect } from 'react';
-import { ContainerIcon, InteroperabilityIcon, OpenHandsIcon, BrainCircuitIcon } from './icons';
-import { LSVZ_SCHEMA, renderExampleManifest, lsvzFieldCount, LSVZ_SPEC_VERSION, LSVZ_SPEC_RELEASE } from '../utils/lsvzSchema';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Archive,
+  Check,
+  ChevronDown,
+  Copy,
+  ExternalLink,
+  FileJson,
+  Link2,
+  Search,
+  ShieldCheck,
+  Waypoints,
+} from 'lucide-react';
+import {
+  LSVZ_SCHEMA,
+  renderExampleManifest,
+  lsvzFieldCount,
+  LSVZ_SPEC_VERSION,
+  LSVZ_SPEC_RELEASE,
+} from '../utils/lsvzSchema';
 import { APP_VERSION } from '../utils/appVersion';
 
-// The example manifest and the per-field tables below are generated from
-// utils/lsvzSchema.ts, which is compile-time checked against the SessionState
-// type in types.ts. When a developer adds a new field to SessionState, the
-// TypeScript build fails until they document it in LSVZ_SCHEMA — so this page,
-// the SEO landing, and any AI assistant citing the spec stay in sync
-// automatically.
 const exampleManifest = renderExampleManifest(APP_VERSION);
+const fieldCount = lsvzFieldCount();
+
+const TOC = [
+  { id: 'lsvz-overview', label: 'Overview' },
+  { id: 'lsvz-principles', label: 'Design principles' },
+  { id: 'lsvz-archive', label: 'Archive layout' },
+  { id: 'lsvz-manifest', label: 'Manifest schema' },
+  { id: 'lsvz-interop', label: 'CACP & A2UI' },
+  { id: 'lsvz-provenance', label: 'Provenance' },
+  { id: 'lsvz-compatibility', label: 'Compatibility' },
+  { id: 'lsvz-license', label: 'Licensing' },
+];
+
+const INITIAL_OPEN_GROUPS = new Set(['top', 'context', 'files', 'cacp', 'redline']);
+
+const SectionHeading: React.FC<{ index: string; title: string; kicker?: string }> = ({ index, title, kicker }) => (
+  <div className="mb-5 flex items-start gap-3">
+    <span className="mt-0.5 font-mono text-[10px] font-bold tracking-[0.16em] text-cyan-400">{index}</span>
+    <div>
+      <h2 className="text-xl font-bold tracking-tight text-white sm:text-2xl">{title}</h2>
+      {kicker && <p className="mt-1 text-sm text-gray-400">{kicker}</p>}
+    </div>
+  </div>
+);
+
+const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <div className="rounded-lg border border-white/[0.08] bg-slate-950/55 px-3 py-3">
+    <p className="font-mono text-[9px] font-semibold uppercase tracking-[0.14em] text-gray-500">{label}</p>
+    <p className="mt-1 truncate font-mono text-sm font-semibold text-cyan-200">{value}</p>
+  </div>
+);
 
 export const LsvzDocumentationContent: React.FC = () => {
-    // Landing pages don't have access to activeAgent context, use default theme
-    const themeColor = 'text-cyan-400';
-    const themeCodeColor = 'text-cyan-300';
-    const themeCodeColor2 = 'text-cyan-200';
+  const [query, setQuery] = useState('');
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set(INITIAL_OPEN_GROUPS));
+  const [copiedExample, setCopiedExample] = useState(false);
+  const [copiedMessage, setCopiedMessage] = useState(false);
 
-    useEffect(() => {
-        const schemas = [
-            {
-                '@context': 'https://schema.org',
-                '@type': 'TechArticle',
-                headline: '.lsvz — LandSurvAI Zipped File Format Specification',
-                description: 'Open source AI-native survey project archive format. A ZIP container with a typed JSON manifest holding all session state for land survey and civil engineering projects. Licensed CC BY 4.0.',
-                url: 'https://lsvz.landsurv.ai',
-                image: 'https://landsurv.ai/favicon-512.png',
-                author:    { '@type': 'Organization', name: 'LandSurv.ai', url: 'https://landsurv.ai' },
-                publisher: { '@type': 'Organization', name: 'LandSurv.ai', url: 'https://landsurv.ai' },
-                license:   'https://creativecommons.org/licenses/by/4.0/',
-                keywords:  '.lsvz, survey data, open source, AI-native, land survey, civil engineering, file format, CC BY 4.0',
-            },
-            {
-                '@context': 'https://schema.org',
-                '@type': 'BreadcrumbList',
-                itemListElement: [
-                    { '@type': 'ListItem', position: 1, name: 'LandSurv.ai', item: 'https://landsurv.ai' },
-                    { '@type': 'ListItem', position: 2, name: '.lsvz File Format', item: 'https://lsvz.landsurv.ai' },
-                ],
-            },
-        ];
-        const injected: HTMLScriptElement[] = [];
-        schemas.forEach(s => {
-            const el = document.createElement('script');
-            el.type = 'application/ld+json';
-            el.textContent = JSON.stringify(s);
-            document.head.appendChild(el);
-            injected.push(el);
-        });
-        return () => injected.forEach(el => el.parentNode?.removeChild(el));
-    }, []);
-    return (
-        <>
-            {/* .lsvz spec-version banner */}
-            <section className="mb-4 p-3 rounded-xl bg-gray-900/60 border border-cyan-700/40 flex flex-wrap items-center gap-2 text-sm">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 font-semibold">
-                    .lsvz Specification v{LSVZ_SPEC_VERSION}
-                </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-700/40 border border-gray-600/40 text-gray-300 font-mono text-xs">
-                    Released {LSVZ_SPEC_RELEASE}
-                </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-700/40 border border-gray-600/40 text-gray-400 font-mono text-xs">
-                    App build {APP_VERSION}
-                </span>
-            </section>
+  useEffect(() => {
+    const schemas = [
+      {
+        '@context': 'https://schema.org',
+        '@type': 'TechArticle',
+        headline: '.lsvz — LandSurv.ai Project Archive Specification',
+        description:
+          'Open CC BY 4.0 specification for the .lsvz survey project archive: ZIP container, typed manifest.json, native source files, CACP state, A2UI message payloads, and Redline review records.',
+        url: 'https://lsvz.landsurv.ai',
+        image: 'https://landsurv.ai/favicon-512.png',
+        author: { '@type': 'Organization', name: 'LandSurv.ai', url: 'https://landsurv.ai' },
+        publisher: { '@type': 'Organization', name: 'LandSurv.ai', url: 'https://landsurv.ai' },
+        license: 'https://creativecommons.org/licenses/by/4.0/',
+        version: LSVZ_SPEC_VERSION,
+        datePublished: LSVZ_SPEC_RELEASE,
+        keywords:
+          '.lsvz, survey data, open source, AI-native, land survey, civil engineering, file format, CACP, A2UI, CC BY 4.0',
+      },
+      {
+        '@context': 'https://schema.org',
+        '@type': 'BreadcrumbList',
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: 'LandSurv.ai', item: 'https://landsurv.ai' },
+          { '@type': 'ListItem', position: 2, name: '.lsvz File Format', item: 'https://lsvz.landsurv.ai' },
+        ],
+      },
+    ];
+    const injected: HTMLScriptElement[] = [];
+    schemas.forEach(schema => {
+      const el = document.createElement('script');
+      el.type = 'application/ld+json';
+      el.textContent = JSON.stringify(schema);
+      document.head.appendChild(el);
+      injected.push(el);
+    });
+    return () => injected.forEach(el => el.parentNode?.removeChild(el));
+  }, []);
 
-            {/* Open-source / license banner */}
-            <section className="mb-8 p-4 rounded-xl bg-amber-900/20 border border-amber-700/40 flex flex-col sm:flex-row items-start gap-4">
-                <div className="flex-shrink-0 flex items-center justify-center w-12 h-12 rounded-full bg-amber-800/30 border border-amber-700/40">
-                    <svg className="w-7 h-7 text-amber-400" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm0 18a8 8 0 110-16 8 8 0 010 16zm-1.293-9.707a2 2 0 012.586 0l1.414-1.414a4 4 0 00-5.414 0L7.879 10.293a4 4 0 000 5.414l1.414 1.414a4 4 0 005.414 0l-1.414-1.414a2 2 0 01-2.586 0 2 2 0 010-2.828 2 2 0 010 2.828z" />
-                    </svg>
+  const filteredGroups = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return LSVZ_SCHEMA;
+    return LSVZ_SCHEMA.map(group => ({
+      ...group,
+      fields: group.fields.filter(field =>
+        String(field.key).toLowerCase().includes(q) ||
+        field.description.toLowerCase().includes(q) ||
+        group.title.toLowerCase().includes(q) ||
+        group.description.toLowerCase().includes(q),
+      ),
+    })).filter(group => group.fields.length > 0);
+  }, [query]);
+
+  const visibleFieldCount = useMemo(
+    () => filteredGroups.reduce((count, group) => count + group.fields.length, 0),
+    [filteredGroups],
+  );
+
+  const copy = async (text: string, setCopied: (value: boolean) => void) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // Clipboard permissions can be denied; the text remains selectable.
+    }
+  };
+
+  const toggleGroup = (id: string) => {
+    setOpenGroups(previous => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <div className="mx-auto max-w-6xl px-5 py-7 sm:px-8 sm:py-9">
+      <section className="relative overflow-hidden rounded-2xl border border-cyan-400/20 bg-gradient-to-br from-cyan-950/45 via-slate-900/85 to-emerald-950/25 px-5 py-7 sm:px-8 sm:py-9">
+        <div className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-cyan-500/10 blur-3xl" />
+        <div className="relative">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-300">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              Open standard
+            </span>
+            <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 font-mono text-[10px] font-semibold text-amber-300">
+              CC BY 4.0
+            </span>
+            <span className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2.5 py-1 font-mono text-[10px] font-semibold text-cyan-200">
+              Spec v{LSVZ_SPEC_VERSION}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 font-mono text-[10px] text-gray-400">
+              Published {LSVZ_SPEC_RELEASE}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 font-mono text-[10px] text-gray-400">
+              App {APP_VERSION}
+            </span>
+          </div>
+
+          <div className="mt-6 grid gap-7 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-end">
+            <div>
+              <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-400">
+                Format specification / LS-VZ
+              </p>
+              <h1 className="mt-2 text-4xl font-black tracking-tight text-white sm:text-5xl">
+                .lsvz <span className="font-light text-cyan-300">File Format</span>
+              </h1>
+              <p className="mt-4 max-w-2xl text-[15px] leading-7 text-gray-300">
+                A portable, auditable container for the complete surveying workspace. One ZIP, one typed
+                manifest, and the original source files — with CACP project memory, A2UI conversation
+                surfaces, and Redline review records carried as first-class session state.
+              </p>
+              <div className="mt-5 flex flex-wrap gap-2.5">
+                <a href="#lsvz-archive" className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3.5 py-2 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20">
+                  Archive layout
+                </a>
+                <a href="#lsvz-manifest" className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-semibold text-gray-200 transition-colors hover:bg-white/[0.08]">
+                  Manifest schema
+                </a>
+                <a href="https://lsvz.landsurv.ai" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-semibold text-gray-200 transition-colors hover:bg-white/[0.08]">
+                  Public URL <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Stat label="Container" value="ZIP" />
+              <Stat label="Manifest" value="JSON" />
+              <Stat label="Documented fields" value={String(fieldCount)} />
+              <Stat label="Schema groups" value={String(LSVZ_SCHEMA.length)} />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="mt-8 grid gap-8 lg:grid-cols-[190px_minmax(0,1fr)]">
+        <aside className="hidden lg:block">
+          <nav className="sticky top-4 space-y-0.5" aria-label=".lsvz specification contents">
+            <p className="mb-2 px-2 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-gray-500">Contents</p>
+            {TOC.map((item, index) => (
+              <a key={item.id} href={`#${item.id}`} className="group flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-gray-400 transition-colors hover:bg-white/[0.04] hover:text-cyan-200">
+                <span className="w-4 font-mono text-[9px] text-gray-600 group-hover:text-cyan-500">{String(index + 1).padStart(2, '0')}</span>
+                {item.label}
+              </a>
+            ))}
+            <div className="mt-4 border-t border-white/[0.08] px-2 pt-3">
+              <a href="https://cacp.landsurv.ai" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-[11px] text-gray-500 transition-colors hover:text-emerald-300">
+                <Waypoints className="h-3 w-3" /> CACP specification
+              </a>
+            </div>
+          </nav>
+        </aside>
+
+        <main className="min-w-0 space-y-12">
+          <section id="lsvz-overview" className="scroll-mt-6">
+            <SectionHeading index="01" title="Overview" kicker="What the format is, and what it is not." />
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_290px]">
+              <div className="space-y-3 text-[15px] leading-7 text-gray-300">
+                <p>
+                  <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[13px] text-cyan-300">.lsvz</code>{' '}
+                  is the LandSurv.ai project archive. It packages the complete editable session — geometry,
+                  survey source files, agent conversations, CACP knowledge, Redline runs, and UI restoration
+                  state — so another workstation can reopen the project with the same context.
+                </p>
+                <p>
+                  The archive is deliberately boring at the container layer: a standard ZIP file. The contract
+                  is the typed <code className="font-mono text-cyan-300">manifest.json</code> at the root.
+                  Every other entry is a source file or an agent-produced artifact. Nothing proprietary is
+                  hidden in a binary database.
+                </p>
+              </div>
+              <div className="rounded-xl border border-white/[0.08] bg-slate-950/50 p-4">
+                <div className="flex items-center gap-2 text-xs font-semibold text-white">
+                  <ShieldCheck className="h-4 w-4 text-emerald-400" /> Specification status
                 </div>
-                <div className="flex-1">
-                    <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <span className="font-bold text-white">Open Source Specification</span>
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-xs text-emerald-400 font-semibold">CC BY 4.0</span>
+                <dl className="mt-3 space-y-2 text-xs">
+                  {[
+                    ['Version', `v${LSVZ_SPEC_VERSION}`],
+                    ['Published', LSVZ_SPEC_RELEASE],
+                    ['Manifest', 'UTF-8 JSON'],
+                    ['License', 'CC BY 4.0'],
+                    ['Compatibility', 'Additive-first'],
+                  ].map(([label, value]) => (
+                    <div key={label} className="flex items-center justify-between gap-3 border-b border-white/[0.05] pb-2 last:border-0 last:pb-0">
+                      <dt className="text-gray-500">{label}</dt>
+                      <dd className="font-mono text-gray-200">{value}</dd>
                     </div>
-                    <p className="text-sm text-amber-200/80">
-                        The <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>.lsvz</code> format specification is published as an open standard under the{' '}
-                        <strong className="text-white">Creative Commons Attribution 4.0 International</strong> license.
-                        Free to use, adapt, and build upon for any purpose — including commercially — with attribution to LandSurv.ai.
-                    </p>
-                    <a
-                        href="https://creativecommons.org/licenses/by/4.0/"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 hover:underline mt-2"
-                    >
-                        View CC BY 4.0 License →
-                    </a>
-                </div>
-            </section>
+                  ))}
+                </dl>
+              </div>
+            </div>
+          </section>
 
-            <section className="mb-8">
-                <h3 className="text-xl font-semibold text-gray-100 mb-3">1. The Vision: A Universal Format for Survey Data</h3>
-                <p className="mb-6">
-                The <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>.lsvz</code> (LandSurvAI Zipped) file format is designed to be the industry's first comprehensive, AI-native container for land surveying and civil engineering projects. Its purpose is to break down data silos by encapsulating every piece of data from a user's session—from raw field data to AI analysis—into a single, portable, and transparent file.
-                </p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-center">
-                <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                    <ContainerIcon className={`w-12 h-12 mx-auto mb-3 ${themeColor}`} />
-                    <h4 className="font-semibold text-white">Complete Project Archive</h4>
-                    <p className="text-sm text-gray-400 mt-1">Source files, AI chats, and all generated data (points, lines, reports) are stored in one auditable and portable archive.</p>
-                </div>
-                <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                    <BrainCircuitIcon className={`w-12 h-12 mx-auto mb-3 ${themeColor}`} />
-                    <h4 className="font-semibold text-white">AI-Ready & Future-Proof</h4>
-                    <p className="text-sm text-gray-400 mt-1">The structured manifest allows AI agents to instantly understand project context, enabling deeper insights and automation.</p>
-                </div>
-                <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                    <OpenHandsIcon className={`w-12 h-12 mx-auto mb-3 ${themeColor}`} />
-                    <h4 className="font-semibold text-white">Democratized Data</h4>
-                    <p className="text-sm text-gray-400 mt-1">An open, non-proprietary format prevents vendor lock-in, allowing smaller firms and developers to innovate without expensive licenses.</p>
-                </div>
-                <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                    <InteroperabilityIcon className={`w-12 h-12 mx-auto mb-3 ${themeColor}`} />
-                    <h4 className="font-semibold text-white">Radical Interoperability</h4>
-                    <p className="text-sm text-gray-400 mt-1">Designed for seamless data transfer between software, field equipment, and other AIs, ensuring your data is always accessible.</p>
-                </div>
-                </div>
-            </section>
+          <section id="lsvz-principles" className="scroll-mt-6 border-t border-white/[0.08] pt-8">
+            <SectionHeading index="02" title="Design principles" kicker="Four constraints that keep the archive portable and legible." />
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[
+                ['Complete, not lossy', 'Points, linework, centerlines, hatches, labels, chats, CACP facts, and Redline runs round-trip. A reopened archive is the project, not a screenshot of it.'],
+                ['Typed and inspectable', 'The manifest is JSON. Keys and groups are documented here and compile-time checked against the live SessionState type, so the spec cannot silently drift.'],
+                ['AI-readable', 'Agents receive a compact project manifest and can query the structured state directly. CACP facts and A2UI messages remain attached to the project they belong to.'],
+                ['Open by construction', 'ZIP + JSON + original files. No license server, no encrypted index, and no dependency on a LandSurv-hosted service to read the archive.'],
+              ].map(([title, body], index) => (
+                <article key={title} className="rounded-xl border border-white/[0.08] bg-slate-950/40 p-4">
+                  <span className="font-mono text-[10px] text-cyan-500">{String(index + 1).padStart(2, '0')}</span>
+                  <h3 className="mt-1 text-sm font-semibold text-white">{title}</h3>
+                  <p className="mt-1.5 text-[13px] leading-6 text-gray-400">{body}</p>
+                </article>
+              ))}
+            </div>
+          </section>
 
-            <section className="mb-8">
-                <h3 className="text-xl font-semibold text-gray-100 mb-3">2. Structure (Version {APP_VERSION})</h3>
-                <p className="mb-4">
-                The <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>.lsvz</code> file is a standard ZIP archive. This container approach ensures that all project-related information is self-contained, auditable, and ready for advanced AI analysis or archival. The archive must contain:
-                </p>
-                <ul className="list-disc list-inside mb-4 space-y-2">
-                <li>A <strong className={`${themeColor}`}>manifest.json</strong> file that contains the complete session state, including UI settings, chat histories, and all generated data.</li>
-                <li>The original source files (e.g., <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>job123.raw</code>, <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>parcel_a.pdf</code>) for external reference and archival.</li>
-                </ul>
-
-                <p className="mb-4 text-sm text-gray-400 italic">
-                The schema below is generated directly from the live <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>SessionState</code> TypeScript interface at build time
-                ({lsvzFieldCount()} top-level fields across {LSVZ_SCHEMA.length} groups in this release). When the app gains a new feature that persists state, this page updates automatically — the build fails if a developer adds a field without documenting it here.
-                </p>
-
-                <p className="mb-4 text-sm text-gray-400">
-                Recent releases expanded the live session surface in several ways that are visible in this manifest: project settings persist selectable linear units for typed drafting; CACP traffic can be surfaced with optional notifications when <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>showCacpNotifications</code> is enabled; steep-slope analysis runs (<code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>steepSlopeRuns</code>) and their agent conversation persist alongside TIN surfaces; the Soils Agent stores SSURGO map units (<code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>soilMapUnits</code>) and its chat; multi-deed batch workflows resume from <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>deedBatchJob</code>; CAD Manager standards and confirmed field-to-finish code aliases travel in <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>cadManagerState</code> alongside the Civil Drafter's user-trained conventions in <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>draftingStyleLibrary</code>; and Standards Compliance audit configurations, control/subject PDFs, and reports persist in <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>standardsCompliance*</code> fields.
-                </p>
-
-                <h4 className="text-lg font-semibold text-gray-200 mb-2">Top-level fields by group:</h4>
-                <div className="space-y-4 mb-6">
-                    {LSVZ_SCHEMA.map(group => (
-                        <div key={group.id} className="bg-gray-900/40 rounded-lg border border-gray-700 overflow-hidden">
-                            <div className="px-4 py-2 bg-gray-800/60 border-b border-gray-700">
-                                <h5 className={`font-semibold ${themeColor}`}>{group.title}</h5>
-                                <p className="text-xs text-gray-400 mt-0.5">{group.description}</p>
-                            </div>
-                            <table className="w-full text-sm">
-                                <tbody>
-                                    {group.fields.map(f => (
-                                        <tr key={String(f.key)} className="border-t border-gray-800 first:border-t-0">
-                                            <td className={`px-4 py-2 align-top whitespace-nowrap font-mono ${themeCodeColor}`}>{String(f.key)}</td>
-                                            <td className="px-4 py-2 align-top text-gray-300">{f.description}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    ))}
+          <section id="lsvz-archive" className="scroll-mt-6 border-t border-white/[0.08] pt-8">
+            <SectionHeading index="03" title="Archive layout" kicker="What is inside the ZIP, and what the reader may rely on." />
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+              <div className="overflow-hidden rounded-xl border border-white/[0.08] bg-slate-950/70">
+                <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2.5">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-gray-500">Archive tree</span>
+                  <span className="font-mono text-[10px] text-cyan-400">application/x-landsurvai-session</span>
                 </div>
-
-                <h4 className="text-lg font-semibold text-gray-200 mb-2">manifest.json example:</h4>
-                <pre className="bg-gray-900 p-4 rounded-lg overflow-x-auto text-sm border border-gray-600">
-                <code className={`language-json ${themeCodeColor2}`}>
-                    {exampleManifest}
-                </code>
+                <pre className="overflow-x-auto p-4 font-mono text-[12px] leading-6 text-gray-300">
+{`project.lsvz
+├─ manifest.json          canonical SessionState
+├─ job123.raw             original RAW file
+├─ parcel_a.pdf           original deed
+├─ C-101.pdf              original plan sheet
+├─ topo.dxf               original DXF
+└─ photo_01.jpg           original site photo`}
                 </pre>
-            </section>
+              </div>
+              <div className="space-y-3 text-[13px] leading-6 text-gray-400">
+                <p><strong className="text-gray-200">manifest.json is reserved.</strong> It is written first and never overwritten by a payload file. A duplicate data filename is uniquified rather than clobbering an earlier entry.</p>
+                <p><strong className="text-gray-200">Source files stay as files.</strong> RAW, PDF, DXF, image, and generated artifacts are written as sibling ZIP entries. Base64 is used only when the manifest itself carries a payload, such as a keyframe or raster underlay.</p>
+                <p><strong className="text-gray-200">DEFLATE, no proprietary codec.</strong> The archive uses standard ZIP DEFLATE and the LandSurv MIME type only as a hint; any ZIP reader can inspect the directory.</p>
+              </div>
+            </div>
+          </section>
 
-            <section>
-                <h3 className="text-xl font-semibold text-gray-100 mb-3">3. Computational provenance — COGO skill suite</h3>
-                <p className="mb-3">
-                Every COGO calculation an agent performs in a session is computed by a deterministic skill in <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>utils/cogoLib/</code> — never by the LLM in chat.
-                The results are written to the fieldbook and (where applicable) the project KnowledgeBase, both of which are persisted into the <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>.lsvz</code> manifest. This means the archive carries a full, replayable computational provenance: anyone reopening the file can re-run the same skills against the same inputs and reproduce every number bit-for-bit.
-                </p>
-                <p className="mb-4 text-sm">
-                The current release exposes <strong className="text-white">30+ COGO skills</strong> over CACP, organized into the categories below. The full schema (inputs, outputs, examples) is published live at <a href="https://cacp.landsurv.ai" className={`${themeColor} hover:underline`}>cacp.landsurv.ai</a>.
-                </p>
-                <div className="grid sm:grid-cols-2 gap-3 mb-4 text-sm">
-                    <div className="bg-gray-900/50 border border-gray-700 rounded-lg p-3">
-                        <div className={`${themeCodeColor} font-mono text-xs mb-1`}>forward / inverse</div>
-                        <div className="text-gray-300">cogo_inverse · cogo_direct · cogo_format_bearing · cogo_parse_bearing</div>
-                    </div>
-                    <div className="bg-gray-900/50 border border-gray-700 rounded-lg p-3">
-                        <div className={`${themeCodeColor} font-mono text-xs mb-1`}>intersections</div>
-                        <div className="text-gray-300">cogo_intersect_bb / bd / dd / ll · cogo_circle_through_3 · cogo_perpendicular_foot</div>
-                    </div>
-                    <div className="bg-gray-900/50 border border-gray-700 rounded-lg p-3">
-                        <div className={`${themeCodeColor} font-mono text-xs mb-1`}>curves &amp; spirals</div>
-                        <div className="text-gray-300">cogo_curve_solve · cogo_curve_stations · cogo_spiral_xy · cogo_vcurve_elev_at · cogo_vcurve_summary</div>
-                    </div>
-                    <div className="bg-gray-900/50 border border-gray-700 rounded-lg p-3">
-                        <div className={`${themeCodeColor} font-mono text-xs mb-1`}>traverse</div>
-                        <div className="text-gray-300">cogo_traverse_compute · cogo_traverse_adjust (Compass / Transit / Crandall)</div>
-                    </div>
-                    <div className="bg-gray-900/50 border border-gray-700 rounded-lg p-3">
-                        <div className={`${themeCodeColor} font-mono text-xs mb-1`}>area &amp; subdivision</div>
-                        <div className="text-gray-300">cogo_area_polygon · cogo_area_from_pns · cogo_minimum_bounding_rect · cogo_subdivide_swing · cogo_subdivide_parallel · cogo_offset_polyline</div>
-                    </div>
-                    <div className="bg-gray-900/50 border border-gray-700 rounded-lg p-3">
-                        <div className={`${themeCodeColor} font-mono text-xs mb-1`}>best-fit &amp; transforms</div>
-                        <div className="text-gray-300">cogo_bestfit_line · cogo_bestfit_circle · cogo_helmert2d · cogo_affine2d</div>
-                    </div>
-                    <div className="bg-gray-900/50 border border-gray-700 rounded-lg p-3">
-                        <div className={`${themeCodeColor} font-mono text-xs mb-1`}>geodetic (WGS-84)</div>
-                        <div className="text-gray-300">cogo_geodesic_inverse · cogo_geodesic_direct · cogo_units_convert</div>
-                    </div>
-                    <div className="bg-gray-900/50 border border-gray-700 rounded-lg p-3">
-                        <div className={`${themeCodeColor} font-mono text-xs mb-1`}>site &amp; QA</div>
-                        <div className="text-gray-300">cogo_shrinkwrap · points_sanity_check (6-check OCR point validation) · cogo_selftest (8-fixture deterministic regression)</div>
-                    </div>
+          <section id="lsvz-manifest" className="scroll-mt-6 border-t border-white/[0.08] pt-8">
+            <SectionHeading index="04" title="Manifest schema" kicker={`${fieldCount} documented top-level fields across ${LSVZ_SCHEMA.length} groups. Generated from the live schema and checked against SessionState.`} />
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="relative w-full sm:max-w-md">
+                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-500" />
+                <input
+                  value={query}
+                  onChange={event => setQuery(event.target.value)}
+                  placeholder="Filter fields, groups, or descriptions…"
+                  className="w-full rounded-lg border border-white/[0.1] bg-slate-950/70 py-2 pl-9 pr-3 text-xs text-gray-100 placeholder-gray-500 outline-none transition focus:border-cyan-400/50 focus:ring-1 focus:ring-cyan-400/30"
+                  aria-label="Filter .lsvz manifest fields"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] text-gray-500">{query ? `${visibleFieldCount} matching fields` : `${fieldCount} fields`}</span>
+                <button type="button" onClick={() => setOpenGroups(new Set(LSVZ_SCHEMA.map(group => group.id)))} className="rounded-md border border-white/[0.08] px-2 py-1 text-[10px] text-gray-400 transition-colors hover:border-cyan-400/30 hover:text-cyan-200">Expand all</button>
+                <button type="button" onClick={() => setOpenGroups(new Set())} className="rounded-md border border-white/[0.08] px-2 py-1 text-[10px] text-gray-400 transition-colors hover:border-cyan-400/30 hover:text-cyan-200">Collapse all</button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {filteredGroups.map((group, index) => {
+                const isOpen = query.trim() ? true : openGroups.has(group.id);
+                return (
+                  <div key={group.id} className="overflow-hidden rounded-lg border border-white/[0.08] bg-slate-950/40">
+                    <button type="button" onClick={() => toggleGroup(group.id)} className="flex w-full items-start justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-white/[0.025]" aria-expanded={isOpen}>
+                      <div className="flex min-w-0 items-start gap-3">
+                        <span className="mt-0.5 font-mono text-[9px] text-cyan-500">{String(index + 1).padStart(2, '0')}</span>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-sm font-semibold text-gray-100">{group.title}</h3>
+                            <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 font-mono text-[9px] text-gray-500">{group.fields.length} fields</span>
+                          </div>
+                          <p className="mt-0.5 text-[11px] leading-5 text-gray-500">{group.description}</p>
+                        </div>
+                      </div>
+                      <ChevronDown className={`mt-0.5 h-4 w-4 shrink-0 text-gray-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {isOpen && (
+                      <div className="border-t border-white/[0.06]">
+                        {group.fields.map(field => (
+                          <div key={String(field.key)} className="grid gap-1.5 border-b border-white/[0.04] px-4 py-3 last:border-0 sm:grid-cols-[190px_minmax(0,1fr)] sm:gap-4">
+                            <code className="break-all font-mono text-[11px] font-semibold text-cyan-300">{String(field.key)}</code>
+                            <div className="min-w-0">
+                              <p className="text-[12px] leading-5 text-gray-300">{field.description}</p>
+                              <code className="mt-1 block truncate font-mono text-[10px] text-gray-500" title={field.example}>{field.example}</code>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {filteredGroups.length === 0 && (
+                <div className="rounded-lg border border-white/[0.08] bg-slate-950/40 px-4 py-6 text-sm text-gray-400">
+                  No fields match <span className="font-mono text-cyan-300">{query}</span>.
                 </div>
-                <div className="bg-gray-900/40 border border-gray-700 rounded-lg p-4 text-sm">
-                    <h4 className="font-semibold text-white mb-2">Reproducibility &amp; numerical guarantees</h4>
-                    <ul className="list-disc list-inside text-gray-400 space-y-1">
-                        <li><strong className="text-gray-200">Clean-room implementation.</strong> All formulae from public-domain or permissively-licensed sources (Wolf &amp; Ghilani, Vincenty 1975, Bourke, Andrew 1979, Kåsa). No GPL / copyleft inheritance.</li>
-                        <li><strong className="text-gray-200">Surveyor units.</strong> US survey foot (1 m = 3.28083333333 ft) is canonical. Areas always emit sqft + acres simultaneously.</li>
-                        <li><strong className="text-gray-200">Test coverage.</strong> 43-fixture vitest suite at <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>tests/cogoLib.test.ts</code>; runtime self-test exposed via <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>cogo_selftest</code>.</li>
-                        <li><strong className="text-gray-200">Reporting precision.</strong> Quadrant DMS to whole seconds, distances to 0.01 ft, areas to 4-decimal acres, geodetic distances to mm + 0.01 ft.</li>
-                    </ul>
+              )}
+            </div>
+
+            <details className="group mt-4 overflow-hidden rounded-lg border border-white/[0.08] bg-slate-950/50">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-semibold text-gray-300">
+                <span className="inline-flex items-center gap-2">
+                  <FileJson className="h-3.5 w-3.5 text-cyan-400" /> Annotated manifest outline
+                  <span className="font-normal text-gray-500">(comments, not valid JSON)</span>
+                </span>
+                <ChevronDown className="h-4 w-4 text-gray-500 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="relative border-t border-white/[0.06]">
+                <button type="button" onClick={() => copy(exampleManifest, setCopiedExample)} className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-md border border-white/[0.1] bg-slate-900/90 px-2 py-1 text-[10px] text-gray-400 transition-colors hover:text-cyan-200">
+                  {copiedExample ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                  {copiedExample ? 'Copied' : 'Copy'}
+                </button>
+                <pre className="max-h-96 overflow-auto p-4 font-mono text-[10.5px] leading-5 text-gray-400">{exampleManifest}</pre>
+              </div>
+            </details>
+          </section>
+
+          <section id="lsvz-interop" className="scroll-mt-6 border-t border-white/[0.08] pt-8">
+            <SectionHeading index="05" title="CACP & A2UI" kicker="Protocol state and conversational surfaces are part of the project, not an external service." />
+            <div className="grid gap-4 lg:grid-cols-2">
+              <article className="rounded-xl border border-emerald-400/20 bg-emerald-950/10 p-5">
+                <div className="flex items-center gap-2">
+                  <Waypoints className="h-4 w-4 text-emerald-400" />
+                  <h3 className="text-sm font-semibold text-white">CACP v1.3 project memory</h3>
                 </div>
-            </section>
-
-            <section className="mt-8">
-                <h3 className="text-xl font-semibold text-gray-100 mb-3">4. Knowledge Base provenance — permissive-source policy</h3>
-                <p className="mb-3">
-                The <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>knowledgeFacts</code> array inside <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>manifest.json</code> is more than a scratchpad — it is the
-                manifest's audit trail for any external research an agent performed during the session. Each fact carries a <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>source</code> URL,
-                a millisecond <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>timestamp</code>, a confidence weight, and the original textual <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>context</code> from which the value was extracted.
-                Re-opening the <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>.lsvz</code> gives the next reader exactly the same evidence the agents saw at save time.
+                <p className="mt-2 text-[13px] leading-6 text-gray-400">
+                  Cross-agent work is persisted where it changes the project: point-number reservations,
+                  sourced Knowledge Base facts, description-key mappings, and CACP keyframes. The transient
+                  activity log, result cache, and policy counters stay runtime diagnostics rather than
+                  becoming part of the archive contract.
                 </p>
-                <p className="mb-4 text-sm">
-                Today the Zoning Agent is the heaviest writer, persisting setbacks, max height, lot coverage, permitted uses, and source citations under the <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>zoning.requirements</code> category every time the user (or another agent via <a href="https://cacp.landsurv.ai" className={`${themeColor} hover:underline`}>CACP</a>) asks a zoning question. Cross-agent reuse is automatic — Boundary Agent, Civil Drafter, and the auto-draft orchestrator read those facts directly from the KB, no second research turn required.
+                <ul className="mt-3 space-y-1.5 text-[11px] text-gray-500">
+                  <li><code className="font-mono text-emerald-300">cacpReservations</code> · point blocks owned by an agent</li>
+                  <li><code className="font-mono text-emerald-300">knowledgeFacts</code> · sourced, timestamped facts</li>
+                  <li><code className="font-mono text-emerald-300">descriptionKeys</code> · VLM-to-CAD code registry</li>
+                  <li><code className="font-mono text-emerald-300">keyframeCache</code> · event-linked visual evidence</li>
+                </ul>
+              </article>
+              <article className="rounded-xl border border-cyan-400/20 bg-cyan-950/10 p-5">
+                <div className="flex items-center gap-2">
+                  <Link2 className="h-4 w-4 text-cyan-400" />
+                  <h3 className="text-sm font-semibold text-white">A2UI conversation surfaces</h3>
+                </div>
+                <p className="mt-2 text-[13px] leading-6 text-gray-400">
+                  A2UI payloads ride inside the per-agent chat histories. A message can carry a typed
+                  surface descriptor, its lifecycle status, and relay attribution; the archive restores the
+                  conversation and the surface state together. Surfaces are catalog-addressed components —
+                  no remote React, HTML, or executable UI is stored.
                 </p>
+                <ul className="mt-3 space-y-1.5 text-[11px] text-gray-500">
+                  <li><code className="font-mono text-cyan-300">*ChatHistory</code> · agent transcript + A2UI payloads</li>
+                  <li><code className="font-mono text-cyan-300">relay</code> · specialist-composed body attribution</li>
+                  <li><code className="font-mono text-cyan-300">uiState</code> · active agent, model, panel, viewport</li>
+                  <li><code className="font-mono text-cyan-300">redlineRuns</code> · review items and decisions</li>
+                </ul>
+              </article>
+            </div>
 
-                <div className="bg-gray-900/40 border border-emerald-700/40 rounded-lg p-4 text-sm mb-4">
-                    <div className="flex items-center gap-2 mb-2">
-                        <h4 className="font-semibold text-white">Permissive-source policy</h4>
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/40 text-xs text-emerald-300 font-mono">App v1.2</span>
-                    </div>
-                    <p className="text-gray-400 mb-2">
-                        The host application's research layer (the LandSurv Claw) only fetches from <strong className="text-white">permissive sources</strong>: hosts whose terms of use either explicitly allow automated retrieval, or whose content sits in the public domain on platforms that don't contractually restrict access. Commercial codification platforms whose TOS prohibits automation (eCode360, Municode, qcode.us, generalCode, codePublishing, amLegal, sterlingCodifiers, lf-pubs) are <strong className="text-amber-300">hard-blocked</strong>; the host application never sends them an automated request, and no facts derived from them ever enter the <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>knowledgeFacts</code> array.
-                    </p>
-                    <p className="text-gray-400 mb-2">
-                        Every <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>knowledgeFacts</code> entry pinned by the Zoning Agent therefore carries a permissive-source URL in its <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>source</code> field — a municipality .gov site, Zoneomics, a county GIS portal, a state planning office PDF, or a similar public archive. Anyone re-opening the <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>.lsvz</code> can follow that URL and verify the fact under the same TOS the original retrieval respected.
-                    </p>
-                    <pre className="bg-gray-950 p-3 rounded text-xs font-mono text-emerald-300 whitespace-pre overflow-x-auto">{`{
-  "category":  "zoning.requirements",
-  "subject":   "Lehi|Utah County|UT|R1-10",
+            <div className="mt-4 overflow-hidden rounded-xl border border-white/[0.08] bg-slate-950/70">
+              <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2.5">
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-gray-500">CACP message shape · v1.3</span>
+                <button type="button" onClick={() => copy(`{"id":"msg_01J...","from":"BOUNDARY_AGENT","to":"POINT_EDITOR","command":"request_next_point_number","data":{"count":6},"metadata":{"traceId":"trace-...","requiresResponse":true},"timestamp":1762891200000}`, setCopiedMessage)} className="inline-flex items-center gap-1 text-[10px] text-gray-500 transition-colors hover:text-cyan-300">
+                  {copiedMessage ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                  {copiedMessage ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <pre className="overflow-x-auto p-4 font-mono text-[11px] leading-5 text-emerald-200/90">
+{`{
+  "id": "msg_01J...",
+  "from": "BOUNDARY_AGENT",
+  "to": "POINT_EDITOR",
+  "command": "request_next_point_number",
+  "data": { "count": 6 },
+  "metadata": {
+    "traceId": "trace-...",
+    "requiresResponse": true
+  },
+  "timestamp": 1762891200000
+}`}
+              </pre>
+            </div>
+            <p className="mt-2 text-[11px] text-gray-500">
+              Read the full protocol at <a href="https://cacp.landsurv.ai" target="_blank" rel="noopener noreferrer" className="text-emerald-400 hover:underline">cacp.landsurv.ai</a>.
+            </p>
+          </section>
+
+          <section id="lsvz-provenance" className="scroll-mt-6 border-t border-white/[0.08] pt-8">
+            <SectionHeading index="06" title="Provenance" kicker="Why a reopened archive can explain its own numbers." />
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <div className="space-y-3 text-[13px] leading-6 text-gray-400">
+                <p>
+                  COGO results are computed by deterministic skills, not by an LLM in prose. The inputs,
+                  outputs, and resulting project state travel in the archive, so a reviewer can replay the
+                  calculation against the same points and bearings.
+                </p>
+                <p>
+                  Knowledge Base entries carry a source URL, extraction context, confidence, and a millisecond
+                  timestamp. The source policy is permissive-only; blocked commercial codification hosts never
+                  enter the <code className="font-mono text-gray-300">knowledgeFacts</code> array.
+                </p>
+              </div>
+              <pre className="overflow-x-auto rounded-xl border border-white/[0.08] bg-slate-950/70 p-4 font-mono text-[10.5px] leading-5 text-gray-400">
+{`{
+  "category": "zoning.requirements",
+  "subject": "Lehi|Utah|R1-10",
   "predicate": "setbackFront",
-  "value":     25,
-  "units":     "ft",
-  "source":    "https://lehi-ut.gov/zoning/r1-10",
-  "context":   "<excerpt from the cited ordinance section>",
+  "value": 25,
+  "units": "ft",
+  "source": "https://lehi-ut.gov/...",
   "confidence": 0.95,
-  "timestamp":  1730000000000
-}`}</pre>
-                    <p className="text-gray-400 mt-2">
-                        The in-app <em>"How LandSurv sources external data"</em> modal (open from any blocked-source toast or from the Claw status badge) walks through the policy, the blocklist, the source-preference order, and the case-law background.
-                    </p>
-                </div>
-            </section>
+  "timestamp": 1762891200000
+}`}
+              </pre>
+            </div>
+          </section>
 
-            <section className="mt-8">
-                <h3 className="text-xl font-semibold text-gray-100 mb-3">5. Licensing</h3>
-                <div className="flex items-start gap-4 bg-amber-900/20 p-4 rounded-lg border border-amber-700/40">
-                <svg className={`w-10 h-10 text-amber-400 flex-shrink-0 mt-1`} viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm0 18a8 8 0 110-16 8 8 0 010 16zm-1.293-9.707a2 2 0 012.586 0l1.414-1.414a4 4 0 00-5.414 0L7.879 10.293a4 4 0 000 5.414l1.414 1.414a4 4 0 005.414 0l-1.414-1.414a2 2 0 01-2.586 0 2 2 0 010-2.828 2 2 0 010 2.828z" />
-                </svg>
-                <div>
-                    <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <h4 className="font-semibold text-white">Creative Commons Attribution 4.0 International</h4>
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-xs text-emerald-400 font-semibold">Open Source</span>
-                    </div>
-                    <p className="text-sm text-gray-400 mt-1">
-                    The <code className={`bg-gray-700 px-1 py-0.5 rounded ${themeCodeColor} font-mono`}>.lsvz</code> format specification is published under the CC BY 4.0 license to encourage widespread, open adoption. You are free to share and adapt the format for any purpose, even commercially, as long as you give appropriate credit to LandSurv.ai.
-                    </p>
-                    <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer" className={`text-sm text-amber-400 hover:underline mt-2 inline-block`}>
-                    View License Details &rarr;
-                    </a>
+          <section id="lsvz-compatibility" className="scroll-mt-6 border-t border-white/[0.08] pt-8">
+            <SectionHeading index="07" title="Versioning & compatibility" kicker="How the format evolves without breaking old projects." />
+            <div className="overflow-hidden rounded-xl border border-white/[0.08]">
+              {[
+                ['Current specification', `v${LSVZ_SPEC_VERSION} · published ${LSVZ_SPEC_RELEASE}`],
+                ['Container rule', 'manifest.json is reserved and always root-level'],
+                ['Additive changes', 'New optional fields and embedded metadata are backward-compatible'],
+                ['Breaking changes', 'New top-level groups or semantic contract changes bump the minor version'],
+                ['Legacy loading', 'The app normalizes older manifests before hydrating session state'],
+                ['Unknown data', 'Unrecognized keys are preserved or ignored rather than treated as fatal'],
+              ].map(([label, value], index) => (
+                <div key={label} className={`grid gap-1 px-4 py-3 sm:grid-cols-[210px_minmax(0,1fr)] sm:gap-4 ${index === 0 ? '' : 'border-t border-white/[0.05]'}`}>
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">{label}</span>
+                  <span className="text-[13px] leading-6 text-gray-300">{value}</span>
                 </div>
+              ))}
+            </div>
+            <div className="mt-4 rounded-lg border border-amber-400/20 bg-amber-950/15 px-4 py-3 text-[12px] leading-6 text-amber-100/80">
+              <strong className="text-amber-200">v1.3 note.</strong> The manifest adds the Redline run group and the
+              parametric road-model record. Legacy <code className="font-mono">roadCorridors</code> entries remain
+              readable; new models use the baseline-linked <code className="font-mono">road-model</code> mode.
+            </div>
+          </section>
+
+          <section id="lsvz-license" className="scroll-mt-6 border-t border-white/[0.08] pt-8">
+            <SectionHeading index="08" title="Licensing" kicker="Open specification, explicit attribution." />
+            <div className="flex flex-col gap-4 rounded-xl border border-amber-400/20 bg-amber-950/15 p-5 sm:flex-row sm:items-start">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-amber-400/30 bg-amber-500/10 font-mono text-xs font-bold text-amber-300">CC</div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-white">Creative Commons Attribution 4.0 International</h3>
+                  <span className="rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-emerald-300">CC BY 4.0</span>
                 </div>
-            </section>
-        </>
-    );
+                <p className="mt-2 text-[13px] leading-6 text-gray-400">
+                  The <code className="font-mono text-amber-200">.lsvz</code> specification is published under
+                  CC BY 4.0. You may share and adapt it for any purpose, including commercially, with attribution
+                  to LandSurv.ai. The license covers the specification text and schema; the application, agents,
+                  and third-party source files retain their own terms.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-4 text-[11px]">
+                  <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-amber-300 hover:underline">License text <ExternalLink className="h-3 w-3" /></a>
+                  <a href="https://github.com/LandSurvAi/landsurv-core" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-amber-300 hover:underline">Reference implementation <ExternalLink className="h-3 w-3" /></a>
+                </div>
+              </div>
+            </div>
+            <footer className="mt-6 flex flex-col gap-2 border-t border-white/[0.06] pt-4 text-[10px] text-gray-600 sm:flex-row sm:items-center sm:justify-between">
+              <span className="inline-flex items-center gap-1.5 font-mono"><Archive className="h-3 w-3" /> .lsvz specification v{LSVZ_SPEC_VERSION} · {LSVZ_SPEC_RELEASE}</span>
+              <span>LandSurv.ai · open format, professional provenance</span>
+            </footer>
+          </section>
+        </main>
+      </div>
+    </div>
+  );
 };

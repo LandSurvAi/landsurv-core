@@ -1,13 +1,14 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { type Centerline, type CenterlinePI, AgentType, type Settings } from '../types';
+import { type Centerline, type CenterlinePI, type ParametricAssociation, AgentType, type Settings } from '../types';
 import { calculatePointFromStationOffset, parseStation, formatStationLabel } from '../utils/stationing';
+import { createCenterlineStationPointAssociation } from '../services/parametricAssociations';
 import { PointAgent } from '../services/PointAgent';
 import { useErrorReporter } from '../contexts/AppStateContext';
 
 interface StationingChatProps {
   centerlines: Centerline[];
   onUpdateCenterline: (updatedCenterline: Centerline) => void;
-  onPlacePoint: (northing: number, easting: number, pointNumber: string, description: string) => void;
+  onPlacePoint: (northing: number, easting: number, pointNumber: string, description: string, parametricAssociation?: ParametricAssociation) => void;
   activeAgent: AgentType;
   settings: Settings;
   agentDrawMode?: 'both' | 'points' | 'lines';
@@ -97,11 +98,17 @@ const StationingChat: React.FC<StationingChatProps> = ({ centerlines, onUpdateCe
             const [next] = agent.getNextNumbers(1);
             pn = next;
         }
+        const description =
+            stationing.description ||
+            `STA ${stationing.station} OFF ${Math.abs(offsetNum)}' ${stationing.isRight ? 'RT' : 'LT'}`;
         onPlacePoint(
             coords.northing,
             coords.easting,
             pn,
-            stationing.description || `STA ${stationing.station} OFF ${Math.abs(offsetNum)}' ${stationing.isRight ? 'RT' : 'LT'}`
+            description,
+            createCenterlineStationPointAssociation(activeCL, stationNum, finalOffset, {
+                label: description,
+            }),
         );
         setStationing(prev => ({ ...prev, pointNumber: '', description: '' }));
     } else {

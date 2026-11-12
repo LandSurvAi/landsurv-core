@@ -9,12 +9,21 @@
 import { useEffect } from 'react';
 import { interAgentComm, type AgentMessage, type AgentResponse } from './InterAgentCommunication';
 import { AgentType } from '../types';
-import type { Centerline, CenterlinePI, PointList } from '../types';
+import type { Centerline, CenterlinePI, PointList, SurveyLine } from '../types';
 import { parseAzimuthFlexible, RAD_PER_DEG } from '../utils/cogoLib';
 import { formatStation, resolveBeginStation } from '../utils/stationing';
+import { generateParallelOffsetLinesForCenterline } from './roadingSkillHandlers';
+import {
+  createCenterlineOffsetAssociation,
+  tagCenterlineOffsetLines,
+} from './parametricAssociations';
 
 export interface UseClSkillsOpts {
   setCenterlines: React.Dispatch<React.SetStateAction<Centerline[]>>;
+  /** Canvas linework — receives the offset polylines drawn by `cl_draw_offsets`. */
+  setLines: React.Dispatch<React.SetStateAction<SurveyLine[]>>;
+  /** Live alignments — resolves the baseline named by `cl_draw_offsets`. */
+  centerlinesRef?: React.RefObject<Centerline[]>;
   /** Live point database — resolves the first point's description when the caller omits it. */
   pointListsRef?: React.RefObject<PointList[]>;
   logActionToFieldbook: (msg: string) => void;
@@ -147,7 +156,7 @@ function askForInput(
  * Computes PI coordinates from a legs description (tangents + circular curves)
  * and upserts the resulting Centerline into the session.
  */
-export function useClSkills({ setCenterlines, pointListsRef, logActionToFieldbook }: UseClSkillsOpts): void {
+export function useClSkills({ setCenterlines, setLines, centerlinesRef, pointListsRef, logActionToFieldbook }: UseClSkillsOpts): void {
   useEffect(() => {
     const unsubCreate = interAgentComm.onCommand(
       'cl_create_from_description',
@@ -505,6 +514,127 @@ export function useClSkills({ setCenterlines, pointListsRef, logActionToFieldboo
       },
     );
 
-    return () => { unsubCreate(); unsubFromPoints(); };
-  }, [setCenterlines, pointListsRef, logActionToFieldbook]);
+    // -----------------------------------------------------------------------
+    // cl_draw_offsets — draw parallel linework along the loaded alignment.
+    // This is the host action behind "draw a road along the baseline": the
+    // model names the offsets, the host builds continuous polylines. Stationing
+    // parameters are intentionally NOT used here — they only stake points.
+    // -----------------------------------------------------------------------
+    const unsubDrawOffsets = interAgentComm.onCommand(
+      'cl_draw_offsets',
+      async (message): Promise<AgentResponse> => {
+        const d = (message.data ?? {}) as Record<string, unknown>;
+        const centerlines = centerlinesRef?.current ?? [];
+        const requested =
+          typeof d.centerlineId === 'string' && d.centerlineId.trim()
+            ? d.centerlineId.trim()
+            : typeof d.centerlineName === 'string' && d.centerlineName.trim()
+              ? d.centerlineName.trim()
+              : '';
+        let cl = requested
+          ? centerlines.find(
+              c => c.id === requested || c.name.trim().toLowerCase() === requested.toLowerCase(),
+            )
+          : undefined;
+        if (!cl) {
+          cl = centerlines.find(c => (c.pis?.length ?? 0) >= 2);
+        }
+        if (!cl || (cl.pis?.length ?? 0) < 2) {
+          return respond(
+            message,
+            false,
+            undefined,
+            'No usable baseline/centerline is loaded. Load or create an alignment first, then ask me to draw along it.',
+          );
+        }
+
+        const rawOffsets = Array.isArray(d.offsets)
+          ? (d.offsets as unknown[])
+          : Array.isArray(d.offset)
+            ? (d.offset as unknown[])
+            : typeof d.offset === 'number'
+              ? [d.offset]
+              : [];
+        let offsets = rawOffsets
+          .map(value => (typeof value === 'string' ? Number(value) : value))
+          .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+          .map(value => Math.round(value * 1000) / 1000)
+          .filter(value => Math.abs(value) > 1e-6 && Math.abs(value) <= 5000);
+        offsets = Array.from(new Set(offsets)).slice(0, 24);
+
+        if (offsets.length === 0) {
+          const widthFt =
+            typeof d.widthFt === 'number' && Number.isFinite(d.widthFt) && d.widthFt > 0
+              ? d.widthFt
+              : 24;
+          const half = Math.round((widthFt / 2) * 1000) / 1000;
+          offsets = [-half, half];
+        }
+
+        const layer =
+          typeof d.layer === 'string' && d.layer.trim() ? d.layer.trim() : 'L-ROAD';
+        const lineType =
+          typeof d.lineType === 'string' && d.lineType.trim() ? d.lineType.trim() : 'CONTINUOUS';
+        const prefix =
+          typeof d.polylinePrefix === 'string' && d.polylinePrefix.trim()
+            ? d.polylinePrefix.trim()
+            : 'cl-offset';
+
+        const parametric = d.parametric !== false;
+        const associationIds: string[] = [];
+        const newLines = offsets.flatMap(offset => {
+          const polylinePrefix = `${prefix}-${offset >= 0 ? 'rt' : 'lt'}`;
+          const generated = generateParallelOffsetLinesForCenterline(
+            cl!,
+            offset,
+            layer,
+            lineType,
+            polylinePrefix,
+          );
+          if (!parametric) return generated;
+          const association = createCenterlineOffsetAssociation(
+            cl!,
+            offset,
+            layer,
+            lineType,
+            polylinePrefix,
+            {
+              ownerKind: 'manual',
+              label: `${Math.abs(offset)}' ${offset >= 0 ? 'RT' : 'LT'} of ${cl!.name}`,
+            },
+          );
+          associationIds.push(association.id);
+          return tagCenterlineOffsetLines(generated, association);
+        });
+
+        if (newLines.length === 0) {
+          return respond(
+            message,
+            false,
+            undefined,
+            `Could not draw offsets along "${cl.name}" — the alignment has no usable length.`,
+          );
+        }
+
+        setLines(prev => [...prev, ...newLines]);
+        logActionToFieldbook(
+          `Drew ${newLines.length} offset segment(s) along baseline "${cl.name}" at ${offsets
+            .map(offset => `${Math.abs(offset)}' ${offset >= 0 ? 'RT' : 'LT'}`)
+            .join(', ')} on layer ${layer}.`,
+        );
+
+        return respond(message, true, {
+          centerlineId: cl.id,
+          centerlineName: cl.name,
+          offsets,
+          addedLines: newLines.length,
+          layer,
+          parametric,
+          associationIds,
+        });
+      },
+    );
+
+    return () => { unsubCreate(); unsubFromPoints(); unsubDrawOffsets(); };
+  }, [setCenterlines, setLines, centerlinesRef, pointListsRef, logActionToFieldbook]);
 }

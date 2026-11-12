@@ -44,6 +44,7 @@ import {
     type RasterUnderlay,
     type CanvasTextAnnotation,
     type AnnotationTextStyle,
+    type RedlineGhost,
     type GisFeature,
     DEFAULT_ANNOTATION_TEXT_STYLES,
 } from '../types.ts';
@@ -487,6 +488,8 @@ interface DrawingCanvasProps {
     onCancelContourLabelTool?: () => void;
     onLayerColorChange: (layer: 'pointNumber' | 'description' | 'elevation', color: string) => void;
     activeAgent: AgentType;
+    /** Force Agent test override, forwarded to the command line. */
+    forcedAgent?: AgentType | null;
     settings: Settings;
     zoomTarget: SurveyPoint | null;
     onZoomComplete: () => void;
@@ -626,6 +629,10 @@ interface DrawingCanvasProps {
     setAnnotationScale?: React.Dispatch<React.SetStateAction<number>>;
     /** Standalone text entities: manual notes and generated point labels. */
     textAnnotations?: CanvasTextAnnotation[];
+    /** Read-only Redline worklist previews. Never enter drawing state or exports. */
+    redlineGhosts?: RedlineGhost[];
+    selectedRedlineItemId?: string | null;
+    onSelectRedlineItem?: (itemId: string) => void;
     /** Named text-style catalog shared with the Annotation Manager. */
     annotationTextStyles?: AnnotationTextStyle[];
     /** Style applied to newly placed text. */
@@ -1285,7 +1292,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         initialTransform,
         onTransformChange,
         points, lines, contourLabels, contourGenerations = [], onMoveContourLabel, centerlines, customSymbols, enabledBuiltinSymbolIds, pointLayers, attributeScale, setAttributeScale, lineLabelScale, setLineLabelScale, lineThickness, setLineThickness, contourLabelScale, onLayerColorChange, activeAgent, settings, zoomTarget, onZoomComplete,
-        onUpdatePointLabelOffset, onAddLine, onDeleteLine, onDeletePoints, onDeleteCenterline, onUpsertCenterline, onOpenStationingSettings, onOpenCenterlineTools, canUndo, canRedo, onUndo, onRedo, wmsServices, activeWmsLayers, offlineMapAreas, onRedrawAndShowAll, onOpenDxfExportModal,
+        onUpdatePointLabelOffset, onAddLine, onDeleteLine, onDeletePoints, onDeleteCenterline, onUpsertCenterline, onOpenStationingSettings, onOpenCenterlineTools, canUndo, canRedo, onUndo, onRedo, wmsServices, activeWmsLayers, offlineMapAreas, onRedrawAndShowAll, onOpenDxfExportModal, forcedAgent = null,
         onUpdatePointAnnotationOffset,
         isLayerPanelOpen, setIsLayerPanelOpen, onLayerToggle, activeAccent, currentPosition, projectedPosition, onZoomToPoint,
         linesVisible, onSetLinesVisible, centerlinesVisible, onSetCenterlinesVisible, pointLists, onTogglePointListVisibility, deedMetadata, onToolStateChange, onShowSettings,
@@ -1295,6 +1302,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         rasterUnderlays = EMPTY_RASTER_UNDERLAYS, selectedRasterUnderlayId, onSelectRasterUnderlay, onUpdateRasterUnderlay,
         customAnnotations = [], annotationScale = 1, setAnnotationScale,
         textAnnotations = [], annotationTextStyles, activeTextStyleName,
+        redlineGhosts = [], selectedRedlineItemId, onSelectRedlineItem,
         parcelLabels, mapAreaLabels, annotationCategories,
         tinSurfaces = [],
         boundaryFiles,
@@ -19314,6 +19322,52 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onTouchEnd={handleTouchEnd}
             />
 
+            {redlineGhosts.length > 0 && (
+                <div
+                    className="pointer-events-none absolute inset-0 z-20 overflow-hidden"
+                    aria-label="Redline review ghosts"
+                >
+                    {redlineGhosts.map(ghost => {
+                        const screen = worldToScreen(ghost.anchor.easting, ghost.anchor.northing);
+                        const width = canvasRef.current?.clientWidth ?? containerRef.current?.clientWidth ?? 0;
+                        const height = canvasRef.current?.clientHeight ?? containerRef.current?.clientHeight ?? 0;
+                        if (!Number.isFinite(screen.x) || !Number.isFinite(screen.y)) return null;
+                        if (width > 0 && (screen.x < -80 || screen.x > width + 80)) return null;
+                        if (height > 0 && (screen.y < -80 || screen.y > height + 80)) return null;
+                        const selected = selectedRedlineItemId === ghost.id;
+                        const tone = ghost.kind === 'delete'
+                            ? 'border-rose-400/80 bg-rose-500/15 text-rose-50'
+                            : ghost.status === 'needs_clarification'
+                                ? 'border-amber-400/80 bg-amber-500/15 text-amber-50'
+                                : 'border-pink-400/80 bg-pink-500/15 text-pink-50';
+                        return (
+                            <button
+                                key={ghost.id}
+                                type="button"
+                                aria-label={`${ghost.number}: ${ghost.reviewerText || ghost.action}`}
+                                title={`${ghost.number} · ${ghost.targetLabel}\n${ghost.reviewerText || ghost.action}`}
+                                onClick={event => {
+                                    event.stopPropagation();
+                                    onSelectRedlineItem?.(ghost.id);
+                                }}
+                                className={`pointer-events-auto absolute max-w-[240px] -translate-y-full rounded-md border border-dashed px-1.5 py-1 text-left shadow-lg backdrop-blur-sm transition ${tone} ${selected ? 'ring-2 ring-pink-300 ring-offset-1 ring-offset-slate-950' : 'hover:brightness-125'}`}
+                                style={{ left: screen.x, top: screen.y }}
+                            >
+                                <span className="mb-0.5 flex items-center gap-1 text-[9px] font-black uppercase tracking-wide opacity-90">
+                                    <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-slate-950/70 px-1 text-[8.5px] text-pink-100">{ghost.number}</span>
+                                    <span>{ghost.kind === 'delete' ? 'delete' : ghost.kind === 'text' ? 'text' : 'review'}</span>
+                                    {ghost.confidence === 'low' && <span className="text-amber-200">low confidence</span>}
+                                </span>
+                                {ghost.beforeText && <span className="block truncate text-[9px] line-through opacity-60">{ghost.beforeText}</span>}
+                                <span className="block whitespace-pre-wrap break-words text-[10px] font-semibold leading-tight">
+                                    {ghost.afterText ?? ghost.action}
+                                </span>
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+
             {props.contourLabelTool && props.onContourLabelStrike && (
                 <ContourLabelStrikeOverlay
                     mode={props.contourLabelTool}
@@ -22442,6 +22496,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onCycleAgentDrawMode={onCycleAgentDrawMode}
                 onCycleAgentAnnotMode={onCycleAgentAnnotMode}
                 activeAgent={activeAgent}
+                forcedAgent={forcedAgent}
                 isWorkspaceEmpty={
                     points.length === 0 &&
                     lines.length === 0 &&

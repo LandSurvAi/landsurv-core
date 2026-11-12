@@ -157,8 +157,8 @@ export const AppStateProvider: React.FC<AppStateProviderProps> = ({ children, av
   
   // Agent State
   const [initializedAgents, setInitializedAgents] = useState<Set<AgentType>>(new Set());
-  const [activeAgent, setActiveAgent] = useState<AgentType>(AgentType.RAW_CRAWLER);
-  const [lastActiveAgent, setLastActiveAgent] = useState<AgentType>(AgentType.RAW_CRAWLER);
+  const [activeAgent, setActiveAgent] = useState<AgentType>(AgentType.LSVZ_AGENT);
+  const [lastActiveAgent, setLastActiveAgent] = useState<AgentType>(AgentType.LSVZ_AGENT);
   const [activeModel, setActiveModel] = useState<string>(availableModels[0]);
   
   // Text Editor State

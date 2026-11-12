@@ -4,6 +4,7 @@ import { parseCanvasCommand, executeCanvasCommand, describeCommand, type Command
 import { CommandHelpView, type CommandReference } from './CommandHelpView';
 import { AgentType, MessageRole, type ChatMessage } from '../types';
 import { agentConfig, agentThemeColors } from '../constants/agents';
+import { formatRelayTag } from '../services/conversationIdentity';
 import { sanitizeZoningAnswer } from '../utils/zoningRender';
 import { formatChatHtml } from '../utils/chatHtml';
 import SuggestedQuestions from './SuggestedQuestions';
@@ -129,6 +130,8 @@ interface CanvasTerminalProps {
   snapControls?: SnapControls;
   /** Unified Agent Mode props (ported from ChatInterface) */
   activeAgent?: AgentType | null;
+  /** Force Agent test override; the only state where the line stops reading LSAI. */
+  forcedAgent?: AgentType | null;
   /** True when no project geometry or files are loaded; drives first-run intake options. */
   isWorkspaceEmpty?: boolean;
   messages?: ChatMessage[];
@@ -204,6 +207,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   statusBadges,
   snapControls,
   activeAgent,
+  forcedAgent = null,
   isWorkspaceEmpty = false,
   messages = [],
   onSendMessage,
@@ -353,15 +357,29 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const isResizingRef = useRef(false);
   const resizeStartRef = useRef<{ clientY: number; origHeight: number }>({ clientY: 0, origHeight: 0 });
 
-  // Resolve the active agent (defaults to the LSAI project assistant).
-  const effectiveAgent = activeAgent || AgentType.LSVZ_AGENT;
-  const isSpecialistPluggedIn = effectiveAgent !== AgentType.LSVZ_AGENT;
-  const agentMeta = agentConfig[effectiveAgent];
-  const agentLabel = effectiveAgent === AgentType.LSVZ_AGENT
-    ? 'LSAI Agent'
-    : (agentMeta?.label || effectiveAgent);
-  const AgentIcon = agentMeta?.icon || LsvzIcon;
-  const accentColor = agentThemeColors[effectiveAgent] || '#38bdf8';
+  // The user always talks to LSAI. A selected agent is called in: it owns the
+  // socket glyph and the accent, but never the command-line name. Force Agent
+  // is the only bypass.
+  const behaviorAgent = activeAgent || AgentType.LSVZ_AGENT;
+  const isForcedAgent = Boolean(forcedAgent);
+  const socketAgent = isForcedAgent ? forcedAgent! : behaviorAgent;
+  const isSpecialistPluggedIn = socketAgent !== AgentType.LSVZ_AGENT;
+  const calledInAgent = !isForcedAgent && behaviorAgent !== AgentType.LSVZ_AGENT ? behaviorAgent : null;
+  const calledInLabel = calledInAgent
+    ? (agentConfig[calledInAgent]?.label || calledInAgent)
+    : null;
+  const socketMeta = agentConfig[socketAgent];
+  const AgentIcon = socketMeta?.icon || LsvzIcon;
+  const conversationLabel = isForcedAgent
+    ? (agentConfig[forcedAgent!]?.label || forcedAgent!)
+    : 'LSAI';
+  const agentLabel = conversationLabel;
+  const accentColor = agentThemeColors[socketAgent] || '#38bdf8';
+  const WordmarkIcon = calledInAgent
+    ? (agentConfig[calledInAgent]?.icon || null)
+    : isForcedAgent
+      ? (agentConfig[forcedAgent!]?.icon || null)
+      : null;
   const resolvedTextScale = Number.isFinite(textScale)
     ? Math.min(1.6, Math.max(0.75, textScale))
     : 1.15;
@@ -371,13 +389,12 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const hasPropertiesSelection = propertiesSelectionTotal > 0;
   const modelLabel = formatModelDisplay(currentModelName);
   const agentWordmark = (
-    <span className="uppercase">
-      {isSpecialistPluggedIn ? (
-        agentLabel
-      ) : (
-        <>
-          <span className="text-white">LSAI</span>
-        </>
+    <span className="uppercase inline-flex items-center gap-1">
+      <span style={{ color: isForcedAgent || calledInAgent ? accentColor : '#ffffff' }}>
+        {conversationLabel}
+      </span>
+      {WordmarkIcon && (
+        <WordmarkIcon className="h-3 w-3 shrink-0" style={{ color: accentColor }} />
       )}
     </span>
   );
@@ -584,7 +601,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       lastMessage.a2ui.status !== 'completed' &&
       lastMessage.a2ui.status !== 'dismissed'
   );
-  const baseQuickThoughtBreakdown = decomposeMessageForQuickThought(lastMessage, effectiveAgent);
+  const baseQuickThoughtBreakdown = decomposeMessageForQuickThought(lastMessage, behaviorAgent);
   // Greetings often arrive without embedded prompts. Give every agent a useful
   // first Quick Thought so its opening state is immediately actionable.
   const initialQuickThoughtOptions =
@@ -593,7 +610,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     !baseQuickThoughtBreakdown.hasActionablePrompt &&
     !lastMessage.quickThoughtText &&
     !hasActiveA2UI
-      ? getAgentInitialQuickThoughtOptions(effectiveAgent, { isWorkspaceEmpty })
+      ? getAgentInitialQuickThoughtOptions(behaviorAgent, { isWorkspaceEmpty })
       : [];
   const quickThoughtBreakdown = initialQuickThoughtOptions.length > 0
     ? {
@@ -625,7 +642,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     Boolean(workflowThought) && !isBottomAgentChatOpen && !isAgentChatOpen;
   const pendingOptions = lastMessage?.questionOptions ?? quickThoughtBreakdown.options ?? [];
   const thoughtKey = lastMessage
-    ? `${effectiveAgent}:${messages.length}:${lastMessage.role}:${lastMessage.quickThoughtText ?? ''}:${lastMessage.quickThoughtLabel ?? ''}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}:${quickThoughtBreakdown.kind ?? ''}:${latestAgentPreview}:${liveScoutActivity?.id ?? ''}`
+    ? `${behaviorAgent}:${messages.length}:${lastMessage.role}:${lastMessage.quickThoughtText ?? ''}:${lastMessage.quickThoughtLabel ?? ''}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}:${quickThoughtBreakdown.kind ?? ''}:${latestAgentPreview}:${liveScoutActivity?.id ?? ''}`
     : liveScoutActivity
       ? `scout:${liveScoutActivity.id}`
       : null;
@@ -851,7 +868,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
 
   useEffect(() => {
     setShowEarlierAgentMessages(false);
-  }, [effectiveAgent]);
+  }, [behaviorAgent]);
 
   // When a new tool dialog becomes available, bring it into view at the end of
   // the conversation rather than leaving it below the fold.
@@ -953,7 +970,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     const unknownVerb = rawInput ? parseCanvasCommand(rawInput).verb : '';
     if (unknownVerb && !describeCommand(unknownVerb)) {
       links.push({
-        label: `Ask ${isSpecialistPluggedIn ? agentLabel : 'LSAI'}`,
+        label: `Ask ${agentLabel}`,
         onClick: () => {
           setAgentInputText(rawInput!);
           focusAgentCommandLine();
@@ -1094,7 +1111,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     const stripHtml = (s: string) => s.replace(/<br\s*\/?>(\s*)/gi, '\n').replace(/<[^>]+>/g, '');
     const lines: string[] = [];
     lines.push('# LandSurv.ai Conversation Export');
-    lines.push(`Agent: ${agentLabel} (${effectiveAgent})`);
+    lines.push(`Agent: ${agentLabel}${calledInLabel ? ` (called in: ${calledInLabel})` : ''}`);
     lines.push(`Exported: ${new Date().toISOString()}`);
     lines.push(`Messages: ${messages.length}`);
     lines.push('');
@@ -1131,7 +1148,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       setCopyStatus('error');
     }
     setTimeout(() => setCopyStatus('idle'), 1800);
-  }, [messages, agentLabel, effectiveAgent]);
+  }, [messages, agentLabel, calledInLabel]);
 
   const handleKeyDownInput = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Space on an empty CAD line repeats the last command, matching the
@@ -1536,7 +1553,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   /** One renderer for every A2UI card, whether it came from chat or a standalone launch. */
   const renderA2UICard = (message: ChatMessage) => {
     const a2ui = message.a2ui;
-    if (!a2ui || a2ui.kind === 'intake-prompt') return null;
+    if (!a2ui || a2ui.kind === 'intake-prompt' || a2ui.quickThoughtOnly) return null;
     const a2uiKey = `${a2ui.agent}:${a2ui.widgetType}`;
     const isDocked = a2uiKey === dockedA2UIKey;
     const isFloating = a2uiKey === floatingA2UIKey;
@@ -1926,7 +1943,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                 <AgentIcon className="h-5 w-5" style={{ color: accentColor }} />
               </div>
               <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/40">
-                {isSpecialistPluggedIn ? 'Specialist Agent' : 'Project Assistant'}
+                {isForcedAgent ? 'Force Agent' : 'LSAI'}
               </p>
               <h3
                 className="mt-1 text-sm font-black uppercase tracking-[0.16em]"
@@ -1935,11 +1952,13 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                 {agentLabel}
               </h3>
               <p className="mt-0.5 max-w-md text-[11px] text-white/50">
-                {isSpecialistPluggedIn
-                  ? 'Type below to work directly with this agent. Use the arrow on the right to open the tool shelf, or choose another agent from the side menu.'
-                  : 'Ask anything about this project. I will handle the work directly or bring in the right specialist for you.'}
+                {isForcedAgent
+                  ? 'Force Agent test mode. This turn answers directly as the forced agent.'
+                  : calledInLabel
+                    ? `I'm handling the conversation. ${calledInLabel} is called in and will take the domain work when it's needed.`
+                    : 'Ask anything about this project. I will handle the work directly or bring in the right specialist for you.'}
               </p>
-              {!isSpecialistPluggedIn && suggestedQuestions.length > 0 && (
+              {!isForcedAgent && suggestedQuestions.length > 0 && (
                 <div className="mt-3 flex flex-wrap justify-center gap-1.5 max-w-2xl">
                   {suggestedQuestions.slice(0, 4).map(question => (
                     <button
@@ -1987,6 +2006,11 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                     {agentLabel}
                   </span>
                   <span aria-hidden="true" className="text-[9px] leading-none" style={{ color: `${accentColor}cc` }}>✦</span>
+                  {msg.relay && (
+                    <span className="rounded border border-white/15 bg-white/[0.04] px-1.5 py-[1px] text-[8px] font-semibold uppercase tracking-[0.1em] text-white/55">
+                      {formatRelayTag(msg.relay.agent, msg.relay.composedBy)}
+                    </span>
+                  )}
                 </span>
               )}
               <div
@@ -2025,7 +2049,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   dangerouslySetInnerHTML={{
                     __html: (() => {
                       const raw = msg.result || msg.text || '';
-                      if (effectiveAgent === AgentType.ZONING_AGENT && msg.role === MessageRole.MODEL) {
+                      if (behaviorAgent === AgentType.ZONING_AGENT && msg.role === MessageRole.MODEL) {
                         const cleaned = sanitizeZoningAnswer(raw);
                         if (!cleaned) {
                           return '<span class="text-white/40 italic">Researching live ordinance… (see Claw status)</span>';
@@ -2137,7 +2161,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                 setShowSuggestions(false);
               }}
               fontSize={13}
-              activeAgent={effectiveAgent}
+              activeAgent={behaviorAgent}
             />
           )}
           </div>
@@ -2776,8 +2800,8 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
               isLoading ? 'animate-pulse' : ''
             }`}
             style={{ '--socket-accent': accentColor } as React.CSSProperties}
-            title={`${isBottomAgentChatOpen ? 'Collapse' : 'Open'} ${agentLabel} chat (drag out to float the command line)`}
-            aria-label={`${isBottomAgentChatOpen ? 'Close' : 'Open'} agent chat for ${agentLabel}`}
+            title={`${isBottomAgentChatOpen ? 'Collapse' : 'Open'} ${agentLabel} chat${calledInLabel ? ` — ${calledInLabel} is called in` : ''} (drag out to float the command line)`}
+            aria-label={`${isBottomAgentChatOpen ? 'Close' : 'Open'} agent chat for ${agentLabel}${calledInLabel ? `; ${calledInLabel} is called in` : ''}`}
           >
             {/* Recessed inner rim: inset 3px with a 9px radius so it, too, is
                 concentric with the plug face. */}
@@ -2859,12 +2883,17 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                 <span aria-hidden="true" className="h-px w-3 rounded-full bg-white/80" />
                 {agentLabel}
                 <span aria-hidden="true" style={{ color: `${accentColor}cc` }}>✦</span>
+                {latestAgentMessage.relay && (
+                  <span className="rounded border border-white/15 bg-white/[0.04] px-1.5 py-[1px] text-[8px] font-semibold uppercase tracking-[0.1em] text-white/55">
+                    {formatRelayTag(latestAgentMessage.relay.agent, latestAgentMessage.relay.composedBy)}
+                  </span>
+                )}
               </div>
               <div
                 className="[&>*]:max-w-full [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap"
                 dangerouslySetInnerHTML={{
                   __html: formatChatHtml(
-                    effectiveAgent === AgentType.ZONING_AGENT
+                    behaviorAgent === AgentType.ZONING_AGENT
                       ? sanitizeZoningAnswer(latestAgentMessage.result || latestAgentMessage.text || '')
                       : latestAgentMessage.result || latestAgentMessage.text || ''
                   ),

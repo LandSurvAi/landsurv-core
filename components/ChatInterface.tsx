@@ -5,6 +5,7 @@ import { SendIcon, BrainCircuitIcon, StopIcon, LsvzIcon, DxfAnalyzerIcon, Lightb
 import SuggestedQuestions from './SuggestedQuestions.tsx';
 import { ToolsDrawer } from './ToolsDrawer.tsx';
 import { agentConfig, agentThemeColors } from '../constants/agents.ts';
+import { formatRelayTag } from '../services/conversationIdentity.ts';
 import { sanitizeZoningAnswer } from '../utils/zoningRender.ts';
 import { formatChatHtml } from '../utils/chatHtml.ts';
 import { A2UISurface } from './A2UISurface.tsx';
@@ -25,6 +26,8 @@ interface ChatInterfaceProps {
   chatBarAccessories?: React.ReactNode;
   dockedContent?: React.ReactNode;
   toolsRowAccessories?: React.ReactNode;
+  /** Force Agent test override; the only state where the panel stops reading LSAI. */
+  forcedAgent?: AgentType | null;
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -88,7 +91,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   toolsTitle, 
   chatBarAccessories,
   dockedContent,
-  toolsRowAccessories
+  toolsRowAccessories,
+  forcedAgent = null,
 }) => {
   const [input, setInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -130,14 +134,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     return () => window.removeEventListener('keydown', handleEscape);
   }, [showSuggestions]);
 
+  const isForced = Boolean(forcedAgent);
+  const calledInAgent = !isForced && activeAgent && activeAgent !== AgentType.LSVZ_AGENT ? activeAgent : null;
+  const calledInLabel = calledInAgent ? (agentConfig[calledInAgent]?.label || calledInAgent) : null;
+  const conversationAgent = isForced ? forcedAgent! : AgentType.LSVZ_AGENT;
+  const agentLabel = isForced ? (agentConfig[forcedAgent!]?.label || forcedAgent!) : 'LSAI';
+  const AgentIcon = agentConfig[conversationAgent]?.icon || LsvzIcon;
+  const CalledInIcon = calledInAgent ? agentConfig[calledInAgent]?.icon : null;
+  const accentColor = agentThemeColors[isForced ? forcedAgent! : (calledInAgent ?? AgentType.LSVZ_AGENT)] || '#94a3b8';
+
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
 
   const handleCopyConversation = useCallback(async () => {
     const stripHtml = (s: string) => s.replace(/<br\s*\/?>(\s*)/gi, '\n').replace(/<[^>]+>/g, '');
-    const agentLabel = agentLabels[activeAgent] || activeAgent;
     const lines: string[] = [];
     lines.push('# LandSurv.ai Conversation Export');
-    lines.push(`Agent: ${agentLabel} (${activeAgent})`);
+    lines.push(`Agent: ${agentLabel}${calledInLabel ? ` (called in: ${calledInLabel})` : isForced ? ' (forced)' : ''}`);
     lines.push(`Exported: ${new Date().toISOString()}`);
     lines.push(`URL: ${typeof window !== 'undefined' ? window.location.href : 'n/a'}`);
     lines.push(`UserAgent: ${typeof navigator !== 'undefined' ? navigator.userAgent : 'n/a'}`);
@@ -186,12 +198,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       setCopyStatus('error');
     }
     setTimeout(() => setCopyStatus('idle'), 1800);
-  }, [messages, activeAgent]);
-
-  const agentMeta = agentConfig[activeAgent];
-  const agentLabel = agentMeta?.label || agentLabels[activeAgent] || activeAgent;
-  const AgentIcon = agentMeta?.icon;
-  const accentColor = agentThemeColors[activeAgent] || '#94a3b8';
+  }, [messages, activeAgent, agentLabel, calledInLabel, isForced]);
   const modelLabel = formatModelDisplay(currentModelName);
   
   // DEBUG: Log tools content
@@ -226,6 +233,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <span className="truncate text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: accentColor, textShadow: `0 0 14px ${accentColor}55` }}>{agentLabel}</span>
                     <span aria-hidden="true" className="shrink-0 text-[9px]" style={{ color: `${accentColor}cc` }}>✦</span>
                   </span>
+                  {calledInLabel && CalledInIcon && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full border px-1.5 py-[1px] text-[8px] font-bold uppercase tracking-[0.1em]"
+                      style={{ color: accentColor, borderColor: `${accentColor}55`, backgroundColor: `${accentColor}14` }}
+                    >
+                      <CalledInIcon className="h-2.5 w-2.5" />
+                      called in
+                    </span>
+                  )}
                   {isLoading && (
                     <span
                       className="flex items-center gap-1 rounded-full border border-white/25 bg-white/[0.06] px-1.5 py-[1px] text-[8px] font-bold uppercase tracking-[0.12em] text-white/75"
@@ -239,6 +255,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   <span>Agent</span>
                   <span className="text-slate-700 light-theme:text-gray-400">/</span>
                   <span className="truncate text-slate-400 light-theme:text-gray-600">{modelLabel || 'Auto'}</span>
+                  {(calledInLabel || isForced) && (
+                    <>
+                      <span className="text-slate-700 light-theme:text-gray-400">·</span>
+                      <span className="truncate" style={{ color: accentColor }}>
+                        {isForced ? `forced: ${agentLabel}` : `called in: ${calledInLabel}`}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -335,10 +359,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   style={{ color: accentColor, textShadow: `0 0 14px ${accentColor}66` }}
                 >
                   {agentLabel}
+                </span>                  <span aria-hidden="true" className="text-[9px] leading-none" style={{ color: `${accentColor}cc` }}>✦</span>
+                  {msg.relay && (
+                    <span className="rounded border border-white/15 bg-white/[0.04] px-1.5 py-[1px] text-[8px] font-semibold uppercase tracking-[0.1em] text-white/55 light-theme:border-gray-300 light-theme:bg-gray-100 light-theme:text-gray-600">
+                      {formatRelayTag(msg.relay.agent, msg.relay.composedBy)}
+                    </span>
+                  )}
                 </span>
-                <span aria-hidden="true" className="text-[9px] leading-none" style={{ color: `${accentColor}cc` }}>✦</span>
-              </span>
-            )}
+              )}
             <div className={`min-w-0 max-w-[94%] md:max-w-xl p-3 rounded-lg overflow-hidden ${msg.role === MessageRole.USER ? 'bg-[#1a2431] text-slate-100 rounded-br-none border border-white/[0.08]' : 'bg-[#0f1620] text-slate-200 rounded-bl-none border border-white/[0.07] light-theme:bg-gray-200 light-theme:text-gray-800'}`}>
               {msg.role === MessageRole.MODEL && formatModelDisplay(msg.model || currentModelName) && (
                 <div className="mb-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide bg-white/[0.05] text-white/70 border border-white/15 light-theme:bg-gray-100 light-theme:text-gray-600 light-theme:border-gray-300">
@@ -373,7 +401,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               />
 
               {/* A2UI Interactive Surface (uploads, intake, and data explorers) */}
-              {msg.a2ui && msg.a2ui.kind !== 'intake-prompt' && (
+              {msg.a2ui && msg.a2ui.kind !== 'intake-prompt' && !msg.a2ui.quickThoughtOnly && (
                 <A2UISurface payload={msg.a2ui} />
               )}
 
@@ -473,8 +501,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     : 'border-white/[0.08] bg-white/[0.03] hover:border-white/[0.14] hover:bg-white/[0.06]'
                 } light-theme:border-gray-300 light-theme:bg-gray-100`}
                 style={{
-                  color: agentThemeColors[activeAgent] || '#94a3b8',
-                  borderColor: isToolsDrawerOpen ? agentThemeColors[activeAgent] || '#94a3b8' : undefined,
+                  color: accentColor,
+                  borderColor: isToolsDrawerOpen ? accentColor : undefined,
                 }}
                 title="Toggle Tools"
               >
@@ -493,7 +521,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask a question or give a command..."
+            placeholder={`Ask ${agentLabel} anything...`}
             rows={1}
             className="w-full bg-transparent text-slate-200 resize-none focus:outline-none p-2.5 pr-24 text-[13px] light-theme:text-gray-800"
             style={{ minHeight: '40px' }}

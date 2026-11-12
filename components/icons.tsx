@@ -216,6 +216,20 @@ export const RoadIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     </svg>
 );
 
+/** Redline Agent Glyph — a white 24×36 landscape sheet carrying red reviewer linework */
+export const RedlineIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        {/* 24×36 landscape sheet (exact 3:2) */}
+        <rect x="1.5" y="5.25" width="21" height="14" rx="0.9" fill="#ffffff" strokeWidth={1.25} />
+        {/* Title block */}
+        <path strokeWidth={0.9} opacity={0.6} d="M16.9 15.7h5.6M16.9 15.7v3.55M16.9 17.6h5.6" />
+        {/* Red reviewer markups: boundary linework, notes, and a callout arrow */}
+        <path stroke="#ef4444" strokeWidth={1.35} strokeLinecap="round" strokeLinejoin="round" d="M4.1 9.4 6.1 7.2l4 1 1.7 2.5-1.3 2.8-4.1.5-2.3-2.1Z" />
+        <path stroke="#ef4444" strokeWidth={1.3} strokeLinecap="round" d="M4.2 15h4.8M4.2 16.7h3.3" />
+        <path stroke="#ef4444" strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round" d="m14.4 12.2 1.3-1.3m0 0 .1 1.6m-.1-1.6-1.6-.1" />
+    </svg>
+);
+
 export const TableCellsIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M9 4.5v15m6-15v15m-10.875 0h15.75c.621 0 1.125-.504 1.125-1.125V5.625c0-.621-.504-1.125-1.125-1.125H4.125A1.125 1.125 0 003 5.625v12.75c0 .621.504 1.125 1.125 1.125z" />

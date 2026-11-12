@@ -5,6 +5,8 @@
 // - The `activeAgent` state determines which agent is currently in use. The `handleAgentChange` function is the primary way to switch between agents.
 
 import React, { useState, useCallback, useEffect, useRef, useMemo, useLayoutEffect, Suspense, lazy } from 'react';
+import RedlinePanel, { type RedlinePatchResult } from './components/Redline/RedlinePanel.tsx';
+import { buildRedlineGhosts } from './services/redline/ghosts.ts';
 import FileUpload from './components/FileUpload.tsx';
 import CivilDrafterFileUpload from './components/CivilDrafterFileUpload.tsx';
 import DeedInput from './components/DeedInput.tsx';
@@ -145,7 +147,9 @@ import { APP_VERSION as APP_VERSION_CONST } from './utils/appVersion.ts';
 import { buildCadManagerSessionState, createSessionZip, generateSessionFileName, toAliasRecord } from './utils/sessionZip.ts';
 import { isOssBuild } from './utils/ossMode.ts';
 import { useExperimentalAgentEnabled } from './hooks/useExperimentalAgentEnabled.ts';
-import { isExperimentalAgentEnabled } from './utils/experimentalAgents.ts';
+import { useParametricAssociations } from './hooks/useParametricAssociations.ts';
+import { getExperimentalAgentDetails, isExperimentalAgentEnabled, setExperimentalAgentEnabled } from './utils/experimentalAgents.ts';
+import { isAgentRetired } from './utils/retiredAgents.ts';
 // Defer non-critical page components for faster initial load
 const TechnologiesPage = lazy(() => import('./components/TechnologiesPage.tsx'));
 const SettingsPage = lazy(() => import('./components/SettingsPage.tsx'));
@@ -352,6 +356,12 @@ import { knowledgeBase, extractDeedMetadataFacts, extractRowFactsFromLines, extr
 import { LsvzPersistence } from './services/LsvzPersistence.ts';
 import { lsvzOrchestrator } from './services/LsvzOrchestrator.ts';
 import { buildAgentWelcome } from './services/agentWelcome.ts';
+import {
+  buildCallInAnnouncement,
+  buildReleaseAnnouncement,
+  resolveConversationIdentity,
+  shouldRelayToCalledIn,
+} from './services/conversationIdentity.ts';
 import {
   A2UI_INTAKE_AGENTS,
   buildA2UIIntakeGreeting,
@@ -630,6 +640,7 @@ const A2UI_DOCK_TITLES: Record<string, string> = {
     'point-upload': 'Point Upload',
     'deed-upload': 'Deed Upload',
     'deed-summary': 'Deed Summary',
+    'experimental-agent': 'Experimental Agent',
     'raw-upload': 'RAW Upload',
     'civil-drafter-upload': 'Civil Drafter Upload',
     'plan-upload': 'Plan Upload',
@@ -671,8 +682,10 @@ const A2UI_DOCK_TITLES: Record<string, string> = {
     'legal-writer': 'Legal Description Writer',
     'sheet-view': 'Sheet View (24×36 Plot Layout)',
     'roading-intake': 'Roading Intake',
+    'redline-upload': 'Redline Package',
     'roading-designer': 'Roading Designer',
     'roading-panel': 'Roading Studio',
+    'redline-workspace': 'Redline Workspace',
     'road-paint-studio': 'Road Paint Studio',
     'gps-rover': 'GPS Rover',
     'project-location': 'Project Location',
@@ -1332,6 +1345,8 @@ const AppContent = () => {
     stormwaterChatHistory, setStormwaterChatHistory,
     dirtVolumeChat, setDirtVolumeChat,
     dirtVolumeChatHistory, setDirtVolumeChatHistory,
+    redlineChat, setRedlineChat,
+    redlineChatHistory, setRedlineChatHistory,
     fieldbookNotes, setFieldbookNotes,
   } = useChatState();
   
@@ -1631,8 +1646,21 @@ const AppContent = () => {
   const [isRoadingPanelVisible, setIsRoadingPanelVisible] = useState(false);
   const [isRoadingWorking, setIsRoadingWorking] = useState(false);
   const [roadCorridors, setRoadCorridors] = useState<import('./types.ts').RoadCorridorRun[]>([]);
+  const drawRoadFromSurveyPoints = useCallback(async () => {
+    setIsRoadingWorking(true);
+    try {
+      await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_synthesize_existing', {});
+    } finally {
+      setIsRoadingWorking(false);
+    }
+  }, []);
   const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
   const experimentalStormwaterEnabled = useExperimentalAgentEnabled(AgentType.STORMWATER_AGENT);
+  const experimentalRedlineEnabled = useExperimentalAgentEnabled(AgentType.REDLINE_AGENT);
+  const [redlineRuns, setRedlineRuns] = useState<import('./types.ts').RedlineRun[]>([]);
+  const [activeRedlineRunId, setActiveRedlineRunId] = useState<string | null>(null);
+  const [selectedRedlineItemId, setSelectedRedlineItemId] = useState<string | null>(null);
+  const [redlineRequestedMode, setRedlineRequestedMode] = useState<import('./types.ts').RedlineReadingMode>('fast');
 
   // PROFILE_AGENT � direct UI panel (no AI round-trip; client-side generateProfile).
   const [isProfileGenPanelVisible, setIsProfileGenPanelVisible] = useState(false);
@@ -1656,6 +1684,20 @@ const AppContent = () => {
   const [annotationTextStyles, setAnnotationTextStyles] = useState<AnnotationTextStyle[]>(DEFAULT_ANNOTATION_TEXT_STYLES);
   const [activeAnnotationTextStyle, setActiveAnnotationTextStyle] = useState<string>(DEFAULT_ANNOTATION_TEXT_STYLES[0].name);
   const [textAnnotations, setTextAnnotations] = useState<CanvasTextAnnotation[]>([]);
+  // Text lives in App state, so opt it into the canvas undo stack. This is
+  // required for per-item Redline rollback and the batch undo label.
+  useHistorySlice('textAnnotations', textAnnotations, setTextAnnotations);
+
+  // Read-only redline review layer. Ghosts are derived from unapplied items and
+  // never enter canvas geometry, exports, or the session's entity arrays.
+  const activeRedlineRun = useMemo(
+    () => redlineRuns.find(run => run.id === activeRedlineRunId) ?? redlineRuns[redlineRuns.length - 1] ?? null,
+    [redlineRuns, activeRedlineRunId],
+  );
+  const redlineGhosts = useMemo(
+    () => buildRedlineGhosts(activeRedlineRun, { points, lines, textAnnotations, centerlines }),
+    [activeRedlineRun, points, lines, textAnnotations, centerlines],
+  );
 
   // PARCEL LABEL FORMATTER � Boundary Agent parcel label field include/exclude + typography controls.
   const [parcelLabelFormatter, setParcelLabelFormatter] = useState<ParcelLabelFormatter>(DEFAULT_PARCEL_LABEL_FORMATTER);
@@ -3160,6 +3202,7 @@ const AppContent = () => {
         case AgentType.STRUCTURES_AGENT: setStructuresChat(null); break;
         case AgentType.SOILS_AGENT: setSoilsChat(null); break;
         case AgentType.ROADING_AGENT: setRoadingChat(null); break;
+        case AgentType.REDLINE_AGENT: setRedlineChat(null); break;
       }
     };
 
@@ -3169,12 +3212,45 @@ const AppContent = () => {
     if (
       next &&
       (next !== AgentType.ROADING_AGENT || isExperimentalAgentEnabled(AgentType.ROADING_AGENT)) &&
-      (next !== AgentType.STORMWATER_AGENT || isExperimentalAgentEnabled(AgentType.STORMWATER_AGENT))
+      (next !== AgentType.STORMWATER_AGENT || isExperimentalAgentEnabled(AgentType.STORMWATER_AGENT)) &&
+      (next !== AgentType.REDLINE_AGENT || isExperimentalAgentEnabled(AgentType.REDLINE_AGENT))
     ) {
       setInitializedAgents(prev => new Set(prev).add(next));
       setActiveAgent(next);
     }
   }, [settings.forceAgent, setActiveAgent, setInitializedAgents]);
+
+  // Call-in announcements: one LSAI-voiced marker per transition in the single
+  // visible thread. Force Agent is a bypass, not a call-in.
+  const previousVisibleAgentRef = useRef<AgentType | null>(null);
+  useEffect(() => {
+    const previous = previousVisibleAgentRef.current;
+    previousVisibleAgentRef.current = activeAgent ?? null;
+    if (!previous || previous === activeAgent) return;
+    if (settings.forceAgent) return;
+
+    if (activeAgent && activeAgent !== AgentType.LSVZ_AGENT) {
+      setLsvzChatHistory(prev => [
+        ...prev,
+        {
+          role: MessageRole.MODEL,
+          text: buildCallInAnnouncement(activeAgent),
+          callInEvent: { kind: 'called-in', agent: activeAgent },
+        },
+      ]);
+    } else if (previous !== AgentType.LSVZ_AGENT && !isAgentRetired(previous)) {
+      // Retired agents (e.g. the old RAW Crawler) should never be named in
+      // release copy; a stale saved session must not surface them.
+      setLsvzChatHistory(prev => [
+        ...prev,
+        {
+          role: MessageRole.MODEL,
+          text: buildReleaseAnnouncement(previous),
+          callInEvent: { kind: 'released', agent: previous },
+        },
+      ]);
+    }
+  }, [activeAgent, settings.forceAgent]);
 
   // ── CACP agent focus ──────────────────────────────────────────────────────
   // CACP owns the delegation stack for visible agent hand-offs. When an agent
@@ -3184,6 +3260,7 @@ const AppContent = () => {
     return interAgentComm.onAgentFocusChange(focus => {
       if (focus.agent === AgentType.ROADING_AGENT && !isExperimentalAgentEnabled(AgentType.ROADING_AGENT)) return;
       if (focus.agent === AgentType.STORMWATER_AGENT && !isExperimentalAgentEnabled(AgentType.STORMWATER_AGENT)) return;
+      if (focus.agent === AgentType.REDLINE_AGENT && !isExperimentalAgentEnabled(AgentType.REDLINE_AGENT)) return;
       setInitializedAgents(prev => (prev.has(focus.agent) ? prev : new Set(prev).add(focus.agent)));
       setActiveAgent(focus.agent);
     });
@@ -7377,7 +7454,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }
   }, [startSession, logActionToFieldbook, initializedAgents, settings, setProjectionPrompt]);
 
-  const getSetHistoryForAgent = useCallback((agent: AgentType): React.Dispatch<React.SetStateAction<ChatMessage[]>> | null => {
+  const getSpecialistHistorySetter = useCallback((agent: AgentType): React.Dispatch<React.SetStateAction<ChatMessage[]>> | null => {
     switch (agent) {
       case AgentType.RAW_CRAWLER: return setRawChatHistory;
       case AgentType.CIVIL_DRAFTER: return setCivilDrafterChatHistory;
@@ -7405,6 +7482,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       case AgentType.ROADING_AGENT: return setRoadingChatHistory;
       case AgentType.STORMWATER_AGENT: return setStormwaterChatHistory;
       case AgentType.DIRT_VOLUME_AGENT: return setDirtVolumeChatHistory;
+      case AgentType.REDLINE_AGENT: return setRedlineChatHistory;
       default: return null;
     }
   }, [
@@ -7414,8 +7492,41 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setSteepSlopeChatHistory, setProfileChatHistory, setCogoChatHistory, setRinexChatHistory,
     setDroneChatHistory, setZoningChatHistory, setTitleSearchChatHistory, setCadManagerChatHistory,
     setStandardsComplianceChatHistory, setStructuresChatHistory, setSoilsChatHistory, setRoadingChatHistory,
-    setStormwaterChatHistory, setDirtVolumeChatHistory,
+    setStormwaterChatHistory, setDirtVolumeChatHistory, setRedlineChatHistory,
   ]);
+
+  // A called-in agent's messages are visible in the one LSAI thread. The
+  // specialist still keeps its own hidden history for continuity.
+  const visibleBehaviorAgentRef = useRef<AgentType>(AgentType.LSVZ_AGENT);
+  visibleBehaviorAgentRef.current = settings.forceAgent ?? activeAgent ?? AgentType.LSVZ_AGENT;
+  const forcedAgentRef = useRef<AgentType | null>(null);
+  forcedAgentRef.current = settings.forceAgent ?? null;
+
+  const getSetHistoryForAgent = useCallback((agent: AgentType): React.Dispatch<React.SetStateAction<ChatMessage[]>> | null => {
+    const setter = getSpecialistHistorySetter(agent);
+    if (!setter || agent === AgentType.LSVZ_AGENT) return setter;
+    if (visibleBehaviorAgentRef.current !== agent) return setter;
+    return (updater) => {
+      setter(updater);
+      setLsvzChatHistory(prev => {
+        const next = typeof updater === 'function'
+          ? (updater as (previous: ChatMessage[]) => ChatMessage[])(prev)
+          : updater;
+        if (next.length <= prev.length) return next;
+        if (forcedAgentRef.current) return next;
+        const last = next[next.length - 1];
+        if (!last || last.role !== MessageRole.MODEL || last.relay || last.callInEvent || last.behaviorAgent === AgentType.LSVZ_AGENT) return next;
+        return [
+          ...next.slice(0, -1),
+          {
+            ...last,
+            behaviorAgent: agent,
+            relay: { agent, status: 'complete' as const, model: resolveModelForAgent(agent, activeModel) },
+          },
+        ];
+      });
+    };
+  }, [getSpecialistHistorySetter, activeModel, resolveModelForAgent]);
 
   // FIX: Add initialization for the new Contouring Agent.
   const initializeContouringAgent = useCallback(() => {
@@ -7699,6 +7810,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   // A2UI Conversational Intake Initialization:
   // When entering any agent that formerly used a full-screen upload screen,
   // go straight to the drawing canvas and greet the user inquisitively in chat.
+  const intakeIntroducedRef = useRef<Set<AgentType>>(new Set());
   useEffect(() => {
     if (isInitialScreen || !activeAgent) return;
     if (!A2UI_INTAKE_AGENTS.includes(activeAgent)) return;
@@ -7722,7 +7834,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             ...markPendingA2UICompleted(prev),
             {
               role: MessageRole.MODEL,
-              text: getUploadPromptCopy(activeAgent, widgetType),
+              text: `**${agentConfig[activeAgent]?.label || activeAgent} is called in.** ${getUploadPromptCopy(activeAgent, widgetType)}`,
+              behaviorAgent: AgentType.LSVZ_AGENT,
               a2ui: {
                 kind: 'upload-widget',
                 agent: activeAgent,
@@ -7796,8 +7909,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
     if (intake) {
       const setHistory = getSetHistoryForAgent(activeAgent);
-      if (setHistory) {
-        setHistory(prev => (prev.length === 0 ? [intake.message] : prev));
+      if (setHistory && !intakeIntroducedRef.current.has(activeAgent)) {
+        intakeIntroducedRef.current.add(activeAgent);
+        setHistory(prev => [
+          ...prev,
+          {
+            ...intake.message,
+            text: `**${agentConfig[activeAgent]?.label || activeAgent} is called in.** Choose an option below to get started.`,
+            behaviorAgent: AgentType.LSVZ_AGENT,
+          },
+        ]);
       }
       setSuggestedQuestions(intake.suggestedQuestions);
     }
@@ -7912,6 +8033,41 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setIsRoadingPanelVisible(false);
     }
   }, [activeAgent, isInitialScreen]);
+
+  // Redline Agent: seed the chat intake card and keep the canvas visible. The
+  // review workspace opens as an A2UI workspace-tool card after a package is
+  // submitted or the user chooses PDFs already in the project.
+  useEffect(() => {
+    if (activeAgent === AgentType.REDLINE_AGENT && experimentalRedlineEnabled && !isInitialScreen) {
+      if (!initializedAgents.has(AgentType.REDLINE_AGENT)) {
+        startSession();
+        try {
+          const newChat = startChatWithOverride(AgentType.REDLINE_AGENT, '');
+          setRedlineChat(newChat);
+        } catch (chatErr) {
+          console.warn('[Redline Agent] AI chat deferred:', chatErr);
+        }
+        setInitializedAgents(prev => new Set(prev).add(AgentType.REDLINE_AGENT));
+      }
+      setRedlineChatHistory(prev =>
+        prev.length === 0
+          ? [{
+              role: MessageRole.MODEL,
+              text: buildAgentWelcome(AgentType.REDLINE_AGENT, 'Use the <strong>Redline package</strong> card below to add marked-up PDFs, then open the review workspace for calibration and worklist sign-off.'),
+              a2ui: {
+                kind: 'upload-widget',
+                agent: AgentType.REDLINE_AGENT,
+                widgetType: 'redline-upload',
+                status: 'expanded',
+              },
+            }]
+          : prev,
+      );
+      setSuggestedQuestions(getAgentInitialQuickThoughtOptions(AgentType.REDLINE_AGENT));
+      showView('canvas');
+      setError(null);
+    }
+  }, [activeAgent, isInitialScreen, experimentalRedlineEnabled, initializedAgents, startSession, startChatWithOverride, showView]);
 
   // Flood Agent (v26.05.17.16): auto-show floating panel when agent activated;
   // auto-hide when switching away so the floating dialog doesn't linger.
@@ -12355,9 +12511,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, [handleFetchFloodZones, logActionToFieldbook]);
 
   // CACP — Centerline & Stationing skills (`cl_create_from_description`,
-  // `cl_create_from_points`, `place_station_offset_point`, `generate_stationed_points`).
-  useClSkills({ setCenterlines, pointListsRef, logActionToFieldbook });
+  // `cl_create_from_points`, `cl_draw_offsets`, `place_station_offset_point`,
+  // `generate_stationed_points`).
+  useClSkills({ setCenterlines, setLines, centerlinesRef, pointListsRef, logActionToFieldbook });
   useStationingSkills({ centerlinesRef, pointListsRef, setPointLists, settings, setSettings, logActionToFieldbook });
+  // Parametric geometry follows Centerline edits from every source (PI editor,
+  // baseline drawing, stationing chat, session load). Associated linework is
+  // rebuilt in `lines`, while station/offset points live in point lists.
+  useParametricAssociations(centerlines, setLines, setPointLists);
 
   /**
    * Standard presentation for an A2UI surface launched outside the chat feed.
@@ -12732,6 +12893,29 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }
   }, [activeAgent, isInitialScreen, openDirtVolumePanel]);
 
+  /** Raise the Redline workspace as an A2UI workspace-tool card in chat. */
+  const openRedlineWorkspace = useCallback(() => {
+    setRedlineChatHistory(prev => {
+      if (prev[prev.length - 1]?.a2ui?.widgetType === 'redline-workspace') return prev;
+      return [
+        ...prev,
+        {
+          role: MessageRole.MODEL,
+          text: 'Redline review workspace — sheet calibration, numbered worklist, response package, and Civil Drafter coordination.',
+          a2ui: {
+            kind: 'workspace-tool' as const,
+            agent: AgentType.REDLINE_AGENT,
+            widgetType: 'redline-workspace' as const,
+            workspaceTool: 'redline-workspace' as const,
+            status: 'expanded' as const,
+          },
+        },
+      ];
+    });
+    setIsChatPanelVisible(true);
+    setAgentChatOpenSignal(n => n + 1);
+  }, [setRedlineChatHistory, setIsChatPanelVisible]);
+
   // CACP — Domain skill handlers across Structures, Soils, Contouring, Steep
   // Slope, Profile, Voice, AR, DXF, Civil Drafter, Civil Plan Expert, CAD
   // Manager (`cad_set_active_drawing_layer`), and remaining survey agents.
@@ -12741,6 +12925,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setPointLists,
     lines,
     setLines,
+    textAnnotations,
+    setTextAnnotations,
+    withCanvasHistoryLabel: canvasHistory.withLabel,
     centerlines,
     setCenterlines,
     roadCorridors,
@@ -14732,20 +14919,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             case 'open-compliance-panel':
               showView('compliance');
               break;
-            case 'roading-synthesize-existing': {
-              // Inputs are optional: synthesize immediately from the loaded
-              // points/imagery. ROW lines are skipped when no width was given.
-              setIsRoadingPanelVisible(true);
-              setIsToolShelfVisible(true);
-              toggleToolDock('roading', true);
-              void interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_synthesize_existing', {
-                useSurveyPoints: true,
-                useBackgroundImagery: true,
-                useOsmWays: true,
-                syncCenterline: true,
-              });
-              break;
-            }
             case 'open-roading-studio':
               setIsRoadingPanelVisible(true);
               setIsToolShelfVisible(true);
@@ -16128,11 +16301,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
     }
 
-    // A CACP hand-off names the agent that must answer; interactive use follows
-    // whichever agent the user has open (defaulting to LSVZ_AGENT when unplugged).
-    // Force Agent overrides the interactive choice for testing.
-    const effectiveActiveAgent = forcedAgent ?? activeAgent ?? AgentType.LSVZ_AGENT;
-    const agent = agentOverride ?? forcedAgent ?? effectiveActiveAgent;
+    // The user always talks to LSAI. A selected agent is called in: it gets
+    // first refusal on domain work, but LSAI owns the visible turn. Force Agent
+    // remains the only bypass.
+    const identity = resolveConversationIdentity(activeAgent, forcedAgent);
+    const effectiveActiveAgent = identity.behaviorAgent;
+    const calledInAgent = identity.calledInAgent;
+    const lastRelayAgent = [...lsvzChatHistory].reverse().find(message => message.relay)?.relay?.agent ?? null;
+    const relayTurn = !agentOverride && !forcedAgent && !!calledInAgent
+      && shouldRelayToCalledIn(query, calledInAgent, lastRelayAgent);
+    const agent = agentOverride ?? forcedAgent ?? (relayTurn ? calledInAgent! : AgentType.LSVZ_AGENT);
+    const isRelayTurn = relayTurn && !agentOverride && !forcedAgent && agent !== AgentType.LSVZ_AGENT;
     let chat: Chat | null = null;
     let setHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>> | null = null;
     
@@ -16167,6 +16346,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         case AgentType.ROADING_AGENT: chat = roadingChat; setHistory = setRoadingChatHistory; break;
         case AgentType.STORMWATER_AGENT: chat = stormwaterChat; setHistory = setStormwaterChatHistory; break;
         case AgentType.DIRT_VOLUME_AGENT: chat = dirtVolumeChat; setHistory = setDirtVolumeChatHistory; break;
+        case AgentType.REDLINE_AGENT: chat = redlineChat; setHistory = setRedlineChatHistory; break;
         case AgentType.AR_AGENT: return; // AR agent doesn't use chat
         case AgentType.FIELD_BOOK: return; // Field book uses notepad, not chat
         case AgentType.FILE_MANAGER: return; // File manager doesn't use chat
@@ -16181,10 +16361,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setActiveAgent(forcedAgent);
     }
 
-    // When LSVZ Orchestrator delegates a turn to a specialist agent while LSVZ is active,
-    // mirror history updates into lsvzChatHistory so the unified command bar feed displays
-    // the specialist's streaming output and clarifying questions seamlessly.
-    if (agentOverride && effectiveActiveAgent === AgentType.LSVZ_AGENT && agent !== AgentType.LSVZ_AGENT && setHistory) {
+    // The visible transcript is always the LSAI thread. A relayed specialist
+    // writes to its own hidden history for continuity and to LSAI for display.
+    const isVisibleOverride = Boolean(agentOverride) && visibleBehaviorAgentRef.current === agent;
+    if ((isRelayTurn || forcedAgent || isVisibleOverride) && agent !== AgentType.LSVZ_AGENT) {
+      setHistory = getSetHistoryForAgent(agent) ?? setHistory;
+    }
+
+    // When LSAI delegates a turn to a specialist that is not the visible
+    // behavior agent, mirror the hidden specialist stream into LSAI.
+    if (agentOverride && agent !== AgentType.LSVZ_AGENT && setHistory && visibleBehaviorAgentRef.current !== agent) {
       const specialistSetHistory = setHistory;
       setHistory = (updater) => {
         specialistSetHistory(updater);
@@ -16211,6 +16397,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
         else if (agent === AgentType.DEED_READER) initialFileContext = deedFile || { name: 'deed.txt', content: '' };
         else if (agent === AgentType.CIVIL_PLAN_EXPERT) initialFileContext = planFiles || [];
+        else if (agent === AgentType.REDLINE_AGENT) initialFileContext = pdfViewerFiles || [];
         else if (agent === AgentType.DXF_ANALYZER) initialFileContext = dxfFile?.content || '';
         else if (agent === AgentType.IMAGE_ANALYZER) initialFileContext = imageFiles || [];
         else if (agent === AgentType.GIS_AGENT) initialFileContext = gisFile?.content || '';
@@ -16245,6 +16432,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           case AgentType.STRUCTURES_AGENT: setStructuresChat(freshChat); break;
           case AgentType.SOILS_AGENT: setSoilsChat(freshChat); break;
           case AgentType.ROADING_AGENT: setRoadingChat(freshChat); break;
+          case AgentType.REDLINE_AGENT: setRedlineChat(freshChat); break;
         }
         setInitializedAgents(prev => new Set(prev).add(agent));
       } catch (initErr: any) {
@@ -16431,12 +16619,20 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       void interAgentComm.offerRequest(agent, query).catch(() => { /* non-fatal */ });
     }
 
+    const isSpecialistTurn = isRelayTurn || isVisibleOverride || (!!agentOverride && agent !== AgentType.LSVZ_AGENT);
+    const turnMetadata: Partial<ChatMessage> = {
+      behaviorAgent: agent,
+      ...(isSpecialistTurn && !forcedAgent
+        ? { relay: { agent, status: 'streaming' as const, model: resolveModelForAgent(agent, activeModel) } }
+        : {}),
+    };
+
     if (isInternalFollowUp) {
-      setHistory(prev => [...prev, { role: MessageRole.MODEL, text: '', quickThoughtText: handoffQuickThought }]);
+      setHistory(prev => [...prev, { role: MessageRole.MODEL, text: '', quickThoughtText: handoffQuickThought, ...turnMetadata }]);
     } else {
       closeCanvasFlashInput();
       const userMessage: ChatMessage = { role: MessageRole.USER, text: query };
-      setHistory(prev => [...markPendingA2UICompleted(prev), userMessage, { role: MessageRole.MODEL, text: '', quickThoughtText: handoffQuickThought }]);
+      setHistory(prev => [...markPendingA2UICompleted(prev), userMessage, { role: MessageRole.MODEL, text: '', quickThoughtText: handoffQuickThought, ...turnMetadata }]);
     }
     setIsLoading(true);
     setError(null);
@@ -16627,6 +16823,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
     }
     
+    if (isRelayTurn) {
+      const recentTurns = lsvzChatHistory
+        .slice(-6)
+        .map(message => `${message.role === MessageRole.USER ? 'User' : 'LSAI'}: ${(message.result || message.text || '').replace(/<[^>]+>/g, ' ').trim()}`)
+        .filter(line => line.length > 0)
+        .join('\n');
+      if (recentTurns) {
+        context = `---BEGIN LSAI CONVERSATION (recent turns)---\n${recentTurns}\n---END LSAI CONVERSATION---\n\n` + context;
+      }
+    }
+
     let fullResponse = '';
     let queryToSend: string | Part[] = context + queryPrefix + query;
 
@@ -17242,7 +17449,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       } else {
         const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
         setError(`An unexpected error occurred: ${errorMessage}`);
-        const modelErrorMessage: ChatMessage = { role: MessageRole.MODEL, text: `⚠️ **I encountered an error trying to process your request.**\n\n${errorMessage}` };
+        const calledInErrorLabel = calledInAgent
+          ? (agentConfig[calledInAgent]?.label || calledInAgent)
+          : null;
+        const modelErrorMessage: ChatMessage = isRelayTurn && calledInErrorLabel
+          ? {
+              role: MessageRole.MODEL,
+              text: `**${calledInErrorLabel} couldn't take that one.** ${errorMessage}\n\nI'm still here — want me to try it from a different angle?`,
+              behaviorAgent: AgentType.LSVZ_AGENT,
+            }
+          : { role: MessageRole.MODEL, text: `⚠️ **I encountered an error trying to process your request.**\n\n${errorMessage}` };
         setHistory(prev => {
            const newHistory = [...prev];
            const lastMessageIndex = newHistory.length - 1;
@@ -17409,6 +17625,54 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
       }
 
+      // Models sometimes put the action payload in the THINKING section even
+      // though only RESULT is parsed. That used to be dropped silently: the
+      // user saw JSON in the thought panel and the canvas never changed. When
+      // RESULT has no JSON, lift the first recognized action object out of the
+      // thought trace, remove it from the thoughts, and execute it.
+      let actionJsonFromThinking: string | null = null;
+      if (!match && !fallbackJsonRaw && thinking) {
+        const ACTION_JSON_KEYS = new Set([
+          'askPeer', 'points', 'lines', 'chains', 'stationingParameters',
+          'stationingSettings', 'contourParameters', 'profileParameters',
+          'cutSheet', 'newFile', 'modifiedContent', 'plotGisFeature',
+          'plotGeoJson', 'closureParameters', 'deedMetadata', 'boundaries',
+          'descriptionsFound', 'recallFact',
+        ]);
+        const thoughtText = thinking;
+        let searchFrom = 0;
+        while (searchFrom < thoughtText.length) {
+          const candidate = extractBalancedJson(thoughtText.slice(searchFrom));
+          if (!candidate) break;
+          const candidateAt = thoughtText.indexOf(candidate, searchFrom);
+          if (candidateAt === -1) break;
+          let isAction = false;
+          try {
+            const parsed = JSON.parse(candidate);
+            isAction = Boolean(
+              parsed
+              && typeof parsed === 'object'
+              && !Array.isArray(parsed)
+              && Object.keys(parsed).some(key => ACTION_JSON_KEYS.has(key)),
+            );
+          } catch {
+            // Not valid JSON — keep scanning.
+          }
+          if (isAction) {
+            actionJsonFromThinking = candidate;
+            fallbackJsonRaw = candidate;
+            thinking = thoughtText
+              .replace(candidate, '')
+              .replace(/```(?:json)?\s*```/gi, '')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim() || undefined;
+            console.log('[JSON EXTRACTION] Recovered action JSON from THINKING, length:', candidate.length);
+            break;
+          }
+          searchFrom = candidateAt + candidate.length;
+        }
+      }
+
       const disclaimer = "\n\n*Disclaimer: Your requested data is ready for professional review.*";
       let jsonContentToParse: string | null = null;
       let finalFullResponse = fullResponse;
@@ -17422,10 +17686,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           finalResultText = stripThinkingBlocks(resultText).replace(jsonRegex, '```json\n' + jsonContentToParse + '\n```') + disclaimer;
       } else if (fallbackJsonRaw) {
           jsonContentToParse = fallbackJsonRaw;
-          // Re-render the response with a synthetic ```json fence so the chat UI displays it consistently
-          const fenced = '```json\n' + fallbackJsonRaw + '\n```';
-          finalFullResponse = stripThinkingBlocks(fullResponse).replace(fallbackJsonRaw, fenced) + disclaimer;
-          finalResultText = stripThinkingBlocks(resultText).replace(fallbackJsonRaw, fenced) + disclaimer;
+          if (actionJsonFromThinking) {
+            // Recovered from the thought trace: apply it, but don't echo the
+            // raw payload back into the visible answer.
+            finalFullResponse = stripThinkingBlocks(resultText) + disclaimer;
+            finalResultText = stripThinkingBlocks(resultText) + disclaimer;
+          } else {
+            // Re-render the response with a synthetic ```json fence so the chat UI displays it consistently
+            const fenced = '```json\n' + fallbackJsonRaw + '\n```';
+            finalFullResponse = stripThinkingBlocks(fullResponse).replace(fallbackJsonRaw, fenced) + disclaimer;
+            finalResultText = stripThinkingBlocks(resultText).replace(fallbackJsonRaw, fenced) + disclaimer;
+          }
       } else {
           // If no JSON, append disclaimer to the whole text
           finalFullResponse = stripThinkingBlocks(fullResponse) + disclaimer;
@@ -21216,6 +21487,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       return;
     }
 
+    if (agent === AgentType.REDLINE_AGENT && !isExperimentalAgentEnabled(AgentType.REDLINE_AGENT)) {
+      setError('Redline Agent is experimental and disabled. Enable it in Settings > Experimental Agents to use it.');
+      return;
+    }
+
     // Push current state to navigation history before changing
     if (isSessionActive && !isInitialScreen) {
       pushNavigation(activeAgent, activeVisualPanel);
@@ -21302,6 +21578,127 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
     }
   }, [isDesktop, isSessionActive, showView, activeVisualPanel, activeAgent, handleStartGpsStakeoutSession, pushNavigation, isInitialScreen, initializedAgents, pointLists, settings, dxfFile, startChatWithOverride, setCivilDrafterChat, setCivilDrafterChatHistory, setRawFile, logActionToFieldbook, cadStandardsLoaded, handleCadManagerSessionStart, initializeDroneAgent]);
+
+  /**
+   * Experimental agent click: instead of bouncing into App Settings, raise an
+   * opt-in chip in Quick Thought so the warning travels with the action.
+   */
+  const handleExperimentalAgentPrompt = useCallback((agent: AgentType) => {
+    const details = getExperimentalAgentDetails(agent);
+    if (!details) return;
+    if (!hasLegalSignature && !hasSignedLegalAgreement()) {
+      setShowLegalGate(true);
+      return;
+    }
+
+    // Quick Thought lives in the workspace command bar, so a card click on the
+    // home screen opens the LSAI workspace first.
+    if (isInitialScreen) {
+      handleAgentChange(AgentType.LSVZ_AGENT);
+      startSession();
+    }
+
+    setError(null);
+    setSuggestedQuestions([]);
+    setIsChatPanelVisible(false);
+    setLsvzChatHistory(prev => {
+      const settled = prev.map(message =>
+        message.a2ui?.kind === 'experimental-agent' && message.a2ui.status === 'expanded'
+          ? { ...message, a2ui: { ...message.a2ui, status: 'dismissed' as const } }
+          : message,
+      );
+      const alreadyOpen = settled.some(
+        message =>
+          message.a2ui?.kind === 'experimental-agent' &&
+          message.a2ui.agent === agent &&
+          message.a2ui.status !== 'dismissed',
+      );
+      if (alreadyOpen) return settled;
+      return [
+        ...markPendingA2UICompleted(settled),
+        {
+          role: MessageRole.MODEL,
+          text: `<strong>${details.label}</strong> is experimental. Review what it does and the safeguards before enabling it.`,
+          quickThoughtLabel: 'Experimental agent',
+          quickThoughtText: `${details.label} — ${details.summary}`,
+          a2ui: {
+            kind: 'experimental-agent',
+            agent,
+            widgetType: 'experimental-agent',
+            status: 'expanded',
+            quickThoughtOnly: true,
+            experimentalAgent: details,
+          },
+        },
+      ];
+    });
+  }, [handleAgentChange, hasLegalSignature, isInitialScreen, startSession]);
+
+  /** Open the experimental-agent explainer as its own floating A2UI dialog. */
+  const handleShowExperimentalAgentDialog = useCallback((agent: AgentType) => {
+    const details = getExperimentalAgentDetails(agent);
+    if (!details) return;
+    openStandaloneA2UISurface({
+      role: MessageRole.MODEL,
+      text: `Review the experimental <strong>${details.label}</strong> before enabling it.`,
+      quickThoughtLabel: 'Experimental agent',
+      quickThoughtText: `${details.label} — ${details.summary}`,
+      a2ui: {
+        kind: 'experimental-agent',
+        agent,
+        widgetType: 'experimental-agent',
+        status: 'expanded',
+        experimentalAgent: details,
+      },
+    });
+  }, [openStandaloneA2UISurface]);
+
+  /** Enable from the A2UI dialog, settle the chip, and call the agent in. */
+  const handleEnableExperimentalAgent = useCallback((agent: AgentType) => {
+    setExperimentalAgentEnabled(agent, true);
+    setLsvzChatHistory(prev =>
+      prev.map(message =>
+        message.a2ui?.kind === 'experimental-agent' && message.a2ui.agent === agent
+          ? {
+              ...message,
+              questionOptions: undefined,
+              needsInput: undefined,
+              a2ui: {
+                ...message.a2ui,
+                status: 'completed' as const,
+                completedSummary: 'Enabled',
+              },
+            }
+          : message,
+      ),
+    );
+    const surfaceKey = `${agent}:experimental-agent`;
+    setFloatingA2UIKey(current => (current === surfaceKey ? null : current));
+    setFloatingA2UIFallback(current =>
+      current?.a2ui?.kind === 'experimental-agent' && current.a2ui.agent === agent ? null : current,
+    );
+    setDockedA2UIKey(current => (current === surfaceKey ? null : current));
+    setDockedA2UIFallback(current =>
+      current?.a2ui?.kind === 'experimental-agent' && current.a2ui.agent === agent ? null : current,
+    );
+    closeA2UISurface(surfaceKey);
+    closeA2UISurface(`fullscreen-experimental-agent-experimental-agent`);
+    handleAgentChange(agent);
+  }, [handleAgentChange]);
+
+  /** Close the explainer without enabling; the Quick Thought chip stays put. */
+  const handleDismissExperimentalAgentPrompt = useCallback((agent: AgentType) => {
+    const surfaceKey = `${agent}:experimental-agent`;
+    setFloatingA2UIKey(current => (current === surfaceKey ? null : current));
+    setFloatingA2UIFallback(current =>
+      current?.a2ui?.kind === 'experimental-agent' && current.a2ui.agent === agent ? null : current,
+    );
+    setDockedA2UIKey(current => (current === surfaceKey ? null : current));
+    setDockedA2UIFallback(current =>
+      current?.a2ui?.kind === 'experimental-agent' && current.a2ui.agent === agent ? null : current,
+    );
+    closeA2UISurface(surfaceKey);
+  }, []);
 
   /**
    * Boundary Agent GIS entry point — shared by the homepage card and the deed
@@ -21476,7 +21873,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     );
   }, [logActionToFieldbook, requestToolShelfTab, selectCenterline, toggleToolDock]);
   
-  const handlePlaceStationOffsetPoint = useCallback((northing: number, easting: number, pointNumber: string, description: string) => {
+  const handlePlaceStationOffsetPoint = useCallback((northing: number, easting: number, pointNumber: string, description: string, parametricAssociation?: SurveyPoint['parametricAssociation']) => {
     logActionToFieldbook(`Calculated and placed point ${pointNumber} by station/offset.`);
     const newPoint: SurveyPoint = {
         pointNumber,
@@ -21484,6 +21881,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         easting,
         elevation: 0,
         description,
+        ...(parametricAssociation ? { parametricAssociation } : {}),
     };
     setPointLists(prevLists => {
         const workingListIndex = prevLists.findIndex(l => l.id === 'working');
@@ -24561,6 +24959,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         structuresChatHistory: structuresChatHistory.length > 0 ? structuresChatHistory : undefined,
         roadingChatHistory: roadingChatHistory.length > 0 ? roadingChatHistory : undefined,
         roadCorridors: roadCorridors.length > 0 ? roadCorridors : undefined,
+        redlineChatHistory: redlineChatHistory.length > 0 ? redlineChatHistory : undefined,
+        redlineRuns: redlineRuns.length > 0 ? redlineRuns : undefined,
         standardsComplianceChatHistory,
         standardsComplianceControlFile,
         standardsComplianceControlFiles: standardsComplianceControlFile ? [standardsComplianceControlFile] : undefined,
@@ -24664,6 +25064,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     profileData, profileInfo, APP_VERSION, lineLabelScale, draftingStyleLibrary,
     soilMapUnits, soilsChatHistory, standardsComplianceChatHistory, standardsComplianceControlFile,
     standardsComplianceSubjectFile, standardsComplianceSourceMode, standardsComplianceChecks, standardsComplianceLastReport,
+    redlineRuns, redlineChatHistory,
     cadManagerContext.state, deedBatchJob, activeTrackedWorkflow, pointWorkflowStarted, pointWorkflowPanelSeen,
     dismissedPointWorkflowKey, rasterUnderlayWorkflowStarted, rasterUnderlayWorkflowPanelSeen,
     dismissedRasterUnderlayWorkflowKey,
@@ -24852,6 +25253,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 setStructuresChatHistory(needsMigration ? (sessionState.structuresChatHistory || []).map(migrateMessage) : sessionState.structuresChatHistory || []);
                 setRoadingChatHistory(needsMigration ? (sessionState.roadingChatHistory || []).map(migrateMessage) : sessionState.roadingChatHistory || []);
                 setRoadCorridors(sessionState.roadCorridors || []);
+                setRedlineRuns(sessionState.redlineRuns || []);
+                setActiveRedlineRunId(sessionState.redlineRuns?.[sessionState.redlineRuns.length - 1]?.id ?? null);
+                setRedlineChatHistory(needsMigration ? (sessionState.redlineChatHistory || []).map(migrateMessage) : sessionState.redlineChatHistory || []);
                 setImageAnalyzerChatHistory(needsMigration ? (sessionState.imageAnalyzerChatHistory || []).map(migrateMessage) : sessionState.imageAnalyzerChatHistory || []);
                 setStandardsComplianceChatHistory(needsMigration ? (sessionState.standardsComplianceChatHistory || []).map(migrateMessage) : sessionState.standardsComplianceChatHistory || []);
                 setStandardsComplianceControlFile(sessionState.standardsComplianceControlFile || sessionState.standardsComplianceControlFiles?.[0] || null);
@@ -25689,35 +26093,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const showLegal = useCallback(() => setIsLegalPageVisible(true), []);
   const showReleaseStages = useCallback(() => setIsReleaseStagesModalVisible(true), []);
 
-  const currentChatHistory = 
-    activeAgent === AgentType.RAW_CRAWLER ? rawChatHistory : 
-    activeAgent === AgentType.CIVIL_DRAFTER ? civilDrafterChatHistory :
-    activeAgent === AgentType.DEED_READER ? deedChatHistory : 
-    activeAgent === AgentType.CIVIL_PLAN_EXPERT ? planExpertChatHistory :
-    activeAgent === AgentType.DXF_ANALYZER ? dxfChatHistory :
-    activeAgent === AgentType.IMAGE_ANALYZER ? imageAnalyzerChatHistory :
-    activeAgent === AgentType.GIS_AGENT ? gisChatHistory :
-    activeAgent === AgentType.CENTERLINE_STATIONING ? stationingChatHistory : 
-    activeAgent === AgentType.POINT_EDITOR ? pointEditorChatHistory : 
-    activeAgent === AgentType.LSVZ_AGENT ? lsvzChatHistory : 
-    // FIX: Add case for Contouring Agent to display its chat history.
-    activeAgent === AgentType.CONTOURING_AGENT ? contouringChatHistory :
-    activeAgent === AgentType.STEEP_SLOPE_AGENT ? steepSlopeChatHistory :
-    // FIX: Add case for Profile Agent to display its chat history.
-    activeAgent === AgentType.PROFILE_AGENT ? profileChatHistory :
-    activeAgent === AgentType.COGO_AGENT ? cogoChatHistory :
-    activeAgent === AgentType.GNSS_AGENT ? rinexChatHistory :
-    activeAgent === AgentType.DRONE_AGENT ? droneChatHistory :
-    activeAgent === AgentType.AR_AGENT ? arChatHistory :
-    activeAgent === AgentType.ZONING_AGENT ? zoningChatHistory :
-    activeAgent === AgentType.TITLE_SEARCH ? titleSearchChatHistory :
-    activeAgent === AgentType.CAD_MANAGER ? cadManagerChatHistory :
-    activeAgent === AgentType.STANDARDS_COMPLIANCE ? standardsComplianceChatHistory :
-    activeAgent === AgentType.ROADING_AGENT ? roadingChatHistory :
-    activeAgent === AgentType.SOILS_AGENT ? soilsChatHistory :
-    activeAgent === AgentType.STORMWATER_AGENT ? stormwaterChatHistory :
-    activeAgent === AgentType.DIRT_VOLUME_AGENT ? dirtVolumeChatHistory :
-    gpsStakeoutChatHistory;
+  // One voice, one thread: the visible transcript is always the LSAI thread.
+  // Called-in specialist histories stay in memory and in the session file for
+  // continuity, but they are never rendered.
+  const currentChatHistory = lsvzChatHistory;
 
   // Cursor-anchored quick inputs: a flash mirrors a one/two-field plain form
   // (for example a point number and description) beside the canvas cursor.
@@ -26015,6 +26394,64 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }
     return areas;
   }, [hatches, boundaryFiles]);
+
+  const renderRedlineWorkspace = useCallback((): React.ReactNode => (
+    <RedlinePanel
+      chrome="surface"
+      isOpen
+      runs={redlineRuns}
+      onRunsChange={setRedlineRuns}
+      activeRunId={activeRedlineRunId}
+      onActiveRunIdChange={setActiveRedlineRunId}
+      pdfFiles={pdfViewerFiles ?? []}
+      points={points}
+      lines={lines}
+      textAnnotations={textAnnotations}
+      centerlines={centerlines}
+      activeModel={currentModelName}
+      userApiKey={settings.userApiKey}
+      selectedItemId={selectedRedlineItemId}
+      onSelectItem={setSelectedRedlineItemId}
+      requestedMode={redlineRequestedMode}
+      onAddPdfFiles={(files) => {
+        setPdfViewerFiles(prev => {
+          const byName = new Map((prev || []).map(file => [file.name, file]));
+          for (const file of files) byName.set(file.name, file);
+          return [...byName.values()];
+        });
+      }}
+      applyPatch={async (run, item, ops, undoLabel): Promise<RedlinePatchResult> => {
+        const response = await interAgentComm.askPeer(
+          AgentType.CIVIL_DRAFTER,
+          'civil_drafter_apply_redline_patch',
+          { patchVersion: 1, runId: run.id, itemId: item.id, ops, undoLabel },
+        );
+        const data = (response?.data ?? {}) as Record<string, unknown>;
+        return {
+          success: Boolean(response?.success),
+          applied: Boolean(data.applied),
+          errors: Array.isArray(data.errors)
+            ? data.errors.map(String)
+            : response?.error
+              ? [response.error]
+              : [],
+          verification: data.verification,
+        };
+      }}
+    />
+  ), [
+    redlineRuns,
+    activeRedlineRunId,
+    pdfViewerFiles,
+    points,
+    lines,
+    textAnnotations,
+    centerlines,
+    currentModelName,
+    settings.userApiKey,
+    selectedRedlineItemId,
+    redlineRequestedMode,
+  ]);
 
   const renderWorkspaceTool = useCallback(
     (toolId: A2UIWorkspaceToolId): React.ReactNode => {
@@ -26430,20 +26867,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           return (
             <div className="p-3">
               <RoadingPanel
-                roadSurveyPointCount={points.filter((p: SurveyPoint) => /\b(EP|EOP|CL|CURB|DEP|TBC|ROW|ROAD|PAVE)\b/i.test(p.description || '')).length}
-                totalPointCount={points.length}
                 centerlines={centerlines}
                 roadCorridors={roadCorridors}
-                hasBackgroundImagery={Boolean(settings.googleMaps?.enabled)}
                 isWorking={isRoadingWorking}
-                onSynthesizeExisting={async (params) => {
-                  setIsRoadingWorking(true);
-                  try {
-                    await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_synthesize_existing', params);
-                  } finally {
-                    setIsRoadingWorking(false);
-                  }
-                }}
+                onSynthesizeExisting={() => { void drawRoadFromSurveyPoints(); }}
                 onDesignCorridor={async (params) => {
                   setIsRoadingWorking(true);
                   try {
@@ -26476,11 +26903,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               />
             </div>
           );
+        case 'redline-workspace':
+          return renderRedlineWorkspace();
         default:
           return null;
       }
     },
     [
+      renderRedlineWorkspace,
       agentDrawMode,
       setAgentDrawMode,
       setSettings,
@@ -26702,6 +27132,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
   const a2uiHostContextValue = useMemo<A2UIHostContextValue>(() => ({
     onOpenFullscreen: handleA2UIFullscreen,
+    onOpenExperimentalAgentDialog: handleShowExperimentalAgentDialog,
+    onEnableExperimentalAgent: handleEnableExperimentalAgent,
+    onDismissExperimentalAgentPrompt: handleDismissExperimentalAgentPrompt,
     onDownloadSoilLimitations: () => { void handleDownloadSoilLimitationsReport(); },
     onAddSoilLimitationsToSheet: () => { void handleAddSoilLimitationsToSheet(); },
     isDownloadingSoilLimitations,
@@ -26835,12 +27268,25 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     onCenterlineSessionStart: handleCenterlineSessionStart,
     onClFileUploaded: handleClFileUploaded,
     centerlineCount: centerlines.length,
-    onRoadingSynthesizeExisting: (opts) => {
-      void interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_synthesize_existing', {
-        ...opts,
-        useOsmWays: true,
-        syncCenterline: true,
+    onRedlinePackageSubmitted: (files, mode) => {
+      setRedlineRequestedMode(mode);
+      setPdfViewerFiles(prev => {
+        const byName = new Map((prev || []).map(file => [file.name, file]));
+        for (const file of files) byName.set(file.name, file);
+        return [...byName.values()];
       });
+      setRedlineChatHistory(prev => [
+        ...markPendingA2UICompleted(prev, files.map(file => file.name).join(', ')),
+        {
+          role: MessageRole.MODEL,
+          text: `Loaded <strong>${files.length}</strong> marked-up PDF${files.length === 1 ? '' : 's'}. The Redline review workspace is open below for calibration and worklist review.`,
+        },
+      ]);
+      openRedlineWorkspace();
+    },
+    onOpenRedlineWorkspace: openRedlineWorkspace,
+    onRoadingSynthesizeExisting: () => {
+      void drawRoadFromSurveyPoints();
     },
     onRoadingDesignCorridor: (opts) => {
       void interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_design_corridor', {
@@ -26996,6 +27442,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     onUseCanvasSelection: handleDivideSelectedLines,
   }), [
     handleA2UIFullscreen,
+    handleShowExperimentalAgentDialog,
+    handleEnableExperimentalAgent,
+    handleDismissExperimentalAgentPrompt,
     handleDownloadSoilLimitationsReport,
     handleAddSoilLimitationsToSheet,
     isDownloadingSoilLimitations,
@@ -27049,6 +27498,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     handleImagesSubmitted,
     handleCenterlineSessionStart,
     handleClFileUploaded,
+    openRedlineWorkspace,
     handleCadManagerSessionStart,
     handleCadManagerFileUploaded,
     handleOpenCadStandardsSheet,
@@ -27757,20 +28207,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       initialY={140}
     >
       <RoadingPanel
-        roadSurveyPointCount={points.filter((p: SurveyPoint) => /\b(EP|EOP|CL|CURB|DEP|TBC|ROW|ROAD|PAVE)\b/i.test(p.description || '')).length}
-        totalPointCount={points.length}
         centerlines={centerlines}
         roadCorridors={roadCorridors}
-        hasBackgroundImagery={Boolean(settings.googleMaps?.enabled)}
         isWorking={isRoadingWorking}
-        onSynthesizeExisting={async (params) => {
-          setIsRoadingWorking(true);
-          try {
-            await interAgentComm.askPeer(AgentType.ROADING_AGENT, 'roading_synthesize_existing', params);
-          } finally {
-            setIsRoadingWorking(false);
-          }
-        }}
+        onSynthesizeExisting={() => { void drawRoadFromSurveyPoints(); }}
         onDesignCorridor={async (params) => {
           setIsRoadingWorking(true);
           try {
@@ -28770,6 +29210,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             onGoBack={handleNavigateBack}
             onGoHome={handleGoBackToInitialScreen}
             onCollapsedChange={setIsAgentSidebarCollapsed}
+            onExperimentalAgentPrompt={handleExperimentalAgentPrompt}
             jobInfo={jobInfo}
             setJobInfo={setJobInfo}
             isLoading={isLoading}
@@ -28839,6 +29280,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         currentPosition={currentPosition}
                         version={APP_VERSION}
                         onShowSettings={showSettings}
+                        onExperimentalAgentPrompt={handleExperimentalAgentPrompt}
                         onShowLegal={showLegal}
                         jobInfo={jobInfo}
                         setJobInfo={setJobInfo}
@@ -29285,6 +29727,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                              {activeVisualPanel === 'canvas' ? (
                                     <>
                                     <DrawingCanvas 
+                                        forcedAgent={settings.forceAgent ?? null}
                                         ref={canvas2dRef}
                                         isDesktop={isDesktop}
                                         onCommandBarHeightChange={setCommandBarHeight}
@@ -29328,6 +29771,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                     : handleUnlockClick,
                                         }}
                                         initialTransform={canvasTransform}
+                                        redlineGhosts={activeAgent === AgentType.REDLINE_AGENT ? redlineGhosts : []}
+                                        selectedRedlineItemId={selectedRedlineItemId}
+                                        onSelectRedlineItem={setSelectedRedlineItemId}
                                         points={streamPreviewPoints.length > 0 ? [...points, ...streamPreviewPoints.filter(sp => !points.some(p => p.pointNumber === sp.pointNumber))] : points} 
                                         lines={streamPreviewLines.length > 0 ? [...visibleLines, ...streamPreviewLines] : visibleLines} 
                                         contourLabels={contourLabels}
@@ -30206,6 +30652,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         <div className="hidden">
                                 <ChatInterface
                                     messages={currentChatHistory}
+                                    forcedAgent={settings.forceAgent ?? null}
                                     onSendMessage={handleSendMessage}
                                     isLoading={isLoading}
                                     suggestedQuestions={suggestedQuestions}

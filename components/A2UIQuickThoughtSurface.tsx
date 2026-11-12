@@ -20,6 +20,7 @@ import {
   WEBGPU_PREF_EVENT,
   type GpuPowerPreference,
 } from '../utils/webgpuBasemap.ts';
+import { agentThemeColors } from '../constants/agents.ts';
 import { A2UIHostContext, WORKSPACE_TOOL_LABELS } from './A2UISurface.tsx';
 import { BoundaryDeedIntake } from './BoundaryDeedIntake.tsx';
 import { A2UIBoundarySummary } from './A2UIBoundarySummary.tsx';
@@ -1842,6 +1843,52 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
             </div>
           )}
         </div>
+        <OpenChatFooter onOpenConversation={onOpenConversation} />
+      </div>
+    );
+  }
+
+  // 9. Experimental agent opt-in chip (`a2ui.kind === 'experimental-agent'`)
+  if (breakdown.kind === 'experimental-agent' && breakdown.a2ui) {
+    const agent = breakdown.a2ui.agent;
+    const spec = breakdown.a2ui.experimentalAgent;
+    const accent = agentThemeColors[agent] ?? '#94a3b8';
+    return (
+      <div data-testid="quick-thought-experimental-agent" className="mt-2.5 space-y-1.5">
+        <div
+          className="rounded-md border px-2.5 py-2"
+          style={{ borderColor: `${accent}59`, backgroundColor: `${accent}12` }}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span
+              className="inline-flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.14em]"
+              style={{ color: accent }}
+            >
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accent }} />
+              Experimental
+            </span>
+            <span className="truncate text-[10px] font-semibold text-white/70">
+              {spec?.label ?? agent.replace(/_/g, ' ').toLowerCase()}
+            </span>
+          </div>
+          <p className="mt-1 text-[10.5px] leading-snug text-white/65">
+            {spec?.summary ?? 'Review what this agent can do before turning it on.'}
+          </p>
+        </div>
+        <button
+          type="button"
+          data-no-drag
+          data-testid="quick-thought-experimental-agent-open"
+          onClick={() => {
+            if (host.onOpenExperimentalAgentDialog) host.onOpenExperimentalAgentDialog(agent);
+            else onOpenConversation();
+          }}
+          className="flex min-h-[28px] w-full items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[10.5px] font-semibold text-white transition-colors hover:brightness-110"
+          style={{ borderColor: `${accent}80`, backgroundColor: `${accent}26` }}
+        >
+          Review &amp; enable
+          <span aria-hidden="true">→</span>
+        </button>
         <OpenChatFooter onOpenConversation={onOpenConversation} />
       </div>
     );

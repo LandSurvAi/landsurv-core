@@ -39,6 +39,7 @@ import {
   SoilsIcon,
   SlopeIcon,
   RoadIcon,
+  RedlineIcon,
 } from '../components/icons.tsx';
 
 // ============================================================================
@@ -81,6 +82,7 @@ export const agentConfig: { [key in AgentType]?: AgentConfig } = {
   [AgentType.ROADING_AGENT]: { icon: RoadIcon, label: 'Roading Agent', color: 'amber' },
   [AgentType.STORMWATER_AGENT]: { icon: StormwaterIcon, label: 'Stormwater Agent', color: 'sky' },
   [AgentType.DIRT_VOLUME_AGENT]: { icon: DirtVolumeIcon, label: 'Dirt Volume Agent', color: 'amber' },
+  [AgentType.REDLINE_AGENT]: { icon: RedlineIcon, label: 'Redline Agent', color: 'red' },
 };
 
 // ============================================================================
@@ -146,6 +148,7 @@ export const agentThemeColors: { [key in AgentType]?: string } = {
   [AgentType.ROADING_AGENT]: '#f59e0b', // amber-500
   [AgentType.STORMWATER_AGENT]: '#38bdf8', // sky-400
   [AgentType.DIRT_VOLUME_AGENT]: '#d97706', // amber-600
+  [AgentType.REDLINE_AGENT]: '#ef4444', // red-500
 };
 
 /**
@@ -191,6 +194,7 @@ export const agentIcons: { [key in AgentType]?: React.FC<any> } = {
   [AgentType.ROADING_AGENT]: RoadIcon,
   [AgentType.STORMWATER_AGENT]: StormwaterIcon,
   [AgentType.DIRT_VOLUME_AGENT]: DirtVolumeIcon,
+  [AgentType.REDLINE_AGENT]: RedlineIcon,
 };
 
 // ============================================================================
@@ -228,6 +232,7 @@ export const agentGradientClasses: { [key in AgentType]?: string } = {
   [AgentType.ROADING_AGENT]: 'from-amber-500 to-orange-600',
   [AgentType.STORMWATER_AGENT]: 'from-sky-500 to-blue-600',
   [AgentType.DIRT_VOLUME_AGENT]: 'from-amber-600 to-stone-700',
+  [AgentType.REDLINE_AGENT]: 'from-red-500 to-red-700',
 };
 
 // ============================================================================
@@ -249,6 +254,7 @@ export const addDataButtonLabels: { [key in AgentType]?: string } = {
   [AgentType.CAD_MANAGER]: 'Upload Standards File...',
   [AgentType.ZONING_AGENT]: 'Set Jurisdiction...',
   [AgentType.ROADING_AGENT]: 'Configure Road...',
+  [AgentType.REDLINE_AGENT]: 'Add Marked-Up PDFs...',
 };
 
 // ============================================================================
@@ -274,6 +280,14 @@ export const getAgentConfig = (agentType: AgentType): AgentConfig => {
     label: 'Unknown Agent',
     color: 'gray',
   };
+};
+
+/**
+ * Human-readable agent label. Used wherever a called-in agent is named in
+ * copy, and by the Force Agent command-line bypass.
+ */
+export const getAgentDisplayLabel = (agentType: AgentType): string => {
+  return agentConfig[agentType]?.label ?? String(agentType);
 };
 
 /**

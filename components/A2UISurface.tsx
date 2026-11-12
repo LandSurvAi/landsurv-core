@@ -22,6 +22,7 @@ import {
   type SurveyPoint,
   type TinSurface,
 } from '../types.ts';
+import { agentThemeColors } from '../constants/agents.ts';
 import { A2UIEmbeddedContext } from './UploadShell.tsx';
 import { BoundaryDeedIntake } from './BoundaryDeedIntake.tsx';
 import { A2UIBoundarySummary } from './A2UIBoundarySummary.tsx';
@@ -33,6 +34,7 @@ import ZoningInput, { type ZoningSearchData } from './ZoningInput.tsx';
 import ImageInput from './ImageInput.tsx';
 import CenterlineInput from './CenterlineInput.tsx';
 import RoadingInput from './RoadingInput.tsx';
+import RedlineInput from './Redline/RedlineInput.tsx';
 import CadManagerInput from './CadManagerInput.tsx';
 import { A2UIStandardsTable } from './A2UIStandardsTable.tsx';
 import { A2UIHatchStudio } from './A2UIHatchStudio.tsx';
@@ -47,6 +49,7 @@ import { A2UISelectionPrompt } from './A2UISelectionPrompt.tsx';
 import { A2UICacpManifestExplorer } from './A2UICacpManifestExplorer.tsx';
 import { A2UICacpReview } from './A2UICacpReview.tsx';
 import { A2UISettingsSurface } from './A2UISettingsSurface.tsx';
+import { A2UIExperimentalAgentDialog } from './A2UIExperimentalAgentDialog.tsx';
 import { A2UIProperties } from './A2UIProperties.tsx';
 import { A2UISoilLimitations } from './A2UISoilLimitations.tsx';
 import { A2UITextEditor } from './A2UITextEditor.tsx';
@@ -86,6 +89,7 @@ export const WORKSPACE_TOOL_LABELS: Record<A2UIWorkspaceToolId, string> = {
   'roading-panel': 'Roading Studio',
   'stormwater-quick-check': 'Stormwater Quick-Check',
   'dirt-volume-panel': 'Dirt Volume',
+  'redline-workspace': 'Redline Workspace',
   'road-paint-studio': 'Road Paint Studio',
   'tin-surfaces': 'TIN Surfaces',
   'point-tools': 'Point Tools',
@@ -184,12 +188,7 @@ export interface A2UIHostContextValue {
   onClFileUploaded?: (content: string, fileName: string) => void;
   // Roading Agent
   centerlineCount?: number;
-  onRoadingSynthesizeExisting?: (opts: {
-    defaultRoadWidthFt: number;
-    rowWidthFt: number;
-    useSurveyPoints: boolean;
-    useBackgroundImagery: boolean;
-  }) => void;
+  onRoadingSynthesizeExisting?: () => void;
   onRoadingDesignCorridor?: (opts: {
     name: string;
     laneCount: number;
@@ -199,6 +198,9 @@ export interface A2UIHostContextValue {
     rowWidthFt: number;
   }) => void;
   onOpenRoadingStudio?: () => void;
+  // Redline Agent
+  onRedlinePackageSubmitted?: (files: SessionFile[], mode: import('../types.ts').RedlineReadingMode) => void;
+  onOpenRedlineWorkspace?: () => void;
   // CAD Manager
   onCadManagerSessionStart?: () => void;
   onCadManagerFileUploaded?: (content: string, fileName: string) => void;
@@ -374,6 +376,12 @@ export interface A2UIHostContextValue {
   ) => Promise<{ ok: boolean; message?: string }> | { ok: boolean; message?: string } | void;
   /** Stop the active live Scout discovery run. */
   onScoutStop?: () => void;
+  /** Open the experimental-agent explainer as its own A2UI dialog. */
+  onOpenExperimentalAgentDialog?: (agent: AgentType) => void;
+  /** Enable an experimental agent from its A2UI dialog and activate it. */
+  onEnableExperimentalAgent?: (agent: AgentType) => void;
+  /** Dismiss the experimental-agent prompt without enabling it. */
+  onDismissExperimentalAgentPrompt?: (agent: AgentType) => void;
 }
 
 export const A2UIHostContext = createContext<A2UIHostContextValue>({});
@@ -1309,6 +1317,46 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
     );
   }
 
+  if (payload.kind === 'experimental-agent') {
+    const embedded = presentation !== 'inline';
+    const accent = agentThemeColors[payload.agent] ?? '#94a3b8';
+    return (
+      <div
+        data-testid="a2ui-surface-experimental-agent"
+        className={embedded ? 'flex h-full min-h-0 flex-col' : 'mt-3 w-full'}
+      >
+        <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
+          <span
+            className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em]"
+            style={{ color: accent }}
+          >
+            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accent }} />
+            Experimental Agent
+          </span>
+          <SurfaceActions
+            onPopOut={onPopOut}
+            onDock={onDock}
+            onChat={onChat}
+            onFullscreen={onFullscreen}
+            onMinimize={onMinimize}
+          />
+        </div>
+        <div
+          className="overflow-hidden rounded-xl border bg-[#070e18]/70"
+          style={{ borderColor: `${accent}40` }}
+        >
+          <A2UIExperimentalAgentDialog
+            agent={payload.agent}
+            spec={payload.experimentalAgent}
+            presentation={embedded ? 'surface' : 'inline'}
+            onEnable={() => host.onEnableExperimentalAgent?.(payload.agent)}
+            onDismiss={() => host.onDismissExperimentalAgentPrompt?.(payload.agent)}
+          />
+        </div>
+      </div>
+    );
+  }
+
   if (payload.kind !== 'upload-widget') {
     return null;
   }
@@ -1545,10 +1593,9 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
       case 'roading-designer':
         return (
           <RoadingInput
-            existingPointCount={host.existingPointCount ?? 0}
             centerlineCount={host.centerlineCount ?? 0}
-            onSynthesizeExisting={(opts) => {
-              host.onRoadingSynthesizeExisting?.(opts);
+            onSynthesizeExisting={() => {
+              host.onRoadingSynthesizeExisting?.();
               setIsCollapsed(true);
             }}
             onDesignCorridor={(opts) => {
@@ -1557,6 +1604,22 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
             }}
             onOpenRoadingStudio={() => {
               host.onOpenRoadingStudio?.();
+              setIsCollapsed(true);
+            }}
+            onGoBack={handleDismiss}
+            backButtonTitle="Hide"
+          />
+        );
+
+      case 'redline-upload':
+        return (
+          <RedlineInput
+            onPackageSubmitted={(files, readingMode) => {
+              host.onRedlinePackageSubmitted?.(files, readingMode);
+              setIsCollapsed(true);
+            }}
+            onOpenWorkspace={() => {
+              host.onOpenRedlineWorkspace?.();
               setIsCollapsed(true);
             }}
             onGoBack={handleDismiss}

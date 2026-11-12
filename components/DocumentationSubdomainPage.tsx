@@ -30,6 +30,8 @@ import {
   type DocCodeBlock,
   type DocParameter,
 } from '../data/documentation/docsContent.ts';
+import { APP_VERSION } from '../utils/appVersion.ts';
+import { CACP_SPEC_VERSION } from './CacpSubdomainPage.tsx';
 
 // ─── Subdomain Page Component ───────────────────────────────────────────────
 
@@ -150,9 +152,9 @@ export function DocumentationSubdomainPage() {
             <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
             {isStaging ? 'staging-documentation.landsurv.ai' : 'documentation.landsurv.ai'}
           </span>
-          <span className="text-gray-400 text-xs">Updated October 2026</span>
+          <span className="text-gray-400 text-xs">Updated November 2026</span>
           <span className="text-gray-500 text-xs">•</span>
-          <span className="text-gray-400 text-xs">Platform v26.09+</span>
+          <span className="text-gray-400 text-xs">Platform v{APP_VERSION}</span>
         </div>
       }
       contentClassName="max-w-7xl"
@@ -334,7 +336,7 @@ export function DocumentationSubdomainPage() {
                 rel="noopener noreferrer"
                 className="flex items-center justify-between text-gray-400 hover:text-purple-400 transition"
               >
-                <span>CACP v1.2 Protocol</span>
+                <span>CACP v{CACP_SPEC_VERSION} Protocol</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
               <a

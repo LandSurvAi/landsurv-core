@@ -21,7 +21,7 @@ import { CivilDrafterContent } from './landing/CivilDrafterContent.tsx';
 import { StandardsComplianceContent } from './landing/StandardsComplianceContent.tsx';
 import { RoadingAgentContent } from './landing/RoadingAgentContent.tsx';
 import { StormwaterAgentContent } from './landing/StormwaterAgentContent.tsx';
-import { StormwaterIcon, DirtVolumeIcon } from './icons.tsx';
+import { StormwaterIcon, DirtVolumeIcon, RedlineIcon } from './icons.tsx';
 import { BrainCircuitIcon, CourthouseIcon, RoadIcon, PlumbBobIcon, DocumentDuplicateIcon, DxfAnalyzerIcon, LsvzIcon, CurrencyDollarIcon, CrosshairsIcon, CogoIcon, FolderIcon, DocumentTextIcon, ArrowUpTrayIcon, DownloadIcon, ScaleIcon, MapPinIcon, CameraIcon, DroneIcon, ClipboardDocumentListIcon, LogClockIcon, BugAntIcon, CpuChipIcon, GisAgentIcon, ContourIcon, ProfileIcon, SatelliteIcon, ARIcon, ZoningIcon, TitleSearchIcon, PlugIcon, LayersIcon, CadManagerIcon, CivilDrafterIcon, KeyIcon, CogIcon, FloodIcon, HomeIcon, StructuresIcon, SoilsIcon, SlopeIcon, StandardsComplianceIcon, EnvelopeIcon, InfoIcon, LegalScaleIcon, ProjectionGlobeIcon } from './icons.tsx';
 import { getRetiredAgents, type HomepageAgentType } from '../utils/retiredAgents.ts';
 import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnabled.ts';
@@ -196,6 +196,7 @@ const agentSeoUrls: Partial<Record<AgentType, string>> = {
   [AgentType.CAD_MANAGER]: 'https://cadmanager.landsurv.ai',
   [AgentType.CIVIL_DRAFTER]: 'https://civildrafter.landsurv.ai',
   [AgentType.ROADING_AGENT]: 'https://roading.landsurv.ai',
+  [AgentType.REDLINE_AGENT]: 'https://redline.landsurv.ai',
 };
 
 /** SPA info modal: maps each agent to its in-app info content. */
@@ -241,6 +242,8 @@ interface InitialAgentSelectionProps {
   onSelectAgentToolOption?: (agent: AgentType) => void;
   onLoadSession: () => void;
   onShowSettings: () => void;
+  /** Surface an experimental agent's opt-in chip in Quick Thought instead of opening Settings. */
+  onExperimentalAgentPrompt?: (agent: AgentType) => void;
   onShowApiKeySettings: () => void;
   onShowUpgrade: () => void;
   // Info & Help props
@@ -546,6 +549,15 @@ export const homepageAgentCards = [
         description: 'Obtain and compare earthwork quantities — end-area cut/fill from cross sections, TIN-to-TIN surface comparisons, grid takeoffs, and stockpile volumes. Save scenarios, compare design options, and export quantity reports.',
         icon: DirtVolumeIcon,
         color: 'amber',
+        actionType: 'agent' as const,
+        releaseStage: 'pre-alpha' as ReleaseStage
+    },
+    {
+        type: AgentType.REDLINE_AGENT,
+        title: 'Redline Agent (Experimental)',
+        description: 'Experimental — read Bluebeam/Acrobat markup on annotated plan PDFs, turn every cloud, callout, and note into a numbered worklist, and coordinate approved corrections with the Civil Drafter. Can be turned off in Settings → Experimental Agents.',
+        icon: RedlineIcon,
+        color: 'red',
         actionType: 'agent' as const,
         releaseStage: 'pre-alpha' as ReleaseStage
     },
@@ -1288,6 +1300,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
     onSelectAgentToolOption,
     onLoadSession,
     onShowSettings,
+    onExperimentalAgentPrompt,
     onShowApiKeySettings,
     onShowUpgrade,
     onShowDoc,
@@ -1322,6 +1335,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
 }) => {
   const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
   const experimentalStormwaterEnabled = useExperimentalAgentEnabled(AgentType.STORMWATER_AGENT);
+  const experimentalRedlineEnabled = useExperimentalAgentEnabled(AgentType.REDLINE_AGENT);
   const [isJobInfoOpen, setIsJobInfoOpen] = useState(false);
   const [activeInfoAgent, setActiveInfoAgent] = useState<AgentType | null>(null);
   const [showCallUsModal, setShowCallUsModal] = useState(false);
@@ -1396,12 +1410,18 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
   
   // Removed walking highlight effect - titles now pulse continuously with CSS animation
   
+  const promptExperimentalAgent = (agent: AgentType) => {
+    if (onExperimentalAgentPrompt) onExperimentalAgentPrompt(agent);
+    else onShowSettings();
+  };
+
   const handleCardClick = (card: Card) => {
     if (
       (card.type === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) ||
-      (card.type === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled)
+      (card.type === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled) ||
+      (card.type === AgentType.REDLINE_AGENT && !experimentalRedlineEnabled)
     ) {
-      onShowSettings();
+      promptExperimentalAgent(card.type);
       return;
     }
     onSelectAgent(card.type);
@@ -2193,9 +2213,10 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
                   onToolOptionClick={onSelectAgentToolOption ? () => {
                     if (
                       (cardWithRelease.type === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) ||
-                      (cardWithRelease.type === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled)
+                      (cardWithRelease.type === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled) ||
+                      (cardWithRelease.type === AgentType.REDLINE_AGENT && !experimentalRedlineEnabled)
                     ) {
-                      onShowSettings();
+                      promptExperimentalAgent(cardWithRelease.type);
                       return;
                     }
                     onSelectAgentToolOption(cardWithRelease.type);

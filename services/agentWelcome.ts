@@ -166,6 +166,11 @@ export const AGENT_WELCOME_PROFILES: Partial<Record<AgentType, AgentWelcomeProfi
     summary:
       'I synthesize existing roads from survey points, background imagery, and OpenStreetMap ways, and design proposed road corridors, typical sections, profiles, and cross sections in coordination with the Stationing & CL and Profile agents.',
   },
+  [AgentType.REDLINE_AGENT]: {
+    name: 'Redline',
+    summary:
+      'I read reviewer markup on annotated plan PDFs, turn every cloud, callout, and note into a numbered correction item, map each item onto the drawing with an explicit confidence, and work with the Civil Drafter to apply the corrections you approve.',
+  },
 };
 
 /**
