@@ -77,6 +77,8 @@ const AGENT_CAPABILITY_PHRASES: Partial<Record<AgentType, string[]>> = {
     'stream-bed', 'stream-beds', 'creek', 'creeks', 'watercourse', 'watercourses', 'drainageway',
     'breakline', 'breaklines', 'top of bank', 'toe of slope',
     'ditch', 'swale', 'tree line', 'fence line', 'connect the shots', 'connect the points',
+    'point studio', 'point style', 'point styles', 'point appearance', 'point symbols',
+    'point labels', 'annotation style', 'drafting style', 'symbol style', 'label style',
   ],
   [AgentType.CENTERLINE_STATIONING]: [
     'station', 'stationing', 'baseline', 'centerline', 'offset point', 'chainage',
@@ -370,5 +372,52 @@ export function resolveIntentHandoff(request: string, currentAgent: AgentType): 
   if (!HANDOFF_ACTION_VERB_RE.test(request)) return null;
   const route = routeIntent(request, currentAgent);
   return route.isMismatched && route.primary ? route.primary : null;
+}
+
+const DRAFTING_ACTION_RE = /\b(?:draw|draft|sketch|plot|trace|connect|join|render|lay\s?out|design|model|synthesi[sz]e|generate|create|build|extract|make|add|put|place|construct|pave|widen|realign|label|annotate|hatch)\w*\b/i;
+const DRAFTING_OBJECT_RE = /\b(?:line|lines|linework|polyline|polylines|feature|features|shot|shots|edge|edges|bank|toe|curb|curbs|gutter|gutters|ditch|ditches|swale|swales|fence|treeline|tree\s?line|road|roads|roadway|street|streets|corridor|corridors|centerline|centerlines|boundary|boundaries|contour|contours|pavement|sidewalk|sidewalks|building|buildings|footprint|footprints|parcel|parcels|lot|lots|utility|utilities|pipe|pipes|profile|profiles|driveway|driveways|circle|circles|arc|arcs|polygon|polygons|star|stars|symbol|symbols|label|labels|annotation|annotations|hatch|hatches|right[\s-]?of[\s-]?way)\b/i;
+
+/** True when the request asks for drawing geometry rather than point-data work. */
+export function isDraftingAuthoringRequest(request: string): boolean {
+  const text = (request || '').trim();
+  if (!text) return false;
+  if (!DRAFTING_ACTION_RE.test(text) || !DRAFTING_OBJECT_RE.test(text)) return false;
+  // These are CAD-management or reporting tasks even when they mention a
+  // drafting object (e.g. "create a layer for roads", "road cost report").
+  if (/\b(?:layer|layers|linetype|line\s?type|color|colour|text\s?style|drafting\s?style|symbol\s?library|report|summary|schedule|estimate|quantity|cost|analysis|table)\b/i.test(text)) {
+    return false;
+  }
+  // Point placement is point-data work: "draw points at the line corners",
+  // "add points along the road". Do not hijack those to the drafter.
+  if (
+    /\b(?:place|add|draw|put|set|insert)\s+(?:new\s+)?points?\b/i.test(text) &&
+    !/\b(?:symbol|style|label|annotation|linework|geometry)\b/i.test(text)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** LSAI must never delegate drafting to Point Editor (or any non-drafter). */
+export function resolveDraftingDelegateTarget(
+  request: string,
+  requestedTarget: AgentType,
+): AgentType {
+  return isDraftingAuthoringRequest(request) ? AgentType.CIVIL_DRAFTER : requestedTarget;
+}
+
+/** LSAI drafting requests are handed off before LSAI runs a single token. */
+export function shouldHandoffLsvzDrafting(
+  agent: AgentType,
+  request: string,
+  isInternalFollowUp: boolean,
+  isAutoDraftTurn: boolean,
+): boolean {
+  return (
+    agent === AgentType.LSVZ_AGENT &&
+    !isInternalFollowUp &&
+    !isAutoDraftTurn &&
+    isDraftingAuthoringRequest(request)
+  );
 }
 

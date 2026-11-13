@@ -80,6 +80,8 @@ interface AutoDraftPanelProps {
   /** Build TIN → steep-slope bands → draw. Returns triangle counts. */
   onSteepSlopes?: () => Promise<{ kept: number; analyzed: number } | void>;
   onDismiss:    () => void;
+  /** Open the Civil Drafter-owned Point Studio surface. */
+  onOpenPointStudio?: () => void;
   isDocked?:    boolean;
   onToggleDock?: () => void;
   dockMode?:    DockMode;
@@ -143,7 +145,7 @@ export default function AutoDraftPanel({
   points, lines, jobInfo, zoningContext, projectEpsg, gpsPosition, projectionLabel,
   onProjectionDetected, mapKeys,
   onDraft, getCanvasLineCount, onCanvasLines, onParcelResult, onStreetLabels,
-  getSymbolCoverage, onAddSymbols, onGenerateContours, onFetchGisContours, onSteepSlopes, onDismiss,
+  getSymbolCoverage, onAddSymbols, onGenerateContours, onFetchGisContours, onSteepSlopes, onDismiss, onOpenPointStudio,
   isDocked: isDockedProp = false, onToggleDock, dockMode, onDockModeChange,
 }: AutoDraftPanelProps) {
   const mode: DockMode = dockMode ?? (isDockedProp ? 'toolshelf' : 'floating');
@@ -476,6 +478,17 @@ export default function AutoDraftPanel({
           )}
         </div>
         <div className="flex items-center gap-1">
+          {onOpenPointStudio && (
+            <button
+              type="button"
+              onClick={onOpenPointStudio}
+              className="text-violet-300 hover:text-white p-1 rounded hover:bg-violet-800/50 transition-colors"
+              title="Open Point Studio"
+              aria-label="Open Point Studio"
+            >
+              <span aria-hidden="true" className="text-sm leading-none">◈</span>
+            </button>
+          )}
           {(onDockModeChange || onToggleDock) && (
             onDockModeChange ? (
               <DockModeControl mode={mode} onChange={onDockModeChange} />

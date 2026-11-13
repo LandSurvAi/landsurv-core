@@ -5,9 +5,10 @@
  * Allows users to select what data to export and sends it to backend for C3D import
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { SessionState, SurveyLine } from '../types.ts';
 import { useAppState } from '../contexts/AppStateContext.tsx';
+import { createPointStyleResolver } from '../services/pointStyles.ts';
 
 // Icons
 const CheckIcon = () => (
@@ -67,6 +68,20 @@ export const C3DExportPanel: React.FC<C3DExportPanelProps> = ({
 
   // Count available data
   const pointCount = sessionState.pointLists.reduce((sum, list) => sum + list.points.length, 0);
+  const pointStyleNames = useMemo(() => {
+    const names = new Map<string, string>();
+    const studio = sessionState.settings.pointStudio;
+    if (!studio) return names;
+    const resolver = createPointStyleResolver(studio);
+    const nameById = new Map(studio.styles.map(style => [style.id, style.name]));
+    for (const list of sessionState.pointLists) {
+      for (const p of list.points) {
+        const resolved = resolver.resolve(p, list.id);
+        names.set(p.pointNumber, nameById.get(resolved.styleId) ?? resolved.styleId);
+      }
+    }
+    return names;
+  }, [sessionState.pointLists, sessionState.settings.pointStudio]);
   const lineCount = sessionState.lines.length;
   const hasDeed = sessionState.deedFile !== null;
   const centerlineCount = sessionState.centerlines.length;
@@ -174,6 +189,7 @@ export const C3DExportPanel: React.FC<C3DExportPanelProps> = ({
               northing: p.northing,
               elevation: p.elevation,
               rawDescription: p.description || '',
+              pointStyleName: pointStyleNames.get(p.pointNumber),
             })),
           })),
         } : { lists: [] },
@@ -241,7 +257,7 @@ export const C3DExportPanel: React.FC<C3DExportPanelProps> = ({
       setLoading(false);
     }
   }, [sessionToken, sessionState, exportPoints, exportLines, exportDeed, exportCenterlines, 
-      pointCount, lineCount, hasDeed, centerlineCount, getDeedMetadata, onClose]);
+      pointCount, lineCount, hasDeed, centerlineCount, getDeedMetadata, onClose, pointStyleNames]);
 
   if (!isOpen) return null;
 

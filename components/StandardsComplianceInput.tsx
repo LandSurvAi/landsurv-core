@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { UploadIcon, ClipboardDocumentListIcon, XMarkIcon } from './icons';
 import { UploadShell, UploadPanel, UploadDropzone, UploadPrimaryButton, UploadActionBar } from './UploadShell.tsx';
@@ -81,6 +81,8 @@ const StandardsComplianceInput: React.FC<StandardsComplianceInputProps> = ({
   const [progress, setProgress] = useState<string | null>(null);
   const [sourceMode, setSourceMode] = useState<ComplianceSourceMode>('ask-each-run');
   const [checks, setChecks] = useState<StandardsComplianceCheckSelection>(DEFAULT_CHECKS);
+  const [isDraggingSubject, setIsDraggingSubject] = useState(false);
+  const dropDepthRef = useRef(0);
 
   const selectedCheckCount = useMemo(
     () => Object.values(checks).filter(Boolean).length,
@@ -134,7 +136,7 @@ const StandardsComplianceInput: React.FC<StandardsComplianceInputProps> = ({
 
   const handleFilePick = useCallback(async (
     role: 'control' | 'subject',
-    selectedFiles: FileList | null,
+    selectedFiles: FileList | File[] | null,
   ) => {
     const files = Array.from(selectedFiles || []);
     if (files.length === 0) return;
@@ -152,6 +154,15 @@ const StandardsComplianceInput: React.FC<StandardsComplianceInputProps> = ({
 
     setControlQueue(prev => [...prev, ...pdfFiles]);
   }, [notifyError, openPageSelectorIfNeeded]);
+
+  const handleSubjectDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dropDepthRef.current = 0;
+    setIsDraggingSubject(false);
+    const files = Array.from(event.dataTransfer.files ?? []);
+    if (files.length > 0) void handleFilePick('subject', files);
+  }, [handleFilePick]);
 
   const handlePagesSelected = useCallback((pages: number[]) => {
     if (!pendingSelectorFile || !activeRoleForSelector) return;
@@ -270,6 +281,29 @@ const StandardsComplianceInput: React.FC<StandardsComplianceInputProps> = ({
         />
       )}
 
+      <div
+        data-testid="standards-compliance-drop-zone"
+        className="relative"
+        onDragEnter={event => {
+          event.preventDefault();
+          event.stopPropagation();
+          dropDepthRef.current += 1;
+          setIsDraggingSubject(true);
+        }}
+        onDragOver={event => {
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = 'copy';
+          setIsDraggingSubject(true);
+        }}
+        onDragLeave={event => {
+          event.preventDefault();
+          event.stopPropagation();
+          dropDepthRef.current = Math.max(0, dropDepthRef.current - 1);
+          if (dropDepthRef.current === 0) setIsDraggingSubject(false);
+        }}
+        onDrop={handleSubjectDrop}
+      >
       <div className="grid grid-cols-1 gap-3.5 text-left lg:grid-cols-2">
         <UploadPanel eyebrow="Intake" title="Files">
           <label className="block text-[11.5px] font-medium text-slate-300">Subject PDF <span className="text-rose-300">*</span></label>
@@ -280,8 +314,11 @@ const StandardsComplianceInput: React.FC<StandardsComplianceInputProps> = ({
             disabled={isProcessing}
             className="mt-1.5 block w-full rounded-md border border-white/[0.08] bg-black/20 p-2 text-[11.5px] text-slate-300 file:mr-3 file:rounded file:border-0 file:bg-white/[0.06] file:px-2.5 file:py-1.5 file:text-[11px] file:font-semibold file:text-slate-200 hover:file:bg-white/[0.1]"
           />
-          <p className="mb-4 mt-1.5 text-[11px] text-slate-500">
+          <p className="mt-1.5 text-[11px] text-slate-500">
             {subjectFile ? `${subjectFile.file.name} (${subjectFile.pages?.length ?? 0} page(s) selected)` : 'No subject PDF selected.'}
+          </p>
+          <p className="mb-4 mt-1 text-[11px] text-slate-500">
+            Or drag &amp; drop a subject PDF here.
           </p>
 
           <label className="block text-[11.5px] font-medium text-slate-300">Reference / control PDFs <span className="text-slate-500">(optional)</span></label>
@@ -365,6 +402,14 @@ const StandardsComplianceInput: React.FC<StandardsComplianceInputProps> = ({
           Start standards compliance
         </UploadPrimaryButton>
       </UploadActionBar>
+      {isDraggingSubject && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-violet-300/80 bg-[#0b131e]/95 px-4 text-center">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-violet-100">
+            Drop a subject PDF
+          </span>
+        </div>
+      )}
+      </div>
     </UploadShell>
   );
 };

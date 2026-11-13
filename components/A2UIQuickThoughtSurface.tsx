@@ -29,11 +29,22 @@ import { LegendQuickActions } from './LegendQuickActions.tsx';
 import type { A2UIQuickThoughtBreakdown } from '../services/a2uiQuickThought.ts';
 import { closeCanvasFlashInput, flashCanvasMessage, openCanvasFlashForInputForm } from '../services/canvasFlashes.ts';
 import { isSurfaceNameField, projectInputChoices } from '../services/projectInputChoices.ts';
+import {
+  applyA2UIPointPickResult,
+  describeA2UIPointPickResult,
+  findA2UIPointPickTargets,
+  type A2UIPointPickResult,
+} from '../utils/a2uiPointPick.ts';
 import { exampleFileContent, exampleFileName } from '../assets/example.raw.ts';
 import { exampleHighwayCl } from '../assets/example.highway.cl.ts';
 import { exampleDeedContent } from '../assets/example.deed.ts';
 import { getBrowserPosition, reverseGeocodeUs } from '../utils/reverseGeocode.ts';
-import { projectLocationZoningSeed, stateNameForZoning } from '../utils/zoningJurisdiction.ts';
+import {
+  projectLocationZoningSeed,
+  resolveProjectLocationZoningSeed,
+  stateNameForZoning,
+  type ProjectZoningSeed,
+} from '../utils/zoningJurisdiction.ts';
 
 interface A2UIQuickThoughtSurfaceProps {
   breakdown: A2UIQuickThoughtBreakdown;
@@ -44,6 +55,8 @@ interface A2UIQuickThoughtSurfaceProps {
   onDock?: () => void;
   onPopOut?: () => void;
   onChat?: () => void;
+  /** The panel was escalated to the Tool Shelf; keep this card compact. */
+  escalatedToToolshelf?: boolean;
   boundaryQuickActions?: {
     onUpload: () => void;
     onAuthor: () => void;
@@ -138,6 +151,8 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+
+
 const btnClass =
   'flex min-h-[28px] items-center justify-center gap-1.5 rounded-md border border-white/15 bg-white/[0.04] px-2.5 py-1.5 text-left text-[10.5px] font-semibold text-white/85 transition-colors hover:border-white/30 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-50';
 
@@ -188,7 +203,8 @@ const QuickThoughtInputForm: React.FC<{
   needsInput?: boolean;
   onSubmit: (messageText: string) => void;
   onOpenConversation: () => void;
-}> = ({ form, needsInput, onSubmit, onOpenConversation }) => {
+  onPickCanvasPoint?: () => Promise<A2UIPointPickResult | null>;
+}> = ({ form, needsInput, onSubmit, onOpenConversation, onPickCanvasPoint }) => {
   const formId = useId();
   const surfaceNames = useSyncExternalStore(
     projectInputChoices.subscribe,
@@ -211,15 +227,40 @@ const QuickThoughtInputForm: React.FC<{
 
   const [values, setValues] = useState<Record<string, string>>(initialValues);
   const [error, setError] = useState<string | null>(null);
+  const pointPickTargets = useMemo(() => findA2UIPointPickTargets(form), [form]);
+  const [isPickingPoint, setIsPickingPoint] = useState(false);
+  const [pointPickNotice, setPointPickNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setValues(initialValues);
     setError(null);
+    setIsPickingPoint(false);
+    setPointPickNotice(null);
   }, [initialValues]);
 
   const updateValue = (id: string, value: string) => {
     setValues(prev => ({ ...prev, [id]: value }));
     setError(null);
+  };
+
+  const handlePickCanvasPoint = async () => {
+    if (!onPickCanvasPoint || !pointPickTargets || isPickingPoint) return;
+    setIsPickingPoint(true);
+    setPointPickNotice(null);
+    setError(null);
+    try {
+      const pick = await onPickCanvasPoint();
+      if (!pick) {
+        setPointPickNotice('No point picked — click a point or snap location on the canvas.');
+        return;
+      }
+      setValues(previous => applyA2UIPointPickResult(pointPickTargets, previous, pick));
+      setPointPickNotice(`${describeA2UIPointPickResult(pick)} — adjust or pick again.`);
+    } catch {
+      setPointPickNotice('Could not read a point from the canvas.');
+    } finally {
+      setIsPickingPoint(false);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -279,6 +320,23 @@ const QuickThoughtInputForm: React.FC<{
   return (
     <div data-testid="quick-thought-input-form" className="mt-2.5 space-y-2">
       <form onSubmit={handleSubmit} noValidate className="space-y-2">
+        {pointPickTargets && onPickCanvasPoint && (
+          <div className="space-y-1">
+            <button
+              type="button"
+              data-no-drag
+              data-testid="quick-thought-pick-canvas"
+              disabled={isPickingPoint}
+              onClick={() => void handlePickCanvasPoint()}
+              className={`${btnClass} w-full`}
+            >
+              {isPickingPoint ? 'Click a point on the canvas…' : 'Pick point / snap on canvas'}
+            </button>
+            {pointPickNotice && (
+              <p className="text-[9.5px] leading-snug text-white/50">{pointPickNotice}</p>
+            )}
+          </div>
+        )}
         {form.fields.map(field => {
           const inputId = `${formId}-${field.id}`;
           const val = values[field.id] ?? '';
@@ -413,6 +471,7 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
   onDock,
   onPopOut,
   onChat,
+  escalatedToToolshelf = false,
   boundaryQuickActions,
 }) => {
   const host = useContext(A2UIHostContext);
@@ -475,44 +534,87 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
   );
   const [zoningLookupMessage, setZoningLookupMessage] = useState<string | null>(null);
   const [isLocatingGps, setIsLocatingGps] = useState(false);
+  const [isApplyingProjectLocation, setIsApplyingProjectLocation] = useState(false);
   const zoningAutoFilledRef = useRef(Boolean(initialZoningSeed));
 
   // The project-location resolver is asynchronous. If the card mounts while it
   // is still resolving, fill the fields once it lands rather than making the
-  // user reopen the Quick Thought.
+  // user reopen the Quick Thought. A drawn AOI is used when no cluster has
+  // resolved yet.
   useEffect(() => {
     if (zoningAutoFilledRef.current) return;
     if (zoningState.trim() || zoningCounty.trim() || zoningMuni.trim()) {
       zoningAutoFilledRef.current = true;
       return;
     }
-    const seed = projectLocationZoningSeed(host.getProjectLocationSnapshot?.());
-    if (!seed) return;
-    if (seed.state) setZoningState(seed.state);
-    if (seed.county) setZoningCounty(seed.county);
-    if (seed.municipality) setZoningMuni(seed.municipality);
-    setZoningAutofillSource('project-location');
-    zoningAutoFilledRef.current = true;
+    let cancelled = false;
+    const applySeed = (seed: ProjectZoningSeed | null) => {
+      if (!seed) return;
+      if (seed.state) setZoningState(prev => prev || seed.state);
+      if (seed.county) setZoningCounty(prev => prev || seed.county);
+      if (seed.municipality) setZoningMuni(prev => prev || seed.municipality);
+      setZoningAutofillSource('project-location');
+      zoningAutoFilledRef.current = true;
+    };
+    const hydrate = async () => {
+      const snapshot = host.getProjectLocationSnapshot?.();
+      const syncSeed = projectLocationZoningSeed(snapshot);
+      const needsAoiFill = !syncSeed || !syncSeed.county || !syncSeed.municipality;
+      if (!snapshot?.inclusionArea || !needsAoiFill) { applySeed(syncSeed); return; }
+      try {
+        const aoiSeed = await resolveProjectLocationZoningSeed(snapshot, reverseGeocodeUs);
+        if (!cancelled) applySeed(aoiSeed ?? syncSeed);
+      } catch { /* AOI lookup is best-effort */ }
+    };
+    void hydrate();
+    return () => { cancelled = true; };
   }, [host, zoningState, zoningCounty, zoningMuni]);
 
-  const applyProjectZoningLocation = () => {
-    const seed = projectLocationZoningSeed(host.getProjectLocationSnapshot?.());
-    if (!seed) {
-      setZoningLookupMessage('No project location yet — add georeferenced points or use GPS.');
+  const applyProjectZoningLocation = async () => {
+    const snapshot = host.getProjectLocationSnapshot?.();
+    const seed = projectLocationZoningSeed(snapshot);
+    if (!snapshot?.inclusionArea) {
+      if (!seed) {
+        setZoningLookupMessage('No project location or AOI yet — draw an inclusion boundary, add points, or use GPS.');
+        return;
+      }
+      if (seed.state) setZoningState(seed.state);
+      if (seed.county) setZoningCounty(seed.county);
+      if (seed.municipality) setZoningMuni(seed.municipality);
+      setZoningAutofillSource('project-location');
+      setZoningLookupMessage('Filled from the project location — adjust anything below.');
+      zoningAutoFilledRef.current = true;
       return;
     }
-    if (seed.state) setZoningState(seed.state);
-    if (seed.county) setZoningCounty(seed.county);
-    if (seed.municipality) setZoningMuni(seed.municipality);
-    setZoningAutofillSource('project-location');
-    setZoningLookupMessage('Filled from the project location — adjust anything below.');
-    zoningAutoFilledRef.current = true;
+
+    setIsApplyingProjectLocation(true);
+    setZoningLookupMessage(null);
+    try {
+      const resolved = await resolveProjectLocationZoningSeed(snapshot, reverseGeocodeUs) ?? seed;
+      if (!resolved) {
+        setZoningLookupMessage('The project AOI could not be matched to a US jurisdiction — enter it manually or use GPS.');
+        return;
+      }
+      if (resolved.state) setZoningState(resolved.state);
+      if (resolved.county) setZoningCounty(resolved.county);
+      if (resolved.municipality) setZoningMuni(resolved.municipality);
+      setZoningAutofillSource('project-location');
+      setZoningLookupMessage('Filled from the project AOI — adjust anything below.');
+      zoningAutoFilledRef.current = true;
+    } catch {
+      setZoningLookupMessage('Could not resolve the project AOI — enter the jurisdiction manually or use GPS.');
+    } finally {
+      setIsApplyingProjectLocation(false);
+    }
   };
 
   // Standards compliance intake state
   const [complianceSourceMode, setComplianceSourceMode] = useState<ComplianceSourceMode>('ask-each-run');
   const [complianceChecks, setComplianceChecks] = useState<StandardsComplianceCheckSelection>(DEFAULT_COMPLIANCE_CHECKS);
   const [showComplianceChecks, setShowComplianceChecks] = useState(false);
+  const [complianceDroppedSubject, setComplianceDroppedSubject] = useState<SessionFile | null>(null);
+  const [isComplianceDragging, setIsComplianceDragging] = useState(false);
+  const complianceDragDepthRef = useRef(0);
 
   // Hatch Studio quick controls
   const hatchSpecPattern = breakdown.a2ui?.hatchStudio?.patternName;
@@ -576,6 +678,36 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
       }
     },
     [host],
+  );
+
+  const handleComplianceFile = useCallback(
+    async (file: File) => {
+      if (!host.onStandardsComplianceSessionStart) {
+        onOpenConversation();
+        return;
+      }
+      if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) return;
+      const fileData = await readFileAsDataUrl(file);
+      setComplianceDroppedSubject({
+        name: file.name,
+        content: `Subject PDF: ${file.name}`,
+        fileData,
+        selectedPages: [1],
+      });
+    },
+    [host.onStandardsComplianceSessionStart, onOpenConversation],
+  );
+
+  const handleComplianceDrop = useCallback(
+    async (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      complianceDragDepthRef.current = 0;
+      setIsComplianceDragging(false);
+      const file = Array.from(event.dataTransfer?.files ?? [])[0];
+      if (file) await handleComplianceFile(file);
+    },
+    [handleComplianceFile],
   );
 
   // 1. Options list (explicit `questionOptions` or extracted inline prose options)
@@ -665,6 +797,29 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
 
   // 3. Input form (`a2ui.kind === 'input-form'`, derived parameter form, or `needsInput`)
   if (breakdown.kind === 'input-form' && breakdown.inputForm) {
+    if (escalatedToToolshelf) {
+      return (
+        <div
+          data-testid="quick-thought-escalated-panel"
+          className="mt-2.5 rounded-md border border-cyan-400/25 bg-cyan-400/[0.05] px-2.5 py-2"
+        >
+          <p className="text-[10.5px] font-semibold text-white/85">
+            {breakdown.inputForm.title || 'Input panel'} moved to the Tool Shelf
+          </p>
+          <p className="mt-0.5 text-[9.5px] leading-snug text-white/50">
+            This needs more than a quick answer. Fill it in beside the canvas, then return here.
+          </p>
+          <button
+            type="button"
+            data-no-drag
+            onClick={onDock ?? onOpenConversation}
+            className={`${primaryBtnClass} mt-1.5 w-full`}
+          >
+            Show in Tool Shelf
+          </button>
+        </div>
+      );
+    }
     if (breakdown.datasetTooLarge) {
       return (
         <div className="mt-2.5 space-y-1.5">
@@ -698,6 +853,7 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
           }
         }}
         onOpenConversation={onOpenConversation}
+        onPickCanvasPoint={host.onPickCanvasPoint}
       />
     );
   }
@@ -712,22 +868,6 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
           <div
             data-testid="quick-thought-cad-manager-intake"
             className="mt-2.5 space-y-1.5"
-            onDragOver={e => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onDrop={async e => {
-              e.preventDefault();
-              e.stopPropagation();
-              const file = e.dataTransfer.files?.[0];
-              if (!file) return;
-              if (host.onCadManagerFileUploaded) {
-                const content = await readFileAsText(file);
-                host.onCadManagerFileUploaded(content, file.name);
-              } else {
-                host.onCadManagerSessionStart?.();
-              }
-            }}
           >
             <input
               ref={cadFileInputRef}
@@ -1321,16 +1461,16 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
                 <button
                   type="button"
                   data-no-drag
-                  disabled={isLocatingGps}
+                  disabled={isLocatingGps || isApplyingProjectLocation}
                   onClick={applyProjectZoningLocation}
                   className={btnClass}
                 >
-                  Use project location
+                  {isApplyingProjectLocation ? 'Locating…' : 'Use project location'}
                 </button>
                 <button
                   type="button"
                   data-no-drag
-                  disabled={isLocatingGps}
+                  disabled={isLocatingGps || isApplyingProjectLocation}
                   onClick={async () => {
                     setIsLocatingGps(true);
                     setZoningLookupMessage(null);
@@ -1427,7 +1567,29 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
       case 'standards-compliance-intake': {
         const selectedCount = Object.values(complianceChecks).filter(Boolean).length;
         return (
-          <div data-testid="quick-thought-standards-compliance-intake" className="mt-2.5 space-y-1.5">
+          <div
+            data-testid="quick-thought-standards-compliance-intake"
+            className="relative mt-2.5 space-y-1.5"
+            onDragEnter={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              complianceDragDepthRef.current += 1;
+              setIsComplianceDragging(true);
+            }}
+            onDragOver={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = 'copy';
+              setIsComplianceDragging(true);
+            }}
+            onDragLeave={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              complianceDragDepthRef.current = Math.max(0, complianceDragDepthRef.current - 1);
+              if (complianceDragDepthRef.current === 0) setIsComplianceDragging(false);
+            }}
+            onDrop={handleComplianceDrop}
+          >
             <input
               ref={complianceSubjectInputRef}
               data-testid="quick-thought-compliance-subject-input"
@@ -1474,6 +1636,25 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
               </select>
             </div>
 
+            <p className="text-[9.5px] text-white/40">
+              Drag &amp; drop a subject PDF here, or choose one below.
+            </p>
+
+            {complianceDroppedSubject && (
+              <div className="flex items-center justify-between gap-2 rounded-md border border-violet-400/30 bg-violet-400/10 px-2 py-1 text-[10px] text-violet-100">
+                <span className="truncate">{complianceDroppedSubject.name}</span>
+                <button
+                  type="button"
+                  data-no-drag
+                  onClick={() => setComplianceDroppedSubject(null)}
+                  className="shrink-0 text-violet-200/70 transition-colors hover:text-white"
+                  aria-label="Remove dropped subject PDF"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
             <button
               type="button"
               data-no-drag
@@ -1513,6 +1694,15 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
               type="button"
               data-no-drag
               onClick={() => {
+                if (complianceDroppedSubject) {
+                  host.onStandardsComplianceSessionStart?.({
+                    controlFiles: [],
+                    subjectFile: complianceDroppedSubject,
+                    checks: complianceChecks,
+                    sourceMode: complianceSourceMode,
+                  });
+                  return;
+                }
                 if (host.onStandardsComplianceSessionStart) {
                   complianceSubjectInputRef.current?.click();
                 } else {
@@ -1521,9 +1711,18 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
               }}
               className={`${primaryBtnClass} w-full`}
             >
-              Select subject PDF &amp; run audit
+              {complianceDroppedSubject
+                ? 'Run audit with dropped PDF'
+                : 'Select subject PDF & run audit'}
             </button>
             <OpenChatFooter onOpenConversation={onOpenConversation} />
+            {isComplianceDragging && (
+              <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-violet-300/80 bg-[#0a1018]/95 px-3 text-center">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-violet-100">
+                  Drop subject PDF
+                </span>
+              </div>
+            )}
           </div>
         );
       }

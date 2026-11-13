@@ -35,6 +35,8 @@
  */
 
 import type { SurveyLine } from '../types.ts';
+import type { ParcelGapRoad } from './parcelRoadInference.ts';
+import { formatParcelGapRoad } from './parcelRoadInference.ts';
 import { formatBearing, inverse } from './cogo.ts';
 import { polylinesCross, polylineSelfIntersects } from './linework.ts';
 import {
@@ -64,6 +66,8 @@ export interface RoadGrounding {
   parcelLines?: DraftLineLike[];
   /** OpenStreetMap road ways reprojected into the project frame. */
   osmWays?: GroundingWay[];
+  /** Road corridors inferred from gaps between different parcel frontages. */
+  parcelGapRoads?: ParcelGapRoad[];
 }
 
 export type RoadDefectKind =
@@ -568,10 +572,13 @@ export async function fetchOsmGroundingWays(
 export function buildRoadGroundingContext(args: {
   parcelLines?: DraftLineLike[];
   osmWays?: GroundingWay[];
+  parcelGapRoads?: ParcelGapRoad[];
   review?: RoadTakeReport | null;
 }): string {
-  const ways = (args.osmWays ?? []).slice(0, 8);
-  const parcels = (args.parcelLines ?? []).filter(l => l.fromPt && l.toPt).slice(0, 16);
+  const ways = (args.osmWays ?? []).slice(0, 24);
+  const allParcels = (args.parcelLines ?? []).filter(l => l.fromPt && l.toPt);
+  const parcels = allParcels.slice(0, 120);
+  const gapRoads = (args.parcelGapRoads ?? []).slice(0, 40);
   const review = args.review;
 
   const wayLines = ways.length > 0
@@ -585,12 +592,21 @@ export function buildRoadGroundingContext(args: {
     : ['  - none available (offline or missing projection) — rely on field shots and corridor logic; parcel lines are a sanity check only'];
 
   const parcelBlocks = parcels.length > 0
-    ? parcels.map(line => {
-        const from = line.fromPt!;
-        const to = line.toPt!;
-        return `  - (${from.x.toFixed(1)}, ${from.y.toFixed(1)}) → (${to.x.toFixed(1)}, ${to.y.toFixed(1)})`;
-      })
+    ? [
+        ...parcels.map(line => {
+          const from = line.fromPt!;
+          const to = line.toPt!;
+          return `  - (${from.x.toFixed(1)}, ${from.y.toFixed(1)}) → (${to.x.toFixed(1)}, ${to.y.toFixed(1)})`;
+        }),
+        ...(allParcels.length > parcels.length
+          ? [`  - (+${allParcels.length - parcels.length} more parcel segments in the loaded fabric)`]
+          : []),
+      ]
     : ['  - none loaded (fetch county/tax parcels to strengthen the alignment)'];
+
+  const gapRoadBlocks = gapRoads.length > 0
+    ? gapRoads.map(road => `  - ${formatParcelGapRoad(road)}`)
+    : ['  - none inferred (parcel frontages are absent or too sparse to pair)'];
 
   const reviewLine = review
     ? [
@@ -606,13 +622,19 @@ export function buildRoadGroundingContext(args: {
     ...wayLines,
     'Tax-parcel frontage linework near the corridor:',
     ...parcelBlocks,
+    'PARCEL-FABRIC ROAD CANDIDATES — gaps between different parcel frontages:',
+    ...gapRoadBlocks,
+    'The strip between two different parcel fabrics IS the road corridor. A consistent empty gap with no parcel polygon inside it is not vacant land and must not be filled with a building, driveway, or arbitrary linework.',
     ...reviewLine,
     'RULES FOR USING THIS GROUNDING:',
     '• Parcel lines are GUIDANCE ONLY. Never snap, trace, or attach a road endpoint to a parcel line, parcel vertex, or parcel intersection.',
     '• Draw the road from survey shots/points and corridor logic: continuity, bearing, inferred width, and opposite-edge pairing. OSM ways may guide the alignment, but field shots outrank them.',
+    '• Keep the take point-driven. Where shot notes mark PC, PT, or POC (curve start/end or a point on the curve), fit a smooth approximate arc through those shots. A rough tangent/chord fit is acceptable; never replace a real bend with one hard straight chord or invent a spiral.',
     '• Use parcel lines only to understand where frontage/road plausibly runs and to sanity-check a gap between field runs. The actual road line must be drawn from the shots and the corridor logic, not copied from parcel geometry.',
+    '• When parcel data covers the area, a continuous gap between two different parcel fabrics is a road candidate. Check the gap-road list before deciding that an unlabelled strip is empty land. Field shots still own the final pavement edges.',
     '• When the aerial imagery is covered by tree canopy/shadow and the pavement is not visible, say so plainly and draft from the field shots and corridor logic. Do not pretend the image supports a synthesis.',
     '• Each pavement edge must be one continuous line: no gaps, no duplicate, no orphan stub. Opposite edges never cross; a side road T-intersects, it never cuts across the pavement.',
+    '• Preserve the intersection arm count and angle. A T has three arms; a cross has four; a skewed crossing is still a cross, not a T. Branch edges stop at the through edge.',
     '---END ROAD GROUNDING — PARCEL LINES & OSM WAYS---',
   ].join('\n');
 }
@@ -844,7 +866,7 @@ function findStitchCandidate(
   return best;
 }
 
-const ROAD_EDGE_SHOT_RE = /\b(?:ER\d*|EP\d*|EOP\d*|EDGE\d*|PAV\w*|PVMT\d*|CURB\d*|TC\d*|BC\d*|TBC\d*|GUTTER\d*|FL\d*|FLOW\d*|TIE|ROAD|DEP[0-9]*)\b/i;
+const ROAD_EDGE_SHOT_RE = /\b(?:ER\d*|EP\d*|EOP\d*|EDGE\d*|PAV\w*|PVMT\d*|CURB\d*|TC\d*|BC\d*|TBC\d*|GUTTER\d*|FL\d*|FLOW\d*|TIE|ROAD|DEP[0-9]*|POC[0-9]*|PC[0-9]*|PT[0-9]*)\b/i;
 const ROAD_CENTERLINE_SHOT_RE = /\b(?:CL\d*|CTR\d*|CENTERLINE)\b/i;
 
 function surveyPointMatchesFeature(point: RoadSurveyPoint, role: RoadFeature['role']): boolean {
@@ -2189,6 +2211,7 @@ export function formatRoadRetakePrompt(
     '• A parallel line beside a continuation is not a crossing. Join same-edge runs across the gap even when another parallel line (opposite edge, centerline, or duplicate) is nearby.',
     '• A road never necks down to a point. Rebuild converging lines as two continuous parallel edges with a consistent width; a T or cross is allowed only where a branch actually exists.',
     '• If surveyed road shots remain inside the parcel corridor but no edge reaches them, synthesize a smooth curve through those shots. Do not draw a straight chord across them and do not snap to parcel geometry.',
+    '• Draw from the surveyed points, not from width detection. Hold the road width constant through ordinary runs and let a PC/PT/POC-implied bend be a rough fitted curve; minor hand-edit geometry is acceptable when it follows the shots.',
     '• If the aerial is all tree canopy/vegetation, do not claim image support; use the field shots and corridor logic. OSM and parcel lines are guidance only.',
     '• Use existing point numbers from the database — never invent points. Explicit fromPt/toPt coordinates are also accepted.',
     '• DYL/DBL shots are PAINT, not a baseline: draw two continuous yellow stripes on L-ROAD-PAINT-Y. Never redraw them on C-ROAD-CNTR.',

@@ -173,6 +173,7 @@ export const A2UISurfaceHost: React.FC<A2UISurfaceHostProps> = ({
     originX: number;
     originY: number;
   } | null>(null);
+  const surfaceRef = useRef<HTMLElement>(null);
 
   const launchDefinition = useCallback(
     (definition: A2UISurfaceDefinition) => {
@@ -248,7 +249,18 @@ export const A2UISurfaceHost: React.FC<A2UISurfaceHostProps> = ({
   const styles = ACCENT_STYLES[activeSurface?.accent ?? 'cyan'];
   const isMinimized = activeSurface ? minimized.has(activeSurface.key) : false;
   const isFullscreen = activeSurface?.size === 'fullscreen';
+  const isSurveyorsEye = activeSurface?.definitionId === 'workspace-gimbal-vision';
   const surfaceOffset = activeSurface ? surfaceOffsets[activeSurface.key] ?? { x: 0, y: 0 } : { x: 0, y: 0 };
+  const surfaceStyle: React.CSSProperties = {
+    ...(isFullscreen ? {} : { transform: `translate(${surfaceOffset.x}px, ${surfaceOffset.y}px)` }),
+    maxHeight: isFullscreen ? undefined : 'min(76dvh, calc(100dvh - 1.5rem))',
+    ...(isSurveyorsEye
+      ? {
+          boxShadow:
+            '0 0 0 1px rgba(56,189,248,0.30), 0 0 34px rgba(56,189,248,0.30), 0 24px 80px -28px rgba(56,189,248,0.70)',
+        }
+      : {}),
+  };
 
   const handleDragStart = (event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || isFullscreen) return;
@@ -275,11 +287,17 @@ export const A2UISurfaceHost: React.FC<A2UISurfaceHostProps> = ({
   const handleDragMove = (event: React.PointerEvent<HTMLElement>) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    const height = surfaceRef.current?.getBoundingClientRect().height ?? 0;
+    const maxUp = Math.max(0, (typeof window !== 'undefined' ? window.innerHeight : 0) - height - 24);
+    const rawY = drag.originY + event.clientY - drag.startY;
+    const lockedToViewport = activeSurface?.definitionId === 'workspace-gimbal-vision';
     setSurfaceOffsets(previous => ({
       ...previous,
       [drag.key]: {
         x: drag.originX + event.clientX - drag.startX,
-        y: drag.originY + event.clientY - drag.startY,
+        // Surveyors Eye is bottom-anchored and must never push its header above
+        // the viewport or its footer below it. Other surfaces keep free drag.
+        y: lockedToViewport ? Math.min(0, Math.max(-maxUp, rawY)) : rawY,
       },
     }));
   };
@@ -328,16 +346,17 @@ export const A2UISurfaceHost: React.FC<A2UISurfaceHostProps> = ({
 
         {activeSurface && (
           <section
+            ref={surfaceRef}
             role="dialog"
             aria-modal="false"
             aria-label={activeSurface.title}
             data-testid={`a2ui-hosted-surface-${activeSurface.definitionId ?? activeSurface.key}`}
             data-size={activeSurface.size}
-            style={isFullscreen ? undefined : { transform: `translate(${surfaceOffset.x}px, ${surfaceOffset.y}px)` }}
-            className={`pointer-events-auto flex flex-col overflow-hidden rounded-xl border bg-[#070e18]/97 text-slate-200 backdrop-blur-md ${styles.border} ${styles.glow} ${
+            style={surfaceStyle}
+            className={`pointer-events-auto flex min-h-0 flex-col overflow-hidden rounded-xl border bg-[#070e18]/97 text-slate-200 backdrop-blur-md ${styles.border} ${styles.glow} ${
               isFullscreen
-                ? 'fixed inset-3 z-[10000] h-[calc(100dvh-1.5rem)] max-h-none'
-                : `max-h-[76vh] ${SIZE_CLASSES[activeSurface.size]}`
+                ? 'fixed inset-3 z-[10000] h-[calc(100dvh-1.5rem)]'
+                : SIZE_CLASSES[activeSurface.size]
             }`}
           >
             <header

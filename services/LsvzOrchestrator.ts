@@ -8,6 +8,7 @@
 import { interAgentComm, AgentResponse } from './InterAgentCommunication';
 import { agentRegistry } from './AgentRegistry';
 import { AgentType } from '../types';
+import { resolveDraftingDelegateTarget } from './cacpIntentRouter.ts';
 
 export interface DispatchResult {
   ok: boolean;
@@ -36,20 +37,21 @@ class LsvzOrchestrator {
     query: string,
     reason?: string
   ): Promise<{ delegated: boolean; targetAgent: AgentType; error?: string }> {
+    const effectiveTarget = resolveDraftingDelegateTarget(query, targetAgent);
     if (!this.delegateHandler) {
       return {
         delegated: false,
-        targetAgent,
+        targetAgent: effectiveTarget,
         error: 'No specialist delegate handler registered in host.',
       };
     }
     try {
-      await this.delegateHandler(targetAgent, query, reason);
-      return { delegated: true, targetAgent };
+      await this.delegateHandler(effectiveTarget, query, reason);
+      return { delegated: true, targetAgent: effectiveTarget };
     } catch (e) {
       return {
         delegated: false,
-        targetAgent,
+        targetAgent: effectiveTarget,
         error: e instanceof Error ? e.message : String(e),
       };
     }

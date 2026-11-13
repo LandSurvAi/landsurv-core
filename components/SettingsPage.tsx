@@ -12,6 +12,7 @@ import GlobalCrsPicker from './GlobalCrsPicker.tsx';
 import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnabled.ts';
 import { A2UIExperimentalAgentDialog } from './A2UIExperimentalAgentDialog.tsx';
 import { EXPERIMENTAL_REDLINE_WARNING, EXPERIMENTAL_ROADING_WARNING, EXPERIMENTAL_STORMWATER_WARNING, setExperimentalAgentEnabled } from '../utils/experimentalAgents.ts';
+import { isScoutAnimationEnabled, setScoutAnimationEnabled } from '../utils/scoutSettings.ts';
 import { detectProjectionFromBrowser } from '../utils/autoProjection.ts';
 
 const FORCE_AGENT_OPTIONS: AgentType[] = [
@@ -89,6 +90,10 @@ interface SettingsPageProps {
     projectBboxWgs84?: [number, number, number, number] | null;
     /** Latest GPS fix, for CRS auto-suggest. */
     gpsPosition?: { latitude: number; longitude: number } | null;
+    /** Record the fix used to detect the CRS so project location can reuse it. */
+    onGpsFixDetected?: (fix: { latitude: number; longitude: number }) => void;
+    /** Launch the A2UI Point Studio from the legacy point controls. */
+    onOpenPointStudio?: () => void;
 }
 
 const SettingsPage: React.FC<SettingsPageProps> = ({
@@ -98,7 +103,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     , isSuperUser, hasApiKey
     , autoHighThinkingModel, autoHighThinkingOptions, onAutoHighThinkingModelChange
     , onTriggerHostCostReminder
-    , projectBboxWgs84, gpsPosition
+    , projectBboxWgs84, gpsPosition, onGpsFixDetected, onOpenPointStudio
 }) => {
     const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
     const experimentalStormwaterEnabled = useExperimentalAgentEnabled(AgentType.STORMWATER_AGENT);
@@ -363,6 +368,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
         ...prev,
         projection: detected.projection,
       }));
+      onGpsFixDetected?.({ latitude: detected.latitude, longitude: detected.longitude });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/denied|permission/i.test(message)) {
@@ -537,9 +543,22 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                 onChange={e => handleSettingChange('debugGimbalHud', e.target.checked)}
                                 className={`w-4 h-4 ${themeAccent}`}
                             />
-                            <span className="text-sm font-medium text-gray-300 light-theme:text-gray-700">Show Civil Drafter Gimbal Vision HUD</span>
+                            <span className="text-sm font-medium text-gray-300 light-theme:text-gray-700">Show Civil Drafter Surveyors Eye HUD</span>
                         </label>
-                        <p className="text-xs text-gray-500 mt-1 ml-7">Debug only. The gimbal vision pass always runs behind the scenes — this toggle only shows the scanning HUD overlay on the canvas.</p>
+                        <p className="text-xs text-gray-500 mt-1 ml-7">Debug only. Surveyors Eye always runs behind the scenes — this toggle only surfaces its access nudge in chat.</p>
+                    </div>
+
+                    <div>
+                        <label className="flex items-center gap-3 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={!!settings.debugA2UIDecisionInspector}
+                                onChange={e => handleSettingChange('debugA2UIDecisionInspector', e.target.checked)}
+                                className={`w-4 h-4 ${themeAccent}`}
+                            />
+                            <span className="text-sm font-medium text-gray-300 light-theme:text-gray-700">Show A2UI Decision 1 shadow inspector</span>
+                        </label>
+                        <p className="text-xs text-gray-500 mt-1 ml-7">Developer only. A floating panel reports what Decision 1 would choose, its confidence, and whether it would differ from the regex router. Decision 1 never opens or changes a surface. For every-turn detail, set A2UI_DECISION_DEBUG_ENABLED=true on the backend.</p>
                     </div>
 
                     <div>
@@ -666,6 +685,24 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             <option value="right">Top Right</option>
                         </select>
                     </div>
+                    <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3 light-theme:border-cyan-300 light-theme:bg-cyan-50">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <div className="text-sm font-semibold text-cyan-300 light-theme:text-cyan-700">Point Studio</div>
+                                <p className="text-xs text-gray-400 light-theme:text-gray-600">
+                                    Named point styles now own symbols, labels, and efficiency behavior. Open the studio to edit styles and assignments.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={onOpenPointStudio}
+                                disabled={!onOpenPointStudio}
+                                className="rounded-md border border-cyan-400/40 bg-cyan-500/15 px-2.5 py-1.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-50 light-theme:text-cyan-800"
+                            >
+                                Open Point Studio
+                            </button>
+                        </div>
+                    </div>
                     <div>
                         <label htmlFor="pointAttributeScaling" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Point Attribute Scaling</label>
                         <select 
@@ -750,6 +787,22 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             <div>
                 <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Command Bar</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 grid grid-cols-1 sm:grid-cols-2 gap-4 light-theme:bg-gray-100 light-theme:border-gray-300">
+                    <div className="sm:col-span-2">
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                defaultChecked={isScoutAnimationEnabled()}
+                                onChange={e => setScoutAnimationEnabled(e.target.checked)}
+                                className={`mt-0.5 h-4 w-4 rounded border-gray-500 bg-gray-700 ${themeAccent} focus:ring-2 ${themeFocusRing}`}
+                            />
+                            <span>
+                                <span className="block text-sm font-medium text-gray-300 light-theme:text-gray-700">Scout animation</span>
+                                <span className="block text-xs text-gray-500 mt-0.5 light-theme:text-gray-600">
+                                    Shows the walking Scout surveyor above the command bar while a run is active. Off by default; this only controls the mascot and its trail.
+                                </span>
+                            </span>
+                        </label>
+                    </div>
                     <div>
                         <label htmlFor="command-bar-scale" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Text Scale</label>
                         <select

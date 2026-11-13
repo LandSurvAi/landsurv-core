@@ -42,6 +42,8 @@ export interface C3DPointRecord {
   elevation: number;
   description: string;
   layer?: string | null;
+  /** Resolved Point Studio export name. Civil 3D styles are not created remotely. */
+  pointStyleName?: string;
 }
 
 export interface C3DLayerRecord {

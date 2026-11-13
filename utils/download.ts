@@ -1,4 +1,5 @@
-// A robust, single download function to replace all uses of `showSaveFilePicker` and legacy fallbacks.
+// A robust fallback download function for browsers or contexts where a native
+// file picker is unavailable. Project saves can use `utils/nativeFileSave.ts`.
 //
 // Hardening notes:
 // - The object URL is revoked on a deferred timer, NOT synchronously after click().

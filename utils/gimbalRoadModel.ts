@@ -23,6 +23,7 @@
  */
 
 import { groupRoadFeatures, type GroundingWay, type RoadFeature, type RoadTakeReport } from './roadTakeReview.ts';
+import type { ParcelGapRoad } from './parcelRoadInference.ts';
 import type { DraftLineLike, DraftVertex } from './synthesisVerification.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,9 +62,17 @@ export interface RoadModelDefect {
   detail: string;
 }
 
+export type RoadModelSource = 'drawn' | 'parcel_gap';
+
 export interface RoadModelCorridor {
   id: string;
-  kind: 'paired_edges' | 'centerline' | 'paint' | 'single_edge';
+  kind: 'paired_edges' | 'centerline' | 'paint' | 'single_edge' | 'parcel_gap';
+  /** Where this corridor came from. Omitted on older models means `drawn`. */
+  source?: RoadModelSource;
+  /** Confidence for inferred corridors (parcel gaps), 0–1. */
+  confidence?: number;
+  /** Parcel ids that bound an inferred gap corridor. */
+  parcelIds?: string[];
   layer?: string;
   lengthFt: number;
   stationStartFt: number;
@@ -80,6 +89,27 @@ export interface RoadModelCorridor {
   defects: RoadModelDefect[];
 }
 
+export type GimbalIntersectionKind = 't' | 'cross' | 'skew' | 'y' | 'l' | 'complex';
+
+export interface GimbalIntersectionArm {
+  corridorId: string;
+  bearingDeg: number;
+  stationFt: number;
+}
+
+export interface GimbalRoadIntersection {
+  id: string;
+  kind: GimbalIntersectionKind;
+  /** Smallest angle between different corridors, 0–90°. */
+  angleDeg: number;
+  at: DraftVertex;
+  corridorIds: string[];
+  arms: GimbalIntersectionArm[];
+  /** Station of the node on each corridor at the closest point. */
+  stationByCorridor: Record<string, number>;
+  label: string;
+}
+
 export interface RoadMathModel {
   corridors: RoadModelCorridor[];
   totalLengthFt: number;
@@ -88,6 +118,10 @@ export interface RoadMathModel {
   sections: number;
   unpairedEdges: number;
   builtAt: number;
+  /** Explicit T / cross / skew nodes derived from corridor centre lines. */
+  intersections?: GimbalRoadIntersection[];
+  /** Number of parcel-gap road candidates carried into the model. */
+  parcelGapRoads?: number;
   /** The civil-sense critique that accompanied this take, if available. */
   reviewRemaining: string[];
   reviewScore: number | null;
@@ -113,8 +147,12 @@ export interface RoadMathModelOptions {
   includeGenericLinework?: boolean;
   /** Consecutive-vertex distance that counts as a broken edge (default 80 ft). */
   maxGapFt?: number;
-  /** Cross-section spacing target (default 50 ft, capped at 14 sections). */
+  /** Cross-section spacing target (default 25 ft). */
   sectionIntervalFt?: number;
+  /** Hard cap on sections per corridor (default 120). */
+  maxSections?: number;
+  /** Add inferred parcel-gap roads as target corridors (default false). */
+  includeParcelGapRoads?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,6 +322,318 @@ function separationStats(a: DraftVertex[], b: DraftVertex[]): { mean: number; st
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Intersection nodes
+// ─────────────────────────────────────────────────────────────────────────────
+
+function segmentHit(
+  a: DraftVertex,
+  b: DraftVertex,
+  c: DraftVertex,
+  d: DraftVertex,
+): { at: DraftVertex; t: number; u: number } | null {
+  const rx = b.easting - a.easting;
+  const ry = b.northing - a.northing;
+  const sx = d.easting - c.easting;
+  const sy = d.northing - c.northing;
+  const denominator = rx * sy - ry * sx;
+  if (Math.abs(denominator) < 1e-9) return null;
+  const qpx = c.easting - a.easting;
+  const qpy = c.northing - a.northing;
+  const t = (qpx * sy - qpy * sx) / denominator;
+  const u = (qpx * ry - qpy * rx) / denominator;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return {
+    at: { easting: a.easting + t * rx, northing: a.northing + t * ry },
+    t,
+    u,
+  };
+}
+
+function nearestPointDetailed(
+  p: DraftVertex,
+  vertices: DraftVertex[],
+): { point: DraftVertex; distance: number; alongFt: number; t: number } | null {
+  if (vertices.length === 0) return null;
+  if (vertices.length === 1) {
+    return { point: vertices[0], distance: distance(p, vertices[0]), alongFt: 0, t: 0 };
+  }
+  let best: { point: DraftVertex; distance: number; alongFt: number; t: number } | null = null;
+  let along = 0;
+  for (let i = 0; i < vertices.length - 1; i++) {
+    const a = vertices[i];
+    const b = vertices[i + 1];
+    const dx = b.easting - a.easting;
+    const dy = b.northing - a.northing;
+    const lengthSq = dx * dx + dy * dy;
+    const length = Math.sqrt(lengthSq);
+    const t = lengthSq < 1e-9
+      ? 0
+      : Math.max(0, Math.min(1, ((p.easting - a.easting) * dx + (p.northing - a.northing) * dy) / lengthSq));
+    const point = { easting: a.easting + t * dx, northing: a.northing + t * dy };
+    const d = distance(p, point);
+    if (!best || d < best.distance) {
+      best = { point, distance: d, alongFt: along + t * length, t };
+    }
+    along += length;
+  }
+  return best;
+}
+
+function corridorCenterline(corridor: RoadModelCorridor): DraftVertex[] {
+  return corridor.sections.map(section => ({
+    easting: section.easting,
+    northing: section.northing,
+  }));
+}
+
+function stationOnCorridor(corridor: RoadModelCorridor, point: DraftVertex): number {
+  const nearest = nearestPointDetailed(point, corridorCenterline(corridor));
+  return nearest ? nearest.alongFt : 0;
+}
+
+export function cardinalDirectionForBearing(bearingDeg: number): string {
+  const labels = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return labels[Math.round((((bearingDeg % 360) + 360) % 360) / 45) % 8];
+}
+
+function angleBetweenBearings(a: number, b: number): number {
+  const difference = Math.abs(bearingDifference(a, b));
+  return Math.min(difference, 180 - difference);
+}
+
+function segmentBearingDeg(a: DraftVertex, b: DraftVertex): number {
+  return normalizeBearing(bearingDeg(a, b));
+}
+
+interface RawIntersection {
+  at: DraftVertex;
+  corridorIds: string[];
+  arms: GimbalIntersectionArm[];
+  angleDeg: number;
+  throughCorridors: string[];
+}
+
+function armsForThrough(corridor: RoadModelCorridor, point: DraftVertex, bearing: number): GimbalIntersectionArm[] {
+  const station = stationOnCorridor(corridor, point);
+  return [
+    { corridorId: corridor.id, bearingDeg: normalizeBearing(bearing), stationFt: station },
+    { corridorId: corridor.id, bearingDeg: normalizeBearing(bearing + 180), stationFt: station },
+  ];
+}
+
+function nodeLabel(kind: GimbalIntersectionKind, angleDeg: number, at: DraftVertex, stations: Record<string, number>): string {
+  const stationText = Object.entries(stations)
+    .map(([corridorId, station]) => `${corridorId} sta ${formatStation(station)}`)
+    .join(' × ');
+  return `${kind.toUpperCase()} · ${angleDeg.toFixed(0)}° · ${stationText} · (${at.easting.toFixed(1)}, ${at.northing.toFixed(1)})`;
+}
+
+function mergeIntersectionNodes(nodes: RawIntersection[]): RawIntersection[] {
+  const merged: RawIntersection[] = [];
+  for (const node of nodes) {
+    const near = merged.find(existing => distance(existing.at, node.at) <= 15);
+    if (!near) {
+      merged.push({
+        ...node,
+        corridorIds: [...new Set(node.corridorIds)],
+        throughCorridors: [...new Set(node.throughCorridors)],
+      });
+      continue;
+    }
+    const count = Math.max(1, merged.filter(existing => distance(existing.at, near.at) <= 15).length + 1);
+    near.at = {
+      easting: (near.at.easting * (count - 1) + node.at.easting) / count,
+      northing: (near.at.northing * (count - 1) + node.at.northing) / count,
+    };
+    near.corridorIds = [...new Set([...near.corridorIds, ...node.corridorIds])];
+    near.throughCorridors = [...new Set([...near.throughCorridors, ...node.throughCorridors])];
+    const seenArms = new Set(near.arms.map(arm => `${arm.corridorId}:${Math.round(arm.bearingDeg)}`));
+    for (const arm of node.arms) {
+      const key = `${arm.corridorId}:${Math.round(arm.bearingDeg)}`;
+      if (!seenArms.has(key)) {
+        seenArms.add(key);
+        near.arms.push(arm);
+      }
+    }
+    near.angleDeg = Math.min(near.angleDeg, node.angleDeg);
+  }
+  return merged;
+}
+
+/**
+ * Detect explicit intersection nodes from the corridor centre lines. A proper
+ * interior crossing is a cross (near 90°) or a skew cross (any other angle);
+ * a corridor endpoint that terminates on another corridor is a T; three or
+ * more terminal corridors at one node are a Y. Every node keeps its angle,
+ * arm count, station on each corridor and absolute coordinates so the drafter
+ * can reproduce it instead of being told only "preserve the intersection".
+ */
+export function buildGimbalIntersections(corridors: RoadModelCorridor[]): GimbalRoadIntersection[] {
+  const usable = corridors.filter(corridor => corridor.sections.length >= 2);
+  if (usable.length < 2) return [];
+  const raw: RawIntersection[] = [];
+
+  for (let i = 0; i < usable.length; i++) {
+    const a = usable[i];
+    const aPoints = corridorCenterline(a);
+    for (let j = i + 1; j < usable.length; j++) {
+      const b = usable[j];
+      const bPoints = corridorCenterline(b);
+      let crossing: { at: DraftVertex; bearingA: number; bearingB: number; angleDeg: number } | null = null;
+
+      const aLength = polylineLength(aPoints);
+      const bLength = polylineLength(bPoints);
+      for (let ai = 0; ai < aPoints.length - 1 && !crossing; ai++) {
+        for (let bi = 0; bi < bPoints.length - 1; bi++) {
+          const hit = segmentHit(aPoints[ai], aPoints[ai + 1], bPoints[bi], bPoints[bi + 1]);
+          if (!hit) continue;
+          // A crossing can land exactly on a 25-ft station boundary. Test its
+          // along-corridor station, not the local segment parameter, so a
+          // boundary hit is still an interior intersection.
+          const alongA = nearestPointDetailed(hit.at, aPoints);
+          const alongB = nearestPointDetailed(hit.at, bPoints);
+          if (!alongA || !alongB) continue;
+          if (alongA.alongFt <= 15 || alongA.alongFt >= aLength - 15) continue;
+          if (alongB.alongFt <= 15 || alongB.alongFt >= bLength - 15) continue;
+          const bearingA = segmentBearingDeg(aPoints[ai], aPoints[ai + 1]);
+          const bearingB = segmentBearingDeg(bPoints[bi], bPoints[bi + 1]);
+          crossing = { at: hit.at, bearingA, bearingB, angleDeg: angleBetweenBearings(bearingA, bearingB) };
+          break;
+        }
+      }
+
+      if (crossing) {
+        raw.push({
+          at: crossing.at,
+          corridorIds: [a.id, b.id],
+          arms: [
+            ...armsForThrough(a, crossing.at, crossing.bearingA),
+            ...armsForThrough(b, crossing.at, crossing.bearingB),
+          ],
+          angleDeg: crossing.angleDeg,
+          throughCorridors: [a.id, b.id],
+        });
+        continue;
+      }
+
+      const aEndpoints = [aPoints[0], aPoints[aPoints.length - 1]];
+      const bEndpoints = [bPoints[0], bPoints[bPoints.length - 1]];
+      let terminal: { at: DraftVertex; branch: RoadModelCorridor; through: RoadModelCorridor; branchBearing: number; throughBearing: number; angleDeg: number } | null = null;
+
+      const throughLength = polylineLength(bPoints);
+      for (const endpoint of aEndpoints) {
+        const near = nearestPointDetailed(endpoint, bPoints);
+        if (!near || near.distance > 10 || near.alongFt <= 15 || near.alongFt >= throughLength - 15) continue;
+        const branchBearing = distance(aPoints[0], endpoint) <= 0.5
+          ? segmentBearingDeg(aPoints[1], aPoints[0])
+          : segmentBearingDeg(aPoints[aPoints.length - 2], aPoints[aPoints.length - 1]);
+        const throughBearing = segmentBearingDeg(bPoints[0], bPoints[1]);
+        terminal = {
+          at: near.point,
+          branch: a,
+          through: b,
+          branchBearing,
+          throughBearing,
+          angleDeg: angleBetweenBearings(branchBearing, throughBearing),
+        };
+        break;
+      }
+      if (!terminal) {
+        const aLength = polylineLength(aPoints);
+        for (const endpoint of bEndpoints) {
+          const near = nearestPointDetailed(endpoint, aPoints);
+          if (!near || near.distance > 10 || near.alongFt <= 15 || near.alongFt >= aLength - 15) continue;
+          const branchBearing = distance(bPoints[0], endpoint) <= 0.5
+            ? segmentBearingDeg(bPoints[1], bPoints[0])
+            : segmentBearingDeg(bPoints[bPoints.length - 2], bPoints[bPoints.length - 1]);
+          const throughBearing = segmentBearingDeg(aPoints[0], aPoints[1]);
+          terminal = {
+            at: near.point,
+            branch: b,
+            through: a,
+            branchBearing,
+            throughBearing,
+            angleDeg: angleBetweenBearings(branchBearing, throughBearing),
+          };
+          break;
+        }
+      }
+
+      if (terminal) {
+        raw.push({
+          at: terminal.at,
+          corridorIds: [terminal.branch.id, terminal.through.id],
+          arms: [
+            { corridorId: terminal.branch.id, bearingDeg: normalizeBearing(terminal.branchBearing), stationFt: stationOnCorridor(terminal.branch, terminal.at) },
+            ...armsForThrough(terminal.through, terminal.at, terminal.throughBearing),
+          ],
+          angleDeg: terminal.angleDeg,
+          throughCorridors: [terminal.through.id],
+        });
+        continue;
+      }
+
+      let joined = false;
+      for (const aEnd of aEndpoints) {
+        for (const bEnd of bEndpoints) {
+          if (distance(aEnd, bEnd) > 12) continue;
+          const aIndex = distance(aPoints[0], aEnd) <= 0.5 ? 1 : aPoints.length - 2;
+          const bIndex = distance(bPoints[0], bEnd) <= 0.5 ? 1 : bPoints.length - 2;
+          const aBearing = segmentBearingDeg(aPoints[aIndex], aEnd);
+          const bBearing = segmentBearingDeg(bPoints[bIndex], bEnd);
+          raw.push({
+            at: midpoint(aEnd, bEnd),
+            corridorIds: [a.id, b.id],
+            arms: [
+              { corridorId: a.id, bearingDeg: normalizeBearing(aBearing), stationFt: stationOnCorridor(a, aEnd) },
+              { corridorId: b.id, bearingDeg: normalizeBearing(bBearing), stationFt: stationOnCorridor(b, bEnd) },
+            ],
+            angleDeg: angleBetweenBearings(aBearing, bBearing),
+            throughCorridors: [],
+          });
+          joined = true;
+          break;
+        }
+        if (joined) break;
+      }
+    }
+  }
+
+  return mergeIntersectionNodes(raw)
+    .map((node, index) => {
+      const armCount = node.arms.length;
+      let kind: GimbalIntersectionKind;
+      if (armCount >= 5) kind = 'complex';
+      else if (armCount === 4) {
+        kind = node.throughCorridors.length >= 2 && node.angleDeg >= 75 ? 'cross' : 'skew';
+      } else if (armCount === 3) {
+        kind = node.throughCorridors.length >= 1 ? 't' : 'y';
+      } else if (armCount === 2) {
+        kind = 'l';
+      } else {
+        kind = 'complex';
+      }
+      const stationByCorridor = Object.fromEntries(
+        node.corridorIds.map(corridorId => {
+          const corridor = usable.find(candidate => candidate.id === corridorId);
+          return [corridorId, corridor ? stationOnCorridor(corridor, node.at) : 0];
+        }),
+      );
+      return {
+        id: `INT-${index + 1}`,
+        kind,
+        angleDeg: parseFloat(node.angleDeg.toFixed(1)),
+        at: { easting: parseFloat(node.at.easting.toFixed(2)), northing: parseFloat(node.at.northing.toFixed(2)) },
+        corridorIds: node.corridorIds,
+        arms: node.arms,
+        stationByCorridor,
+        label: nodeLabel(kind, node.angleDeg, node.at, stationByCorridor),
+      };
+    })
+    .sort((a, b) => a.at.northing - b.at.northing || a.at.easting - b.at.easting);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Corridor assembly
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -342,10 +692,10 @@ function buildSections(
   primaryVertices: DraftVertex[],
   secondaryVertices: DraftVertex[] | null,
   intervalFt: number,
+  maxSections: number,
 ): RoadModelSection[] {
   const totalLength = polylineLength(primaryVertices);
-  const maxSections = 14;
-  const count = Math.max(2, Math.min(maxSections, Math.ceil(totalLength / Math.max(intervalFt, 10)) + 1));
+  const count = Math.max(2, Math.min(maxSections, Math.ceil(totalLength / Math.max(intervalFt, 5)) + 1));
   const samples = resamplePolyline(primaryVertices, count);
   const sections: RoadModelSection[] = [];
 
@@ -510,9 +860,14 @@ function buildCorridor(
   secondary: RoadFeature | null,
   centerlines: RoadFeature[],
   osmWays: GroundingWay[],
-  options: Required<Pick<RoadMathModelOptions, 'maxGapFt' | 'sectionIntervalFt'>>,
+  options: Required<Pick<RoadMathModelOptions, 'maxGapFt' | 'sectionIntervalFt' | 'maxSections'>>,
 ): RoadModelCorridor {
-  const sections = buildSections(primary.vertices, secondary?.vertices ?? null, options.sectionIntervalFt);
+  const sections = buildSections(
+    primary.vertices,
+    secondary?.vertices ?? null,
+    options.sectionIntervalFt,
+    options.maxSections,
+  );
   const widths = sections.map(section => section.widthFt).filter((width): width is number => width !== null);
   const widthFt = median(widths);
   const widthSpreadFt = widths.length >= 2 && widthFt !== null
@@ -551,6 +906,7 @@ function buildCorridor(
         : primary.role === 'paint'
           ? 'paint'
           : 'single_edge',
+    source: 'drawn',
     layer: primary.layer,
     lengthFt: parseFloat(lengthFt.toFixed(2)),
     stationStartFt: 0,
@@ -574,9 +930,88 @@ function buildCorridor(
 // Public model builder
 // ─────────────────────────────────────────────────────────────────────────────
 
+function buildParcelGapCorridor(
+  id: string,
+  road: ParcelGapRoad,
+  intervalFt: number,
+  maxSections: number,
+): RoadModelCorridor {
+  const count = Math.max(2, Math.min(maxSections, Math.ceil(road.lengthFt / Math.max(intervalFt, 5)) + 1));
+  const samples = resamplePolyline(road.vertices, count);
+  const halfWidth = road.widthFt / 2;
+  const sections: RoadModelSection[] = samples.map((sample, index) => {
+    const prev = samples[Math.max(0, index - 1)];
+    const next = samples[Math.min(samples.length - 1, index + 1)];
+    const heading = distance(prev, next) > 1e-6
+      ? normalizeBearing(bearingDeg(prev, next))
+      : 0;
+    const normal = {
+      easting: Math.cos((heading * Math.PI) / 180),
+      northing: -Math.sin((heading * Math.PI) / 180),
+    };
+    return {
+      stationFt: parseFloat(sample.stationFt.toFixed(2)),
+      easting: parseFloat(sample.easting.toFixed(2)),
+      northing: parseFloat(sample.northing.toFixed(2)),
+      bearingDeg: parseFloat(heading.toFixed(2)),
+      widthFt: road.widthFt,
+      nearEdge: {
+        easting: parseFloat((sample.easting + normal.easting * halfWidth).toFixed(2)),
+        northing: parseFloat((sample.northing + normal.northing * halfWidth).toFixed(2)),
+      },
+      farEdge: {
+        easting: parseFloat((sample.easting - normal.easting * halfWidth).toFixed(2)),
+        northing: parseFloat((sample.northing - normal.northing * halfWidth).toFixed(2)),
+      },
+      curvatureDegPer100Ft: 0,
+    };
+  });
+  for (let i = 1; i < sections.length; i++) {
+    const stationDelta = Math.max(1, sections[i].stationFt - sections[i - 1].stationFt);
+    const turn = bearingDifference(sections[i].bearingDeg, sections[i - 1].bearingDeg);
+    sections[i].curvatureDegPer100Ft = parseFloat(((turn / stationDelta) * 100).toFixed(3));
+  }
+
+  return {
+    id,
+    kind: 'parcel_gap',
+    source: 'parcel_gap',
+    confidence: road.confidence,
+    parcelIds: road.parcelIds,
+    layer: 'PARCEL-GAP-ROAD',
+    lengthFt: parseFloat(road.lengthFt.toFixed(2)),
+    stationStartFt: 0,
+    stationEndFt: parseFloat(road.lengthFt.toFixed(2)),
+    widthFt: parseFloat(road.widthFt.toFixed(2)),
+    widthSpreadFt: 0,
+    edgeCount: 0,
+    hasCenterline: true,
+    maxCurvatureDegPer100Ft: sections.reduce(
+      (max, section) => Math.max(max, Math.abs(section.curvatureDegPer100Ft)),
+      0,
+    ),
+    sections,
+    edgeFeatureIds: [],
+    defects: [],
+  };
+}
+
+function gapCoveredByDrawnCorridor(road: ParcelGapRoad, corridors: RoadModelCorridor[]): boolean {
+  if (corridors.length === 0) return false;
+  const samples = resamplePolyline(road.vertices, 9);
+  const covered = samples.filter(sample =>
+    corridors.some(corridor =>
+      corridor.sections.some(section =>
+        Math.hypot(section.easting - sample.easting, section.northing - sample.northing) <= 30,
+      ),
+    ),
+  ).length;
+  return samples.length > 0 && covered / samples.length >= 0.6;
+}
+
 export function buildRoadMathModel<T extends DraftLineLike>(
   lines: T[],
-  grounding: { osmWays?: GroundingWay[] } = {},
+  grounding: { osmWays?: GroundingWay[]; parcelGapRoads?: ParcelGapRoad[] } = {},
   report?: Pick<RoadTakeReport, 'scoreAfter' | 'remaining'> | null,
   options: RoadMathModelOptions = {},
 ): RoadMathModel {
@@ -584,7 +1019,8 @@ export function buildRoadMathModel<T extends DraftLineLike>(
     includeGenericLinework: options.includeGenericLinework === true,
   });
   const maxGapFt = options.maxGapFt ?? 80;
-  const sectionIntervalFt = options.sectionIntervalFt ?? 50;
+  const sectionIntervalFt = options.sectionIntervalFt ?? 25;
+  const maxSections = Math.max(2, options.maxSections ?? 120);
 
   const edges = features.filter(feature => feature.role === 'edge');
   // Paint is centerline evidence: DYL/WL runs describe the road's medial line,
@@ -603,7 +1039,7 @@ export function buildRoadMathModel<T extends DraftLineLike>(
       pair.secondary,
       centerlines,
       osmWays,
-      { maxGapFt, sectionIntervalFt },
+      { maxGapFt, sectionIntervalFt, maxSections },
     ));
   }
   const claimedCenterlines = new Set(
@@ -624,7 +1060,7 @@ export function buildRoadMathModel<T extends DraftLineLike>(
       null,
       [],
       osmWays,
-      { maxGapFt, sectionIntervalFt },
+      { maxGapFt, sectionIntervalFt, maxSections },
     ));
   }
   for (const edge of unpaired) {
@@ -634,8 +1070,23 @@ export function buildRoadMathModel<T extends DraftLineLike>(
       null,
       centerlines,
       osmWays,
-      { maxGapFt, sectionIntervalFt },
+      { maxGapFt, sectionIntervalFt, maxSections },
     ));
+  }
+
+  let addedGapRoads = 0;
+  if (options.includeParcelGapRoads) {
+    const drawnCorridors = [...corridors];
+    for (const road of grounding.parcelGapRoads ?? []) {
+      if (gapCoveredByDrawnCorridor(road, drawnCorridors)) continue;
+      corridors.push(buildParcelGapCorridor(
+        `R${sequence++}`,
+        road,
+        sectionIntervalFt,
+        maxSections,
+      ));
+      addedGapRoads++;
+    }
   }
 
   const widths = corridors.map(corridor => corridor.widthFt).filter((width): width is number => width !== null);
@@ -646,6 +1097,8 @@ export function buildRoadMathModel<T extends DraftLineLike>(
     sections: corridors.reduce((sum, corridor) => sum + corridor.sections.length, 0),
     unpairedEdges: unpaired.length,
     builtAt: Date.now(),
+    intersections: buildGimbalIntersections(corridors),
+    parcelGapRoads: addedGapRoads,
     reviewRemaining: report?.remaining?.slice(0, 8) ?? [],
     reviewScore: report?.scoreAfter ?? null,
   };
@@ -663,20 +1116,54 @@ export function formatStation(stationFt: number): string {
   return `${sign}${hundreds}+${String(remainder).padStart(2, '0')}`;
 }
 
+export const ROAD_ACCEPTANCE_RUBRIC: string[] = [
+  'ROAD ACCEPTANCE RUBRIC — every applicable red gate must pass:',
+  '  coverage      ≥ 95% of each pass-1 station range, both ends within the corridor endpoint tolerance.',
+  '  pairing       every pass-1 paired edge survives; no lost opposite edge.',
+  '  continuity    no unstitched pavement/paint/curb gap beyond the corridor gap tolerance; no orphan stub or duplicate run.',
+  '  crossing      no opposite-edge crossing or self-intersection; branches stop at the through edge.',
+  '  width         hold the adopted width within the pass-1 tolerance; no section below the floor or above the ceiling.',
+  '  paint         DYL/DBL = two continuous yellow bands; WL/SWL = one continuous white band; correct paint layer; no deleted band.',
+  '  curb          continuous curb/gutter/flow-line chain following its pavement edge within 3 ft of the pass-1 offset.',
+  '  intersection  preserve every target node: arm count, T/cross/skew type, angle, station and location.',
+  '  centerline    only when requested: one continuous alignment, monotonic stations, no kink over 15°.',
+  '  shot_grounding ≥ 95% of coded road shots within 2.0 ft of drafted road/paint/curb geometry.',
+];
+
 function formatCorridorTable(corridor: RoadModelCorridor): string[] {
-  const rows = corridor.sections.slice(0, 14).map(section => {
+  const rows = corridor.sections.slice(0, 120).map(section => {
     const width = section.widthFt === null ? '—' : section.widthFt.toFixed(1);
-    const edge = section.farEdge
+    const near = section.nearEdge
+      ? `(${section.nearEdge.easting.toFixed(1)}, ${section.nearEdge.northing.toFixed(1)})`
+      : '—';
+    const far = section.farEdge
       ? `(${section.farEdge.easting.toFixed(1)}, ${section.farEdge.northing.toFixed(1)})`
       : 'no opposite edge';
     return `  ${formatStation(section.stationFt).padEnd(7)} ` +
-      `(${section.easting.toFixed(1)}, ${section.northing.toFixed(1)})  ` +
-      `${section.bearingDeg.toFixed(1).padStart(5)}°  ${width.padStart(5)} ft  opp ${edge}`;
+      `CTR (${section.easting.toFixed(1)}, ${section.northing.toFixed(1)})  ` +
+      `${section.bearingDeg.toFixed(1).padStart(5)}° ${cardinalDirectionForBearing(section.bearingDeg).padEnd(3)} ` +
+      `${width.padStart(5)} ft  NEAR ${near}  FAR ${far}`;
   });
   const hidden = corridor.sections.length > rows.length
     ? [`  (+${corridor.sections.length - rows.length} more sections)`]
     : [];
   return rows.concat(hidden);
+}
+
+export function formatGimbalIntersectionTargets(model: RoadMathModel): string[] {
+  const intersections = model.intersections ?? [];
+  if (intersections.length === 0) {
+    return [
+      'INTERSECTION TARGETS: none detected from the pass-1 centre lines. ' +
+      'Do not invent a branch or crossing that is not in the take.',
+    ];
+  }
+  return [
+    `INTERSECTION TARGETS — ${intersections.length} node${intersections.length === 1 ? '' : 's'} to preserve exactly:`,
+    ...intersections.map(node =>
+      `  ${node.id} · ${node.label} · arms ${node.arms.length}`,
+    ),
+  ];
 }
 
 /**
@@ -697,8 +1184,10 @@ export function formatGimbalMathBrief(model: RoadMathModel): string {
     '---BEGIN GIMBAL ROAD MATH MODEL — FIRST PASS TARGET---',
     `Model recorded from take 1: ${model.corridors.length} corridor${model.corridors.length === 1 ? '' : 's'}, ` +
       `${model.sections} cross-sections, ${model.totalLengthFt.toFixed(0)} ft total` +
-      `${model.widthFt !== null ? `, typical width ${model.widthFt.toFixed(1)} ft` : ', width not measurable (edge missing)'}.`,
-    'This table is the mathematical record of the first glance. The second pass must reproduce this corridor, station by station — not invent a new alignment.',
+      `${model.widthFt !== null ? `, typical width ${model.widthFt.toFixed(1)} ft` : ', width not measurable (edge missing)'}` +
+      `${model.parcelGapRoads ? `, ${model.parcelGapRoads} parcel-gap road${model.parcelGapRoads === 1 ? '' : 's'} adopted as target corridors` : ''}` +
+      `${model.intersections?.length ? `, ${model.intersections.length} intersection node${model.intersections.length === 1 ? '' : 's'}` : ''}.`,
+    'This table is the mathematical record of the first glance. The second pass must reproduce this corridor, station by station — not invent a new alignment. Every coordinate is a location anchor; use it when a frame edge or crop makes the site ambiguous.',
     '',
   ];
 
@@ -709,14 +1198,15 @@ export function formatGimbalMathBrief(model: RoadMathModel): string {
         `${corridor.lengthFt.toFixed(0)} ft · ${corridor.widthFt?.toFixed(1) ?? '—'} ft wide` +
         `${corridor.widthSpreadFt > 0 ? ` (±${corridor.widthSpreadFt.toFixed(1)} ft)` : ''} · ` +
         `${corridor.edgeCount} edge${corridor.edgeCount === 1 ? '' : 's'}` +
-        `${corridor.hasCenterline ? ' + centreline' : ''}`,
+        `${corridor.hasCenterline ? ' + centreline' : ''}` +
+        `${corridor.source === 'parcel_gap' ? ` · PARCEL-GAP CANDIDATE (${Math.round((corridor.confidence ?? 0) * 100)}% confidence; frontage parcels ${corridor.parcelIds?.join(', ') || 'unknown'})` : ''}`,
     );
-    lines.push('  STA     CENTRE (E, N)                 BEARING  WIDTH   OPPOSITE EDGE');
+    lines.push('  STA     CENTRE (E, N)                 BEARING CARD WIDTH   NEAR EDGE / FAR EDGE');
     lines.push(...formatCorridorTable(corridor));
 
     if (corridor.defects.length > 0) {
       lines.push('  FIX TARGETS:');
-      corridor.defects.slice(0, 8).forEach((defect, index) => {
+      corridor.defects.forEach((defect, index) => {
         const severity = defect.severity === 'red' ? 'RED' : 'AMBER';
         lines.push(
           `   ${index + 1}. [${severity}] ${defect.detail}` +
@@ -727,18 +1217,24 @@ export function formatGimbalMathBrief(model: RoadMathModel): string {
     lines.push('');
   }
 
+  lines.push(...formatGimbalIntersectionTargets(model), '');
+
   if (model.reviewRemaining.length > 0) {
     lines.push('CIVIL-SENSE DEFECTS STILL OPEN FROM THE TAKE REVIEW:');
-    for (const detail of model.reviewRemaining.slice(0, 8)) lines.push(`  - ${detail}`);
+    for (const detail of model.reviewRemaining) lines.push(`  - ${detail}`);
     lines.push('');
   }
 
   lines.push(
+    ...ROAD_ACCEPTANCE_RUBRIC,
+    '',
     'SECOND-PASS RULES FOR USING THIS MODEL:',
     '• Keep the modelled station range and typical width. Every section is a hard anchor: start/end at the same stations, hold the opposite edge at the modelled width ± 2 ft.',
     '• Re-use the section centre coordinates and opposite-edge coordinates to place the redraw. If a defect target says "extend", extend along the same bearing from that station.',
     '• Do not shorten the corridor to the densest cluster or stop at a frame edge. Station coverage is part of the acceptance test.',
     '• Preserve edge pairing: two parallel edges, no crossing, no duplicate, no orphan stub. A branch T-intersects the through edge.',
+    '• Preserve every intersection target: arm count, T/cross/skew type, angle and station. A skewed crossing is still a crossing; do not turn it into a T because the crop makes one arm hard to see.',
+    '• A parcel-gap corridor is a road candidate adopted from the county fabric. Keep it in the take unless a surveyed shot or a stronger OSM alignment proves a different centerline; never fill the gap as vacant land.',
     '• If a section width or centre is genuinely wrong, say which station and give the corrected value in your response prose — do not silently change the alignment.',
     '---END GIMBAL ROAD MATH MODEL — FIRST PASS TARGET---',
   );
@@ -753,7 +1249,9 @@ export function formatGimbalMathSummary(model: RoadMathModel): string {
   return `Gimbal math model: ${model.corridors.length} corridor${model.corridors.length === 1 ? '' : 's'}, ` +
     `${model.sections} cross-sections, ${model.totalLengthFt.toFixed(0)} ft` +
     `${model.widthFt !== null ? `, typical width ${model.widthFt.toFixed(1)} ft` : ''}` +
-    `${model.unpairedEdges > 0 ? `, ${model.unpairedEdges} unpaired edge${model.unpairedEdges === 1 ? '' : 's'}` : ''}.`;
+    `${model.unpairedEdges > 0 ? `, ${model.unpairedEdges} unpaired edge${model.unpairedEdges === 1 ? '' : 's'}` : ''}` +
+    `${model.intersections?.length ? `, ${model.intersections.length} intersection node${model.intersections.length === 1 ? '' : 's'}` : ''}` +
+    `${model.parcelGapRoads ? `, ${model.parcelGapRoads} parcel-gap corridor${model.parcelGapRoads === 1 ? '' : 's'}` : ''}.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

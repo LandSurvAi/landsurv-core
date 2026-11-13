@@ -1,4 +1,5 @@
 import React from 'react';
+import type { AgentType } from '../types.ts';
 
 export type WorkflowQuickThoughtAttention = 'active' | 'away' | 'complete';
 
@@ -11,6 +12,10 @@ export interface WorkflowQuickThoughtStep {
 export interface WorkflowQuickThoughtNotice {
   key: string;
   title: string;
+  /** Agent whose workflow this proposition belongs to. */
+  ownerAgent?: AgentType;
+  /** A2UI surface this generation proposition represents, when applicable. */
+  surface?: 'surveyors-eye';
   attention: WorkflowQuickThoughtAttention;
   progressLabel: string;
   summary: string;
@@ -19,6 +24,24 @@ export interface WorkflowQuickThoughtNotice {
   onAction: () => void;
   onDismiss?: () => void;
 }
+
+const SurveyorsEyeGlyph: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg
+    {...props}
+    data-testid="surveyors-eye-glyph"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.7}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M2.8 12c1.5-3.4 4.9-5.8 9.2-5.8s7.7 2.4 9.2 5.8c-1.5 3.4-4.9 5.8-9.2 5.8S4.3 15.4 2.8 12Z" />
+    <circle cx="12" cy="12" r="2.7" />
+    <path d="M12 2.7v2.4M12 18.9v2.4M2.7 12h2.4M18.9 12h2.4" />
+  </svg>
+);
 
 const ATTENTION_STYLES: Record<
   WorkflowQuickThoughtAttention,
@@ -50,6 +73,7 @@ export const WorkflowQuickThought: React.FC<{ notice: WorkflowQuickThoughtNotice
   notice,
 }) => {
   const styles = ATTENTION_STYLES[notice.attention];
+  const isSurveyorsEye = notice.surface === 'surveyors-eye';
 
   return (
     <div
@@ -58,8 +82,9 @@ export const WorkflowQuickThought: React.FC<{ notice: WorkflowQuickThoughtNotice
       className={`mt-1 rounded-lg border px-2.5 py-2 ${styles.box}`}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className={`truncate text-[9px] font-bold uppercase tracking-[0.14em] ${styles.badge}`}>
-          {notice.title}
+        <span className={`flex min-w-0 items-center gap-1.5 ${styles.badge}`}>
+          {isSurveyorsEye && <SurveyorsEyeGlyph className="h-3.5 w-3.5 shrink-0" />}
+          <span className="truncate text-[9px] font-bold uppercase tracking-[0.14em]">{notice.title}</span>
         </span>
         <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-white/45">
           {notice.progressLabel}

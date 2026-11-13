@@ -13,12 +13,14 @@ import {
   AgentType,
   type A2UIContourChipId,
   type A2UIHatchStudioSpec,
+  type A2UIPointStudioSpec,
   type A2UISettingsSection,
   type A2UIWorkspaceToolId,
 } from '../types.ts';
 import { agentRegistry } from './AgentRegistry.ts';
 import { CONTOUR_CHIP_META } from './contourChips.ts';
 import { resolveHatchForFeatureOrCode } from './hatchLibrary.ts';
+import { resolvePointStyleIntent } from './pointStyleIntent.ts';
 import {
   detectKeyEntrySource,
   isKeyEntryRequest,
@@ -72,6 +74,7 @@ export type A2UISurfaceIntent =
       surface: 'workspace-tool';
       tool: A2UIWorkspaceToolId;
       agent: AgentType;
+      pointStudio?: A2UIPointStudioSpec;
       replyText: string;
       suggestedQuestions: string[];
     }
@@ -454,6 +457,18 @@ const WORKSPACE_TOOL_RULES: readonly WorkspaceToolRule[] = [
     ],
   },
   {
+    tool: 'road-links',
+    agent: AgentType.ROADING_AGENT,
+    pattern: /\b(?:road\s+links?|road\s+objects?|linked\s+(?:road\s+)?profiles?|live\s+(?:road\s+)?profile|cross[- ]sections?\s+(?:for|along)\s+(?:the\s+)?road|station\s+sections?)\b/i,
+    replyText:
+      'Here is the live <strong>Road Links</strong> surface. Inspect linked baselines, existing and design profiles, and cross sections, or refresh a road.',
+    suggestedQuestions: [
+      'Refresh the road profiles and sections',
+      'Show cross sections for Main St',
+      'Unlink the road object from its baseline',
+    ],
+  },
+  {
     tool: 'roading-panel',
     agent: AgentType.ROADING_AGENT,
     pattern: /\b(?:roading\s+(?:studio|panel|workspace|designer)|road\s+(?:typical\s+section|corridor)\s+(?:panel|designer|tool))\b/i,
@@ -555,7 +570,7 @@ const WORKSPACE_TOOL_RULES: readonly WorkspaceToolRule[] = [
     agent: AgentType.CAD_MANAGER,
     pattern: /\b(?:sheet\s+view|paperspace\s+(?:layout|view)|24\s*x\s*36\s+(?:sheet|plot|layout)|plot\s+layout\s+view)\b/i,
     replyText:
-      'Here is the live <strong>Sheet View (24×36 Plot Layout)</strong> in chat. Preview the paperspace sheet or open it fullscreen to arrange viewports and titleblock metadata.',
+      'Here is the live <strong>Sheet View</strong> in chat. Preview the paper-space sheet or open it fullscreen to arrange viewports, scale, and titleblock metadata.',
     suggestedQuestions: [
       'Open CAD Manager workspace',
       'Open Symbol Manager',
@@ -783,6 +798,40 @@ export function resolveA2UISurfaceIntent(
   }
 
   if (!hasActionOrHowToVerb) return null;
+
+  // Direct appearance requests deep-link into the exact Point Studio control
+  // and carry any explicit color/size/shape values with them.
+  const pointStyleIntent = resolvePointStyleIntent(trimmed);
+  if (pointStyleIntent) {
+    return {
+      surface: 'workspace-tool',
+      tool: 'point-studio',
+      agent: AgentType.CIVIL_DRAFTER,
+      pointStudio: pointStyleIntent.spec,
+      replyText: pointStyleIntent.replyText,
+      suggestedQuestions: pointStyleIntent.suggestedQuestions,
+    };
+  }
+
+  // 3. Point Studio: named point styles, assignments, and efficiency tuning.
+  if (
+    /\b(?:(?:open|show|launch|view|adjust|edit|tune|configure)\s+(?:the\s+)?point\s+studio|point\s+studios?|point\s+styles?(?:\s+settings?)?|point\s+appearance|adjust\s+(?:how\s+)?points?\s+look|efficiency\s+(?:mode\s+)?settings?|tune\s+efficiency\s+mode)\b/i.test(
+      trimmed
+    )
+  ) {
+    return {
+      surface: 'workspace-tool',
+      tool: 'point-studio',
+      agent: AgentType.CIVIL_DRAFTER,
+      replyText:
+        'Here is the Civil Drafter <strong>Point Studio</strong>. Create or edit named point styles, assign them to lists, codes, layers, or points, and tune how Point Efficiency Mode looks and acts.',
+      suggestedQuestions: [
+        'Make points cyan and smaller',
+        'Tune efficiency mode for large point files',
+        'Style points by description code',
+      ],
+    };
+  }
 
   // 3. Point Tools hub: one surface that presents every point workflow as an
   // independently actionable card. Individual point tools keep their own

@@ -594,7 +594,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
           onChange={handleImportPointsFile}
         />
         <div className="flex-shrink-0 border-b border-white/[0.07] bg-[#0b111a]/90 px-3.5 py-3">
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex flex-col gap-2">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-semibold text-slate-100">Point Workspace</h2>
@@ -607,13 +607,13 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                 {visiblePointCount !== allPoints.length ? ` · ${visiblePointCount.toLocaleString()} visible` : ''}
               </p>
             </div>
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+            <div className="flex flex-wrap items-center gap-1">
               <select
                 value={exportFormat}
                 onChange={event => setExportFormat(event.target.value as PointExportFormat)}
                 aria-label="Point export format"
                 title="PNEZD (default): Point, Northing, Easting, Elevation, Description. Full CSV adds list name and photo count."
-                className="h-[24px] rounded border border-white/[0.08] bg-white/[0.03] px-1 text-[9.5px] font-semibold text-slate-300 focus:border-cyan-400/40 focus:outline-none light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-700"
+                className="h-[24px] shrink-0 rounded border border-white/[0.08] bg-white/[0.03] px-1 text-[9.5px] font-semibold text-slate-300 focus:border-cyan-400/40 focus:outline-none light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-700"
               >
                 <option value="pnezd">PNEZD</option>
                 <option value="pnezd_header">PNEZD + Header</option>
@@ -623,7 +623,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                 <button
                   type="button"
                   onClick={onOpenPointTools}
-                  className="inline-flex items-center gap-1 rounded-md border border-cyan-400/30 bg-cyan-400/10 px-1.5 py-1 text-[10px] font-semibold text-cyan-200 transition-colors hover:border-cyan-300/60 hover:text-white"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-cyan-400/30 bg-cyan-400/10 px-1.5 py-1 text-[10px] font-semibold text-cyan-200 transition-colors hover:border-cyan-300/60 hover:text-white"
                   title="Open every point tool"
                 >
                   All tools
@@ -632,7 +632,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-1 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.15] hover:bg-white/[0.07] hover:text-white"
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-1 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.15] hover:bg-white/[0.07] hover:text-white"
                 title="Import a point file"
               >
                 <ArrowUpTrayIcon className="h-3 w-3" />
@@ -642,7 +642,7 @@ export const PointEditorChat = forwardRef<PointEditorChatHandles, PointEditorCha
                 type="button"
                 onClick={handleExportPoints}
                 disabled={allPoints.length === 0}
-                className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-1 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.15] hover:bg-white/[0.07] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex shrink-0 items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-1 text-[10px] font-semibold text-slate-300 transition-colors hover:border-white/[0.15] hover:bg-white/[0.07] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                 title={exportFormat === 'full' ? 'Export all points as a full CSV' : 'Export all points as PNEZD'}
               >
                 <DownloadIcon className="h-3 w-3" />

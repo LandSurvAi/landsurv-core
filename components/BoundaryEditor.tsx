@@ -287,9 +287,10 @@ const BoundaryEditor: React.FC<BoundaryEditorProps> = ({
 
     const [isSummaryCollapsed, setIsSummaryCollapsed] = useState(false);
     const [showToolsDrawer, setShowToolsDrawer] = useState(false);
-    // The deed summary/lite-scan now lives in chat as an A2UI surface. The panel
-    // is deliberately traverse-only so it stays compact.
-    const showEmbeddedIntake = false;
+    // Before a deed is parsed there is no traverse table to show. Use the panel's
+    // pending Lite Scan / deed summary as the intake handoff; once boundary files
+    // exist the panel goes back to being traverse-only.
+    const showEmbeddedIntake = boundaryFiles.length === 0;
     const [internalSelectedFileId, setInternalSelectedFileId] = useState<string>('');
 
     const selectedFileId = controlledSelectedFileId !== undefined

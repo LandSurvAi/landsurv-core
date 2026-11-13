@@ -1,4 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react';
+import { Maximize2 } from 'lucide-react';
 import { ArrowTopRightOnSquareIcon, ArrowDownOnSquareIcon } from './icons.tsx';
 import { DockModeControl, type DockMode } from './DockModeControl.tsx';
 
@@ -42,6 +43,8 @@ interface FloatingPanelProps {
   dockMode?: DockMode;
   /** Move this dialog between Floating, Chat, and Toolshelf. */
   onDockModeChange?: (mode: DockMode) => void;
+  /** Expand the hosted tool to its fullscreen presentation from the header. */
+  onFullscreen?: () => void;
 }
 
 export const FloatingPanel: React.FC<FloatingPanelProps> = ({
@@ -62,6 +65,7 @@ export const FloatingPanel: React.FC<FloatingPanelProps> = ({
   onToggleDock,
   dockMode,
   onDockModeChange,
+  onFullscreen,
 }) => {
   const mode: DockMode = dockMode ?? (isDockedProp ? 'toolshelf' : 'floating');
   const isDocked = mode !== 'floating';
@@ -184,6 +188,19 @@ export const FloatingPanel: React.FC<FloatingPanelProps> = ({
                 )}
               </button>
             )
+          )}
+          {onFullscreen && (
+            <button
+              data-no-drag
+              type="button"
+              onClick={onFullscreen}
+              data-testid="floating-panel-fullscreen"
+              className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-cyan-950/60 hover:text-cyan-300"
+              title={`Open ${title} fullscreen`}
+              aria-label={`Open ${title} fullscreen`}
+            >
+              <Maximize2 className="w-4 h-4" />
+            </button>
           )}
           {onToggleMinimize && (
             <button

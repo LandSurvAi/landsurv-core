@@ -162,7 +162,7 @@ const HelpModal: React.FC<HelpModalProps> = ({ onClose, activeAgent, onShowAbout
 
             <HelpSection title="Tips & Tricks">
                 <ul className="list-disc list-inside space-y-2">
-                    <li><strong className="text-gray-200 light-theme:text-gray-800">Save Your Session:</strong> Use the "Save Session" button to download a <code className="text-xs bg-gray-700 px-1 rounded">.lsvz</code> file. This file contains your entire project and can be reloaded later.</li>
+                    <li><strong className="text-gray-200 light-theme:text-gray-800">Save Your Session:</strong> Use the "Save Session" button to save a <code className="text-xs bg-gray-700 px-1 rounded">.lsvz</code> file. This file contains your entire project and can be reloaded later.</li>
                     <li><strong className="text-gray-200 light-theme:text-gray-800">Move Point Labels:</strong> In the Canvas view, hold down <code className="text-xs bg-gray-700 px-1 rounded">Ctrl</code> or <code className="text-xs bg-gray-700 px-1 rounded">Cmd</code> and drag a point's label to reposition it.</li>
                     <li><strong className="text-gray-200 light-theme:text-gray-800">Use Suggested Questions:</strong> If you're unsure what to ask, click the <strong className="text-yellow-400">lightbulb icon</strong> in the chat input to see some ideas.</li>
                     <li><strong className="text-gray-200 light-theme:text-gray-800">Check the Disclaimer:</strong> This is beta software. Always verify AI-generated data with professional judgment.</li>

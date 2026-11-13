@@ -97,8 +97,7 @@ export const SOIL_LIMITATION_RESOLUTIONS: Record<SoilLimitationKey, string> = {
     'Reduce complications of ponding and wetness through appropriate use of drainage facilities during construction.',
 };
 
-const CHART_STORAGE_KEY = 'landsurv:soil-limitations:PA:v1';
-const SCOUT_TOOL_URL = '/api/scout/tools/fetch_soil_limitations';
+export const SOIL_LIMITATIONS_STORAGE_KEY = 'landsurv:soil-limitations:PA:v1';
 const BUNDLED_CHART_URL = '/data/pa-es-soil-limitations.json';
 
 /** Canonical lookup key; mirrors `normalize_soil_name` in the Scout parser. */
@@ -145,7 +144,7 @@ function chartFromUnknown(value: unknown): SoilLimitationsChart | null {
 
 function readBrowserCache(): SoilLimitationsChart | null {
   try {
-    const raw = window.localStorage.getItem(CHART_STORAGE_KEY);
+    const raw = window.localStorage.getItem(SOIL_LIMITATIONS_STORAGE_KEY);
     if (!raw) return null;
     const parsed = chartFromUnknown(JSON.parse(raw));
     return parsed ? { ...parsed, cached: true, cacheSource: 'localStorage' } : null;
@@ -156,13 +155,22 @@ function readBrowserCache(): SoilLimitationsChart | null {
 
 function writeBrowserCache(chart: SoilLimitationsChart): void {
   try {
-    window.localStorage.setItem(CHART_STORAGE_KEY, JSON.stringify({
+    window.localStorage.setItem(SOIL_LIMITATIONS_STORAGE_KEY, JSON.stringify({
       ...chart,
       cached: true,
       cacheSource: 'localStorage',
     }));
   } catch {
     /* a full/disabled localStorage must not break the report */
+  }
+}
+
+/** Drop the parsed reference chart so a new project starts from the bundled copy. */
+export function clearSoilLimitationsChartCache(): void {
+  try {
+    window.localStorage.removeItem(SOIL_LIMITATIONS_STORAGE_KEY);
+  } catch {
+    /* localStorage may be disabled; the bundled chart still loads */
   }
 }
 
@@ -175,51 +183,20 @@ export interface FetchSoilLimitationsOptions {
 /**
  * Return the PA E&S limitations chart. Resolution order:
  *   1. browser cache (from an earlier first find)
- *   2. Scout live fetch (downloads/parses/caches on the server on first use)
- *   3. bundled copy of the parsed Table E.1 (offline / Scout-unconfigured)
+ *   2. bundled copy of the parsed Table E.1
+ *
+ * This used to download and parse the 386-page DEP manual through Scout. The
+ * chart is reference data, not a crawl; it now ships with the app.
  */
 export async function fetchSoilLimitationsChart(
   options: FetchSoilLimitationsOptions = {},
 ): Promise<SoilLimitationsChart> {
-  const state = options.state ?? 'PA';
-
   if (!options.forceRefresh) {
     const cached = readBrowserCache();
     if (cached) return cached;
   }
 
-  let scoutError: unknown = null;
-  try {
-    const response = await fetch(SCOUT_TOOL_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-scout-session': `soils-${Date.now().toString(36)}`,
-      },
-      body: JSON.stringify({
-        state,
-        force_refresh: options.forceRefresh === true,
-      }),
-      signal: options.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`Scout HTTP ${response.status}`);
-    }
-    const body = await response.json() as {
-      content?: Array<{ type?: string; text?: string }>;
-    };
-    const text = body.content?.find(part => part.type === 'text')?.text ?? '';
-    if (!text || text.startsWith('ERROR:')) {
-      throw new Error(text || 'Scout returned no limitations chart.');
-    }
-    const chart = chartFromUnknown(JSON.parse(text));
-    if (!chart) throw new Error('Scout returned a malformed limitations chart.');
-    writeBrowserCache(chart);
-    return chart;
-  } catch (error) {
-    scoutError = error;
-  }
-
+  let bundledError: unknown = null;
   try {
     const response = await fetch(BUNDLED_CHART_URL, { signal: options.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -230,20 +207,15 @@ export async function fetchSoilLimitationsChart(
       ...chart,
       cached: true,
       cacheSource: 'bundled',
-      notes: [
-        ...(chart.notes ?? []),
-        scoutError instanceof Error
-          ? `Scout chart unavailable (${scoutError.message}); using the bundled Table E.1 extract.`
-          : 'Using the bundled Table E.1 extract.',
-      ],
+      notes: [...(chart.notes ?? []), 'Using the bundled Table E.1 extract.'],
     };
-  } catch (bundledError) {
-    const scoutMessage = scoutError instanceof Error ? scoutError.message : String(scoutError);
-    throw new Error(
-      `Could not obtain the PA E&S limitations chart. Scout: ${scoutMessage}. ` +
-      `Bundled chart: ${bundledError instanceof Error ? bundledError.message : String(bundledError)}.`,
-    );
+  } catch (error) {
+    bundledError = error;
   }
+
+  throw new Error(
+    `Could not obtain the PA E&S limitations chart. Bundled chart: ${bundledError instanceof Error ? bundledError.message : String(bundledError)}.`,
+  );
 }
 
 export interface SoilSeriesMatch {

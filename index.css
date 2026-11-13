@@ -620,6 +620,80 @@
     animation: scout-speed-line 1.4s ease-out infinite;
   }
 
+  /* Scout's command-bar trail. The figure is an articulated SVG; only
+     transform and opacity animate, and the component swaps to a static strip
+     under reduced motion or a narrow viewport. */
+  @keyframes scout-trail-step-front {
+    0%, 100% { transform: rotate(15deg); }
+    50%      { transform: rotate(-17deg); }
+  }
+  @keyframes scout-trail-step-back {
+    0%, 100% { transform: rotate(-16deg); }
+    50%      { transform: rotate(17deg); }
+  }
+  @keyframes scout-trail-arm-front {
+    0%, 100% { transform: rotate(-9deg); }
+    50%      { transform: rotate(12deg); }
+  }
+  @keyframes scout-trail-arm-back {
+    0%, 100% { transform: rotate(13deg); }
+    50%      { transform: rotate(-14deg); }
+  }
+  @keyframes scout-trail-head-bob {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-2px); }
+  }
+  @keyframes scout-trail-pole-sway {
+    0%, 100% { transform: rotate(-1.4deg); }
+    50%      { transform: rotate(1.4deg); }
+  }
+  @keyframes scout-trail-fix-pulse {
+    0%, 100% { opacity: 0.35; }
+    50%      { opacity: 1; }
+  }
+  @keyframes scout-trail-pose {
+    0%   { opacity: 0; transform: translateY(3px); }
+    25%  { opacity: 0.9; }
+    100% { opacity: 0; transform: translateY(-3px); }
+  }
+  @keyframes scout-trail-body-bob {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-2px); }
+  }
+  .scout-figure { overflow: visible; }
+  .scout-leg,
+  .scout-arm,
+  .scout-head,
+  .scout-pole {
+    transform-box: fill-box;
+    transform-origin: 50% 0%;
+  }
+  .scout-head { transform-origin: 50% 85%; }
+  .scout-pole { transform-origin: 50% 100%; }
+  .scout-fix-light { animation: scout-trail-fix-pulse 1.2s ease-in-out infinite; }
+  .scout-pose-mark { animation: scout-trail-pose 1.8s ease-out both; }
+  .scout-trail-running .scout-leg-front { animation: scout-trail-step-front var(--scout-step-duration, 0.86s) ease-in-out infinite; }
+  .scout-trail-running .scout-leg-back { animation: scout-trail-step-back var(--scout-step-duration, 0.86s) ease-in-out infinite; }
+  .scout-trail-running .scout-arm-front { animation: scout-trail-arm-front var(--scout-step-duration, 0.86s) ease-in-out infinite; }
+  .scout-trail-running .scout-arm-back { animation: scout-trail-arm-back var(--scout-step-duration, 0.86s) ease-in-out infinite; }
+  .scout-trail-running .scout-head { animation: scout-trail-head-bob var(--scout-step-duration, 0.86s) ease-in-out infinite; }
+  .scout-trail-running .scout-trail-body-bob { animation: scout-trail-body-bob calc(var(--scout-step-duration, 0.86s) / 2) ease-in-out infinite; }
+  .scout-trail-running .scout-pole { animation: scout-trail-pole-sway calc(var(--scout-step-duration, 0.86s) * 2) ease-in-out infinite; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .scout-fix-light,
+    .scout-pose-mark,
+    .scout-trail-running .scout-leg-front,
+    .scout-trail-running .scout-leg-back,
+    .scout-trail-running .scout-arm-front,
+    .scout-trail-running .scout-arm-back,
+    .scout-trail-running .scout-head,
+    .scout-trail-running .scout-trail-body-bob,
+    .scout-trail-running .scout-pole {
+      animation: none;
+    }
+  }
+
   @keyframes command-status-pulse {
     0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.36), 0 0 5px rgba(52, 211, 153, 0.55); opacity: 0.9; }
     50%      { box-shadow: 0 0 0 3px rgba(52, 211, 153, 0), 0 0 7px rgba(52, 211, 153, 0.8); opacity: 1; }

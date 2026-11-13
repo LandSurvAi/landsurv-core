@@ -184,6 +184,7 @@ export const normalizeLoadedSession = (rawSession: Partial<SessionState>): Sessi
     generationBlocks: rawSession.generationBlocks,
     steepSlopeRuns: rawSession.steepSlopeRuns,
     roadCorridors: rawSession.roadCorridors || [],
+    roadObjects: rawSession.roadObjects || [],
     redlineRuns: rawSession.redlineRuns || [],
     streetLabels: rawSession.streetLabels,
     parcelLabels: rawSession.parcelLabels,

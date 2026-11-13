@@ -1165,5 +1165,27 @@ export function generateDxf(
     }
 
     // AutoCAD requires $HANDSEED to be greater than every handle in the file.
-    return applyHandseed(result, handles.peek());
+    let finalDxf = applyHandseed(result, handles.peek());
+
+    // Point Studio metadata travels as DXF comment records (group code 999).
+    // Civil 3D ignores unknown 999 values, while other consumers can recover
+    // the exact style names used for the point set.
+    if (options.includePointStyleNames && options.pointStyleNames) {
+        const styleNames = Array.from(new Set(Object.values(options.pointStyleNames)))
+            .map(name => String(name).replace(/[\r\n]+/g, ' ').trim())
+            .filter(name => name.length > 0)
+            .sort((a, b) => a.localeCompare(b));
+        if (styleNames.length > 0) {
+            const comments = styleNames.map(name => `999\nPOINT_STYLE: ${name}`).join('\n') + '\n';
+            const headerStart = finalDxf.indexOf('0\nSECTION\n2\nHEADER\n');
+            if (headerStart >= 0) {
+                const insertAt = headerStart + '0\nSECTION\n2\nHEADER\n'.length;
+                finalDxf = finalDxf.slice(0, insertAt) + comments + finalDxf.slice(insertAt);
+            } else {
+                finalDxf = comments + finalDxf;
+            }
+        }
+    }
+
+    return finalDxf;
 }

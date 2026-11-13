@@ -17,6 +17,51 @@ export const POINT_EFFICIENCY_SCREEN_BUDGET = 240;
 /** Screen-space cell used to collapse overlapping points into one dot. */
 export const POINT_PRIMITIVE_CELL_SIZE = 4;
 
+/**
+ * Parameterized view of the current efficiency constants. Point Studio styles
+ * provide these values; the legacy constants remain the default profile.
+ */
+export interface PointEfficiencyConfig {
+  enabled?: boolean;
+  detailScaleCutoff?: number;
+  screenPointBudget?: number;
+  cellSizePx?: number;
+  minDotSizePx?: number;
+  maxDotSizePx?: number;
+  densityGrowth?: number;
+}
+
+/** True when a Point Studio efficiency profile should compress the cloud. */
+export function shouldCompressPointCloud(
+  profile: PointEfficiencyConfig | undefined,
+  zoomScale: number,
+  visiblePointCount = 0,
+): boolean {
+  if (profile?.enabled !== true) return false;
+  const detailScaleCutoff = Number.isFinite(profile.detailScaleCutoff)
+    ? profile.detailScaleCutoff!
+    : POINT_EFFICIENCY_DETAIL_SCALE;
+  const screenPointBudget = Number.isFinite(profile.screenPointBudget)
+    ? profile.screenPointBudget!
+    : POINT_EFFICIENCY_SCREEN_BUDGET;
+
+  if (Number.isFinite(zoomScale) && zoomScale < detailScaleCutoff) return true;
+  return Number.isFinite(visiblePointCount) && visiblePointCount > screenPointBudget;
+}
+
+/** Dot size for one compressed cell, given the profile and cell count. */
+export function getPointDotSize(
+  profile: PointEfficiencyConfig | undefined,
+  cellCount: number,
+): number {
+  const minDotSize = Number.isFinite(profile?.minDotSizePx) ? profile!.minDotSizePx! : 2;
+  const maxDotSize = Number.isFinite(profile?.maxDotSizePx) ? profile!.maxDotSizePx! : 4;
+  const densityGrowth = Number.isFinite(profile?.densityGrowth) ? profile!.densityGrowth! : 1;
+  const safeCount = Number.isFinite(cellCount) && cellCount > 0 ? cellCount : 1;
+  const rawSize = minDotSize + densityGrowth * Math.floor(Math.log2(safeCount));
+  return Math.min(maxDotSize, Math.max(minDotSize, rawSize));
+}
+
 const INTERMEDIATE_DASH_RE = /int-/i;
 const INTERMEDIATE_UNDERSCORE_RE = /^int_/i;
 

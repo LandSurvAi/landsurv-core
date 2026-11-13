@@ -624,7 +624,7 @@ export const DOC_ARTICLES: DocArticle[] = [
           language: 'json',
           caption: 'Manifest identity and provenance',
           code: `{
-  "version": "26.11.12.01",
+  "version": "26.11.13.01",
   "savedAt": "2026-11-12T15:30:00.000Z",
   "sessionMetadata": {
     "author": "Jane Doe",

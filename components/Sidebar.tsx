@@ -26,6 +26,7 @@ import {
     CivilDrafterIcon,
     FloodIcon,
     HomeIcon,
+    PlusIcon,
     StructuresIcon,
     SoilsIcon,
     SlopeIcon,
@@ -60,6 +61,7 @@ import { AGENT_SIDEBAR_LAYOUT_EVENT } from '../utils/layoutEvents.ts';
 
 interface SidebarProps {
     isSessionActive: boolean;
+    onNewProject: () => void;
     onSaveSession: () => void;
     onLoadSession: () => void;
     hasPdfFiles: boolean;
@@ -791,6 +793,21 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
             <div className="relative flex-shrink-0 border-t border-white/[0.07] bg-black/20 p-2 light-theme:border-gray-300 light-theme:bg-gray-50">
                 <div className="mb-1.5 hidden px-1 text-[8px] font-bold uppercase tracking-[0.2em] text-slate-500 lg:block">Session</div>
                 <div className={`grid gap-1.5 ${props.isDesktop ? 'md:grid-cols-1 lg:grid-cols-2' : 'grid-cols-2'}`}>
+                    <button
+                        onClick={props.onNewProject}
+                        disabled={!isSessionActive}
+                        title="Start a new project"
+                        className={`group relative flex h-10 items-center justify-center gap-2 overflow-hidden rounded-md border border-violet-400/20 bg-gradient-to-b from-violet-400/[0.10] to-violet-400/[0.02] px-2 text-left transition-colors hover:border-violet-400/45 disabled:cursor-not-allowed disabled:opacity-40 lg:justify-start light-theme:border-violet-300/60 light-theme:from-violet-50 light-theme:to-white ${props.isDesktop ? 'md:col-span-1 lg:col-span-2' : 'col-span-2'}`}
+                    >
+                        <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded border border-violet-400/25 bg-violet-400/10 text-violet-300 transition-colors group-hover:border-violet-400/50 light-theme:border-violet-300 light-theme:bg-violet-100 light-theme:text-violet-700">
+                            <PlusIcon className="h-[18px] w-[18px]" />
+                        </span>
+                        <span className={`flex min-w-0 flex-col leading-none ${props.isDesktop ? 'hidden lg:flex' : 'flex'}`}>
+                            <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-violet-200 light-theme:text-violet-700">New</span>
+                            <span className="mt-1 text-[8px] font-semibold uppercase tracking-[0.16em] text-violet-400/60 light-theme:text-violet-600">Project</span>
+                        </span>
+                        <span aria-hidden="true" className="pointer-events-none absolute inset-x-2 bottom-0 h-px bg-gradient-to-r from-transparent via-violet-400/60 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                    </button>
                     <button
                         onClick={props.onSaveSession}
                         disabled={!isSessionActive}

@@ -150,7 +150,7 @@ export function getUploadPromptCopy(agent: AgentType, widgetType: A2UIWidgetType
     case 'image-upload':
       return 'Drop your site photos or exhibit images below so I can tag, analyze, and link them to your project points:';
     case 'zoning-intake':
-      return 'Select your property jurisdiction (or autofill from GPS) below so I can research the official zoning map, districts, and ordinances:';
+      return 'Use your project location or drawn AOI (GPS is an optional fallback) below so I can research the official zoning map, districts, and ordinances:';
     case 'title-search-upload':
       return 'Upload a deed PDF/image or paste a deed description below to start building the chain of title:';
     case 'standards-compliance-intake':

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useLayoutEffect, useCallback, useSyncExternalStore } from 'react';
+import React, { useRef, useState, useEffect, useLayoutEffect, useCallback, useContext, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { parseCanvasCommand, executeCanvasCommand, describeCommand, type CommandContext, type CommandResult, type HelpGroup } from '../utils/canvasCommands';
 import { CommandHelpView, type CommandReference } from './CommandHelpView';
@@ -8,10 +8,12 @@ import { formatRelayTag } from '../services/conversationIdentity';
 import { sanitizeZoningAnswer } from '../utils/zoningRender';
 import { formatChatHtml } from '../utils/chatHtml';
 import SuggestedQuestions from './SuggestedQuestions';
-import { A2UISurface } from './A2UISurface';
+import { A2UISurface, A2UIHostContext } from './A2UISurface';
 import { A2UIQuickThoughtSurface } from './A2UIQuickThoughtSurface';
+import { useA2UIFileDrop } from './a2uiFileDrop.tsx';
 import { AGENT_SIDEBAR_LAYOUT_EVENT } from '../utils/layoutEvents.ts';
-import { A2UIScoutActivity } from './A2UIScoutActivity';
+import { ScoutQuickThought } from './ScoutQuickThought';
+import { ScoutTrail } from './ScoutTrail';
 import { WorkflowQuickThought, type WorkflowQuickThoughtNotice } from './WorkflowQuickThought';
 import { DockModeControl, type DockMode } from './DockModeControl';
 import {
@@ -120,6 +122,10 @@ interface CanvasTerminalProps {
   /** Hand a command result to the app's full text editor, keeping its tone color
    *  and its formatted reference (HELP) so the editor renders the same cards. */
   onOpenTextEditor?: (content: string, tone?: TerminalTone, reference?: CommandReference) => void;
+  /** Dock the grouped HELP reference as an A2UI toolshelf surface. */
+  onDockCommandHelp?: (reference: CommandReference) => void;
+  /** Expose the deterministic command runner so docked A2UI links can execute. */
+  onCommandRunnerReady?: (runner: ((raw: string) => void) | null) => void;
   /** Snaps and ortho status display */
   statusBadges?: {
     runningOsnaps?: string;
@@ -202,6 +208,8 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   onCycleAgentDrawMode,
   onCycleAgentAnnotMode,
   onOpenTextEditor,
+  onDockCommandHelp,
+  onCommandRunnerReady,
   keyInfo,
   incomingMessage,
   statusBadges,
@@ -344,10 +352,12 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const historyScrollRef = useRef<HTMLDivElement | null>(null);
   const agentFeedScrollRef = useRef<HTMLDivElement | null>(null);
   const latestAgentMessageRef = useRef<HTMLDivElement | null>(null);
+  const standaloneA2UIRef = useRef<HTMLDivElement | null>(null);
   const wasAgentLoadingRef = useRef(isLoading);
   const lastAgentFeedCountRef = useRef(0);
   const lastAgentFeedRoleRef = useRef<MessageRole | null>(null);
   const wasAgentFeedExpandedRef = useRef(false);
+  const previousActiveSurfaceSignatureRef = useRef<string | null>(null);
   const wasBottomFeedOpenForThoughtRef = useRef(false);
   const wasToolDockOpenRef = useRef(isToolDockOpen);
   const wasAgentChatOpenRef = useRef(isAgentChatOpen);
@@ -383,6 +393,20 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const resolvedTextScale = Number.isFinite(textScale)
     ? Math.min(1.6, Math.max(0.75, textScale))
     : 1.15;
+  // The latest HELP run carries the deterministic command groups. Keep it so
+  // the header can dock the reference even after the output has scrolled.
+  const [latestHelpReference, setLatestHelpReference] = useState<CommandReference | null>(null);
+  useEffect(() => {
+    const latest = [...history].reverse().find(entry => entry.type === 'output' && entry.helpGroups?.length);
+    setLatestHelpReference(latest?.helpGroups?.length
+      ? {
+          groups: latest.helpGroups,
+          notes: latest.helpNotes,
+          text: latest.text,
+          textScale: resolvedTextScale,
+        }
+      : null);
+  }, [history, resolvedTextScale]);
   const propertiesSelectionTotal = propertiesSelectionCount
     ?? commandContext.selectionCount
     ?? (commandContext.hasSelection ? 1 : 0);
@@ -568,6 +592,30 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   // explicit socket/tab click opens the full agent feed.
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
   const latestModelMessage = lastMessage?.role === MessageRole.MODEL ? lastMessage : null;
+  const standaloneA2UIKey = standaloneA2UIMessage?.a2ui
+    ? `${standaloneA2UIMessage.a2ui.agent}:${standaloneA2UIMessage.a2ui.widgetType}`
+    : null;
+  const hasChatMessageForStandalone = standaloneA2UIKey
+    ? messages.some(
+        msg =>
+          msg.a2ui &&
+          `${msg.a2ui.agent}:${msg.a2ui.widgetType}` === standaloneA2UIKey &&
+          msg.a2ui.status !== 'completed' &&
+          msg.a2ui.status !== 'dismissed'
+      )
+    : false;
+  const hasStandaloneA2UI = Boolean(
+    standaloneA2UIMessage?.a2ui &&
+      standaloneA2UIMessage.a2ui.status !== 'completed' &&
+      standaloneA2UIMessage.a2ui.status !== 'dismissed' &&
+      !hasChatMessageForStandalone
+  );
+  const standaloneA2UIInChat = Boolean(
+    hasStandaloneA2UI &&
+      standaloneA2UIKey &&
+      standaloneA2UIKey !== floatingA2UIKey &&
+      standaloneA2UIKey !== dockedA2UIKey
+  );
   const latestAgentFullText = (latestModelMessage?.result || latestModelMessage?.text || '').trim();
   // The collapsed command bar gets a quick thought, never the full answer.
   const latestAgentPreview = deriveQuickThoughtPreview(
@@ -581,19 +629,31 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
         (latestModelMessage.questionOptions?.length ?? 0) > 0 ||
         latestModelMessage.quickThoughtText)
   );
-  const keepRecentAgentMessages = isLoading ? 2 : 1;
+  const keepRecentAgentMessages = standaloneA2UIInChat ? 0 : isLoading ? 2 : 1;
   const shouldCollapseAgentFeed =
     !showEarlierAgentMessages &&
-    Boolean(latestModelMessage) &&
-    messages.length > 2 &&
-    (isLoading || latestModelHasContent);
+    (standaloneA2UIInChat || (messages.length > 2 && (isLoading || latestModelHasContent)));
   const hiddenAgentMessageCount = shouldCollapseAgentFeed
     ? Math.max(0, messages.length - keepRecentAgentMessages)
     : 0;
   const visibleAgentMessages = shouldCollapseAgentFeed
-    ? messages.slice(-keepRecentAgentMessages)
+    ? keepRecentAgentMessages > 0
+      ? messages.slice(-keepRecentAgentMessages)
+      : []
     : messages;
   const firstVisibleAgentMessageIndex = messages.length - visibleAgentMessages.length;
+  const latestResultIndex = (() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (
+        message.role === MessageRole.MODEL &&
+        ((message.result || message.text || '').trim() || message.a2ui)
+      ) {
+        return index;
+      }
+    }
+    return -1;
+  })();
   const isLatestResultFocused = Boolean(latestModelHasContent && !showEarlierAgentMessages && messages.length > 1);
   const hasPendingQuestionOptions = Boolean(lastMessage?.questionOptions && lastMessage.questionOptions.length > 0);
   const hasActiveA2UI = Boolean(
@@ -638,14 +698,92 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     !hasPendingPrompt &&
     Boolean(latestAgentPreview);
   const hasQuickThought = hasPendingPrompt || hasCompletedAgentThought;
+  // Escalation: a multi-field custom panel handed off from Quick Thought belongs
+  // beside the canvas, not floating over the conversation. Dock it once; the
+  // user can still move it back to Chat from the placement controls.
+  const quickThoughtPanelKey = lastMessage?.a2ui
+    ? `${lastMessage.a2ui.agent}:${lastMessage.a2ui.widgetType}`
+    : null;
+  const quickThoughtEscalationSignature =
+    quickThoughtPanelKey &&
+    quickThoughtBreakdown.kind === 'input-form' &&
+    quickThoughtBreakdown.inputForm &&
+    quickThoughtBreakdown.inputForm.fields.filter(field => field.type !== 'checkbox').length > 1
+      ? `${quickThoughtPanelKey}:${quickThoughtBreakdown.inputForm.title ?? ''}:${quickThoughtBreakdown.inputForm.fields.map(field => field.id).join(',')}`
+      : null;
+  const escalatedQuickThoughtPanelRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!lastMessage?.a2ui || !onSetA2UIDockMode) return;
+    if (!quickThoughtEscalationSignature || !hasActiveA2UI) return;
+    if (quickThoughtPanelKey === dockedA2UIKey || quickThoughtPanelKey === floatingA2UIKey) return;
+    if (escalatedQuickThoughtPanelRef.current === quickThoughtEscalationSignature) return;
+    escalatedQuickThoughtPanelRef.current = quickThoughtEscalationSignature;
+    onSetA2UIDockMode(lastMessage, 'toolshelf');
+  }, [
+    dockedA2UIKey,
+    floatingA2UIKey,
+    hasActiveA2UI,
+    lastMessage,
+    onSetA2UIDockMode,
+    quickThoughtEscalationSignature,
+    quickThoughtPanelKey,
+  ]);
+  const isQuickThoughtPanelEscalated = Boolean(
+    quickThoughtPanelKey && quickThoughtPanelKey === dockedA2UIKey,
+  );
+  const surveyorsEyeSurfaceKey = `${AgentType.CAD_MANAGER}:surveyors-eye`;
+  const surveyorsEyeVisible =
+    (dockedA2UIKey === surveyorsEyeSurfaceKey && isToolDockOpen) ||
+    floatingA2UIKey === surveyorsEyeSurfaceKey ||
+    openA2UISurfaces.some(surface =>
+      surface.definitionId === 'surveyors-eye' ||
+      surface.definitionId === 'workspace-gimbal-vision'
+    );
+  const workflowOwnedByActiveAgent =
+    !workflowThought?.ownerAgent || workflowThought.ownerAgent === behaviorAgent;
+  const workflowOffersVisibleSurveyorsEye =
+    workflowThought?.surface === 'surveyors-eye' && surveyorsEyeVisible;
+  const workflowSuppressedByNewPrompt = Boolean(workflowThought) && (hasPendingQuestionOptions || hasActiveA2UI);
   const hasWorkflowThoughtNotice =
-    Boolean(workflowThought) && !isBottomAgentChatOpen && !isAgentChatOpen;
+    Boolean(workflowThought) &&
+    workflowOwnedByActiveAgent &&
+    !workflowOffersVisibleSurveyorsEye &&
+    !workflowSuppressedByNewPrompt &&
+    !isBottomAgentChatOpen &&
+    !isAgentChatOpen;
+  const dismissedWorkflowNoticeKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!workflowThought) {
+      dismissedWorkflowNoticeKeyRef.current = null;
+      return;
+    }
+    const ownerChanged = Boolean(
+      workflowThought.ownerAgent && workflowThought.ownerAgent !== behaviorAgent
+    );
+    if (!ownerChanged && !workflowSuppressedByNewPrompt) return;
+    if (dismissedWorkflowNoticeKeyRef.current === workflowThought.key) return;
+    dismissedWorkflowNoticeKeyRef.current = workflowThought.key;
+    workflowThought.onDismiss?.();
+  }, [
+    behaviorAgent,
+    workflowSuppressedByNewPrompt,
+    workflowThought,
+  ]);
   const pendingOptions = lastMessage?.questionOptions ?? quickThoughtBreakdown.options ?? [];
   const thoughtKey = lastMessage
     ? `${behaviorAgent}:${messages.length}:${lastMessage.role}:${lastMessage.quickThoughtText ?? ''}:${lastMessage.quickThoughtLabel ?? ''}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}:${quickThoughtBreakdown.kind ?? ''}:${latestAgentPreview}:${liveScoutActivity?.id ?? ''}`
     : liveScoutActivity
       ? `scout:${liveScoutActivity.id}`
       : null;
+  const a2uiHost = useContext(A2UIHostContext);
+  const quickThoughtFileDrop = useA2UIFileDrop({
+    host: a2uiHost,
+    widgetType:
+      quickThoughtBreakdown.kind === 'upload-widget' ? quickThoughtBreakdown.widgetType : undefined,
+    enabled:
+      quickThoughtBreakdown.kind === 'upload-widget' &&
+      quickThoughtBreakdown.widgetType !== 'standards-compliance-intake',
+  });
   const quickThoughtLabel =
     hasWorkflowThoughtNotice && workflowThought
       ? workflowThought.attention === 'complete'
@@ -730,12 +868,13 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   useEffect(() => {
     if (isBottomAgentChatOpen && !wasBottomFeedOpenForThoughtRef.current && thoughtKey) {
       setDismissedThoughtKey(thoughtKey);
+      workflowThought?.onDismiss?.();
       setHoverReveal(null);
       isPointerOverQuickThoughtRef.current = false;
       clearQuickThoughtHideTimer();
     }
     wasBottomFeedOpenForThoughtRef.current = isBottomAgentChatOpen;
-  }, [isBottomAgentChatOpen, thoughtKey, setHoverReveal, clearQuickThoughtHideTimer]);
+  }, [isBottomAgentChatOpen, thoughtKey, workflowThought, setHoverReveal, clearQuickThoughtHideTimer]);
 
   const cleanedThoughtText = (lastMessage?.quickThoughtText || latestAgentFullText)
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -784,25 +923,49 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   }, [thoughtScrollText, hasPendingPrompt, isThoughtDismissed, isQuickThoughtHoverRevealed, hasPendingQuestionOptions]);
 
   const hasExpandedA2UIWidget = Boolean(
-    messages.some(
-      m => m.a2ui?.kind === 'upload-widget' && m.a2ui.status !== 'completed' && m.a2ui.status !== 'dismissed'
-    )
+    standaloneA2UIInChat ||
+    visibleAgentMessages.some(m => {
+      if (!m.a2ui || m.a2ui.status === 'completed' || m.a2ui.status === 'dismissed') return false;
+      const key = `${m.a2ui.agent}:${m.a2ui.widgetType}`;
+      return key !== floatingA2UIKey && key !== dockedA2UIKey;
+    })
   );
+  const latestA2UIKey = latestModelMessage?.a2ui
+    ? `${latestModelMessage.a2ui.agent}:${latestModelMessage.a2ui.widgetType}`
+    : null;
+  const latestA2UIInChat = Boolean(
+    latestA2UIKey && latestA2UIKey !== floatingA2UIKey && latestA2UIKey !== dockedA2UIKey
+  );
+  const activeSurfaceSignature = standaloneA2UIInChat
+    ? `standalone:${standaloneA2UIKey ?? 'surface'}:${standaloneA2UIMessage?.a2ui?.status ?? ''}`
+    : latestA2UIInChat && latestModelMessage?.a2ui
+      ? `message:${latestModelMessage.a2ui.agent}:${latestModelMessage.a2ui.widgetType}:${latestModelMessage.a2ui.status ?? ''}`
+      : null;
+  const scrollAgentFeedToElementStart = useCallback(
+    (element: HTMLElement | null, behavior: ScrollBehavior = 'smooth') => {
+      const feed = agentFeedScrollRef.current;
+      if (!feed || !element) return;
+      const top = Math.max(
+        0,
+        feed.scrollTop + element.getBoundingClientRect().top - feed.getBoundingClientRect().top - 6
+      );
+      try {
+        if (typeof feed.scrollTo === 'function') feed.scrollTo({ top, behavior });
+        else feed.scrollTop = top;
+      } catch {
+        feed.scrollTop = top;
+      }
+    },
+    [],
+  );
+
   const scrollAgentFeedToMessageStart = useCallback((behavior: ScrollBehavior = 'smooth') => {
-    const feed = agentFeedScrollRef.current;
-    const message = latestAgentMessageRef.current;
-    if (!feed || !message) return;
-    const top = Math.max(
-      0,
-      feed.scrollTop + message.getBoundingClientRect().top - feed.getBoundingClientRect().top - 6
-    );
-    try {
-      if (typeof feed.scrollTo === 'function') feed.scrollTo({ top, behavior });
-      else feed.scrollTop = top;
-    } catch {
-      feed.scrollTop = top;
-    }
-  }, []);
+    scrollAgentFeedToElementStart(latestAgentMessageRef.current, behavior);
+  }, [scrollAgentFeedToElementStart]);
+
+  const scrollAgentFeedToStandaloneStart = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    scrollAgentFeedToElementStart(standaloneA2UIRef.current, behavior);
+  }, [scrollAgentFeedToElementStart]);
 
   const scrollAgentFeedToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const feed = agentFeedScrollRef.current;
@@ -814,6 +977,32 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       feed.scrollTop = feed.scrollHeight;
     }
   }, []);
+
+  // A newly placed A2UI is the next thing the user needs to act on. Fold older
+  // results and anchor the surface at the top instead of appending it beneath
+  // every previous chat bubble.
+  useEffect(() => {
+    const previous = previousActiveSurfaceSignatureRef.current;
+    previousActiveSurfaceSignatureRef.current = activeSurfaceSignature;
+    if (!activeSurfaceSignature || previous === activeSurfaceSignature) return;
+    if (!isExpanded || inputMode !== 'agent' || isAgentFloating) return;
+    setShowEarlierAgentMessages(false);
+    const frame = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (standaloneA2UIInChat) scrollAgentFeedToStandaloneStart('auto');
+        else scrollAgentFeedToMessageStart('auto');
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    activeSurfaceSignature,
+    standaloneA2UIInChat,
+    inputMode,
+    isAgentFloating,
+    isExpanded,
+    scrollAgentFeedToMessageStart,
+    scrollAgentFeedToStandaloneStart,
+  ]);
 
   // A completed agent turn releases the command-bar feed so the canvas is
   // clear. A plain choice prompt belongs to the Quick Thought card, and a
@@ -895,11 +1084,13 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
 
     if (!wasAgentFeedExpandedRef.current) {
       wasAgentFeedExpandedRef.current = true;
-      if (messages.length > 0) scrollAgentFeedToMessageStart('auto');
+      if (standaloneA2UIInChat) scrollAgentFeedToStandaloneStart('auto');
+      else if (messages.length > 0) scrollAgentFeedToMessageStart('auto');
       return;
     }
 
     if (messages.length > previousCount && lastMessage) {
+      setShowEarlierAgentMessages(false);
       if (lastMessage.role === MessageRole.USER) {
         scrollAgentFeedToBottom();
       } else if (lastMessage.role === MessageRole.MODEL && previousRole !== MessageRole.MODEL) {
@@ -912,8 +1103,10 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     isExpanded,
     inputMode,
     isAgentFloating,
+    standaloneA2UIInChat,
     scrollAgentFeedToBottom,
     scrollAgentFeedToMessageStart,
+    scrollAgentFeedToStandaloneStart,
   ]);
 
   useEffect(() => {
@@ -981,7 +1174,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     return links;
   };
 
-  const executeHelp = () => {
+  const executeHelp = (): CommandReference | null => {
     const raw = 'help';
     commandHistoryRef.current.push(raw);
     historyIndexRef.current = -1;
@@ -1010,11 +1203,15 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       helpNotes: result.helpNotes,
     };
 
+    const reference: CommandReference | null = result.helpGroups?.length
+      ? { groups: result.helpGroups, notes: result.helpNotes, text: result.message, textScale: resolvedTextScale }
+      : null;
     setHistory(prev => [...prev.slice(-80), newEntry, outEntry]);
     setInputMode('cad');
     setIsExpanded(true);
     setIsCollapsePulsing(true);
     onExecuteCommand?.(raw);
+    return reference;
   };
 
   const runCommand = (rawInput: string) => {
@@ -1090,6 +1287,20 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     setHistory(prev => [...prev.slice(-80), newEntry, outEntry]);
     onExecuteCommand?.(raw);
   };
+
+  const runCommandRef = useRef<(raw: string) => void>(() => {});
+  useEffect(() => {
+    runCommandRef.current = runCommand;
+  }, [runCommand]);
+  useEffect(() => {
+    if (!onCommandRunnerReady) return;
+    const runner = (raw: string) => {
+      setInputMode('cad');
+      runCommandRef.current(raw);
+    };
+    onCommandRunnerReady(runner);
+    return () => onCommandRunnerReady(null);
+  }, [onCommandRunnerReady]);
 
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -1537,19 +1748,6 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
 
   const latestAgentMessage = lastMessage && lastMessage.role === MessageRole.MODEL ? lastMessage : null;
 
-  const standaloneA2UIKey = standaloneA2UIMessage?.a2ui
-    ? `${standaloneA2UIMessage.a2ui.agent}:${standaloneA2UIMessage.a2ui.widgetType}`
-    : null;
-  const hasChatMessageForStandalone = standaloneA2UIKey
-    ? messages.some(
-        msg =>
-          msg.a2ui &&
-          `${msg.a2ui.agent}:${msg.a2ui.widgetType}` === standaloneA2UIKey &&
-          msg.a2ui.status !== 'completed' &&
-          msg.a2ui.status !== 'dismissed'
-      )
-    : false;
-
   /** One renderer for every A2UI card, whether it came from chat or a standalone launch. */
   const renderA2UICard = (message: ChatMessage) => {
     const a2ui = message.a2ui;
@@ -1651,6 +1849,8 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       data-testid="canvas-command-bar"
       data-mode={inputMode}
     >
+      <ScoutTrail />
+
       {/* Top rail — white chrome. The active agent color starts at its socket and tab. */}
       <div className="relative h-px w-full overflow-hidden rounded-t-xl pointer-events-none">
         <div
@@ -1795,18 +1995,34 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
           <div className="flex items-center gap-1.5 flex-wrap pr-12">
             {inputMode === 'agent' && chatBarAccessories}
             {inputMode === 'agent' && toolsRowAccessories}
-            {hasDockableTools && onToggleToolDock && (
+            {(onDockCommandHelp || hasDockableTools) && onToggleToolDock && (
               <button
                 type="button"
-                onClick={onToggleToolDock}
+                onClick={() => {
+                  if (onDockCommandHelp) {
+                    const reference = latestHelpReference ?? executeHelp();
+                    if (reference) {
+                      onDockCommandHelp(reference);
+                      return;
+                    }
+                  }
+                  onToggleToolDock();
+                }}
+                aria-label={onDockCommandHelp
+                  ? 'Dock Commands'
+                  : (isToolDockOpen ? 'Hide Agent Tools Dock' : 'Open Agent Tools Dock')}
                 className={`inline-flex h-6 items-center gap-1.5 rounded border px-2 text-[10px] font-semibold uppercase tracking-[0.08em] transition-colors ${
-                  isToolDockOpen
+                  isToolDockOpen && onDockCommandHelp
+                    ? 'border-cyan-300/50 bg-cyan-400/[0.12] text-cyan-100'
+                    : isToolDockOpen
                     ? 'border-white/40 bg-white/[0.10] text-white'
                     : 'border-white/15 bg-white/[0.03] text-white/75 hover:border-white/30 hover:bg-white/[0.06] hover:text-white'
                 }`}
-                title={isToolDockOpen ? 'Hide Agent Tools Dock' : 'Open Agent Tools Dock'}
+                title={onDockCommandHelp
+                  ? 'Dock the deterministic command reference in the tool shelf'
+                  : (isToolDockOpen ? 'Hide Agent Tools Dock' : 'Open Agent Tools Dock')}
               >
-                <span>{isToolDockOpen ? 'Hide Tools' : 'Agent Tools'}</span>
+                <span>{onDockCommandHelp ? 'Dock Commands' : (isToolDockOpen ? 'Hide Tools' : 'Agent Tools')}</span>
               </button>
             )}
             {inputMode === 'agent' && headerControls}
@@ -1886,6 +2102,23 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                       {link.label}
                     </button>
                   ))}
+                  {item.helpGroups?.length && onDockCommandHelp ? (
+                    <button
+                      type="button"
+                      data-testid="dock-command-help"
+                      onClick={() => onDockCommandHelp({
+                        groups: item.helpGroups as HelpGroup[],
+                        notes: item.helpNotes,
+                        text: item.text,
+                        textScale: resolvedTextScale,
+                      })}
+                      className="rounded border border-cyan-400/30 bg-cyan-400/[0.07] p-1 text-cyan-300 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/[0.14] hover:text-cyan-100"
+                      title="Dock Commands in the tool shelf"
+                      aria-label="Dock Commands in the tool shelf"
+                    >
+                      <ArrowDownOnSquareIcon className="h-3 w-3" />
+                    </button>
+                  ) : null}
                   <span className="text-[9px] tabular-nums text-white/30">
                     {new Date(item.timestamp).toLocaleTimeString([], { hour12: false })}
                   </span>
@@ -1918,14 +2151,17 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
               </button>
             </div>
           )}
-          {showEarlierAgentMessages && messages.length > 2 && latestModelHasContent && (
+          {showEarlierAgentMessages && (standaloneA2UIInChat || (messages.length > 2 && latestModelHasContent)) && (
             <div className="flex justify-center">
               <button
                 type="button"
                 data-testid="agent-collapse-to-result"
                 onClick={() => {
                   setShowEarlierAgentMessages(false);
-                  window.requestAnimationFrame(() => scrollAgentFeedToMessageStart('auto'));
+                  window.requestAnimationFrame(() => {
+                    if (standaloneA2UIInChat) scrollAgentFeedToStandaloneStart('auto');
+                    else scrollAgentFeedToMessageStart('auto');
+                  });
                 }}
                 className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/[0.03] px-2.5 py-1 text-[9.5px] font-semibold uppercase tracking-[0.1em] text-white/55 transition-colors hover:border-white/30 hover:bg-white/[0.06] hover:text-white"
               >
@@ -1978,15 +2214,24 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
           {visibleAgentMessages.map((msg, visibleIndex) => {
             const index = firstVisibleAgentMessageIndex + visibleIndex;
             const isLatestAgentMessage = index === messages.length - 1;
+            const isPriorAgentResult =
+              msg.role === MessageRole.MODEL && index < latestResultIndex;
             return (
             <div
               key={index}
               ref={isLatestAgentMessage ? latestAgentMessageRef : undefined}
               data-testid={isLatestAgentMessage ? 'agent-latest-message' : `agent-message-${index}`}
               data-latest-result={isLatestAgentMessage && isLatestResultFocused ? 'true' : undefined}
-              className={`flex w-full min-w-0 flex-col gap-1 ${msg.role === MessageRole.USER ? 'items-end' : 'items-start'} ${
+              data-shaded={isPriorAgentResult ? 'true' : undefined}
+              className={`flex w-full min-w-0 flex-col gap-1 transition-opacity duration-200 ${
+                msg.role === MessageRole.USER ? 'items-end' : 'items-start'
+              } ${
                 isLatestAgentMessage && isLatestResultFocused
                   ? 'rounded-lg bg-white/[0.015] ring-1 ring-inset ring-white/10'
+                  : ''
+              } ${
+                isPriorAgentResult
+                  ? 'opacity-60 saturate-50 hover:opacity-90 focus-within:opacity-100'
                   : ''
               }`}
             >
@@ -2119,10 +2364,16 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
             );
           })}
 
-          {standaloneA2UIMessage?.a2ui && !hasChatMessageForStandalone && (
+          {hasStandaloneA2UI && standaloneA2UIMessage?.a2ui && (
             <div
+              ref={standaloneA2UIRef}
               data-testid="a2ui-standalone-chat-message"
-              className="flex w-full min-w-0 flex-col gap-1 items-start"
+              data-latest-result={standaloneA2UIInChat ? 'true' : undefined}
+              className={`flex w-full min-w-0 flex-col gap-1 items-start transition-opacity duration-200 ${
+                standaloneA2UIInChat && !showEarlierAgentMessages
+                  ? 'rounded-lg bg-white/[0.015] ring-1 ring-inset ring-white/10'
+                  : ''
+              }`}
             >
               <span className="inline-flex items-center gap-2 px-1">
                 <span aria-hidden="true" className="h-[2px] w-5 rounded-full bg-emerald-300/80" />
@@ -2635,6 +2886,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                 rememberCanvasPointer(e.clientX, e.clientY);
                 handleQuickThoughtInteraction();
               }}
+              {...quickThoughtFileDrop.handlers}
               onFocusCapture={handleQuickThoughtInteraction}
               onMouseEnter={handleQuickThoughtPointerEnter}
               onMouseLeave={handleQuickThoughtPointerLeave}
@@ -2685,9 +2937,19 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
               </div>
 
               <div className="px-3 pb-3">
+                {!hasWorkflowThoughtNotice && quickThoughtFileDrop.enabled && (
+                  <div
+                    data-testid="quick-thought-drop-hint"
+                    className="mb-2 flex items-center gap-1.5 rounded-md border border-dashed border-white/15 px-2 py-1 text-[9.5px] text-white/45"
+                  >
+                    <span aria-hidden="true">⤓</span>
+                    Drag &amp; drop a file here
+                  </div>
+                )}
                 {hasWorkflowThoughtNotice && workflowThought && (
                   <WorkflowQuickThought notice={workflowThought} />
                 )}
+                {!hasWorkflowThoughtNotice && (
                 <div
                   ref={thoughtTextRef}
                   data-testid="agent-thought-text"
@@ -2701,10 +2963,12 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                     {thoughtScrollText || (liveScoutActivity ? 'Scout is checking live public GIS sources below.' : hasPendingQuestionOptions ? 'I have a suggestion for the next step.' : 'I have a quick panel ready for you.')}
                   </div>
                 </div>
+                )}
 
-                {hasQuickThought && <A2UIScoutActivity variant="inline" />}
+                {!hasWorkflowThoughtNotice && hasQuickThought && <ScoutQuickThought />}
 
-                {lastMessage && hasQuickThought && (
+                {!hasWorkflowThoughtNotice && lastMessage && hasQuickThought && (
+                  <>
                   <A2UIQuickThoughtSurface
                     breakdown={quickThoughtBreakdown}
                     message={lastMessage}
@@ -2752,10 +3016,12 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                         : undefined
                     }
                     boundaryQuickActions={boundaryQuickActions}
+                    escalatedToToolshelf={isQuickThoughtPanelEscalated}
                   />
+                  </>
                 )}
               </div>
-
+              {quickThoughtFileDrop.overlay}
             </div>
           )}
           {/* Socket Tab — a single stroked collar wrapping the plug's exposed

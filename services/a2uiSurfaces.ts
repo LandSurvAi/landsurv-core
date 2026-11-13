@@ -225,6 +225,18 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
     widgetType: 'cad-manager-intake',
     keywords: ['cad', 'standards', 'layers', 'linetypes'],
   },
+  {
+    id: 'capture-redline',
+    title: 'Redline review',
+    description: 'Upload annotated PDF plans and build a numbered correction worklist.',
+    category: 'capture',
+    glyph: 'R',
+    accent: 'rose',
+    audiences: ['workspace'],
+    agent: AgentType.REDLINE_AGENT,
+    widgetType: 'redline-upload',
+    keywords: ['redline', 'markup', 'annotated pdf', 'review', 'corrections'],
+  },
 
   // ── Exploration ───────────────────────────────────────────────────────────
   {
@@ -253,6 +265,16 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
   },
 
   // ── Workspace ─────────────────────────────────────────────────────────────
+  {
+    id: 'scout-activity',
+    title: 'Scout run audit',
+    description: 'Every source Scout checked, every rejection, and the jurisdiction it was grounded to.',
+    category: 'workspace',
+    glyph: '◎',
+    accent: 'cyan',
+    audiences: ['workspace'],
+    keywords: ['scout', 'crawler', 'gis', 'sources', 'grounding', 'rejected', 'audit'],
+  },
   {
     id: 'workspace-cad-manager',
     title: 'CAD Manager workspace',
@@ -429,6 +451,22 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
     agent: AgentType.ROADING_AGENT,
     widgetType: 'roading-panel',
     keywords: ['roading', 'road studio', 'typical section', 'corridor', 'cul-de-sac'],
+  },
+  {
+    id: 'workspace-road-links',
+    title: 'Road Links',
+    description:
+      'Inspect linked road objects, their baselines and linework, and live existing/design profiles and cross sections.',
+    category: 'workspace',
+    glyph: '⇄',
+    accent: 'amber',
+    audiences: ['workspace'],
+    agent: AgentType.ROADING_AGENT,
+    widgetType: 'road-links',
+    keywords: [
+      'road links', 'road object', 'linked profile', 'cross sections',
+      'road profile', 'live profile', 'corridor sections', 'station sections',
+    ],
   },
   {
     id: 'workspace-stormwater',
@@ -661,11 +699,11 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
   },
   {
     id: 'workspace-sheet-view',
-    title: 'Sheet View (24×36 Plot Layout)',
-    description: 'Preview and configure the 24×36 paperspace plot sheet and titleblock.',
+    title: 'Sheet View',
+    description: 'Preview and configure the paper-space plot sheet, viewports, and titleblock.',
     category: 'workspace',
     glyph: '▭',
-    accent: 'amber',
+    accent: 'cyan',
     audiences: ['workspace'],
     agent: AgentType.CAD_MANAGER,
     widgetType: 'sheet-view',
@@ -705,6 +743,18 @@ export const A2UI_SURFACE_CATALOG: readonly A2UISurfaceDefinition[] = [
   },
 
   // ── Dialogs and system ────────────────────────────────────────────────────
+  {
+    id: 'point-studio',
+    title: 'Point Studio',
+    description: 'Create named point styles, assign them to lists, codes, layers, and points, and tune how Point Efficiency Mode looks and acts.',
+    category: 'workspace',
+    glyph: '◈',
+    accent: 'fuchsia',
+    audiences: ['workspace'],
+    agent: AgentType.CIVIL_DRAFTER,
+    widgetType: 'point-studio',
+    keywords: ['point studio', 'point style', 'point styles', 'style studio', 'point appearance', 'point efficiency', 'efficiency mode', 'compressed points'],
+  },
   {
     id: 'point-tools',
     title: 'Point Tools',

@@ -57,7 +57,6 @@ import { ALL_BUILT_IN_HATCHES, resolveHatchForFeatureOrCode, type HatchDefinitio
 import { traceEnclosingLoopAtPoint, resolveHatchFromSelectedEntities, computePolygonAreaAbs, type TracedHatchRegion } from './utils/hatchBoundaryTracer.ts';
 import SheetView from './components/SheetView.tsx';
 import { DraftingStyleLibrary } from './components/CadManager/DraftingStyleLibrary.tsx';
-import CivilDrafterVisionHUD from './components/CadManager/CivilDrafterVisionHUD.tsx';
 import AutoDraftPanel from './components/CadManager/AutoDraftPanel.tsx';
 import {
   captureVisionSurvey,
@@ -89,15 +88,27 @@ import {
   type GroundingWay,
   type RoadTakeReport,
 } from './utils/roadTakeReview.ts';
+import { inferParcelGapRoads } from './utils/parcelRoadInference.ts';
 import {
   buildRoadMathModel,
   formatGimbalInspectionSummary,
-  formatGimbalMathBrief,
   formatGimbalMathSummary,
-  inspectGimbalRoadModel,
   type GimbalRoadInspection,
   type RoadMathModel,
 } from './utils/gimbalRoadModel.ts';
+import {
+  buildFailureWindows,
+  evaluateRoadAcceptance,
+  type RoadWidthResolution,
+} from './utils/roadAcceptanceGates.ts';
+import { MAX_ROAD_TURNS, runRoadAcceptanceLoop, type RoadAcceptanceResult } from './utils/roadRetakeLoop.ts';
+import {
+  acceptanceResultFromRecord,
+  buildRoadAcceptanceRecord,
+  pruneRoadAcceptanceRecords,
+} from './utils/roadAcceptanceRecord.ts';
+import { buildRoadCriticPrompt, parseRoadCriticResponse } from './utils/roadAcceptanceCritic.ts';
+import type { RoadAcceptanceRecord } from './types.ts';
 import { type ZoningContext, type AutoDraftImage } from './utils/autoDraftOrchestrator.ts';
 import { getStaticMap, clearStaticMapsCache } from './services/staticMapsService.ts';
 import { clearMapCache, decodeImageCached, getCachedBitmap, mapWithConcurrency } from './utils/mapTileCache.ts';
@@ -106,14 +117,22 @@ import { pointRangeBbox, centerRadiusBbox, planDownloadTiles, type MapBbox } fro
 import { buildSymbolMatchers, resolveSymbol } from './utils/symbolResolver.ts';
 import { parseSymbolCommand, type SymbolVisibilityCommand } from './utils/symbolCommandParser.ts';
 import { parseLocalChatCommand } from './utils/chatCommandParser.ts';
+import {
+  buildMoundPointListName,
+  formatProceduralDimension,
+  generateMoundPoints,
+  parseMoundPointIntent,
+} from './utils/proceduralPoints.ts';
+import { convertLinearUnits, getLinearUnitAbbreviation } from './utils/linearUnits.ts';
 import { applyAnnotationStyleCommand } from './utils/annotationStyleCommand.ts';
 import { normalizeCadLayerColor, normalizeCadLayerLinetype, parseCadLayerChatCommand } from './services/cadLayerChatCommands.ts';
 import CadLayerPicker from './components/CadLayerPicker.tsx';
 import LegendPicker from './components/LegendPicker.tsx';
 import { SURVEY_SYMBOL_LIBRARY } from './data/surveySymbolLibrary.ts';
 import { parsePointFile, pointListToString } from './utils/pointFile.ts';
-import { shouldFetchParcelLineGrounding } from './utils/parcelGroundingIntent.ts';
+import { isRoadGroundingQuery, shouldFetchParcelLineGrounding } from './utils/parcelGroundingIntent.ts';
 import { dedupeIncomingPoints } from './utils/pointDedupe.ts';
+import { computeConcaveHullPoints, computeConvexHullPoints } from './utils/shrinkwrapHull.ts';
 import { clearShrinkwrapSessionLines } from './utils/shrinkwrapSession.ts';
 import { insertPinnedPointsIntoHull, partitionPointsByPolygon } from './utils/shrinkwrapGeometry.ts';
 import {
@@ -145,11 +164,14 @@ import { setBearingDistanceMode } from './services/annotationPreferences.ts';
 import { buildPointLabelAnnotations, describeLabelAllResult } from './services/annotationStudio.ts';
 import { APP_VERSION as APP_VERSION_CONST } from './utils/appVersion.ts';
 import { buildCadManagerSessionState, createSessionZip, generateSessionFileName, toAliasRecord } from './utils/sessionZip.ts';
+import { isFileSaveCanceled, pickSessionFileHandle, writeBlobToFileHandle, type NativeSaveFileHandle } from './utils/nativeFileSave.ts';
 import { isOssBuild } from './utils/ossMode.ts';
 import { useExperimentalAgentEnabled } from './hooks/useExperimentalAgentEnabled.ts';
 import { useParametricAssociations } from './hooks/useParametricAssociations.ts';
 import { getExperimentalAgentDetails, isExperimentalAgentEnabled, setExperimentalAgentEnabled } from './utils/experimentalAgents.ts';
 import { isAgentRetired } from './utils/retiredAgents.ts';
+import { A2UIDecisionInspector } from './components/A2UIDecisionInspector.tsx';
+import { HELP_GROUPS } from './utils/canvasCommands.ts';
 // Defer non-critical page components for faster initial load
 const TechnologiesPage = lazy(() => import('./components/TechnologiesPage.tsx'));
 const SettingsPage = lazy(() => import('./components/SettingsPage.tsx'));
@@ -204,6 +226,8 @@ import NotificationCenter from './components/NotificationCenter.tsx';
 import NotificationScopeMarker from './components/NotificationScopeMarker.tsx';
 import GlobalErrorDialog from './components/GlobalErrorDialog.tsx';
 import TextEditorPanel, { type TextEditorTone } from './components/TextEditorPanel.tsx';
+import { A2UICommandHelp } from './components/A2UICommandHelp.tsx';
+import { A2UIDrawMenu } from './components/A2UIDrawMenu.tsx';
 import type { TerminalTone } from './components/CanvasTerminal.tsx';
 import type { CommandReference } from './components/CommandHelpView.tsx';
 import SessionSaveModal from './components/SessionSaveModal.tsx';
@@ -249,6 +273,11 @@ import DirtVolumePanel from './components/DirtVolumePanel.tsx';
 import StreamsPanel, { type StreamsPanelResult } from './components/StreamsPanel.tsx';
 import { buildAreaHatches, buildAreaLabels } from './services/areaHatchService.ts';
 import RoadingPanel from './components/RoadingPanel.tsx';
+import { RoadLinksSurface } from './components/RoadLinksSurface.tsx';
+import { roadLinkRegistry } from './services/roadLinkRegistry.ts';
+import { createCenterlineStationPointAssociation } from './services/parametricAssociations.ts';
+import { useRoadObjectLiveLinks } from './hooks/useRoadObjectLiveLinks.ts';
+import { useRoadObjectPointLinks } from './hooks/useRoadObjectPointLinks.ts';
 import ShrinkwrapPanel from './components/ShrinkwrapPanel.tsx';
 import InclusionBoundariesPanel from './components/InclusionBoundariesPanel.tsx';
 import { ContourGenerationPanel } from './components/ContourGenerationPanel.tsx';
@@ -257,6 +286,8 @@ import ContourManagementPanel from './components/ContourManagementPanel.tsx';
 import { A2UITinSurfaces } from './components/A2UITinSurfaces.tsx';
 import { A2UIContourChip } from './components/A2UIContourChips.tsx';
 import { A2UIPointTools } from './components/A2UIPointTools.tsx';
+import { PointStudioSurface } from './components/PointStudioSurface.tsx';
+import { createPointStyleResolver, ensurePointStudioState } from './services/pointStyles.ts';
 import { SteepSlopePanel } from './components/SteepSlopePanel.tsx';
 import SteepSlopeReportPanel from './components/SteepSlopeReportPanel.tsx';
 import ClaudeSettingsPanel from './components/ClaudeSettingsPanel.tsx';
@@ -336,7 +367,7 @@ import { applyContourBlends } from './utils/contourBlending.ts';
 import { generateContourLabelsFromIsoPaths, generateContourLabelsFromLines, strikeContourLabels } from './utils/contourLabels.ts';
 import { DEFAULT_CONTOUR_LINE_LAYERS, resolveContourLineLayersViaCacp, type ContourLineLayerAssignment } from './services/contourLayerResolver.ts';
 // FIX: Import `CustomSymbol`, `ContourSettings` and `ContourLabel` to be used with new features.
-import { type ChatMessage, MessageRole, type SurveyPoint, type SurveyLine, type CutSheetRow, type CutSheetInfo, AgentType, type SessionFile, type SessionState, type Centerline, JobInfo, Settings, PdfHighlight, type PointList, WmsService, ActiveWmsLayer, DxfExportOptions, VisualPanel, type OfflineMapArea, type ChatMessageAction, SettingsContext, AgentContext, UIContext, HighlightContext, Chat, Modality, Part, ProjectionSetting, type CustomSymbol, type AnnotationRule, type ContourSettings, type ContourLabel, type StreetLabel, type ProfilePoint, type ProfileInfo, type ClosureReport, type GisFeature, type DeedMetadata, type TitleSearchData, type BoundaryFile, type BoundaryFileCall, type AnnotationDimension, type CanvasHatch, type RasterUnderlay, type RasterAsset, type ToolWorkflowId, type HatchBoundaryLoop, type EsriServiceInfo, type InclusionBoundary, type DraftingStyleEntry, type ContourGeneration, type ContourBlendStats, type GenerationBlock, type IsoPath, type ParcelLabel, type MapAreaFeature, type MapAreaLabel, type SoilMapUnit, type AnnotationCategoryStyle, type AnnotationTextStyle, type CanvasTextAnnotation, DEFAULT_ANNOTATION_TEXT_STYLES, type DeedSummary, type AppNotification, type TinSurface, type SteepSlopeBand, type SteepSlopeRunResult, DEFAULT_ANNOTATION_CATEGORIES, type ParcelLabelFormatter, type ParcelCadTextStyle, DEFAULT_PARCEL_LABEL_FORMATTER, type StandardsComplianceCheckSelection, type StandardsComplianceReport, type ComplianceSourceMode, type SessionSaveOptions } from './types.ts';
+import { type ChatMessage, MessageRole, type SurveyPoint, type SurveyLine, type CutSheetRow, type CutSheetInfo, AgentType, type SessionFile, type SessionState, type Centerline, JobInfo, Settings, PdfHighlight, type PointList, WmsService, ActiveWmsLayer, DxfExportOptions, VisualPanel, type OfflineMapArea, type ChatMessageAction, SettingsContext, AgentContext, UIContext, HighlightContext, Chat, Modality, Part, ProjectionSetting, type CustomSymbol, type AnnotationRule, type ContourSettings, type ContourLabel, type StreetLabel, type ProfilePoint, type ProfileInfo, type ClosureReport, type GisFeature, type DeedMetadata, type TitleSearchData, type BoundaryFile, type BoundaryFileCall, type AnnotationDimension, type CanvasHatch, type RasterUnderlay, type RasterAsset, type ToolWorkflowId, type HatchBoundaryLoop, type EsriServiceInfo, type InclusionBoundary, type AoiBoundary, type DraftingStyleEntry, type ContourGeneration, type ContourBlendStats, type GenerationBlock, type IsoPath, type ParcelLabel, type MapAreaFeature, type MapAreaLabel, type SoilMapUnit, type AnnotationCategoryStyle, type AnnotationTextStyle, type CanvasTextAnnotation, DEFAULT_ANNOTATION_TEXT_STYLES, type DeedSummary, type AppNotification, type TinSurface, type SteepSlopeBand, type SteepSlopeRunResult, DEFAULT_ANNOTATION_CATEGORIES, type ParcelLabelFormatter, type ParcelCadTextStyle, DEFAULT_PARCEL_LABEL_FORMATTER, type StandardsComplianceCheckSelection, type StandardsComplianceReport, type ComplianceSourceMode, type SessionSaveOptions } from './types.ts';
 import { DEFAULT_PARCEL_CAD_TEXT_STYLES } from './utils/parcelLabelFormatter.ts';
 // FIX: Corrected import of startGeminiChat. Renamed import 'startChat' to 'startGeminiChat' to match export.
 import { startGeminiChat, selectContextSources, getModelForAgent, getAutoModelForAgent, summarizeDeed, investigateDeedClosure, isClaudeModel, isOpenAIModel, isGrokModel, extractZoningDistrictsFromMap, runVisualStandardsComplianceAudit, processAndCorrectCoordinates, AUTO_FAST_MODEL, type DeedClosureReview, type DeedClosureHypothesis } from './services/geminiService.ts';
@@ -403,13 +434,21 @@ import { A2UIStationingControls } from './components/A2UIStationingControls.tsx'
 import { A2UIPublicSurfaceLayer } from './components/A2UIPublicSurfaceLayer.tsx';
 import { A2UICacpReview } from './components/A2UICacpReview.tsx';
 import { A2UICacpManifestExplorer } from './components/A2UICacpManifestExplorer.tsx';
+import { A2UIAoiSurface } from './components/A2UIAoiSurface.tsx';
+import { GimbalVisionA2UISurface } from './components/GimbalVisionA2UISurface.tsx';
+import { gimbalVisionStore } from './services/gimbalVisionStore.ts';
 import { closeA2UISurface, openA2UISurface } from './services/a2uiSurfaces.ts';
+import { clearSoilLimitationsChartCache } from './services/soilLimitationsService.ts';
+import type { SheetViewCommand, SheetViewSnapshot, SheetViewTitleblockField } from './services/sheetViewProtocol.ts';
 import { applyLegendPatchToHatches, legendStore, type LegendDrawingLayer } from './services/legendStudio.ts';
 import { buildCacpReviewContext, isNotableCacpEntry, retryCacpReviewItem, startCacpSurfaceBridge } from './services/cacpSurfaceBridge.ts';
 import { resolveA2UISurfaceIntent } from './services/a2uiSurfaceIntent.ts';
+import { regexIntentToCatalogId } from './services/a2uiDecisionCatalog.ts';
+import { evaluateA2UIDecisionShadow } from './services/a2uiDecisionClient.ts';
 import { buildPointListSurfaceData, createBlankSpreadsheetSpec } from './utils/a2uiSpreadsheet.ts';
 import { wgs84ToProjected } from './utils/projectLocation.ts';
 import { buildProjectLocationClusters, clusterSetSignature, describeProjectLocationClusters } from './utils/projectClusters.ts';
+import { buildAoiFromInclusionLines, buildAoiFromVertices, isAoiPolylineId } from './utils/aoiBoundary.ts';
 import { projectionSettingForEpsg, recommendProjectionForClusters } from './utils/projectionRecommendation.ts';
 import { detectProjectionFromBrowser } from './utils/autoProjection.ts';
 import { detectProjectLocationIntent, projectLocationIntentLabel, type ProjectLocationIntentKind } from './services/projectLocationIntent.ts';
@@ -440,7 +479,7 @@ import { useUndoShortcuts } from './hooks/useUndoShortcuts.ts';
 import HistoryPanel from './components/HistoryPanel.tsx';
 import { UndoHistoryQuickPicker } from './components/UndoHistoryQuickPicker.tsx';
 import { useHistorySkills } from './services/historySkillHandlers.ts';
-import { resolveIntentHandoff } from './services/cacpIntentRouter.ts';
+import { resolveDraftingDelegateTarget, resolveIntentHandoff, shouldHandoffLsvzDrafting } from './services/cacpIntentRouter.ts';
 import { AppStateProvider, useAppState } from './contexts/AppStateContext.tsx';
 import { CadManagerProvider, useCadManager } from './contexts/CadManagerContext.tsx';
 import {
@@ -636,6 +675,10 @@ function uniqueTextFileName(name: string, taken: Set<string>): string {
 }
 
 const A2UI_DOCK_TITLES: Record<string, string> = {
+    'draw-menu': 'Draw & Edit',
+    'command-help': 'Command Help',
+    'surveyors-eye': 'Surveyors Eye',
+    'area-of-interest': 'Area of Interest',
     'point-entry': 'Add Point',
     'point-upload': 'Point Upload',
     'deed-upload': 'Deed Upload',
@@ -680,7 +723,7 @@ const A2UI_DOCK_TITLES: Record<string, string> = {
     'closure-report': 'Closure Reports',
     'steep-slope-report': 'Steep Slope Report',
     'legal-writer': 'Legal Description Writer',
-    'sheet-view': 'Sheet View (24×36 Plot Layout)',
+    'sheet-view': 'Sheet View',
     'roading-intake': 'Roading Intake',
     'redline-upload': 'Redline Package',
     'roading-designer': 'Roading Designer',
@@ -808,6 +851,13 @@ interface DrawingCanvasHandles {
   toggleDrawingToolsMenu: () => void;
   closeDrawingToolsMenu: () => void;
   startPointPlacement: (options: { pointNumber?: string; elevation?: string; description?: string }) => void;
+  /** Arm the AOI boundary drawing tool from the A2UI AOI menu. */
+  startAoiDrawing?: () => void;
+  /** Arm a one-click snapped pick for an A2UI point/coordinate input. */
+  startCoordinatePick: (
+    onPick: (coordinates: { northing: number; easting: number; pointNumber?: string }) => void,
+    onCancel?: () => void,
+  ) => void;
   cancelDeleteMode: () => void;
   confirmDelete: () => void;
   getTransform: () => { scale: number; offsetX: number; offsetY: number };
@@ -1015,7 +1065,7 @@ const numberToAlpha = (num: number): string => {
     return alpha;
 };
 
-// FIX: A robust, single download function to replace all uses of `showSaveFilePicker` and legacy fallbacks.
+// FIX: A robust fallback download function for contexts where a native save picker is unavailable.
 // Hardened: guards against empty/invalid blobs and defers URL revocation so the browser has time to
 // start streaming the download. Revoking synchronously after click() can cancel the download and is a
 // common cause of "save file not working / nothing downloads".
@@ -1076,174 +1126,6 @@ const triggerDownload = (blob: Blob, fileName: string) => {
         setTimeout(() => URL.revokeObjectURL(url), 10000);
     }
 };
-
-/**
- * Andrew's monotone-chain 2-D convex hull on (easting=x, northing=y).
- * Returns hull vertices in CCW order without duplicates / colinear vertices.
- * Shared by the cogo_shrinkwrap CACP handler and the live recompute effect.
- */
-function computeConvexHullPoints<T extends { easting: number; northing: number }>(pts: T[]): T[] {
-  if (pts.length < 3) return pts.slice();
-  const sorted = [...pts].sort((a, b) =>
-    a.easting === b.easting ? a.northing - b.northing : a.easting - b.easting
-  );
-  const cross = (o: T, a: T, b: T) =>
-    (a.easting - o.easting) * (b.northing - o.northing) -
-    (a.northing - o.northing) * (b.easting - o.easting);
-  const lower: T[] = [];
-  for (const p of sorted) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
-    lower.push(p);
-  }
-  const upper: T[] = [];
-  for (let i = sorted.length - 1; i >= 0; i--) {
-    const p = sorted[i];
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
-    upper.push(p);
-  }
-  return lower.slice(0, -1).concat(upper.slice(0, -1));
-}
-
-/**
- * 2-D segment intersection test (proper interior crossings only � shared
- * endpoints don't count). Used by the concave-hull walker to reject candidate
- * edges that would cross previously-laid hull segments.
- */
-function _segmentsIntersect(
-  x1: number, y1: number, x2: number, y2: number,
-  x3: number, y3: number, x4: number, y4: number,
-): boolean {
-  const d = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3);
-  if (Math.abs(d) < 1e-12) return false;
-  const t = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / d;
-  const u = ((x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1)) / d;
-  const eps = 1e-9;
-  return t > eps && t < 1 - eps && u > eps && u < 1 - eps;
-}
-
-/**
- * Concave hull (Moreira-Santos KNN algorithm).
- *
- * Walks the point cloud from the lowest point, at each step choosing the
- * neighbor that produces the largest right-hand (clockwise) turn from among
- * the K nearest unvisited candidates � and skipping any candidate whose edge
- * would intersect a prior hull segment. K controls concavity:
- *   - Small K (3-5)  ? very tight, follows every notch (can self-cross on dense
- *                       clouds ? falls back to a larger K).
- *   - Medium K (10-20) ? typical "wraps the boundary" surveyor look.
- *   - Large K (>50)   ? asymptotically equals the convex hull.
- *
- * If the walker dead-ends or produces a degenerate hull at the requested K,
- * K is incremented and retried. On total failure the convex hull is returned
- * so the user is never left with no boundary at all.
- */
-function computeConcaveHullPoints<T extends { easting: number; northing: number }>(
-  pts: T[],
-  k: number,
-): T[] {
-  if (pts.length < 3) return pts.slice();
-  // Dedupe by xy � duplicate points break the angle-sort and the visited set.
-  const seen = new Map<string, T>();
-  for (const p of pts) seen.set(`${p.easting.toFixed(4)},${p.northing.toFixed(4)}`, p);
-  const unique = Array.from(seen.values());
-  if (unique.length < 3) return unique;
-  if (unique.length === 3) return unique;
-
-  const startK = Math.max(3, Math.min(k, unique.length - 1));
-
-  const tryHull = (kk: number): T[] | null => {
-    // Start at the bottom-most point (tie-break leftmost) � guaranteed to be on
-    // the boundary, and the initial "previous direction" of due-west gives a
-    // deterministic first step.
-    let startIdx = 0;
-    for (let i = 1; i < unique.length; i++) {
-      const p = unique[i];
-      const s = unique[startIdx];
-      if (p.northing < s.northing || (p.northing === s.northing && p.easting < s.easting)) startIdx = i;
-    }
-    const start = unique[startIdx];
-    const hull: T[] = [start];
-    const visited = new Set<T>([start]);
-    let current = start;
-    // Initial previous-direction: pointing west, so first right-turn selects
-    // the candidate nearest to "south of east" ? which on a bottom-start means
-    // the rightmost candidate, kicking off a CCW traversal.
-    let prevAngle = Math.PI;
-    let step = 2;
-
-    while (step <= unique.length) {
-      // Re-admit the start point after 3 steps so the walker can close the ring.
-      if (step === 5) visited.delete(start);
-
-      // K nearest unvisited candidates.
-      const candidates = unique
-        .filter(p => p !== current && !visited.has(p))
-        .map(p => ({
-          pt: p,
-          dist: Math.hypot(p.easting - current.easting, p.northing - current.northing),
-        }))
-        .sort((a, b) => a.dist - b.dist)
-        .slice(0, kk);
-
-      if (candidates.length === 0) return null;
-
-      // Sort by right-hand (clockwise) turn from the previous-direction vector.
-      const angled = candidates
-        .map(c => {
-          const ang = Math.atan2(c.pt.northing - current.northing, c.pt.easting - current.easting);
-          let turn = prevAngle - ang;
-          while (turn <= 0) turn += 2 * Math.PI;
-          while (turn > 2 * Math.PI) turn -= 2 * Math.PI;
-          return { ...c, turn };
-        })
-        .sort((a, b) => a.turn - b.turn);
-
-      // Pick the first candidate whose edge doesn't cross any prior hull edge.
-      let chosen: typeof angled[number] | null = null;
-      for (const cand of angled) {
-        let intersects = false;
-        // Skip the immediately-previous edge (shared endpoint) � check all
-        // earlier edges only.
-        for (let i = 0; i < hull.length - 1; i++) {
-          if (_segmentsIntersect(
-            current.easting, current.northing,
-            cand.pt.easting, cand.pt.northing,
-            hull[i].easting, hull[i].northing,
-            hull[i + 1].easting, hull[i + 1].northing,
-          )) { intersects = true; break; }
-        }
-        if (!intersects) { chosen = cand; break; }
-      }
-      if (!chosen) return null;
-
-      if (chosen.pt === start) {
-        // Closed the ring.
-        return hull;
-      }
-
-      hull.push(chosen.pt);
-      visited.add(chosen.pt);
-      prevAngle = Math.atan2(
-        current.northing - chosen.pt.northing,
-        current.easting - chosen.pt.easting,
-      );
-      current = chosen.pt;
-      step++;
-    }
-    return null;
-  };
-
-  // Auto-retry with larger K when the requested K dead-ends. Cap retries so we
-  // never spend more than ~10 attempts on very stubborn clouds.
-  const maxAttempts = Math.min(10, unique.length - startK);
-  for (let attempt = 0; attempt <= maxAttempts; attempt++) {
-    const kk = Math.min(unique.length - 1, startK + attempt);
-    const result = tryHull(kk);
-    if (result && result.length >= 3) return result;
-  }
-  // Last-resort fallback � convex hull is always defined.
-  return computeConvexHullPoints(pts);
-}
 
 // FIX: Changed to a named export to resolve the module resolution error in index.tsx.
 // REFACTORING: Split into AppContent (uses context) and App (provides context)
@@ -1486,7 +1368,19 @@ const AppContent = () => {
     dismissNotification,
     clearNotifications,
   } = useAppState();
+  const pointStudioState = useMemo(
+    () => ensurePointStudioState(settings, attributeScale, pointLayers),
+    [settings.pointStudio, settings.showPointSymbols, settings.pointEfficiencyMode, settings.pointAttributeScaling, attributeScale, pointLayers],
+  );
+  // Persist the one-time legacy migration so old projects gain a concrete
+  // Point Studio library instead of re-deriving it on every open.
+  useEffect(() => {
+    if (settings.pointStudio) return;
+    setSettings(prev => prev.pointStudio ? prev : { ...prev, pointStudio: pointStudioState });
+  }, [settings.pointStudio, pointStudioState, setSettings]);
   const [isSessionSaveModalOpen, setIsSessionSaveModalOpen] = useState(false);
+  const [isNewProjectPromptOpen, setIsNewProjectPromptOpen] = useState(false);
+  const [isSavingBeforeNewProject, setIsSavingBeforeNewProject] = useState(false);
   // Multi-deed batch pipeline state. Persisted in the .lsvz manifest so a
   // batch review can resume after save/load; consumed by the deed batch flow.
   const [deedBatchJob, setDeedBatchJob] = useState<import('./types.ts').DeedBatchJob | null>(null);
@@ -1579,6 +1473,11 @@ const AppContent = () => {
     text: string;
     title: string;
   } | null | undefined>(undefined);
+  // CACP/A2UI → Sheet View command queue. Commands are applied by the mounted
+  // paper-space surface through the same handlers as the visible controls.
+  const [sheetViewCommands, setSheetViewCommands] = useState<Array<{ id: string; command: SheetViewCommand }>>([]);
+  const sheetViewCommandSeqRef = useRef(0);
+  const sheetViewSnapshotRef = useRef<SheetViewSnapshot | null>(null);
   // Closed FEMA polygons kept for live hatch + annotation rebuilding.
   const [lastFloodAreas, setLastFloodAreas] = useState<MapAreaFeature[]>([]);
   // FIRMETTE (v26.05.19.1) � cached FEMA NFHL map image stored in session.
@@ -1616,6 +1515,23 @@ const AppContent = () => {
   const [soilLimitationsReport, setSoilLimitationsReport] = useState<import('./services/soilLimitationsReport.ts').SoilLimitationsReport | null>(null);
   const [isCompilingSoilLimitations, setIsCompilingSoilLimitations] = useState(false);
   const [isDownloadingSoilLimitations, setIsDownloadingSoilLimitations] = useState(false);
+  const lastSoilProjectNameRef = useRef<string | null>(null);
+
+  // The chart is reference data, but the compiled report and queued sheet block
+  // belong to one project. Clear both when the project identity changes.
+  useEffect(() => {
+    const projectName = jobInfo?.jobName?.trim() ?? '';
+    if (lastSoilProjectNameRef.current === null) {
+      lastSoilProjectNameRef.current = projectName;
+      return;
+    }
+    if (lastSoilProjectNameRef.current === projectName) return;
+    lastSoilProjectNameRef.current = projectName;
+    clearSoilLimitationsChartCache();
+    setSoilLimitationsReport(null);
+    setSoilLimitationsSheetNotes(null);
+    setPendingSheetNotes(null);
+  }, [jobInfo?.jobName]);
 
   // GIS_AGENT — Streams & Watersheds panel. Presets and a free-form topic both
   // go through the same live-layer pipeline (`handleShowGisLayer`).
@@ -1819,6 +1735,9 @@ const AppContent = () => {
 
   // CACP manifest viewer modal � opened by clicking the CacpBadge.
   const [cacpManifestAgent, setCacpManifestAgent] = useState<AgentType | null>(null);
+  // Last WGS84 fix used to detect a CRS. Project location reuses it before the
+  // first point is stored, so a GPS-applied projection is not forgotten.
+  const [projectionGpsFix, setProjectionGpsFix] = useState<{ latitude: number; longitude: number } | null>(null);
 
   // Boundary files � created when the Boundary Agent generates a traverse; linked to canvas editor
   const [boundaryFiles, setBoundaryFiles] = useState<BoundaryFile[]>([]);
@@ -2148,9 +2067,9 @@ const AppContent = () => {
   const [isAgentSidebarCollapsed, setIsAgentSidebarCollapsed] = useState(true);
   const headerWorkspaceNavVisible = !isDesktop || isAgentSidebarCollapsed;
   const [isVisionScanning, setIsVisionScanning] = useState(false);
-  // Gimbal Vision HUD: defaults to closed/shaded. Auto-opens when a new
-  // file is loaded (App.tsx ~2247) or when a Civil Drafter scan begins
-  // (~5482) � i.e. only appears when there's something to look at.
+  // Gimbal access nudge: when true the chat Quick Thought offers the full A2UI
+  // panel. It is raised when a load/scan produces something to review and
+  // cleared only when the user dismisses the nudge.
   const [showVisionHUD, setShowVisionHUD] = useState(false);
   const [showAutoDraftPanel, setShowAutoDraftPanel] = useState(false);
   const [isHeaderZoomMenuOpen, setIsHeaderZoomMenuOpen] = useState(false);
@@ -2166,6 +2085,9 @@ const AppContent = () => {
   const [isHeaderScaleMenuOpen, setIsHeaderScaleMenuOpen] = useState(false);
   // Track point count when last scan ran so we know when to re-scan
   const lastVisionPointCountRef = useRef<number>(0);
+  // AOI bounds used for the last scan. Changing the held AOI invalidates the
+  // cached frames immediately, even when the point count is unchanged.
+  const lastVisionAoiKeyRef = useRef<string>('none');
   // Civil Drafter turns since the underlying chat was last reset (for auto-reset).
   const civilDrafterTurnsSinceResetRef = useRef<number>(0);
   const [civilDrafterContextVolume, setCivilDrafterContextVolume] = useState<CivilDrafterContextVolume>(
@@ -2190,7 +2112,31 @@ const AppContent = () => {
   // Pass-2 frames of the drawn road, shown in the Gimbal HUD and sent to the
   // redraw model so it can see its own take over the field shots.
   const [gimbalDraftSurvey, setGimbalDraftSurvey] = useState<VisionSurvey | null>(null);
+  const [gimbalTargetSurvey, setGimbalTargetSurvey] = useState<VisionSurvey | null>(null);
   const [isGimbalInspecting, setIsGimbalInspecting] = useState(false);
+  // Full 8-turn road acceptance run (HUD scorecard + defect pins) and its
+  // persisted audit history (last 20 runs).
+  const [roadAcceptance, setRoadAcceptance] = useState<RoadAcceptanceResult<SurveyLine> | null>(null);
+  const [roadAcceptanceRecords, setRoadAcceptanceRecords] = useState<RoadAcceptanceRecord[]>([]);
+  // Keep the standalone A2UI Gimbal panel fed with live scan/acceptance state.
+  useEffect(() => {
+    gimbalVisionStore.update({
+      isScanning: isVisionScanning,
+      survey: civilDrafterVisionSurvey,
+      qa: synthesisQa,
+      roadReview: roadTakeReview,
+      mathModel: gimbalRoadModel,
+      gimbalInspection: gimbalRoadInspection,
+      inspectionSurvey: gimbalDraftSurvey,
+      targetSurvey: gimbalTargetSurvey,
+      isInspecting: isGimbalInspecting,
+      acceptance: roadAcceptance,
+    });
+  }, [
+    civilDrafterVisionSurvey, gimbalDraftSurvey, gimbalRoadInspection, gimbalRoadModel,
+    gimbalTargetSurvey, isGimbalInspecting, isVisionScanning, roadAcceptance,
+    roadTakeReview, synthesisQa,
+  ]);
   // Paint intent waiting for a Stationing & CL alignment ("draw the DYL" in a
   // turn that also establishes the centerline).
   const pendingRoadPaintRef = useRef<{ marking: RoadPaintMarkingId } | null>(null);
@@ -2263,6 +2209,15 @@ const AppContent = () => {
 
 
   const canvas2dRef = useRef<DrawingCanvasHandles>(null);
+  /** The mounted terminal publishes its deterministic command runner here so
+   *  A2UI help/menu links execute exactly like typed commands. */
+  const canvasCommandRunnerRef = useRef<((raw: string) => void) | null>(null);
+  const handleCanvasCommandRunnerReady = useCallback((runner: ((raw: string) => void) | null) => {
+    canvasCommandRunnerRef.current = runner;
+  }, []);
+  const runCanvasCommand = useCallback((raw: string) => {
+    canvasCommandRunnerRef.current?.(raw);
+  }, []);
 
   const handleAddRasterUnderlay = useCallback((asset: RasterAsset) => {
     const viewport = canvas2dRef.current?.getViewportBboxWorld?.();
@@ -2664,14 +2619,53 @@ const AppContent = () => {
   const [activeInclusionBoundaryId, setActiveInclusionBoundaryId] = useState<string | null>(null);
   const [isInclusionBoundariesPanelVisible, setIsInclusionBoundariesPanelVisible] = useState(false);
   const [isInclusionBoundariesPanelMinimized, setIsInclusionBoundariesPanelMinimized] = useState(false);
+  // Areas of interest are a held scope, not another inclusion manager entry.
+  // Their linework is inclusion-typed so the existing clipping engine consumes
+  // it unchanged; the active AOI simply outranks the active inclusion.
+  const [aoiBoundaries, setAoiBoundaries] = useState<AoiBoundary[]>([]);
+  const [activeAoiBoundaryId, setActiveAoiBoundaryId] = useState<string | null>(null);
+  const activeAoiBoundaryRef = useRef<AoiBoundary | null>(null);
   // Ref mirror so existing useCallback handlers (Contour / Flood / Parcel) can
-  // narrow `type:'inclusion'` lines to the active boundary without forcing all
-  // those callbacks to re-create when the active boundary changes.
+  // narrow `type:'inclusion'` lines to the active clip boundary without forcing
+  // all those callbacks to re-create when the active boundary changes.
   const activeInclusionBoundaryRef = useRef<InclusionBoundary | null>(null);
   useEffect(() => {
-    activeInclusionBoundaryRef.current =
-      inclusionBoundaries.find(b => b.id === activeInclusionBoundaryId) || null;
-  }, [activeInclusionBoundaryId, inclusionBoundaries]);
+    const activeAoi = aoiBoundaries.find(b => b.id === activeAoiBoundaryId) || null;
+    const activeInclusion = inclusionBoundaries.find(b => b.id === activeInclusionBoundaryId) || null;
+    activeAoiBoundaryRef.current = activeAoi;
+    // An AOI is a held mask. While it is active it overrides the inclusion
+    // boundary for every existing clipper (parcels, soils, flood, contours, TIN).
+    activeInclusionBoundaryRef.current = activeAoi ?? activeInclusion;
+  }, [activeAoiBoundaryId, aoiBoundaries, activeInclusionBoundaryId, inclusionBoundaries]);
+
+  const activeAoiBounds = useMemo(() => {
+    const active = aoiBoundaries.find(b => b.id === activeAoiBoundaryId);
+    if (!active) return null;
+    const pointMap = new Map(points.map(p => [p.pointNumber, p]));
+    let minE = Infinity, maxE = -Infinity, minN = Infinity, maxN = -Infinity;
+    let found = false;
+    for (const line of lines) {
+      if (line.type !== 'inclusion' || line.polylineId !== active.polylineId || line.hidden) continue;
+      const from = line.fromPt ?? (pointMap.has(line.from)
+        ? { x: pointMap.get(line.from)!.easting, y: pointMap.get(line.from)!.northing }
+        : null);
+      const to = line.toPt ?? (pointMap.has(line.to)
+        ? { x: pointMap.get(line.to)!.easting, y: pointMap.get(line.to)!.northing }
+        : null);
+      for (const c of [from, to]) {
+        if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y)) continue;
+        minE = Math.min(minE, c.x); maxE = Math.max(maxE, c.x);
+        minN = Math.min(minN, c.y); maxN = Math.max(maxN, c.y);
+        found = true;
+      }
+    }
+    return found ? { minE, maxE, minN, maxN } : null;
+  }, [activeAoiBoundaryId, aoiBoundaries, lines, points]);
+
+  // Capture closures that run later (Gimbal scans) read the AOI extent from a
+  // ref instead of forcing the giant chat callback to re-create on every edit.
+  const activeAoiBoundsRef = useRef(activeAoiBounds);
+  useEffect(() => { activeAoiBoundsRef.current = activeAoiBounds; }, [activeAoiBounds]);
 
   // Blend curves are derived from generation paths, so boundary geometry edits
   // must retrigger the blend even when generation metadata is unchanged.
@@ -3939,8 +3933,9 @@ const AppContent = () => {
       centerlines: visibleCenterlines,
       epsg: settings.projection.epsg,
       marginProjected: 200,
+      gpsFix: projectionGpsFix,
     }),
-    [points, visibleLines, visibleCenterlines, settings.projection.epsg]
+    [points, visibleLines, visibleCenterlines, settings.projection.epsg, projectionGpsFix]
   );
   const projectLocationSignature = useMemo(
     () => clusterSetSignature(projectLocationClusters),
@@ -4472,12 +4467,14 @@ const AppContent = () => {
   const handleReset = useCallback(() => {
     void clearMapCache();
     clearStaticMapsCache();
+    clearSoilLimitationsChartCache();
     try {
       localStorage.removeItem('landsurv.sheetset.v1.project name');
       localStorage.removeItem('landsurv.sheetset.v1.__default__');
     } catch { /* ignore */ }
     setShowWelcome(true);
     setIsInitialScreen(true);
+    setProjectionGpsFix(null);
     setInitializedAgents(new Set());
     setIsAddingData(false);
     setRawFile(null);
@@ -4579,6 +4576,11 @@ const AppContent = () => {
     setAreaLabels([]);
     setLastFloodAreas([]);
     setLastSoilAreas([]);
+    setSoilLimitationsReport(null);
+    setSoilLimitationsSheetNotes(null);
+    setPendingSheetNotes(null);
+    setSheetViewCommands([]);
+    sheetViewSnapshotRef.current = null;
     setGenerationBlocks([]);
     setContourFocusRequest(null);
     setTinSurfaces([]);
@@ -4809,6 +4811,7 @@ const AppContent = () => {
             // Clear vision cache � new file, fresh gimbal scan on next draw request
             setCivilDrafterVisionSurvey(null);
             lastVisionPointCountRef.current = 0;
+            lastVisionAoiKeyRef.current = 'none';
             autoParcelGroundingRef.current = null;
             visionAerialRef.current = null;
             setShowVisionHUD(true);
@@ -4939,6 +4942,7 @@ const AppContent = () => {
         // Reset vision cache so the next draw request rescans the loaded points.
         setCivilDrafterVisionSurvey(null);
         lastVisionPointCountRef.current = 0;
+        lastVisionAoiKeyRef.current = 'none';
         autoParcelGroundingRef.current = null;
         visionAerialRef.current = null;
         setShowVisionHUD(true);
@@ -4962,6 +4966,15 @@ const AppContent = () => {
       setShowLegalGate(true);
       setShowWelcome(false);
       return;
+    }
+
+    if (mode === 'blank') {
+      // Open CAD Environment starts a fresh project even when the previous
+      // session was left on the same default project name.
+      clearSoilLimitationsChartCache();
+      setSoilLimitationsReport(null);
+      setSoilLimitationsSheetNotes(null);
+      setPendingSheetNotes(null);
     }
 
     if (mode === 'sample') {
@@ -5091,6 +5104,18 @@ const AppContent = () => {
    * also used to re-open a deed that was already processed (file-manager switch),
    * which must not spend another free deed.
    */
+  /** Hand an intake straight to the deed panel instead of leaving the upload screen idle. */
+  const revealDeedPanelAfterIntake = useCallback(() => {
+    setIsBoundaryEditorVisible(true);
+    setIsBoundaryEditorButtonPulsing(false);
+    setIsBoundaryDialogMinimized(false);
+    if (boundaryDockMode === 'toolshelf') {
+      requestToolShelfTab('boundary-deed');
+      setActiveBoundaryDockedTab('dialog');
+      setIsToolShelfVisible(true);
+    }
+  }, [boundaryDockMode, requestToolShelfTab]);
+
   const applyDeedSubmission = useCallback(async (file: SessionFile) => {
     try {
       const summaryRequestId = ++deedSummaryRequestRef.current;
@@ -5133,11 +5158,11 @@ const AppContent = () => {
                 }
             ]);
             setIsAddingData(false);
-            // The deed summary lives in chat; keep the traverse panel closed until
-            // this upload produces bearing/distance calls.
-            setIsBoundaryEditorVisible(false);
-            setIsBoundaryEditorButtonPulsing(false);
+            showView('canvas');
             setIsBoundaryAlignmentOpen(false);
+            // Hand off immediately: the deed panel shows the Lite Scan / summary
+            // while bearing-distance extraction is still pending.
+            revealDeedPanelAfterIntake();
             // Re-run deed summarizer for the replacement file.
             setDeedSummary(null);
             publishBoundarySummaryToChat(null);
@@ -5194,13 +5219,12 @@ const AppContent = () => {
       
       setActiveAgent(AgentType.DEED_READER);
       setInitializedAgents(prev => new Set(prev).add(AgentType.DEED_READER));
+      setIsAddingData(false);
       showView('canvas');
-
-      // The summary lands in chat; the traverse panel opens only after the
-      // selected descriptions produce bearing/distance calls.
-      setIsBoundaryEditorVisible(false);
-      setIsBoundaryEditorButtonPulsing(false);
       setIsBoundaryAlignmentOpen(false);
+      // Hand off immediately: the deed panel shows the Lite Scan / summary
+      // while bearing-distance extraction is still pending.
+      revealDeedPanelAfterIntake();
 
       // Populate the chat summary. Extraction is always user-initiated, even
       // when the deed contains only one description.
@@ -5233,7 +5257,7 @@ const AppContent = () => {
       setError(`Initialization Error: ${errorMessage}`);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, deedFile, settings, clearHighlights, startChatWithOverride]);
+  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, deedFile, settings, clearHighlights, startChatWithOverride, revealDeedPanelAfterIntake]);
 
   /**
    * Deed submission from the upload screen: spends one free deed first (free
@@ -6468,12 +6492,16 @@ const AppContent = () => {
 
   /**
    * Compute the WGS84 envelope of the project's inclusion lines (optionally
-   * narrowed to one named inclusion boundary). Used by the GIS Agent to load
+   * narrowed to one named inclusion boundary or held AOI). Used by the GIS Agent to load
    * only the features intersecting the surveyed site. Returns null when no
    * inclusion geometry exists or no projection is set.
    */
   const getInclusionBboxWgs84 = useCallback((boundaryId: string | null): [number, number, number, number] | null => {
-    const boundary = boundaryId ? inclusionBoundaries.find(b => b.id === boundaryId) ?? null : null;
+    const boundary = boundaryId
+      ? inclusionBoundaries.find(b => b.id === boundaryId)
+        ?? aoiBoundaries.find(b => b.id === boundaryId)
+        ?? null
+      : null;
     const inclusionLines = lines.filter((l: SurveyLine) =>
       l.type === 'inclusion' && (!boundary || l.polylineId === boundary.polylineId));
     if (inclusionLines.length === 0) return null;
@@ -6525,16 +6553,19 @@ const AppContent = () => {
     const padLon = (lon1 - lon0) * 0.05 || 0.001;
     const padLat = (lat1 - lat0) * 0.05 || 0.001;
     return [lon0 - padLon, lat0 - padLat, lon1 + padLon, lat1 + padLat];
-  }, [lines, points, inclusionBoundaries, settings.projection?.epsg]);
+  }, [lines, points, inclusionBoundaries, aoiBoundaries, settings.projection?.epsg]);
 
-  /** Active inclusion boundary exposed as an alternate query area. */
+  /** Active inclusion boundary (or held AOI) exposed as an alternate query area. */
   const inclusionAreaInfo = useMemo(() => {
-    const active = inclusionBoundaries.find(
+    const activeAoi = aoiBoundaries.find(boundary => boundary.id === activeAoiBoundaryId);
+    const activeInclusion = inclusionBoundaries.find(
       boundary => boundary.id === activeInclusionBoundaryId,
     );
-    const ordered = active
-      ? [active, ...inclusionBoundaries.filter(boundary => boundary.id !== active.id)]
-      : inclusionBoundaries;
+    const ordered = activeAoi
+      ? [activeAoi, ...inclusionBoundaries]
+      : activeInclusion
+        ? [activeInclusion, ...inclusionBoundaries.filter(boundary => boundary.id !== activeInclusion.id)]
+        : inclusionBoundaries;
     for (const boundary of ordered) {
       const bboxWgs84 = getInclusionBboxWgs84(boundary.id);
       if (!bboxWgs84) continue;
@@ -6562,7 +6593,118 @@ const AppContent = () => {
       }
     }
     return null;
-  }, [activeInclusionBoundaryId, getInclusionBboxWgs84, inclusionBoundaries, lines]);
+  }, [activeAoiBoundaryId, activeInclusionBoundaryId, aoiBoundaries, getInclusionBboxWgs84, inclusionBoundaries, lines]);
+
+  /** Zoom the canvas to the geometry that just became the active AOI. */
+  const zoomToAoiLines = useCallback((aoiLines: SurveyLine[]) => {
+    const pointMap = new Map(points.map(p => [p.pointNumber, p]));
+    let minE = Infinity, maxE = -Infinity, minN = Infinity, maxN = -Infinity;
+    let found = false;
+    for (const line of aoiLines) {
+      const from = line.fromPt ?? (pointMap.has(line.from)
+        ? { x: pointMap.get(line.from)!.easting, y: pointMap.get(line.from)!.northing }
+        : null);
+      const to = line.toPt ?? (pointMap.has(line.to)
+        ? { x: pointMap.get(line.to)!.easting, y: pointMap.get(line.to)!.northing }
+        : null);
+      for (const c of [from, to]) {
+        if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y)) continue;
+        minE = Math.min(minE, c.x); maxE = Math.max(maxE, c.x);
+        minN = Math.min(minN, c.y); maxN = Math.max(maxN, c.y);
+        found = true;
+      }
+    }
+    if (found) {
+      window.setTimeout(() => canvas2dRef.current?.zoomToBbox(minE, maxE, minN, maxN, 0.12), 60);
+    }
+  }, [points]);
+
+  const handleStartAoiDraw = useCallback(() => {
+    closeA2UISurface('aoi-surface');
+    showView('canvas');
+    canvas2dRef.current?.startAoiDrawing?.();
+    logActionToFieldbook('AOI draw armed from the A2UI AOI menu.');
+  }, [logActionToFieldbook, showView]);
+
+  const handleCreateAoiFromInclusion = useCallback((sourceId: string): { ok: boolean; message?: string } => {
+    const source = inclusionBoundaries.find(boundary => boundary.id === sourceId);
+    if (!source) return { ok: false, message: 'That inclusion boundary no longer exists.' };
+    const sourceLines = lines.filter(line =>
+      line.type === 'inclusion' && line.polylineId === source.polylineId && !line.hidden,
+    );
+    if (sourceLines.length < 3) {
+      return { ok: false, message: 'That inclusion needs at least three visible segments before it can become an AOI.' };
+    }
+    const { boundary, lines: aoiLines } = buildAoiFromInclusionLines(sourceLines, source.name);
+    if (aoiLines.length < 3) return { ok: false, message: 'Could not copy enough inclusion geometry into an AOI.' };
+    setLines(prev => [...prev, ...aoiLines]);
+    setAoiBoundaries(prev => [...prev.filter(b => b.id !== boundary.id), boundary]);
+    setActiveAoiBoundaryId(boundary.id);
+    zoomToAoiLines(aoiLines);
+    logActionToFieldbook(`Held AOI "${boundary.name}" copied from inclusion boundary.`);
+    return { ok: true, message: `AOI "${boundary.name}" is held and now overrides inclusion clipping.` };
+  }, [inclusionBoundaries, lines, logActionToFieldbook, zoomToAoiLines]);
+
+  const handleCreateAoiFromBoundaryFile = useCallback(async (fileId: string): Promise<{ ok: boolean; message?: string }> => {
+    const file = boundaryFiles.find(boundary => boundary.id === fileId);
+    if (!file) return { ok: false, message: 'That boundary file no longer exists.' };
+    const { buildBoundaryFileLoops } = await import('./services/soilLimitationsReport.ts');
+    const result = buildBoundaryFileLoops(boundaryFiles, points, file.id);
+    const loop = result.loops[0];
+    if (!loop || loop.vertices.length < 3) {
+      return { ok: false, message: 'That deed boundary does not close into a usable AOI.' };
+    }
+    const { boundary, lines: aoiLines } = buildAoiFromVertices(
+      loop.vertices.map(vertex => ({ easting: vertex.x, northing: vertex.y })),
+      file.name,
+      { source: 'boundary' },
+    );
+    if (aoiLines.length < 3) return { ok: false, message: 'That deed boundary produced too few AOI segments.' };
+    setLines(prev => [...prev, ...aoiLines]);
+    setAoiBoundaries(prev => [...prev.filter(b => b.id !== boundary.id), boundary]);
+    setActiveAoiBoundaryId(boundary.id);
+    zoomToAoiLines(aoiLines);
+    logActionToFieldbook(`Held AOI "${boundary.name}" built from deed boundary.`);
+    return { ok: true, message: `AOI "${boundary.name}" is held from the deed boundary.` };
+  }, [boundaryFiles, lines, logActionToFieldbook, points, zoomToAoiLines]);
+
+  const handleCreateAoiFromAddress = useCallback(async (address: string): Promise<{ ok: boolean; message?: string }> => {
+    const query = address.trim();
+    if (!query) return { ok: false, message: 'Enter a street address or place.' };
+    const epsg = settings.projection?.epsg;
+    if (!epsg) return { ok: false, message: 'Set a project projection before creating an address AOI.' };
+    const { geocodeLocationText } = await import('./utils/aoiResolver.ts');
+    const bbox = await geocodeLocationText(query, 0.0015);
+    const corners = [
+      wgs84ToProjected(bbox[1], bbox[0], epsg),
+      wgs84ToProjected(bbox[1], bbox[2], epsg),
+      wgs84ToProjected(bbox[3], bbox[2], epsg),
+      wgs84ToProjected(bbox[3], bbox[0], epsg),
+    ].filter((point): point is { northing: number; easting: number } => Boolean(point));
+    if (corners.length < 3) {
+      return { ok: false, message: 'The address could not be converted into the project coordinate system.' };
+    }
+    const { boundary, lines: aoiLines } = buildAoiFromVertices(
+      corners.map(point => ({ easting: point.easting, northing: point.northing })),
+      query,
+      { source: 'address', address: query, bboxWgs84: bbox },
+    );
+    setLines(prev => [...prev, ...aoiLines]);
+    setAoiBoundaries(prev => [...prev.filter(b => b.id !== boundary.id), boundary]);
+    setActiveAoiBoundaryId(boundary.id);
+    zoomToAoiLines(aoiLines);
+    logActionToFieldbook(`Held address AOI "${query}".`);
+    return { ok: true, message: `AOI "${query}" is held from the address envelope.` };
+  }, [logActionToFieldbook, settings.projection?.epsg, zoomToAoiLines]);
+
+  const handleDeleteAoi = useCallback((id: string) => {
+    const target = aoiBoundaries.find(boundary => boundary.id === id);
+    if (!target) return;
+    setLines(prev => prev.filter(line => line.polylineId !== target.polylineId));
+    setAoiBoundaries(prev => prev.filter(boundary => boundary.id !== id));
+    if (activeAoiBoundaryId === id) setActiveAoiBoundaryId(null);
+    logActionToFieldbook(`Removed AOI "${target.name}".`);
+  }, [activeAoiBoundaryId, aoiBoundaries, logActionToFieldbook]);
 
   const handleImagesSubmitted = useCallback((files: SessionFile[]) => {
     try {
@@ -8383,6 +8525,171 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     return () => { unsub1(); unsub2(); };
   }, [zoningChat, zoningPlace, zoningCounty, zoningState, zoningDistrict, startChatWithOverride, setZoningChat]);
 
+  const enqueueSheetViewCommand = useCallback((command: SheetViewCommand) => {
+    const id = `sheet-view-${Date.now()}-${++sheetViewCommandSeqRef.current}`;
+    setSheetViewCommands(prev => [...prev, { id, command }]);
+  }, []);
+
+  const handleSheetViewCommandConsumed = useCallback((id: string) => {
+    setSheetViewCommands(prev => prev.filter(entry => entry.id !== id));
+  }, []);
+
+  const handleSheetViewStateChange = useCallback((snapshot: SheetViewSnapshot | null) => {
+    sheetViewSnapshotRef.current = snapshot;
+  }, []);
+
+  // CACP: Sheet View is a first-class paper-space peer. Agents call these
+  // deterministic skills; the live surface applies the typed command, and the
+  // get-state query returns the sheet's actual state rather than a model guess.
+  useEffect(() => {
+    const reply = (messageId: string, data: Record<string, unknown>, success = true) => ({
+      requestId: messageId,
+      from: AgentType.CAD_MANAGER,
+      success,
+      data,
+      timestamp: Date.now(),
+    });
+    const asString = (value: unknown): string | undefined =>
+      typeof value === 'string' && value.trim() ? value.trim() : undefined;
+    const asNumber = (value: unknown): number | undefined =>
+      typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+    const asBoolean = (value: unknown): boolean | undefined =>
+      typeof value === 'boolean' ? value : undefined;
+    const titleblockFields: SheetViewTitleblockField[] = [
+      'projectName', 'sheetNumber', 'drawnBy', 'date', 'notes',
+    ];
+
+    const unsubs = [
+      interAgentComm.onCommand('sheet_view_get_state', async (message) => {
+        const snapshot = sheetViewSnapshotRef.current;
+        return reply(message.id, snapshot ? { ...snapshot } : { open: false });
+      }),
+      interAgentComm.onCommand('sheet_view_open', async (message) => {
+        showView('sheetview');
+        return reply(message.id, { accepted: true, command: 'open', opened: true });
+      }),
+      interAgentComm.onCommand('sheet_view_add_plan_viewport', async (message) => {
+        const data = message.data as Record<string, unknown>;
+        const command: SheetViewCommand = {
+          action: 'add_plan_viewport',
+          scaleFt: asNumber(data.scaleFt),
+        };
+        showView('sheetview');
+        enqueueSheetViewCommand(command);
+        return reply(message.id, { accepted: true, command: command.action });
+      }),
+      interAgentComm.onCommand('sheet_view_add_profile_viewport', async (message) => {
+        const data = message.data as Record<string, unknown>;
+        const roadObjectId = asString(data.roadObjectId);
+        if (roadObjectId) {
+          await interAgentComm.askPeer(AgentType.PROFILE_AGENT, 'road_profile_show', {
+            roadObjectId,
+            profileKind: data.profileKind === 'design' ? 'design' : 'existing',
+          });
+        } else if (!profileData || profileData.length === 0) {
+          return reply(message.id, { accepted: false, reason: 'No profile data is loaded.' }, false);
+        }
+        showView('sheetview');
+        enqueueSheetViewCommand({
+          action: 'add_profile_viewport',
+          roadObjectId,
+          profileKind: data.profileKind === 'design' ? 'design' : 'existing',
+        });
+        return reply(message.id, { accepted: true, command: 'add_profile_viewport' });
+      }),
+      interAgentComm.onCommand('sheet_view_add_cross_section_viewport', async (message) => {
+        const data = message.data as Record<string, unknown>;
+        const roadObjectId = asString(data.roadObjectId);
+        if (!roadObjectId || !roadLinkRegistry.get(roadObjectId)?.crossSections) {
+          return reply(message.id, { accepted: false, reason: 'No linked cross-section set is available.' }, false);
+        }
+        showView('sheetview');
+        enqueueSheetViewCommand({
+          action: 'add_cross_section_viewport',
+          roadObjectId,
+          station: asNumber(data.station),
+          scaleFt: asNumber(data.scaleFt),
+          verticalExaggeration: asNumber(data.verticalExaggeration),
+        });
+        return reply(message.id, { accepted: true, command: 'add_cross_section_viewport' });
+      }),
+      interAgentComm.onCommand('sheet_view_update_viewport', async (message) => {
+        const data = message.data as Record<string, unknown>;
+        const command: SheetViewCommand = {
+          action: 'update_viewport',
+          viewportId: asString(data.viewportId),
+          scaleFt: asNumber(data.scaleFt),
+          rotationDeg: asNumber(data.rotationDeg),
+          showBasemap: asBoolean(data.showBasemap),
+          basemapOpacity: asNumber(data.basemapOpacity),
+          lockPosition: asBoolean(data.lockPosition),
+          lockZoom: asBoolean(data.lockZoom),
+        };
+        if (Object.keys(command).length === 1) {
+          return reply(message.id, { accepted: false, reason: 'No viewport change supplied.' }, false);
+        }
+        showView('sheetview');
+        enqueueSheetViewCommand(command);
+        return reply(message.id, { accepted: true, command: command.action });
+      }),
+      interAgentComm.onCommand('sheet_view_update_sheet', async (message) => {
+        const data = message.data as Record<string, unknown>;
+        const command: SheetViewCommand = {
+          action: 'update_sheet',
+          sheetId: asString(data.sheetId),
+          landscape: asBoolean(data.landscape),
+          name: asString(data.name),
+        };
+        if (Object.keys(command).length === 1) {
+          return reply(message.id, { accepted: false, reason: 'No sheet change supplied.' }, false);
+        }
+        showView('sheetview');
+        enqueueSheetViewCommand(command);
+        return reply(message.id, { accepted: true, command: command.action });
+      }),
+      interAgentComm.onCommand('sheet_view_update_titleblock', async (message) => {
+        const data = message.data as Record<string, unknown>;
+        const field = asString(data.field) as SheetViewTitleblockField | undefined;
+        const value = typeof data.value === 'string' ? data.value : undefined;
+        if (!field || !titleblockFields.includes(field) || value === undefined) {
+          return reply(message.id, { accepted: false, reason: 'A valid titleblock field and value are required.' }, false);
+        }
+        showView('sheetview');
+        enqueueSheetViewCommand({ action: 'update_titleblock', field, value });
+        return reply(message.id, { accepted: true, command: 'update_titleblock' });
+      }),
+      interAgentComm.onCommand('sheet_view_add_sheet', async (message) => {
+        const data = message.data as Record<string, unknown>;
+        showView('sheetview');
+        enqueueSheetViewCommand({
+          action: 'add_sheet',
+          name: asString(data.name),
+          sheetNumber: asString(data.sheetNumber),
+        });
+        return reply(message.id, { accepted: true, command: 'add_sheet' });
+      }),
+      interAgentComm.onCommand('sheet_view_select_sheet', async (message) => {
+        const data = message.data as Record<string, unknown>;
+        const sheetId = asString(data.sheetId);
+        if (!sheetId) {
+          return reply(message.id, { accepted: false, reason: 'sheetId is required.' }, false);
+        }
+        showView('sheetview');
+        enqueueSheetViewCommand({ action: 'select_sheet', sheetId });
+        return reply(message.id, { accepted: true, command: 'select_sheet' });
+      }),
+      interAgentComm.onCommand('sheet_view_export_pdf', async (message) => {
+        const data = message.data as Record<string, unknown>;
+        const scope = data.scope === 'set' ? 'set' as const : 'current' as const;
+        showView('sheetview');
+        enqueueSheetViewCommand({ action: 'export_pdf', scope });
+        return reply(message.id, { accepted: true, command: 'export_pdf', scope });
+      }),
+    ];
+
+    return () => { for (const unsubscribe of unsubs) unsubscribe(); };
+  }, [enqueueSheetViewCommand, profileData, showView]);
+
   // CACP: Register CAD Manager skill handlers � these let any agent (or
   // UI component) ask the CAD Manager Agent to resolve a symbol for a given
   // code/description against the shared CustomSymbol library, OR batch-
@@ -9691,7 +9998,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   useEffect(() => {
     const inclusionByPid = new Map<string, number>();
     for (const l of lines) {
-      if (l.type !== 'inclusion' || !l.polylineId) continue;
+      if (l.type !== 'inclusion' || !l.polylineId || isAoiPolylineId(l.polylineId)) continue;
       inclusionByPid.set(l.polylineId, (inclusionByPid.get(l.polylineId) || 0) + 1);
     }
     setInclusionBoundaries(prev => {
@@ -9722,6 +10029,34 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setActiveInclusionBoundaryId(null);
     }
   }, [inclusionBoundaries, activeInclusionBoundaryId]);
+
+  // Register held AOIs from their `aoi_` inclusion-typed line groups. Names and
+  // source metadata survive line edits; a deleted AOI drops from the list.
+  useEffect(() => {
+    const aoiByPid = new Map<string, number>();
+    for (const line of lines) {
+      if (line.type !== 'inclusion' || !isAoiPolylineId(line.polylineId)) continue;
+      aoiByPid.set(line.polylineId!, (aoiByPid.get(line.polylineId!) || 0) + 1);
+    }
+    setAoiBoundaries(prev => {
+      const kept = prev.filter(boundary => aoiByPid.has(boundary.polylineId));
+      const known = new Set(kept.map(boundary => boundary.polylineId));
+      let nextNumber = kept.length + 1;
+      const additions: AoiBoundary[] = [];
+      for (const pid of aoiByPid.keys()) {
+        if (known.has(pid)) continue;
+        additions.push({ id: pid, polylineId: pid, name: `AOI ${nextNumber++}`, source: 'drawn' });
+      }
+      if (kept.length === prev.length && additions.length === 0) return prev;
+      return [...kept, ...additions];
+    });
+  }, [lines]);
+
+  useEffect(() => {
+    if (activeAoiBoundaryId && !aoiBoundaries.some(b => b.id === activeAoiBoundaryId)) {
+      setActiveAoiBoundaryId(null);
+    }
+  }, [aoiBoundaries, activeAoiBoundaryId]);
 
   // CACP � Project Knowledge Base skill. Any agent can ask the KB for facts
   // via askPeer('kb_query', {category?, subject?, predicate?, query?}).
@@ -10140,6 +10475,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       signal: controller.signal,
     };
     scoutActivityStore.begin({ id: run.id, title, subtitle });
+    scoutActivityStore.narrate(
+      run.id,
+      subtitle ? `${title} — ${subtitle}.` : `${title}.`,
+      'info',
+    );
     return run;
   }, []);
 
@@ -10152,11 +10492,23 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       url: event.url,
       level: event.level ?? 'info',
     });
+    const message = String(event.message ?? '').trim();
+    if (message && !['probe', 'links', 'pasda'].includes(event.phase ?? '')) {
+      scoutActivityStore.narrate(
+        runId,
+        message,
+        event.level === 'error' ? 'error'
+          : event.level === 'warn' ? 'warn'
+            : event.level === 'success' ? 'success'
+              : 'info',
+      );
+    }
   }, []);
 
   const finishScoutActivity = useCallback(
     (runId: string, status: 'success' | 'error', summary: string) => {
       scoutActivityStore.finish(runId, status, summary);
+      scoutActivityStore.narrate(runId, summary, status === 'success' ? 'success' : 'error');
     },
     [],
   );
@@ -10165,6 +10517,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     scoutAbortRef.current?.abort();
     scoutActivityStore.cancelCurrent('Stopped by the user.');
   }, []);
+
+  useEffect(() => {
+    scoutActivityStore.setStopHandler(handleScoutStop);
+    return () => scoutActivityStore.setStopHandler(null);
+  }, [handleScoutStop]);
 
   const openTinSurfacesSurface = useCallback(() => {
     openA2UISurface({
@@ -10179,6 +10536,23 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       content: <A2UITinSurfaces />,
     });
   }, [settings.a2ui?.defaultSize]);
+
+  /** Surveyors Eye is a standard A2UI workspace tool with toolshelf/float/chat placement. */
+  const openGimbalVisionSurface = useCallback(() => {
+    const message: ChatMessage = {
+      role: MessageRole.MODEL,
+      text: 'Surveyors Eye is open in the Agent Tool Shelf. Use the placement controls to float it, return it to chat, or open it fullscreen.',
+      a2ui: {
+        kind: 'workspace-tool',
+        agent: AgentType.CAD_MANAGER,
+        widgetType: 'surveyors-eye',
+        workspaceTool: 'surveyors-eye',
+        status: 'expanded',
+      },
+    };
+    setStandaloneA2UIMessage(message);
+    handleSetA2UIDockMode(message, 'toolshelf');
+  }, [handleSetA2UIDockMode]);
 
   /** Raise one independently addressable contour chip on the A2UI surface stack. */
   const openContourChipSurface = useCallback((chip: A2UIContourChipId, generationId?: string) => {
@@ -12519,6 +12893,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   // baseline drawing, stationing chat, session load). Associated linework is
   // rebuilt in `lines`, while station/offset points live in point lists.
   useParametricAssociations(centerlines, setLines, setPointLists);
+  // Station points carry a centerline association; this stamps the live road
+  // object id and keeps RoadObject.linework.pointIds in sync.
+  useRoadObjectPointLinks(pointLists, setPointLists);
 
   /**
    * Standard presentation for an A2UI surface launched outside the chat feed.
@@ -12553,6 +12930,30 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setFloatingA2UIKey(key);
     setFloatingA2UIFallback(message);
   }, [requestToolShelfTab, setIsToolShelfVisible]);
+
+  /** Open AOI chips with the same Floating/Chat/Toolshelf chrome as other A2UI tools. */
+  const openAoiSurface = useCallback(() => {
+    openStandaloneA2UISurface(
+      {
+        role: MessageRole.MODEL,
+        text: 'Area of Interest is open. Use the placement controls to float it, return it to chat, or dock it in the Agent Tool Shelf.',
+        a2ui: {
+          kind: 'workspace-tool',
+          agent: activeAgent || AgentType.CAD_MANAGER,
+          widgetType: 'area-of-interest',
+          workspaceTool: 'area-of-interest',
+          status: 'expanded',
+        },
+      },
+      'floating',
+    );
+  }, [activeAgent, openStandaloneA2UISurface]);
+
+  /** Closing the AOI float dismisses it; only the Chat placement opens chat. */
+  const handleCloseAoiFloat = useCallback(() => {
+    setFloatingA2UIKey(null);
+    setFloatingA2UIFallback(null);
+  }, []);
 
   /** Raise a standalone A2UI spreadsheet from the catalog or a CACP action. */
   const openSpreadsheetSurface = useCallback((spec: A2UISpreadsheetSpec) => {
@@ -12639,6 +13040,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       bboxWgs84: bbox,
       state: cluster?.jurisdiction?.state,
       county: cluster?.jurisdiction?.county,
+      projectKey: cluster?.label ?? 'project',
+      requireJurisdiction: false,
       includeScout: true,
       signal: scoutRun.signal,
       onActivity: event => pushScoutActivity(scoutRun.id, event),
@@ -12651,6 +13054,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       );
       throw error;
     });
+    scoutActivityStore.setCandidates(scoutRun.id, resolution.candidates ?? []);
+    if (resolution.jurisdiction) scoutActivityStore.setJurisdiction(scoutRun.id, resolution.jurisdiction);
+    scoutActivityStore.setWarnings(scoutRun.id, resolution.warnings);
+    scoutActivityStore.setCacheHit(scoutRun.id, resolution.cached);
     const verifiedCount = resolution.sources.filter(source => source.verified).length;
     finishScoutActivity(
       scoutRun.id,
@@ -12994,6 +13401,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     logActionToFieldbook,
   });
 
+  useRoadObjectLiveLinks({
+    centerlines,
+    points,
+    lines,
+    tinSurfaces,
+    roadCorridors,
+    enabled: experimentalRoadingEnabled,
+  });
+
   /**
    * Fetch county tax-parcel boundaries (Boundary Agent feature).
    * Mirrors handleFetchEsriContours: 'inclusion' uses a drawn polygon for the
@@ -13083,9 +13499,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     mode: 'inclusion' | 'description' | 'project',
     descriptionText?: string,
     bboxOverride?: [number, number, number, number] | null,
-    opts?: { silent?: boolean; clipToBoundary?: boolean },
+    opts?: { silent?: boolean; clipToBoundary?: boolean; addToCanvas?: boolean },
   ): Promise<{ ok: boolean; featureCount: number; message: string; parcelLines?: SurveyLine[] }> => {
     const silent = opts?.silent === true;
+    const addToCanvas = opts?.addToCanvas !== false;
     setIsFetchingParcels(true);
     if (!silent) setError(null);
     try {
@@ -13146,31 +13563,33 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
       }
 
-      setLines((prev: SurveyLine[]) => [
-        ...prev.filter((l: SurveyLine) => l.layer !== PARCEL_LAYER_TAG),
-        ...parcelLines,
-      ]);
-      setLastFetchedParcels(parcelSummaries);
-      setLastParcelEnrichment(result.enrichment ?? null);
+      if (addToCanvas) {
+        setLines((prev: SurveyLine[]) => [
+          ...prev.filter((l: SurveyLine) => l.layer !== PARCEL_LAYER_TAG),
+          ...parcelLines,
+        ]);
+        setLastFetchedParcels(parcelSummaries);
+        setLastParcelEnrichment(result.enrichment ?? null);
 
-      // Create parcel centroid annotation labels with N/F owner notation.
-      if (parcelLabelPoints.length > 0) {
-        const ts = Date.now();
-        const newLabels: ParcelLabel[] = parcelLabelPoints.map((lp, i) => ({
-          id: `PARCEL-LBL-${i}-${ts}`,
-          x: lp.x,
-          y: lp.y,
-          parcelId: lp.parcelId ?? null,
-          owner: lp.owner ?? null,
-          angle: 0,
-        }));
-        setParcelLabels(newLabels);
+        // Create parcel centroid annotation labels with N/F owner notation.
+        if (parcelLabelPoints.length > 0) {
+          const ts = Date.now();
+          const newLabels: ParcelLabel[] = parcelLabelPoints.map((lp, i) => ({
+            id: `PARCEL-LBL-${i}-${ts}`,
+            x: lp.x,
+            y: lp.y,
+            parcelId: lp.parcelId ?? null,
+            owner: lp.owner ?? null,
+            angle: 0,
+          }));
+          setParcelLabels(newLabels);
+        }
+        logActionToFieldbook(
+          `Fetched ${parcelSummaries.length} parcels (${parcelLines.length} segments)` +
+          `${trimmedToBoundary ? ' trimmed to the inclusion boundary' : ''} from ${service.label}` +
+          `${result.exceededTransferLimit ? ' � transfer limit reached, try a smaller area' : ''}.`
+        );
       }
-      logActionToFieldbook(
-        `Fetched ${parcelSummaries.length} parcels (${parcelLines.length} segments)` +
-        `${trimmedToBoundary ? ' trimmed to the inclusion boundary' : ''} from ${service.label}` +
-        `${result.exceededTransferLimit ? ' � transfer limit reached, try a smaller area' : ''}.`
-      );
       if (!silent) {
         showView('canvas');
         if (result.exceededTransferLimit) {
@@ -13235,6 +13654,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       bboxWgs84: [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax],
       state: cluster?.jurisdiction?.state,
       county: cluster?.jurisdiction?.county,
+      projectKey: cluster?.label ?? 'project',
+      requireJurisdiction: false,
       includeScout: true,
       signal: scoutRun.signal,
       onActivity: event => pushScoutActivity(scoutRun.id, event),
@@ -13247,6 +13668,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       );
       throw error;
     });
+    scoutActivityStore.setCandidates(scoutRun.id, resolution.candidates ?? []);
+    if (resolution.jurisdiction) scoutActivityStore.setJurisdiction(scoutRun.id, resolution.jurisdiction);
+    scoutActivityStore.setWarnings(scoutRun.id, resolution.warnings);
+    scoutActivityStore.setCacheHit(scoutRun.id, resolution.cached);
     const verifiedCount = resolution.sources.filter(source => source.verified).length;
     finishScoutActivity(
       scoutRun.id,
@@ -13360,6 +13785,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       inclusionBbox?: [number, number, number, number] | null;
       /** Suppress canvas switches and transient error toasts for background evidence gathering. */
       silent?: boolean;
+      /** Keep fetched parcels in memory without adding the county fabric to the canvas. */
+      addToCanvas?: boolean;
     } = {},
   ): Promise<{ ok: boolean; featureCount: number; message: string; parcelLines?: SurveyLine[] }> => {
     const useInclusion = options.aoi === 'inclusion';
@@ -13422,7 +13849,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         publish('loading', `Contacting ${candidates[0].service.label}…`);
       }
       for (const candidate of candidates) {
-        const result = await handleFetchParcels(candidate.service, 'project', undefined, bbox, { silent: options.silent, clipToBoundary: useInclusion });
+        const result = await handleFetchParcels(candidate.service, 'project', undefined, bbox, {
+          silent: options.silent,
+          clipToBoundary: useInclusion,
+          addToCanvas: options.addToCanvas,
+        });
         const issue = result.ok ? undefined : classifyParcelFetchIssue(result.message);
         attempts.push({
           label: candidate.service.label,
@@ -13505,7 +13936,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               label: source.label,
               state: cluster.jurisdiction?.state,
             });
-            const result = await handleFetchParcels(probe.def, 'project', undefined, bbox, { silent: options.silent, clipToBoundary: useInclusion });
+            const result = await handleFetchParcels(probe.def, 'project', undefined, bbox, {
+              silent: options.silent,
+              clipToBoundary: useInclusion,
+              addToCanvas: options.addToCanvas,
+            });
             liveAttempt.label = probe.def.label;
             liveAttempt.ok = result.ok;
             liveAttempt.message = result.message;
@@ -13676,11 +14111,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       return [];
     }
 
-    const result = await fetchProjectClusterLayer('parcels', cluster, { silent: true });
+    const result = await fetchProjectClusterLayer('parcels', cluster, {
+      silent: true,
+      addToCanvas: false,
+    });
     autoParcelGroundingRef.current = { key, ok: result.ok, at: Date.now() };
     if (!result.ok || !result.parcelLines?.length) return [];
     logActionToFieldbook(
-      `Gimbal Pass A: auto-loaded ${result.parcelLines.length} county parcel segments as frontage reference (${cluster.label}).`,
+      `Gimbal Pass A: held ${result.parcelLines.length} county parcel segments in memory as frontage reference (${cluster.label}); they are not drawn on the road take.`,
     );
     return result.parcelLines;
   }, [
@@ -14435,6 +14873,41 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }, 'toolshelf');
   }, [openStandaloneA2UISurface]);
 
+  /** Dock the lightweight Draw menu without turning it into a floating panel. */
+  const openDrawMenuSurface = useCallback(() => {
+    openStandaloneA2UISurface({
+      role: MessageRole.MODEL,
+      text: 'Draw & Edit — deterministic linework, hatch, and edit tools. Click a tool to start it on the canvas.',
+      a2ui: {
+        kind: 'workspace-tool',
+        agent: AgentType.CAD_MANAGER,
+        widgetType: 'draw-menu',
+        workspaceTool: 'draw-menu',
+        status: 'expanded',
+      },
+    }, 'toolshelf');
+  }, [openStandaloneA2UISurface]);
+
+  /** Dock the formatted HELP reference as a compact A2UI surface. */
+  const openCommandHelpSurface = useCallback((reference: CommandReference) => {
+    openStandaloneA2UISurface({
+      role: MessageRole.MODEL,
+      text: 'Command help — click a command to run it on the canvas.',
+      a2ui: {
+        kind: 'workspace-tool',
+        agent: AgentType.CAD_MANAGER,
+        widgetType: 'command-help',
+        workspaceTool: 'command-help',
+        status: 'expanded',
+        commandHelp: {
+          groups: reference.groups,
+          notes: reference.notes,
+          text: reference.text,
+        },
+      },
+    }, 'toolshelf');
+  }, [openStandaloneA2UISurface]);
+
   /** Open the shared Stationing Controls A2UI surface from the baseline tool or Stationing & CL panel. */
   const openStationingControlsSurface = useCallback(() => {
     openStandaloneA2UISurface({
@@ -14479,6 +14952,24 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       },
     });
   }, [openStandaloneA2UISurface]);
+
+  /** Open the named-style Point Studio surface. */
+  const openPointStudioSurface = useCallback(() => {
+    setSettings(prev => prev.pointStudio
+      ? prev
+      : { ...prev, pointStudio: ensurePointStudioState(prev, attributeScale, pointLayers) });
+    openStandaloneA2UISurface({
+      role: MessageRole.MODEL,
+      text: 'Civil Drafter Point Studio — named point styles, assignments, labels, and efficiency mode.',
+      a2ui: {
+        kind: 'workspace-tool',
+        agent: AgentType.CIVIL_DRAFTER,
+        widgetType: 'point-studio',
+        workspaceTool: 'point-studio',
+        status: 'expanded',
+      },
+    });
+  }, [openStandaloneA2UISurface, setSettings, attributeScale, pointLayers]);
 
   /** Open Add Point through the standard standalone A2UI presentation path. */
   const openPointEntrySurface = useCallback(() => {
@@ -14758,6 +15249,66 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       return;
     }
 
+    // High-volume synthetic point requests are generated locally. A model
+    // asked for hundreds of coordinates starts confidently and then truncates
+    // at its output cap; this deterministic path always lands the full count.
+    const moundIntent = parseMoundPointIntent(query);
+    if (moundIntent && !isInternalFollowUp && !agentOverride && !forcedAgent && askPeerDepth === 0) {
+      const projectUnit = settings.linearUnits ?? 'foot';
+      const sourceUnit = moundIntent.sourceUnit;
+      const toProjectUnit = (value: number): number =>
+        sourceUnit && sourceUnit !== projectUnit
+          ? convertLinearUnits(value, sourceUnit, projectUnit)
+          : value;
+      const normalizedIntent = {
+        ...moundIntent,
+        baseDiameter: toProjectUnit(moundIntent.baseDiameter),
+        height: toProjectUnit(moundIntent.height),
+      };
+      const existingPoints = pointLists.flatMap(list => list.points);
+      const pointAgent = PointAgent.getInstance();
+      pointAgent.setLabelingSettings(settings.pointLabelingSettings);
+      pointAgent.setAvailablePoints(existingPoints);
+      const pointNumbers = pointAgent.getNextNumbers(normalizedIntent.pointCount, AgentType.POINT_EDITOR);
+      const generated = generateMoundPoints(normalizedIntent, { pointNumbers, existingPoints });
+      const unitLabel = getLinearUnitAbbreviation(projectUnit);
+      const listName = buildMoundPointListName(normalizedIntent, unitLabel);
+      const listId = `procedural-mound-${Date.now().toString(36)}`;
+
+      setPointLists(prev => [
+        ...prev,
+        { id: listId, name: listName, points: generated.points, isVisible: true },
+      ]);
+      logActionToFieldbook(
+        `Generated ${generated.points.length.toLocaleString()} mound points client-side ` +
+        `(${formatProceduralDimension(normalizedIntent.baseDiameter)} ${unitLabel} base diameter, ` +
+        `${formatProceduralDimension(normalizedIntent.height)} ${unitLabel} high) in "${listName}".`
+      );
+
+      const reply =
+        `**Generated ${generated.points.length.toLocaleString()} mound points locally** — no model round-trip. ` +
+        `${formatProceduralDimension(normalizedIntent.baseDiameter)} ${unitLabel} base diameter, ` +
+        `${formatProceduralDimension(normalizedIntent.height)} ${unitLabel} tall, ` +
+        `centered at N ${generated.center.northing.toFixed(settings.coordinatePrecision)}, ` +
+        `E ${generated.center.easting.toFixed(settings.coordinatePrecision)}. ` +
+        `Base elevation ${generated.baseElevation.toFixed(settings.coordinatePrecision)} ${unitLabel}, ` +
+        `apex ${generated.apexElevation.toFixed(settings.coordinatePrecision)} ${unitLabel}. ` +
+        `The full cloud is in point list **${listName}**.`;
+      const commandSetHistory = getSetHistoryForAgent(activeAgent || AgentType.POINT_EDITOR);
+      commandSetHistory?.(prev => [
+        ...markPendingA2UICompleted(prev),
+        { role: MessageRole.USER, text: query },
+        { role: MessageRole.MODEL, text: reply },
+      ]);
+      setSuggestedQuestions([
+        `Contour the ${generated.points.length.toLocaleString()} mound points`,
+        'Show the mound point list',
+        'Generate a 1,000-point mound',
+      ]);
+      setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
+      return;
+    }
+
     // Deterministic symbol-visibility intercept: if the user issued a command
     // like "draw tree symbols" or "hide all manholes", toggle the built-in
     // symbol group here (no LLM in the loop � see utils/symbolCommandParser).
@@ -14937,6 +15488,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // request gets a Quick Thought choice before any model call.
     if (!agentOverride && askPeerDepth === 0 && !isInternalFollowUp) {
       const contourSetHistory = getSetHistoryForAgent(AgentType.CONTOURING_AGENT);
+      // A host-written contour prompt must land in the conversation the user is
+      // already looking at. Writing only to the Contouring Agent's hidden feed
+      // leaves the visible LSAI thread on its previous message (often the
+      // call-in notice), which hides the Quick Thought until the user asks again.
+      const visibleContourSetHistory =
+        getSetHistoryForAgent(visibleBehaviorAgentRef.current) ?? setLsvzChatHistory;
       const activateContourAgent = (openConversation = false) => {
         if (!initializedAgents.has(AgentType.CONTOURING_AGENT)) {
           initializeContouringAgent();
@@ -15036,11 +15593,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
       const contourIntent = detectContourSourceIntent(query);
       if (contourIntent?.kind === 'ambiguous') {
-        // A source choice belongs in Quick Thought, not a full chat feed. Keep
-        // the feed closed so the option buttons surface beside the socket.
-        activateContourAgent(false);
+        // A source choice belongs in Quick Thought, not a full chat feed. Ask it
+        // in the visible conversation without calling the Contouring Agent in
+        // yet: the call-in announcement would become the newest message and
+        // replace this prompt. Selecting a source calls the agent in for the work.
         const question = 'Would you like contours from your <strong>survey points / TIN</strong>, or from a <strong>public GIS service</strong> (USGS 3DEP or state GIS)?';
-        contourSetHistory?.(prev => [
+        visibleContourSetHistory?.(prev => [
           ...markPendingA2UICompleted(prev),
           { role: MessageRole.USER, text: query },
           {
@@ -15596,6 +16154,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           try {
             const detected = await detectProjectionFromBrowser();
             applyProjectProjection(detected.projection);
+            setProjectionGpsFix({ latitude: detected.latitude, longitude: detected.longitude });
             const gpsLabel = `${detected.projection.zoneName ?? 'Local CRS'} (EPSG:${detected.projection.epsg ?? '—'})`;
             const options = ['Open projection controls', 'Where is my project?', 'Fetch county tax lines for cluster 1'];
             projectionHistory(prev => [
@@ -15653,6 +16212,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
 
         if (!projection) {
+          const currentLabel = currentEpsg != null
+            ? `${settings.projection.zoneName ?? 'Custom'} (EPSG:${currentEpsg})`
+            : null;
           const options = [
             'Open projection controls',
             'Use my GPS location for projection',
@@ -15663,10 +16225,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             { role: MessageRole.USER, text: query },
             {
               role: MessageRole.MODEL,
-              text: 'I could not derive a projection because no point cluster has a WGS84 footprint yet. Open the projection controls to choose a CRS manually.',
+              text: currentLabel
+                ? `The project projection is already set to <strong>${currentLabel}</strong>. I could not derive a replacement because no point cluster or GPS fix has a WGS84 footprint yet. Open the projection controls to keep or change the current CRS.`
+                : 'I could not derive a projection because no point cluster has a WGS84 footprint yet. Open the projection controls to choose a CRS manually.',
               a2ui: buildProjectionSurfacePayload(targetAgent),
               questionOptions: options,
-              needsInput: true,
+              needsInput: currentLabel == null,
             },
           ]);
           setSuggestedQuestions(options);
@@ -15881,6 +16445,20 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       const surfaceIntent = resolveA2UISurfaceIntent(query, {
         centerlineNames: centerlines.map(centerline => centerline.name),
       });
+      // Shadow-only Decision 1 measurement. This never awaits and never changes
+      // the surface below; the regex result remains the source of truth.
+      evaluateA2UIDecisionShadow({
+        utterance: query,
+        regexSurface: regexIntentToCatalogId(surfaceIntent),
+        debug: settings.debugA2UIDecisionInspector === true,
+        state: {
+          activeAgent: activeAgent || null,
+          pointCount: points.length,
+          hasBoundary: boundaryFiles.length > 0,
+          centerlineCount: centerlines.length,
+          cadStandardsLoaded,
+        },
+      });
       const surfaceSetHistory = getSetHistoryForAgent(activeAgent || AgentType.LSVZ_AGENT);
       if (surfaceIntent && surfaceSetHistory) {
         if (surfaceIntent.surface === 'point-editor') {
@@ -16092,6 +16670,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             widgetType: surfaceIntent.tool,
             workspaceTool: surfaceIntent.tool,
             status: 'expanded',
+            pointStudio: surfaceIntent.pointStudio,
           };
         } else if (surfaceIntent.surface === 'hatch-studio') {
           surfacePayload = {
@@ -16573,6 +17152,55 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
     stopGenerationRef.current = false;
 
+    const isAutoDraftLsvzTurn =
+      query.includes('**AUTO DRAFT') ||
+      query.includes('**STAGE ') ||
+      pendingAutoDraftImagesRef.current.length > 0;
+
+    // LSAI owns orchestration, not drafting. Route drafting to Civil Drafter
+    // before inference so LSAI cannot emit a rough `lines` payload itself.
+    if (
+      agent === AgentType.LSVZ_AGENT &&
+      !forcedAgent &&
+      shouldHandoffLsvzDrafting(agent, query, isInternalFollowUp, isAutoDraftLsvzTurn)
+    ) {
+      const fromLabel = agentConfig[agent]?.label || agent;
+      const toLabel = agentConfig[AgentType.CIVIL_DRAFTER]?.label || 'Civil Drafter';
+      const handoffText = `CACP handoff — ${fromLabel} → ${toLabel}. ${toLabel} owns drafting; continuing automatically.`;
+      setInitializedAgents(prev => new Set(prev).add(AgentType.CIVIL_DRAFTER));
+      setLastActiveAgent(agent);
+      interAgentComm.transferAgentFocus(AgentType.CIVIL_DRAFTER, {
+        from: agent,
+        reason: 'drafting request',
+      });
+      const targetSetHistory = getSetHistoryForAgent(AgentType.CIVIL_DRAFTER);
+      if (targetSetHistory) {
+        targetSetHistory(prev => [
+          ...markPendingA2UICompleted(prev),
+          { role: MessageRole.USER, text: query },
+          {
+            role: MessageRole.MODEL,
+            text: `🔀 **CACP handoff — ${fromLabel} → ${toLabel}**\n\nDrafting belongs to **${toLabel}**. Continuing there.`,
+            quickThoughtText: handoffText,
+          },
+        ]);
+      }
+      setLsvzChatHistory(prev => [
+        ...markPendingA2UICompleted(prev),
+        { role: MessageRole.USER, text: query },
+        {
+          role: MessageRole.MODEL,
+          text: `🔗 **Specialist Hand-off** — Bringing in **${toLabel}** to draft this…`,
+          quickThoughtText: handoffText,
+        },
+      ]);
+      logActionToFieldbook(`LSAI drafting handoff: ${fromLabel} → ${toLabel}.`);
+      setTimeout(() => {
+        void handleSendMessage(query, AgentType.CIVIL_DRAFTER, askPeerDepth + 1, undefined, handoffText);
+      }, 0);
+      return;
+    }
+
     if (!isInternalFollowUp && !forcedAgent && agentRegistry.isCacpEnabled(agent)) {
       // CACP intent gate — ENFORCED, not advisory. If the request clearly
       // belongs to another specialist, hand it to that agent before this one
@@ -16737,6 +17365,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               ? autoParcelGrounding
               : canvasGrounding.parcelLines
             : [];
+          const parcelGapRoads = inferParcelGapRoads(parcelGrounding);
           let osmWays = canvasGrounding.osmWays ?? [];
           let minE = Infinity, maxE = -Infinity, minN = Infinity, maxN = -Infinity;
           const includePoint = (e: number, n: number) => {
@@ -16765,6 +17394,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           context += buildRoadGroundingContext({
             parcelLines: parcelGrounding,
             osmWays,
+            parcelGapRoads,
             review: lastRoadTakeReviewRef.current,
           });
         }
@@ -16844,19 +17474,30 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // Parts. This gives the model spatial context it would otherwise never have.
     const hasDrafterContext = points.length > 0 || (boundaryFiles && boundaryFiles.length > 0) || lines.length > 0;
     if ((agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT) && hasDrafterContext && isDrawIntent(query) && (getCivilDrafterContextConfig()?.attachVisionImagery ?? true)) {
-        // Decide whether to re-scan: first time, or point/feature set changed >5 %
+        // Decide whether to re-scan: first time, point/feature set changed >5 %,
+        // the AOI moved, or road mode changed how parcel frontage is rendered.
         const prevCount  = lastVisionPointCountRef.current;
         const newlyFetchedParcelLines = autoParcelGrounding.filter(line => !lines.includes(line)).length;
         const currentFeatureCount = points.length + (boundaryFiles?.length ?? 0) * 10 + lines.length + newlyFetchedParcelLines;
-        const needScan   = !civilDrafterVisionSurvey
-            || civilDrafterVisionSurvey.pass !== 'geometry'
-            || Math.abs(currentFeatureCount - prevCount) / Math.max(prevCount, 1) > 0.05;
+        const aoiForVision = activeAoiBoundsRef.current;
+        const aoiKey = aoiForVision
+            ? `${aoiForVision.minE.toFixed(2)}:${aoiForVision.maxE.toFixed(2)}:${aoiForVision.minN.toFixed(2)}:${aoiForVision.maxN.toFixed(2)}`
+            : 'none';
 
         // Pass A is deliberately geometry-only: field shots plus inclusion
         // linework, with NO map tiles. Parcel lines are included only for road
         // and boundary/property-corner work — never for breaklines or generic
         // linework. Background pixels are a separate Pass B capture.
         const allowParcelGrounding = shouldFetchParcelLineGrounding(agent, query);
+        const renderParcelLines = !(
+            (agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT)
+            && isRoadGroundingQuery(query)
+        );
+        const needScan   = !civilDrafterVisionSurvey
+            || civilDrafterVisionSurvey.pass !== 'geometry'
+            || Math.abs(currentFeatureCount - prevCount) / Math.max(prevCount, 1) > 0.05
+            || lastVisionAoiKeyRef.current !== aoiKey
+            || (civilDrafterVisionSurvey?.parcelLinesRendered ?? true) !== renderParcelLines;
         const geometryLines = [
             ...(allowParcelGrounding ? autoParcelGrounding : []),
             ...visibleLines.filter(line =>
@@ -16881,10 +17522,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 activeSurvey = await captureVisionSurvey(points, geometryLines, {
                     boundaryFiles,
                     pass: 'geometry',
+                    renderParcelLines,
+                    aoiBounds: activeAoiBoundsRef.current ?? undefined,
                 });
                 setCivilDrafterVisionSurvey(activeSurvey);
                 civilDrafterVisionSurveyRef.current = activeSurvey;
                 lastVisionPointCountRef.current = currentFeatureCount;
+                lastVisionAoiKeyRef.current = aoiKey;
             } catch (visionErr) {
                 console.warn('[CivilDrafterVision] scan failed:', visionErr);
                 activeSurvey = null;
@@ -16933,8 +17577,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                     }
                 }
                 if (Number.isFinite(minE) && maxE > minE && maxN > minN) {
-                    const padX = Math.max((maxE - minE) * 0.15, 30);
-                    const padY = Math.max((maxN - minN) * 0.15, 30);
+                    // Surveyors Eye is AOI-scoped: when an AOI is active, the
+                    // background reference uses exactly those extents instead
+                    // of padding out into neighboring parcels.
+                    const activeAoiBounds = activeAoiBoundsRef.current;
+                    if (activeAoiBounds) {
+                        minE = activeAoiBounds.minE;
+                        maxE = activeAoiBounds.maxE;
+                        minN = activeAoiBounds.minN;
+                        maxN = activeAoiBounds.maxN;
+                    }
+                    const padX = activeAoiBounds ? 0 : Math.max((maxE - minE) * 0.15, 30);
+                    const padY = activeAoiBounds ? 0 : Math.max((maxN - minN) * 0.15, 30);
                     const w = (maxE - minE) + padX * 2;
                     const h = (maxN - minN) + padY * 2;
                     // Variable high-resolution aerial reference: 1280px cap for crisp
@@ -17029,6 +17683,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         renderVectors: false,
                         maxClusterFrames: 0,
                         maxDetailFrames: 0,
+                        aoiBounds: activeAoiBoundsRef.current ?? undefined,
                     });
                     const backgroundFrame = backgroundPass.frames[0];
                     if (backgroundFrame?.base64) {
@@ -17875,9 +18530,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             const payload = (ap.payload ?? {}) as Record<string, unknown>;
             const reason = ap.reason ?? '';
             if (skillId === 'lsvz_delegate_agent') {
-              const targetAgent = String(payload.targetAgent || '') as AgentType;
+              const requestedTarget = String(payload.targetAgent || '') as AgentType;
               const delegatedQuery = String(payload.query || query);
+              const targetAgent = resolveDraftingDelegateTarget(delegatedQuery, requestedTarget);
               const targetLabel = agentConfig[targetAgent]?.label || targetAgent;
+              if (targetAgent !== requestedTarget) {
+                logActionToFieldbook(`LSAI drafting route corrected: ${requestedTarget} → ${targetAgent}.`);
+              }
               if (forcedAgent && targetAgent !== forcedAgent) {
                 setHistory(prev => {
                   const newHist = [...prev];
@@ -19369,15 +20028,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 setGimbalRoadModel(null);
                 setGimbalRoadInspection(null);
                 setGimbalDraftSurvey(null);
+                setGimbalTargetSurvey(null);
                 setIsGimbalInspecting(false);
                 lastGimbalInspectionRef.current = null;
                 const canvasGrounding = extractRoadGrounding(lines);
+                const parcelGrounding = shouldFetchParcelLineGrounding(agent, query)
+                  ? autoParcelGrounding.length > 0
+                    ? autoParcelGrounding
+                    : canvasGrounding.parcelLines
+                  : [];
                 const roadGrounding = {
-                  parcelLines: shouldFetchParcelLineGrounding(agent, query)
-                    ? autoParcelGrounding.length > 0
-                      ? autoParcelGrounding
-                      : canvasGrounding.parcelLines
-                    : [],
+                  parcelLines: parcelGrounding,
+                  parcelGapRoads: inferParcelGapRoads(parcelGrounding),
                   osmWays: roadGroundingOsmRef.current?.ways.length
                     ? roadGroundingOsmRef.current.ways
                     : canvasGrounding.osmWays,
@@ -19410,6 +20072,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   // against — frames alone cannot carry that relationship.
                   passOneMath = buildRoadMathModel(linesToPlot, roadGrounding, roadReview.report, {
                     includeGenericLinework: roadTakeIntent,
+                    includeParcelGapRoads: true,
                   });
                   setGimbalRoadModel(passOneMath);
                   logActionToFieldbook(formatGimbalMathSummary(passOneMath));
@@ -19426,8 +20089,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                       draftInspection: true,
                       maxClusterFrames: 0,
                       maxDetailFrames: 0,
+                      aoiBounds: activeAoiBoundsRef.current ?? undefined,
                     });
                     setGimbalDraftSurvey(passOneFrames);
+                    setGimbalTargetSurvey(passOneFrames);
                     setShowVisionHUD(true);
                     logActionToFieldbook(
                       passOneFrames.frames.length > 0
@@ -19449,205 +20114,250 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 // reviewer is clean, so the drawn road is actually re-examined.
                 // A still-unresolved critique may earn a third take. Capped at
                 // two model retakes.
-                if (reviewedTake && reviewedTake.featuresAudited > 0) {
+                // ── ROAD ACCEPTANCE LOOP (8 turns) ──────────────────────────────
+                // Gate-count-first policy, one confirmation redraw after a pass,
+                // and an explicit UNVERIFIED commit when the budget runs out.
+                if (reviewedTake && reviewedTake.featuresAudited > 0 && passOneMath) {
                   const auditedIndexes = new Set(
                     groupRoadFeatures(linesToPlot, { includeGenericLinework: roadTakeIntent })
                       .flatMap(feature => feature.sourceLineIndexes),
                   );
                   const otherLines = linesToPlot.filter((_, index) => !auditedIndexes.has(index));
-                  let currentRoadLines = linesToPlot.filter((_, index) => auditedIndexes.has(index));
-                  let currentTake = reviewedTake;
-                  let currentInspection: GimbalRoadInspection | null = null;
-                  const mathModelBrief = passOneMath ? formatGimbalMathBrief(passOneMath) : '';
-                  const roadLength = (candidate: SurveyLine[]): number =>
-                    candidate.reduce((total, line) => {
-                      const from = line.fromPt;
-                      const to = line.toPt;
-                      return total + (from && to ? Math.hypot(to.x - from.x, to.y - from.y) : 0);
-                    }, 0);
-                  const originalLength = Math.max(1, roadLength(currentRoadLines));
+                  const initialRoadLines = linesToPlot.filter((_, index) => auditedIndexes.has(index));
+                  const wantsCenterline = /\b(baseline|centerline|centreline|alignment|stationing)\b/i.test(query);
+                  const wantsPaint = /\b(DYL|DBL|WL|SWL|paint|yellow line|white line)\b/i.test(query);
+                  const acceptanceRequest = { wantsCenterline, wantsPaint };
 
                   setIsLoading(true);
                   try {
-                    for (let retake = 1; retake <= 2 && !stopGenerationRef.current; retake++) {
-                      // First redraw runs unconditionally; the second only when
-                      // the reviewer still has an unresolved defect.
-                      if (retake > 1 && currentTake.status !== 'needs_retake') break;
-                      const prompt = formatRoadRetakePrompt(currentTake, currentRoadLines, 60, {
-                        mathModelBrief,
-                        inspectionSummary: currentInspection?.summary,
-                        inspectionDefects: currentInspection?.defects,
-                        groundingContext: buildRoadGroundingContext(roadGrounding),
+                    const result = await runRoadAcceptanceLoop<SurveyLine>({
+                      initialLines: initialRoadLines,
+                      passOneModel: passOneMath,
+                      request: acceptanceRequest,
+                      maxTurns: MAX_ROAD_TURNS,
+                      shouldStop: () => stopGenerationRef.current,
+                      runReview: candidate => runRoadTakeReview(candidate, roadGrounding, {
+                        maxTakes: 3,
+                        inferUnlabeledRoads: roadTakeIntent,
                         surveyPoints: points,
-                      });
-                      logActionToFieldbook(
-                        currentTake.status === 'needs_retake'
-                          ? `Civil Drafter take ${1 + retake}: redrawing the road from the math model and the reviewer's critique…`
-                          : `Civil Drafter take ${1 + retake}: redrawing the accepted road for the second-pass Gimbal check…`,
-                      );
-
-                      // Second gimbal inspection frames: the drafted take itself,
-                      // drawn over the field shots, so the redraw model sees its
-                      // own first attempt instead of only reading coordinates.
-                      // Reuse the pass-1 capture; later rounds capture the
-                      // current redraw instead.
-                      const retakeParts: Part[] = [{ text: prompt }];
-                      let inspectionSurvey: VisionSurvey | null = retake === 1 ? passOneFrames : null;
-                      if (!inspectionSurvey) {
+                      }),
+                      evaluateGates: (candidate, gateContext) => evaluateRoadAcceptance({
+                        passOneModel: passOneMath,
+                        passOneLines: initialRoadLines,
+                        currentLines: candidate,
+                        grounding: roadGrounding,
+                        surveyPoints: points,
+                        request: acceptanceRequest,
+                        includeGenericLinework: roadTakeIntent,
+                        widthTargets: gateContext?.widthTargets,
+                        widthRanges: gateContext?.widthRanges,
+                      }),
+                      resolveWidthConflict: conflict => {
+                        logActionToFieldbook(
+                          `Road width changes in ${conflict.corridorId}: `
+                          + `${conflict.narrowWidthFt.toFixed(1)} ft to ${conflict.wideWidthFt.toFixed(1)} ft — auto-transitioning.`,
+                        );
+                        return Promise.resolve<RoadWidthResolution>({
+                          corridorId: conflict.corridorId,
+                          decision: 'transition',
+                        });
+                      },
+                      captureFrames: async ({ turn, confirmation, verdict, currentLines }) => {
+                        if (turn === 1) return [];
                         setIsGimbalInspecting(true);
                         try {
-                          inspectionSurvey = await captureVisionSurvey(points, currentRoadLines, {
+                          const windows = verdict
+                            ? buildFailureWindows(passOneMath, verdict, { confirmation })
+                            : [];
+                          const markers = verdict
+                            ? verdict.gates
+                                .filter(gate => gate.applicable && !gate.passed && gate.at)
+                                .slice(0, 5)
+                                .map(gate => ({
+                                  easting: gate.at!.easting,
+                                  northing: gate.at!.northing,
+                                  label: `${gate.id.toUpperCase()}${gate.measured !== null ? ` ${gate.measured.toFixed(0)}` : ''}${gate.allowed !== null ? `/${gate.allowed.toFixed(0)}` : ''}`,
+                                  severity: gate.severity,
+                                }))
+                            : [];
+                          const survey = await captureVisionSurvey(points, currentLines, {
                             boundaryFiles,
                             draftInspection: true,
                             maxClusterFrames: 0,
                             maxDetailFrames: 0,
+                            failureWindows: windows,
+                            referenceLines: initialRoadLines,
+                            defectMarkers: markers,
+                            aoiBounds: activeAoiBoundsRef.current ?? undefined,
                           });
-                          setGimbalDraftSurvey(inspectionSurvey);
+                          setGimbalDraftSurvey(survey);
                           setShowVisionHUD(true);
-                        } catch (inspectionFrameErr) {
-                          console.warn('[RoadTakeReview] draft inspection frames failed:', inspectionFrameErr);
+                          return survey.frames.slice(0, 6).map(frame => ({
+                            label: frame.label,
+                            base64: frame.base64,
+                          }));
+                        } catch (frameErr) {
+                          console.warn('[RoadAcceptance] targeted frame capture failed:', frameErr);
+                          logActionToFieldbook('  ! Gimbal could not capture the failure window — continuing with the station table.');
+                          return [];
                         } finally {
                           setIsGimbalInspecting(false);
                         }
-                      }
-                      for (const frame of inspectionSurvey?.frames.slice(0, 7) ?? []) {
-                        retakeParts.push({
-                          text: `PASS 2 · DRAFT INSPECTION — ${frame.label} | ${frame.description}`,
-                        });
-                        retakeParts.push({ inlineData: { mimeType: 'image/png', data: frame.base64 } });
-                      }
-                      let retakeText = '';
-                      try {
-                        const retakeStream = await chat.sendMessageStream({ message: retakeParts });
-                        for await (const chunk of retakeStream) {
-                          if (stopGenerationRef.current) break;
-                          retakeText += chunk.text;
+                      },
+                      reviewWithCritic: async ({ turn, confirmation, verdict, frames }) => {
+                        // Fresh conversation every turn: no drafter prose, no
+                        // prior take explanation. The critic sees only the gate
+                        // table and labelled frames.
+                        try {
+                          const criticChat = startGeminiChat(
+                            AgentType.CIVIL_DRAFTER,
+                            '',
+                            currentModelName,
+                            settings,
+                          );
+                          const parts: Part[] = [{
+                            text: buildRoadCriticPrompt({
+                              turn,
+                              confirmation,
+                              verdict,
+                              frameLabels: frames.map(frame => frame.label),
+                            }),
+                          }];
+                          for (const frame of frames.slice(0, 6)) {
+                            parts.push({ text: `CRITIC FRAME — ${frame.label}` });
+                            parts.push({ inlineData: { mimeType: 'image/png', data: frame.base64 } });
+                          }
+                          const response = await criticChat.sendMessage({ message: parts });
+                          const critic = parseRoadCriticResponse(response.text ?? '');
+                          if (!critic) {
+                            logActionToFieldbook(`  · Independent critic turn ${turn}: no usable verdict.`);
+                          }
+                          return critic;
+                        } catch (criticErr) {
+                          console.warn('[RoadAcceptance] critic unavailable:', criticErr);
+                          return null;
                         }
-                      } catch (retakeErr) {
-                        console.warn('[RoadTakeReview] model retake failed:', retakeErr);
-                        logActionToFieldbook('  ! The model retake did not complete — keeping the audited take for review.');
-                        break;
-                      }
-                      const draft = parseRoadRetakeResponse(retakeText);
-                      if (!draft) {
-                        logActionToFieldbook('  ! The retake returned no usable geometry — keeping the audited take for review.');
-                        break;
-                      }
-
-                      const retakeLines: SurveyLine[] = [];
-                      for (const expanded of expandChainsToLines(
-                        draft.chains as DrafterChain[],
-                        pointNumber => {
-                          const point = pointLookup.get(String(pointNumber));
-                          return point ? { easting: point.easting, northing: point.northing } : undefined;
-                        },
-                      )) {
-                        const fromPoint = pointLookup.get(expanded.from);
-                        const toPoint = pointLookup.get(expanded.to);
-                        if (!fromPoint || !toPoint) continue;
-                        retakeLines.push({
-                          ...expanded,
-                          fromPt: { x: fromPoint.easting, y: fromPoint.northing, z: fromPoint.elevation || 0 },
-                          toPt: { x: toPoint.easting, y: toPoint.northing, z: toPoint.elevation || 0 },
-                        });
-                      }
-
-                      draft.lines.forEach((line, index) => {
-                        const from = line.fromPt
-                          ? { x: line.fromPt.x, y: line.fromPt.y, z: 0 }
-                          : (() => {
-                              const point = line.from ? pointLookup.get(String(line.from)) : undefined;
-                              return point ? { x: point.easting, y: point.northing, z: point.elevation || 0 } : null;
-                            })();
-                        const to = line.toPt
-                          ? { x: line.toPt.x, y: line.toPt.y, z: 0 }
-                          : (() => {
-                              const point = line.to ? pointLookup.get(String(line.to)) : undefined;
-                              return point ? { x: point.easting, y: point.northing, z: point.elevation || 0 } : null;
-                            })();
-                        if (!from || !to) return;
-                        retakeLines.push({
-                          id: `road-retake-${retake}-${index}`,
-                          from: line.from || `RET-${retake}-${index}`,
-                          to: line.to || `RET-${retake}-${index + 1}`,
-                          fromPt: from,
-                          toPt: to,
-                          layer: line.layer || currentRoadLines[0]?.layer || 'L-ROAD',
-                          lineType: line.lineType || 'CONTINUOUS',
-                          polylineId: line.polylineId || `road-retake-${retake}-${index}`,
-                        });
-                      });
-
-                      if (retakeLines.length < 2) {
-                        logActionToFieldbook('  ! The retake drew almost nothing — keeping the audited take for review.');
-                        break;
-                      }
-
-                      const recheck = runRoadTakeReview(retakeLines, roadGrounding, {
-                        maxTakes: 3,
-                        inferUnlabeledRoads: roadTakeIntent,
-                        surveyPoints: points,
-                      });
-                      const keptShare = roadLength(retakeLines) / originalLength;
-                      const noRegression = recheck.report.featuresAudited > 0
-                        && keptShare >= 0.5
-                        && recheck.report.scoreAfter >= currentTake.scoreAfter
-                        && recheck.report.remaining.length <= currentTake.remaining.length;
-                      const scoreImproved = recheck.report.featuresAudited > 0
-                        && keptShare >= 0.5
-                        && (recheck.report.scoreAfter > currentTake.scoreAfter
-                          || (recheck.report.scoreAfter === currentTake.scoreAfter
-                            && recheck.report.remaining.length < currentTake.remaining.length));
-                      // A clean first take can never improve its score. It still
-                      // gets the second-pass redraw; accept an equally clean,
-                      // full-length redraw so pass 2 is real rather than skipped.
-                      const cleanSecondPass = currentTake.status !== 'needs_retake'
-                        && recheck.report.status === 'clean'
-                        && noRegression;
-                      if (!scoreImproved && !cleanSecondPass) {
-                        logActionToFieldbook(`  ! Model take ${1 + retake} was not better (${recheck.report.scoreAfter}% vs ${currentTake.scoreAfter}%, ${recheck.report.remaining.length} vs ${currentTake.remaining.length} defect(s)) — keeping the audited take.`);
-                        break;
-                      }
-
-                      // ── SECOND GIMBAL INSPECTION ─────────────────────────────
-                      // The redraw is checked against the recorded first-pass
-                      // station/width model. A take that scores better but
-                      // shortens the corridor, drops an opposite edge or drifts
-                      // the width is rejected and sent back with measured
-                      // mismatches instead of being committed on score alone.
-                      const inspection = passOneMath
-                        ? inspectGimbalRoadModel(passOneMath, recheck.lines, {
-                            includeGenericLinework: roadTakeIntent,
-                          })
-                        : null;
-                      if (inspection) {
-                        currentInspection = inspection;
-                        setGimbalRoadInspection(inspection);
-                        lastGimbalInspectionRef.current = inspection;
-                        logActionToFieldbook(formatGimbalInspectionSummary(inspection));
-                        for (const defect of inspection.defects.slice(0, 5)) {
-                          logActionToFieldbook(`  • ${defect}`);
+                      },
+                      redraw: async ({ prompt, frames }) => {
+                        const parts: Part[] = [{ text: prompt }];
+                        for (const frame of frames) {
+                          parts.push({ text: `PASS 2 · DRAFT INSPECTION — ${frame.label}` });
+                          parts.push({ inlineData: { mimeType: 'image/png', data: frame.base64 } });
                         }
-                        if (!inspection.acceptable) {
-                          logActionToFieldbook('  ! Second gimbal inspection rejected this redraw — keeping the audited take and feeding the measured mismatches into the next round.');
-                          continue;
+                        let retakeText = '';
+                        try {
+                          const retakeStream = await chat.sendMessageStream({ message: parts });
+                          for await (const chunk of retakeStream) {
+                            if (stopGenerationRef.current) break;
+                            retakeText += chunk.text;
+                          }
+                        } catch (retakeErr) {
+                          console.warn('[RoadAcceptance] model redraw failed:', retakeErr);
+                          return null;
                         }
-                      }
+                        const draft = parseRoadRetakeResponse(retakeText);
+                        if (!draft) return null;
 
-                      currentRoadLines = recheck.lines;
-                      currentTake = recheck.report;
-                      committedTake = currentTake;
-                      linesToPlot = [...otherLines, ...currentRoadLines];
-                      lastRoadTakeReviewRef.current = currentTake;
-                      setRoadTakeReview(currentTake);
-                      logActionToFieldbook(formatRoadTakeSummary(currentTake));
-                      for (const repair of currentTake.repairs) {
-                        logActionToFieldbook(`  • ${repair}`);
-                      }
-                      if (currentTake.remaining.length > 0) {
-                        logActionToFieldbook(`  ! Take still needs a redraw: ${currentTake.remaining.slice(0, 5).join(' | ')}`);
-                      }
+                        const retakeLines: SurveyLine[] = [];
+                        for (const expanded of expandChainsToLines(
+                          draft.chains as DrafterChain[],
+                          pointNumber => {
+                            const point = pointLookup.get(String(pointNumber));
+                            return point ? { easting: point.easting, northing: point.northing } : undefined;
+                          },
+                        )) {
+                          const fromPoint = pointLookup.get(expanded.from);
+                          const toPoint = pointLookup.get(expanded.to);
+                          if (!fromPoint || !toPoint) continue;
+                          retakeLines.push({
+                            ...expanded,
+                            fromPt: { x: fromPoint.easting, y: fromPoint.northing, z: fromPoint.elevation || 0 },
+                            toPt: { x: toPoint.easting, y: toPoint.northing, z: toPoint.elevation || 0 },
+                          });
+                        }
+
+                        draft.lines.forEach((line, index) => {
+                          const from = line.fromPt
+                            ? { x: line.fromPt.x, y: line.fromPt.y, z: 0 }
+                            : (() => {
+                                const point = line.from ? pointLookup.get(String(line.from)) : undefined;
+                                return point ? { x: point.easting, y: point.northing, z: point.elevation || 0 } : null;
+                              })();
+                          const to = line.toPt
+                            ? { x: line.toPt.x, y: line.toPt.y, z: 0 }
+                            : (() => {
+                                const point = line.to ? pointLookup.get(String(line.to)) : undefined;
+                                return point ? { x: point.easting, y: point.northing, z: point.elevation || 0 } : null;
+                              })();
+                          if (!from || !to) return;
+                          retakeLines.push({
+                            id: `road-acceptance-${index}`,
+                            from: line.from || `ACC-${index}`,
+                            to: line.to || `ACC-${index + 1}`,
+                            fromPt: from,
+                            toPt: to,
+                            layer: line.layer || initialRoadLines[0]?.layer || 'L-ROAD',
+                            lineType: line.lineType || 'CONTINUOUS',
+                            polylineId: line.polylineId || `road-acceptance-${index}`,
+                          });
+                        });
+
+                        return retakeLines.length >= 2 ? retakeLines : null;
+                      },
+                      onTurn: (turnRecord, turnVerdict) => {
+                        const failed = turnVerdict.gates
+                          .filter(gate => gate.applicable && !gate.passed && gate.severity === 'red')
+                          .map(gate => gate.id);
+                        logActionToFieldbook(
+                          `Road acceptance turn ${turnRecord.turn}/${MAX_ROAD_TURNS} — `
+                          + `${turnRecord.gatesPassed}/${turnRecord.gatesApplicable} gates · `
+                          + `${turnRecord.coveragePct.toFixed(0)}% coverage · `
+                          + `${turnRecord.widthDriftFt !== null ? `${turnRecord.widthDriftFt.toFixed(1)} ft width` : 'width unchanged'} · `
+                          + `${turnRecord.verdict === 'pass' ? 'PASS' : turnRecord.verdict === 'no_geometry' ? 'NO GEOMETRY' : `REJECT (${failed.slice(0, 3).join(', ')})`}`,
+                        );
+                      },
+                    });
+
+                    linesToPlot = [...otherLines, ...result.lines];
+                    committedTake = result.report;
+                    lastRoadTakeReviewRef.current = result.report;
+                    setRoadTakeReview(result.report);
+                    setRoadAcceptance(result);
+                    lastGimbalInspectionRef.current = null;
+                    setGimbalRoadInspection({
+                      status: result.verdict.acceptable ? 'pass' : 'issues',
+                      acceptable: result.verdict.acceptable,
+                      score: result.verdict.score,
+                      targetCorridors: passOneMath.corridors.length,
+                      inspectedCorridors: passOneMath.corridors.length,
+                      coveragePct: result.verdict.coveragePct,
+                      widthDriftFt: result.verdict.widthDriftFt,
+                      defects: result.remainingDefects.map(defect => defect.detail),
+                      notes: result.turns.map(turn => `${turn.turn}. ${turn.source} · ${turn.gatesPassed}/${turn.gatesApplicable} gates · ${turn.score}%`),
+                      summary: result.verdict.summary,
+                    });
+
+                    const record = buildRoadAcceptanceRecord({
+                      result,
+                      model: passOneMath,
+                      agent: agent === AgentType.ROADING_AGENT ? 'ROADING_AGENT' : 'CIVIL_DRAFTER',
+                      requestText: query,
+                      widthDecision: result.widthDecision,
+                    });
+                    setRoadAcceptanceRecords(prev => pruneRoadAcceptanceRecords([...prev, record]));
+
+                    logActionToFieldbook(formatRoadTakeSummary(result.report));
+                    for (const repair of result.report.repairs) {
+                      logActionToFieldbook(`  • ${repair}`);
                     }
+                    logActionToFieldbook(
+                      result.verified
+                        ? `Road accepted after ${result.turnsUsed} turn${result.turnsUsed === 1 ? '' : 's'} — ${result.verdict.passedCount}/${result.verdict.applicableCount} gates, ${result.verdict.coveragePct.toFixed(0)}% coverage.`
+                        : `Road committed UNVERIFIED after ${result.turnsUsed} turn${result.turnsUsed === 1 ? '' : 's'} — ${result.remainingDefects.length} red gate${result.remainingDefects.length === 1 ? '' : 's'} remain: ${result.remainingDefects.slice(0, 3).map(defect => defect.detail).join(' | ')}`,
+                    );
+                  } catch (acceptanceErr) {
+                    console.warn('[RoadAcceptance] loop failed:', acceptanceErr);
+                    logActionToFieldbook('  ! Road acceptance loop failed — keeping the audited take for review.');
                   } finally {
                     setIsLoading(false);
                   }
@@ -24057,6 +24767,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     return {
       key,
       title: 'Point workflow',
+      ownerAgent: AgentType.POINT_EDITOR,
       attention,
       progressLabel: snapshot.progressLabel,
       summary,
@@ -24115,6 +24826,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     return {
       key,
       title: 'Underlay workflow',
+      ownerAgent: AgentType.CAD_MANAGER,
       attention,
       progressLabel: snapshot.progressLabel,
       summary,
@@ -24136,6 +24848,65 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     rasterUnderlayWorkflowPanelSeen,
     rasterUnderlayWorkflowSnapshot,
     rasterUnderlayWorkflowStarted,
+  ]);
+
+  const gimbalVisionThought = useMemo<WorkflowQuickThoughtNotice | undefined>(() => {
+    if (activeAgent !== AgentType.CIVIL_DRAFTER || !showVisionHUD) return undefined;
+    const hasSomethingToShow = Boolean(settings.debugGimbalHud)
+      || synthesisQa?.status === 'corrected'
+      || (roadTakeReview?.featuresAudited ?? 0) > 0
+      || isGimbalInspecting
+      || (gimbalDraftSurvey?.frames.length ?? 0) > 0
+      || Boolean(roadAcceptance)
+      || (civilDrafterVisionSurvey?.frames.length ?? 0) > 0;
+    if (!hasSomethingToShow) return undefined;
+
+    const frameCount = (civilDrafterVisionSurvey?.frames.length ?? 0) + (gimbalDraftSurvey?.frames.length ?? 0);
+    const attention: WorkflowQuickThoughtNotice['attention'] = isVisionScanning || isGimbalInspecting
+      ? 'active'
+      : roadAcceptance?.verified
+        ? 'complete'
+        : 'active';
+    const summary = isVisionScanning
+      ? 'Surveyors Eye is capturing the visual survey. Open the A2UI panel to watch the frames land.'
+      : isGimbalInspecting
+        ? 'Surveyors Eye is inspecting the drafted road. Open the A2UI panel to review pass-2 frames and gates.'
+        : `${frameCount} Surveyors Eye frame${frameCount === 1 ? '' : 's'} and the road evidence are ready in the A2UI panel.`;
+    const key = `gimbal:${isVisionScanning ? 'scan' : isGimbalInspecting ? 'inspect' : 'ready'}:${frameCount}:${roadAcceptance?.verdict.score ?? ''}`;
+    const hasGeneration =
+      isVisionScanning ||
+      isGimbalInspecting ||
+      frameCount > 0 ||
+      Boolean(roadAcceptance);
+    return {
+      key,
+      title: 'Surveyors Eye',
+      ownerAgent: AgentType.CIVIL_DRAFTER,
+      surface: hasGeneration ? 'surveyors-eye' : undefined,
+      attention,
+      progressLabel: isVisionScanning ? 'SCANNING' : isGimbalInspecting ? 'PASS 2' : `${frameCount} FRAMES`,
+      summary,
+      steps: [
+        { id: 'survey', label: 'Visual survey frames', status: frameCount > 0 ? 'complete' : isVisionScanning ? 'current' : 'pending' },
+        { id: 'inspection', label: 'Road model + pass-2 inspection', status: gimbalDraftSurvey ? 'complete' : isGimbalInspecting ? 'current' : 'pending' },
+        { id: 'acceptance', label: 'Road acceptance gates', status: roadAcceptance ? 'complete' : 'pending' },
+      ],
+      actionLabel: 'Open Surveyors Eye',
+      onAction: openGimbalVisionSurface,
+      onDismiss: () => setShowVisionHUD(false),
+    };
+  }, [
+    activeAgent,
+    civilDrafterVisionSurvey?.frames.length,
+    gimbalDraftSurvey?.frames.length,
+    isGimbalInspecting,
+    isVisionScanning,
+    openGimbalVisionSurface,
+    roadAcceptance,
+    roadTakeReview?.featuresAudited,
+    settings.debugGimbalHud,
+    showVisionHUD,
+    synthesisQa?.status,
   ]);
 
   /** Duplicate check shared by the A2UI point-entry surface and CACP numbering. */
@@ -24217,6 +24988,27 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }) => {
     handleStartLivePointPlacement(options);
   }, [handleStartLivePointPlacement]);
+
+  /**
+   * Switch to the canvas and resolve the next snapped pick for an A2UI point
+   * input. Resolves null when the pick is cancelled or the canvas is gone.
+   */
+  const handlePickCanvasPointFromA2UI = useCallback((): Promise<{ northing: number; easting: number; pointNumber?: string } | null> => {
+    showView('canvas');
+    return new Promise(resolve => {
+      window.setTimeout(() => {
+        const canvas = canvas2dRef.current;
+        if (!canvas?.startCoordinatePick) {
+          resolve(null);
+          return;
+        }
+        canvas.startCoordinatePick(
+          coordinates => resolve(coordinates),
+          () => resolve(null),
+        );
+      }, 0);
+    });
+  }, [showView]);
 
   const handleStartDivideSelection = useCallback(() => {
     canvas2dRef.current?.beginSelectionMode?.();
@@ -24806,12 +25598,27 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         return;
     }
     try {
+        let dxfOptions = options;
+        if (options.includePointStyleNames) {
+            const resolver = createPointStyleResolver(pointStudioState);
+            const listIdByPointNumber = new Map<string, string>();
+            for (const list of pointLists) {
+                for (const p of list.points) listIdByPointNumber.set(p.pointNumber, list.id);
+            }
+            const styleNameById = new Map(pointStudioState.styles.map(style => [style.id, style.name]));
+            const pointStyleNames: Record<string, string> = {};
+            for (const p of points) {
+                const resolved = resolver.resolve(p, listIdByPointNumber.get(p.pointNumber));
+                pointStyleNames[p.pointNumber] = styleNameById.get(resolved.styleId) ?? resolved.styleId;
+            }
+            dxfOptions = { ...options, pointStyleNames };
+        }
         const dxfContent = generateDxf(
             points,
             visibleLines,
             contourLabels,
             visibleCenterlines,
-            options,
+            dxfOptions,
             settings,
             customSymbols,
             parcelLabels,
@@ -24830,7 +25637,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setError(`DXF Export Error: ${errorMessage}`);
     }
     setIsDxfExportModalOpen(false);
-  }, [points, visibleLines, visibleCenterlines, settings, customSymbols, contourLabels, parcelLabels, parcelLabelFormatter, parcelCadTextStyles, annotationCategories, dimensions, hatches, cadManagerState.standard?.hatches, agentAnnotMode]);
+  }, [points, visibleLines, visibleCenterlines, settings, customSymbols, contourLabels, parcelLabels, parcelLabelFormatter, parcelCadTextStyles, annotationCategories, dimensions, hatches, cadManagerState.standard?.hatches, agentAnnotMode, pointStudioState, pointLists]);
 
 
    const handleExportPoints = useCallback((format: 'csv' | 'txt_comma' | 'txt_space') => {
@@ -24871,8 +25678,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setIsSessionSaveModalOpen(true);
   }, [isSessionActive]);
 
-  const handleSaveSession = useCallback(async (saveOptions?: SessionSaveOptions) => {
-    if (!isSessionActive) return;
+  const handleSaveSession = useCallback(async (saveOptions?: SessionSaveOptions): Promise<boolean> => {
+    if (!isSessionActive) return false;
 
     const savedAt = new Date().toISOString();
     const sessionCadManagerState = buildCadManagerSessionState(cadManagerContext.state, savedAt);
@@ -24887,6 +25694,25 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
     );
 
+    // Choose the destination before building the archive. The File System
+    // Access picker must be opened directly from the click that started the
+    // save, and browsers without it fall back to the download path below.
+    let targetHandle: NativeSaveFileHandle | null = null;
+    let targetName = suggestedName;
+    try {
+      const picked = await pickSessionFileHandle(suggestedName);
+      if (picked.status === 'canceled') return false;
+      if (picked.status === 'picked') {
+        targetHandle = picked.handle;
+        targetName = picked.handle.name || suggestedName;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not open the save dialog.';
+      console.error('[handleSaveSession] Save dialog failed:', err);
+      setError(`Save Error: ${message}`);
+      return false;
+    }
+
     // FIX: Update session version and include gisFile, gisChatHistory and contouringChatHistory to match the updated SessionState type. Also add profileChatHistory.
     const sessionState: Omit<SessionState, 'fileManagerChatHistory' | 'textEditorChatHistory'> = {
         version: APP_VERSION,
@@ -24894,7 +25720,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         sessionMetadata: {
             author: saveOptions?.author?.trim() || undefined,
             note: saveOptions?.note?.trim() || undefined,
-            exportFileName: suggestedName,
+            exportFileName: targetName,
             exportedByAgent: activeAgent,
             includeTimestampInName: Boolean(saveOptions?.includeTimestampInName),
             includeJobNumberInName: Boolean(saveOptions?.includeJobNumberInName),
@@ -24925,6 +25751,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         steepSlopeRuns: steepSlopeRuns.length > 0 ? steepSlopeRuns : undefined,
         inclusionBoundaries,
         activeInclusionBoundaryId,
+        aoiBoundaries,
+        activeAoiBoundaryId,
         floodFirmette: floodFirmetteData ?? null,
         contourGenerations: contourGenerations.length > 0 ? contourGenerations : undefined,
         generationBlocks: generationBlocks.length > 0 ? generationBlocks : undefined,
@@ -24959,6 +25787,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         structuresChatHistory: structuresChatHistory.length > 0 ? structuresChatHistory : undefined,
         roadingChatHistory: roadingChatHistory.length > 0 ? roadingChatHistory : undefined,
         roadCorridors: roadCorridors.length > 0 ? roadCorridors : undefined,
+        roadObjects: roadLinkRegistry.list().length > 0 ? [...roadLinkRegistry.list()] : undefined,
+        roadAcceptanceRecords: roadAcceptanceRecords.length > 0 ? roadAcceptanceRecords : undefined,
         redlineChatHistory: redlineChatHistory.length > 0 ? redlineChatHistory : undefined,
         redlineRuns: redlineRuns.length > 0 ? redlineRuns : undefined,
         standardsComplianceChatHistory,
@@ -25045,31 +25875,67 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
         // Use utility to create ZIP
         const blob = await createSessionZip(sessionState, filesToInclude);
-        
-        triggerDownload(blob, suggestedName);
+
+        if (targetHandle) {
+            await writeBlobToFileHandle(targetHandle, blob);
+        } else {
+            triggerDownload(blob, suggestedName);
+        }
         setIsSessionSaveModalOpen(false);
+        return true;
 
     } catch (err) {
+        if (isFileSaveCanceled(err)) return false;
         const errorMessage = err instanceof Error ? err.message : 'Failed to create session file.';
         console.error('[handleSaveSession] Failed to save .lsvz session file:', err);
         setError(`Save Error: ${errorMessage}`);
+        return false;
     }
   }, [
     isSessionActive, settings, rawFile, deedFile, planFiles, dxfFile, clFile, imageFiles, gisFile, generatedFiles, jobInfo, rawChatHistory, deedChatHistory, civilDrafterChatHistory, dxfChatHistory, stationingChatHistory, 
     pointEditorChatHistory, fieldbookLog, gpsStakeoutChatHistory, lsvzChatHistory, planExpertChatHistory, imageAnalyzerChatHistory, gisChatHistory, contouringChatHistory, steepSlopeChatHistory, profileChatHistory, fieldbookNotes,
     pointLists, lines, contourLabels, centerlines, wmsServices, activeWmsLayers, offlineMapAreas, cutSheetData, cutSheetInfo, activeAgent, activeModel,
     activeVisualPanel, pdfViewerFiles, highlights, customSymbols, closureReports, boundaryFiles,
-    inclusionBoundaries, activeInclusionBoundaryId, floodFirmetteData, contourGenerations, generationBlocks, streetLabels,
+    inclusionBoundaries, activeInclusionBoundaryId, aoiBoundaries, activeAoiBoundaryId, floodFirmetteData, contourGenerations, generationBlocks, streetLabels,
     isVisualPanelFullscreen, attributeScale, pointLayers, activeTextEditorFile, isChatPanelVisible, linesVisible, centerlinesVisible,
     profileData, profileInfo, APP_VERSION, lineLabelScale, draftingStyleLibrary,
     soilMapUnits, soilsChatHistory, standardsComplianceChatHistory, standardsComplianceControlFile,
     standardsComplianceSubjectFile, standardsComplianceSourceMode, standardsComplianceChecks, standardsComplianceLastReport,
-    redlineRuns, redlineChatHistory,
+    redlineRuns, redlineChatHistory, roadAcceptanceRecords,
     cadManagerContext.state, deedBatchJob, activeTrackedWorkflow, pointWorkflowStarted, pointWorkflowPanelSeen,
     dismissedPointWorkflowKey, rasterUnderlayWorkflowStarted, rasterUnderlayWorkflowPanelSeen,
     dismissedRasterUnderlayWorkflowKey,
     setIsSessionSaveModalOpen
   ]);
+
+  const startNewProject = useCallback(() => {
+    setIsNewProjectPromptOpen(false);
+    setIsSavingBeforeNewProject(false);
+    setIsSessionSaveModalOpen(false);
+    handleReset();
+  }, [handleReset]);
+
+  const handleRequestNewProject = useCallback(() => {
+    if (!isSessionActive) {
+      startNewProject();
+      return;
+    }
+    setIsNewProjectPromptOpen(true);
+  }, [isSessionActive, startNewProject]);
+
+  const handleSaveAndStartNewProject = useCallback(async () => {
+    setIsSavingBeforeNewProject(true);
+    try {
+      const saved = await handleSaveSession();
+      if (saved) startNewProject();
+    } finally {
+      setIsSavingBeforeNewProject(false);
+    }
+  }, [handleSaveSession, startNewProject]);
+
+  const handleStartNewProjectWithoutSaving = useCallback(() => {
+    startNewProject();
+  }, [startNewProject]);
 
   // FUTURE GEMINI: This `handleLoadSession` function is CRITICAL. It unpacks a `.lsvz` file and restores the application state.
   // It includes logic for migrating older session file versions. If you change the `SessionState` interface,
@@ -25185,6 +26051,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 }
                 setInclusionBoundaries(sessionState.inclusionBoundaries || []);
                 setActiveInclusionBoundaryId(sessionState.activeInclusionBoundaryId ?? null);
+                setAoiBoundaries(sessionState.aoiBoundaries || []);
+                setActiveAoiBoundaryId(sessionState.activeAoiBoundaryId ?? null);
                 if (sessionState.floodFirmette) {
                   setFloodFirmetteData(sessionState.floodFirmette);
                 }
@@ -25253,6 +26121,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 setStructuresChatHistory(needsMigration ? (sessionState.structuresChatHistory || []).map(migrateMessage) : sessionState.structuresChatHistory || []);
                 setRoadingChatHistory(needsMigration ? (sessionState.roadingChatHistory || []).map(migrateMessage) : sessionState.roadingChatHistory || []);
                 setRoadCorridors(sessionState.roadCorridors || []);
+                roadLinkRegistry.hydrate(sessionState.roadObjects || []);
+                if ((sessionState.roadObjects?.length ?? 0) === 0 && experimentalRoadingEnabled) {
+                  roadLinkRegistry.adoptLegacyRoadModels(
+                    sessionState.roadCorridors || [],
+                    sessionState.centerlines || [],
+                  );
+                }
+                const loadedAcceptanceRecords = sessionState.roadAcceptanceRecords || [];
+                setRoadAcceptanceRecords(loadedAcceptanceRecords);
+                if (loadedAcceptanceRecords.length > 0) {
+                  setRoadAcceptance(acceptanceResultFromRecord(loadedAcceptanceRecords[loadedAcceptanceRecords.length - 1]));
+                  setShowVisionHUD(true);
+                }
                 setRedlineRuns(sessionState.redlineRuns || []);
                 setActiveRedlineRunId(sessionState.redlineRuns?.[sessionState.redlineRuns.length - 1]?.id ?? null);
                 setRedlineChatHistory(needsMigration ? (sessionState.redlineChatHistory || []).map(migrateMessage) : sessionState.redlineChatHistory || []);
@@ -25471,6 +26352,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             });
         });
 
+        const linkedRoadObjectId = roadLinkRegistry.getByBaseline(cl.id)?.id;
         const totalLength = calculateCenterlineLength(cl);
         const stationInterval = Math.max(1, Number(settings.stationing?.pointInterval) || 100);
         // CACP: collect stations first, batch-issue PNs from PointAgent so the
@@ -25489,12 +26371,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         clAgent.setAvailablePoints(pointLists.flatMap(l => l.points));
         const clNumbers = clAgent.getNextNumbers(clStations.length);
         clStations.forEach((entry, idx) => {
+            const description = `CL STA ${formatStation(entry.station)}`;
+            const association = createCenterlineStationPointAssociation(cl, entry.station, 0, {
+                roadObjectId: linkedRoadObjectId,
+                label: description,
+            });
             newPoints.push({
                 pointNumber: clNumbers[idx],
                 northing: entry.coords.northing,
                 easting: entry.coords.easting,
                 elevation: 0,
-                description: `CL STA ${formatStation(entry.station)}`,
+                description,
+                parametricAssociation: association,
             });
         });
         
@@ -26454,7 +27342,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   ]);
 
   const renderWorkspaceTool = useCallback(
-    (toolId: A2UIWorkspaceToolId): React.ReactNode => {
+    (toolId: A2UIWorkspaceToolId, presentation?: 'inline' | 'floating' | 'docked', a2uiPayload?: A2UIPayload): React.ReactNode => {
       switch (toolId) {
         case 'symbol-manager':
           return (
@@ -26743,6 +27631,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               No legal description generated yet. Open the Boundary Editor and click &ldquo;Write Legal&rdquo;.
             </div>
           );
+        case 'surveyors-eye':
+          return <GimbalVisionA2UISurface presentation={presentation} />;
+        case 'area-of-interest':
+          return <A2UIAoiSurface presentation={presentation} />;
         case 'legend':
           return (
             <A2UILegendStudio
@@ -26777,6 +27669,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               pendingNotes={pendingSheetNotes}
               onPendingNotesConsumed={() => setPendingSheetNotes(null)}
               soilLimitationsNotes={soilLimitationsSheetNotes}
+              command={sheetViewCommands[0] ?? null}
+              onCommandConsumed={handleSheetViewCommandConsumed}
+              onStateChange={handleSheetViewStateChange}
+            />
+          );
+        case 'point-studio':
+          return (
+            <PointStudioSurface
+              state={pointStudioState}
+              pointLists={pointLists}
+              a2uiSpec={a2uiPayload?.pointStudio}
+              onChange={next => setSettings(prev => ({ ...prev, pointStudio: next }))}
             />
           );
         case 'point-tools':
@@ -26863,6 +27767,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               projectName={jobInfo?.jobName}
             />
           );
+        case 'road-links':
+          return <RoadLinksSurface />;
         case 'roading-panel':
           return (
             <div className="p-3">
@@ -26905,12 +27811,30 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           );
         case 'redline-workspace':
           return renderRedlineWorkspace();
+        case 'draw-menu':
+          return (
+            <A2UIDrawMenu
+              onRunCommand={runCanvasCommand}
+              onOpenStationingControls={openStationingControlsSurface}
+              onOpenHatchManager={() => showView('hatchmanager')}
+            />
+          );
+        case 'command-help':
+          return (
+            <A2UICommandHelp
+              groups={a2uiPayload?.commandHelp?.groups ?? HELP_GROUPS}
+              onRunCommand={runCanvasCommand}
+            />
+          );
         default:
           return null;
       }
     },
     [
       renderRedlineWorkspace,
+      runCanvasCommand,
+      openStationingControlsSurface,
+      showView,
       agentDrawMode,
       setAgentDrawMode,
       setSettings,
@@ -26919,6 +27843,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       handleUpdateSymbol,
       handleDeleteSymbol,
       settings,
+      pointStudioState,
+      openPointStudioSurface,
       enabledBuiltinSymbolIds,
       applySymbolVisibilityCommand,
       isC3DConnected,
@@ -27143,6 +28069,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     gpsPosition: currentPosition
       ? { latitude: currentPosition.coords.latitude, longitude: currentPosition.coords.longitude }
       : null,
+    onGpsFixDetected: fix => setProjectionGpsFix(fix),
     onRetryCacpItem: retryCacpReviewItem,
     onInspectCacpAgent: openCacpManifestSurface,
     onPointsUploaded: handlePointsUploaded,
@@ -27173,6 +28100,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     getNextPointNumber: getNextPointNumberFromSurface,
     isPointNumberTaken: isPointNumberTakenFromSurface,
     onStartPointPlacement: handleStartPointPlacementFromA2UI,
+    onPickCanvasPoint: handlePickCanvasPointFromA2UI,
     convertLatLon,
     plusCodeReference,
     onRawFileUploaded: handleFileUploaded,
@@ -27185,6 +28113,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     onOpenBoundaryGis: handleOpenBoundaryGis,
     boundaryDeedSummary: deedSummary,
     boundaryDeedFiles: boundaryFiles,
+    aoiBoundaries,
+    activeAoiBoundaryId,
+    onStartAoiDraw: handleStartAoiDraw,
+    onSetActiveAoi: setActiveAoiBoundaryId,
+    onDeleteAoi: handleDeleteAoi,
+    onCreateAoiFromInclusion: handleCreateAoiFromInclusion,
+    onCreateAoiFromBoundaryFile: handleCreateAoiFromBoundaryFile,
+    onCreateAoiFromAddress: handleCreateAoiFromAddress,
     boundaryComputingTractIds: Array.from(computingTractIds),
     boundaryActiveFileId: activeBoundaryFileId,
     onBoundaryProcessTracts: (tractIds, summarySnapshot) => {
@@ -27467,6 +28403,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     getNextPointNumberFromSurface,
     isPointNumberTakenFromSurface,
     handleStartPointPlacementFromA2UI,
+    handlePickCanvasPointFromA2UI,
     convertLatLon,
     plusCodeReference,
     handleFileUploaded,
@@ -27940,6 +28877,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         geminiKey: settings.userApiKey || undefined,
         mapsKey: settings.googleMaps?.apiKey || undefined,
       }}
+      onOpenPointStudio={openPointStudioSurface}
       onDraft={async (prompt, images) => {
         pendingAutoDraftImagesRef.current = images ?? [];
         await handleSendMessage(prompt, AgentType.CIVIL_DRAFTER);
@@ -28741,27 +29679,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         icon: <SparklesIcon className="w-3.5 h-3.5 text-cyan-400" />,
         content: (
           <div className="flex h-full min-h-0 flex-col">
-            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/[0.06] px-3 py-1.5">
-              <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-slate-500">
-                Docked surface
-              </span>
-              <div className="flex items-center gap-1.5">
-                {dockedA2UIMessage && (
-                  <DockModeControl
-                    mode="toolshelf"
-                    onChange={next => handleSetA2UIDockMode(dockedA2UIMessage, next)}
-                  />
-                )}
-                <button
-                  type="button"
-                  onClick={() => handleA2UIFullscreen(dockedA2UIPayload)}
-                  className="rounded border border-cyan-500/30 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400/60 hover:bg-cyan-500/10"
-                >
-                  Fullscreen
-                </button>
-              </div>
-            </div>
-            <div className={dockedA2UIPayload.kind === 'cad-manager' ? 'min-h-0 flex-1 overflow-hidden' : 'min-h-0 flex-1 overflow-y-auto px-3 pb-3'}>
+            <div className={dockedA2UIPayload.kind === 'cad-manager' ? 'min-h-0 flex-1 overflow-hidden' : 'min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3'}>
               <A2UISurface
                 payload={dockedA2UIPayload}
                 presentation="docked"
@@ -28770,6 +29688,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             </div>
           </div>
         ),
+        headerActions: dockedA2UIMessage ? (
+          <DockModeControl
+            mode="toolshelf"
+            onChange={next => handleSetA2UIDockMode(dockedA2UIMessage, next)}
+          />
+        ) : undefined,
+        onFullscreen: () => handleA2UIFullscreen(dockedA2UIPayload),
         isDocked: true,
         dockMode: 'toolshelf',
         onDock: () => setIsToolShelfVisible(true),
@@ -28813,7 +29738,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           onUndock: () => setBoundaryAlignmentDockMode('floating'),
         }]
       : []),
-    ...(activeAgent === AgentType.DEED_READER && isBoundaryEditorVisible && boundaryFiles.length > 0
+    ...(activeAgent === AgentType.DEED_READER && isBoundaryEditorVisible && (boundaryFiles.length > 0 || Boolean(deedFile))
       ? [{
           id: 'boundary-deed',
           title: 'Deed Draft',
@@ -29125,7 +30050,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           setActiveBoundaryDockedTab('dialog');
           setIsToolShelfVisible(true);
         }}
-        className={`${boundaryFiles.length === 0 ? 'hidden' : ''} black-hole-btn ${
+        className={`${boundaryFiles.length === 0 && !deedFile ? 'hidden' : ''} black-hole-btn ${
           !isBoundaryDialogDocked
             ? 'black-hole-btn--cyan'
             : (!isBoundaryDialogMinimized && isBoundaryEditorVisible)
@@ -29200,6 +30125,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           <NotificationScopeMarker />
           {!isInitialScreen && <Sidebar 
             isSessionActive={isSessionActive}
+            onNewProject={handleRequestNewProject}
             onSaveSession={handleOpenSaveSessionModal}
             onLoadSession={handleLoadSession}
             hasPdfFiles={(planFiles && planFiles.length > 0) || !!deedFile?.fileData}
@@ -29466,18 +30392,21 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                 </button>
                             </div>
                             {activeVisualPanel !== 'canvas' && (
-                                <button onClick={() => showView('canvas')} className="p-2 rounded-full hover:bg-gray-700 transition-colors animate-pulse" title="Return to Canvas"><MonitorIcon className="h-[18px] w-[18px] text-cyan-400"/></button>
+                                <button
+                                    onClick={() => showView('canvas')}
+                                    className="p-2 rounded-full bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-500/40 hover:bg-cyan-500/20 transition-colors animate-pulse"
+                                    title="Return to Canvas Workspace"
+                                    aria-label="Return to Canvas Workspace"
+                                >
+                                    <MonitorIcon className="h-[18px] w-[18px]"/>
+                                </button>
                             )}
-                            <button 
-                                onClick={() => showView(activeVisualPanel === 'sheetview' ? 'canvas' : 'sheetview')} 
-                                className={`p-2 rounded-full transition-all ${
-                                    activeVisualPanel === 'sheetview' 
-                                        ? 'bg-amber-600/30 text-amber-300 hover:bg-amber-600/50 ring-1 ring-amber-500/70 shadow-[0_0_12px_rgba(245,158,11,0.3)]' 
-                                        : 'hover:bg-gray-700 text-gray-300 hover:text-amber-400'
-                                }`} 
-                                title={activeVisualPanel === 'sheetview' ? "Return to Canvas Workspace" : "Open Sheet View (24x36 Paperspace Plot Layout)"}
+                            <button
+                                onClick={() => showView(activeVisualPanel === 'sheetview' ? 'canvas' : 'sheetview')}
+                                className="p-2 rounded-full text-slate-300 hover:bg-gray-700 hover:text-cyan-300 transition-colors"
+                                title={activeVisualPanel === 'sheetview' ? "Return to Canvas Workspace" : "Open Sheet View"}
                             >
-                                <SheetViewIcon className="h-[18px] w-[18px] text-amber-400"/>
+                                <SheetViewIcon className="h-[18px] w-[18px]"/>
                             </button>
                             
                             
@@ -29608,6 +30537,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         data-testid="toolbar-address-lookup"
                                     >
                                         Address
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setIsLayerPanelOpen(false);
+                                            openAoiSurface();
+                                        }}
+                                        className={`p-2 rounded-full transition-colors text-xs font-medium ${activeAoiBoundaryId ? 'bg-cyan-600 text-white hover:bg-cyan-700' : 'text-gray-300 hover:bg-gray-700'}`}
+                                        title={activeAoiBoundaryId ? 'AOI — an Area of Interest is held; open the AOI chips' : 'AOI — define and hold an Area of Interest for clipping and Surveyors Eye'}
+                                        aria-label="Open Area of Interest menu"
+                                        data-testid="toolbar-aoi"
+                                    >
+                                        AOI
                                     </button>
                                     <button onClick={() => undo()} disabled={!canUndo} className={`p-2 rounded-full transition-colors ${canUndo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canUndo && undoLabel ? `Undo: ${undoLabel} (Ctrl+Z or U)` : 'Nothing to undo'}><UndoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
                                     <button onClick={() => redo()} disabled={!canRedo} className={`p-2 rounded-full transition-colors ${canRedo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canRedo && redoLabel ? `Redo: ${redoLabel} (Ctrl+Y)` : 'Nothing to redo'}><RedoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
@@ -29754,7 +30695,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 }
                                                 : undefined
                                         }
-                                        workflowThought={pointWorkflowThought ?? rasterUnderlayWorkflowThought}
+                                        workflowThought={gimbalVisionThought ?? pointWorkflowThought ?? rasterUnderlayWorkflowThought}
                                         keyInfo={{
                                             label: activeKeyStatusLabel,
                                             detail: activeKeyStatusDetail,
@@ -29788,6 +30729,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         enabledBuiltinSymbolIds={enabledBuiltinSymbolIds}
                                         tinSurfaces={activeAgent === AgentType.STEEP_SLOPE_AGENT ? steepSlopeTinSurfaces : tinSurfaces}
                                         pointLayers={pointLayers} 
+                                        pointStudio={pointStudioState}
                                         onLayerToggle={handleLayerToggle}
                                         onLayerColorChange={handleLayerColorChange}
                                         attributeScale={attributeScale}
@@ -29815,9 +30757,29 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onAddLine={handleAddLine}
                                         onDeleteLine={handleDeleteLine}
                                         onDeletePoints={(pointNumbers) => pointNumbers.forEach(pn => handleDeletePoint(pn))}
-                                        onDeleteCenterline={(centerlineId) => setCenterlines(prev => prev.filter(cl => cl.id !== centerlineId))}
+                                        onDeleteCenterline={(centerlineId) => {
+                                          const guard = roadLinkRegistry.assertBaselineDeletable(centerlineId);
+                                          if (!guard.allowed) {
+                                            openA2UISurface({
+                                              key: 'road-links',
+                                              definitionId: 'workspace-road-links',
+                                              title: 'Road Links',
+                                              subtitle: 'Baseline is linked to a road object',
+                                              category: 'workspace',
+                                              accent: 'amber',
+                                              size: settings.a2ui?.defaultSize ?? 'standard',
+                                              source: 'workspace:road-links',
+                                              content: <RoadLinksSurface initialRoadObjectId={guard.roadObject?.id} focus="broken" />,
+                                            });
+                                            return;
+                                          }
+                                          setCenterlines(prev => prev.filter(cl => cl.id !== centerlineId));
+                                        }}
                                         onUpsertCenterline={handleUpsertCenterline}
                                         onOpenStationingSettings={openStationingControlsSurface}
+                                        onDockDrawingMenu={openDrawMenuSurface}
+                                        onDockCommandHelp={openCommandHelpSurface}
+                                        onCanvasCommandRunnerReady={handleCanvasCommandRunnerReady}
                                         onOpenCenterlineTools={openCenterlineTools}
                                         onBatchLinesChange={handleBatchLines}
                                         canUndo={canUndo}
@@ -30115,20 +31077,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 : undefined
                                         }
                                     />
-                                    {/* Civil Drafter Gimbal Vision HUD � debug-only (Settings ? Developer/Testing) */}
-                                    {activeAgent === AgentType.CIVIL_DRAFTER && showVisionHUD && (!!settings.debugGimbalHud || synthesisQa?.status === 'corrected' || (roadTakeReview?.featuresAudited ?? 0) > 0 || isGimbalInspecting || (gimbalDraftSurvey?.frames.length ?? 0) > 0) && (
-                                        <CivilDrafterVisionHUD
-                                            isScanning={isVisionScanning}
-                                            qa={synthesisQa}
-                                            roadReview={roadTakeReview}
-                                            mathModel={gimbalRoadModel}
-                                            gimbalInspection={gimbalRoadInspection}
-                                            inspectionSurvey={gimbalDraftSurvey}
-                                            isInspecting={isGimbalInspecting}
-                                            survey={civilDrafterVisionSurvey}
-                                            onDismiss={() => setShowVisionHUD(false)}
-                                        />
-                                    )}
                                     {/* Civil Drafter Auto Draft panel */}
                                     {activeAgent === AgentType.CIVIL_DRAFTER && showAutoDraftPanel && getToolDockMode('autoDraft') === 'floating' && (
                                         <AutoDraftPanel
@@ -30363,7 +31311,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                     })()}
                                     {/* Boundary Editor overlay � shown when there are boundary files */}
                                     {/* Boundary Editor: Render floating ONLY when explicitly popped out */}
-                                    {isBoundaryEditorVisible && boundaryFiles.length > 0 && boundaryDockMode === 'floating' && (
+                                    {isBoundaryEditorVisible && (boundaryFiles.length > 0 || Boolean(deedFile)) && boundaryDockMode === 'floating' && (
                                         renderBoundaryEditor('floating')
                                     )}
                                     {isBoundaryAlignmentOpen && activeBoundaryFile && boundaryAlignmentDockMode === 'floating' && (
@@ -30598,6 +31546,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                       pendingNotes={pendingSheetNotes}
                                       onPendingNotesConsumed={() => setPendingSheetNotes(null)}
                                       soilLimitationsNotes={soilLimitationsSheetNotes}
+                                      command={sheetViewCommands[0] ?? null}
+                                      onCommandConsumed={handleSheetViewCommandConsumed}
+                                      onStateChange={handleSheetViewStateChange}
                                     />
                                 ) : activeVisualPanel === 'draftstylelib' ? (
                                     <DraftingStyleLibrary
@@ -30838,7 +31789,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 isBoundaryEditorVisible &&
                                                 isBoundaryDialogDocked &&
                                                 !isBoundaryDialogMinimized &&
-                                                boundaryFiles.length > 0;
+                                                (boundaryFiles.length > 0 || Boolean(deedFile));
                                             const isParcelPanelShowing =
                                                 isParcelPanelVisible &&
                                                 isParcelPanelDocked &&
@@ -30868,7 +31819,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                             isBoundaryEditorVisible &&
                                                             isBoundaryDialogDocked &&
                                                             !isBoundaryDialogMinimized &&
-                                                            boundaryFiles.length > 0;
+                                                            (boundaryFiles.length > 0 || Boolean(deedFile));
 
                                                         if (!isBoundaryDialogDocked) {
                                                             setIsBoundaryDialogDocked(true);
@@ -30886,7 +31837,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                             setActiveBoundaryDockedTab('dialog');
                                                         }
                                                     }}
-                                                    className={`${boundaryFiles.length === 0 ? 'hidden' : ''} black-hole-btn ${
+                                                    className={`${boundaryFiles.length === 0 && !deedFile ? 'hidden' : ''} black-hole-btn ${
                                                         !isBoundaryDialogDocked
                                                             ? 'black-hole-btn--cyan'
                                                             : (!isBoundaryDialogMinimized && isBoundaryEditorVisible && (activeBoundaryDockedTab === 'dialog' || !isParcelPanelVisible || isParcelPanelMinimized || !isParcelPanelDocked))
@@ -30975,10 +31926,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             )}
           </main>
           
-          {isSettingsVisible && <Suspense fallback={<LoadingFallback />}><SettingsPage settings={settings} onSettingsChange={setSettings} onClose={() => { setIsSettingsVisible(false); setPulseApiKey(false); }} onReset={handleReset} activeAgent={activeAgent} activeModel={activeModel} availableModels={visibleAvailableModels} onModelChange={handleModelChange} jobInfo={jobInfo} onJobInfoChange={setJobInfo} pulseProjection={pulseProjection} pulseApiKey={pulseApiKey} onApiKeySubmit={handleSettingsApiKeySubmit} onProviderKeySubmit={handleProviderKeySubmit} isSuperUser={isSuperUser} hasApiKey={hasApiKey} projectBboxWgs84={getInclusionBboxWgs84(activeInclusionBoundaryId)} gpsPosition={currentPosition ? { latitude: currentPosition.coords.latitude, longitude: currentPosition.coords.longitude } : null} autoHighThinkingModel={autoHighThinkingModel} autoHighThinkingOptions={visibleAutoHighThinkingOptions} onAutoHighThinkingModelChange={(model) => {
+          {isSettingsVisible && <Suspense fallback={<LoadingFallback />}><SettingsPage settings={settings} onSettingsChange={setSettings} onGpsFixDetected={setProjectionGpsFix} onOpenPointStudio={() => { setIsSettingsVisible(false); openPointStudioSurface(); }} onClose={() => { setIsSettingsVisible(false); setPulseApiKey(false); }} onReset={handleReset} activeAgent={activeAgent} activeModel={activeModel} availableModels={visibleAvailableModels} onModelChange={handleModelChange} jobInfo={jobInfo} onJobInfoChange={setJobInfo} pulseProjection={pulseProjection} pulseApiKey={pulseApiKey} onApiKeySubmit={handleSettingsApiKeySubmit} onProviderKeySubmit={handleProviderKeySubmit} isSuperUser={isSuperUser} hasApiKey={hasApiKey} projectBboxWgs84={getInclusionBboxWgs84(activeInclusionBoundaryId)} gpsPosition={currentPosition ? { latitude: currentPosition.coords.latitude, longitude: currentPosition.coords.longitude } : null} autoHighThinkingModel={autoHighThinkingModel} autoHighThinkingOptions={visibleAutoHighThinkingOptions} onAutoHighThinkingModelChange={(model) => {
             if (!confirmFableSelection(model)) return;
             setAutoHighThinkingModel(model);
           }} onTriggerHostCostReminder={() => setShowHostCostReminder(true)} /></Suspense>}
+
+          <A2UIDecisionInspector
+            enabled={settings.debugA2UIDecisionInspector === true}
+            onDisable={() => setSettings(prev => ({ ...prev, debugA2UIDecisionInspector: false }))}
+          />
 
           {/* LandSurv Claw: live browser-tool status (Zoning Agent only; backend-dependent, hidden in OSS build) */}
           {!isOssBuild() && <ClawStatusBadge visible={activeAgent === AgentType.ZONING_AGENT} />}
@@ -31201,27 +32157,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               title={A2UI_DOCK_TITLES[floatingA2UIMessage.a2ui.widgetType] || 'Tool'}
               dockMode="floating"
               onDockModeChange={next => handleSetA2UIDockMode(floatingA2UIMessage, next)}
-              onClose={handleReturnA2UIToChat}
+              onClose={
+                floatingA2UIMessage.a2ui.widgetType === 'area-of-interest'
+                  ? handleCloseAoiFloat
+                  : handleReturnA2UIToChat
+              }
               initialX={typeof window !== 'undefined' ? Math.max(24, window.innerWidth / 2 - 380) : 80}
               initialY={72}
               width={floatingA2UIMessage.a2ui.kind === 'cad-manager' ? 'min(1180px, 96vw)' : 'min(760px, 94vw)'}
               maxHeight="90vh"
               accentBorder="border-cyan-500/40"
+              onFullscreen={() => floatingA2UIMessage.a2ui && handleA2UIFullscreen(floatingA2UIMessage.a2ui)}
             >
-              <div className="mb-2 flex items-center justify-between gap-2 border-b border-white/[0.06] pb-2">
-                <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-slate-500">
-                  Floating surface
-                </span>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => floatingA2UIMessage.a2ui && handleA2UIFullscreen(floatingA2UIMessage.a2ui)}
-                    className="rounded border border-cyan-500/30 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 transition-colors hover:border-cyan-400/60 hover:bg-cyan-500/10"
-                  >
-                    Fullscreen
-                  </button>
-                </div>
-              </div>
               <A2UISurface
                 payload={floatingA2UIMessage.a2ui}
                 presentation="floating"
@@ -31995,6 +32942,52 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             loadBaseline={loadSyncBaseline}
             saveBaseline={saveSyncBaseline}
           />
+
+          {!showWelcome && isNewProjectPromptOpen && (
+            <div
+              className="fixed inset-0 z-[9990] flex items-center justify-center bg-gray-900/80 p-4 backdrop-blur-sm animate-fade-in"
+              onClick={() => { if (!isSavingBeforeNewProject) setIsNewProjectPromptOpen(false); }}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="new-project-title"
+                className="w-full max-w-md rounded-lg border border-cyan-500/40 bg-gray-800 p-6 shadow-2xl animate-modal-panel-fade-in-down light-theme:border-cyan-300 light-theme:bg-white"
+                onClick={event => event.stopPropagation()}
+              >
+                <h2 id="new-project-title" className="text-xl font-bold text-cyan-300">Start a new project?</h2>
+                <p className="mt-3 text-sm text-gray-300 light-theme:text-gray-600">
+                  Do you want to save this project before starting a new one?
+                </p>
+                <div className="mt-6 flex flex-wrap justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsNewProjectPromptOpen(false)}
+                    disabled={isSavingBeforeNewProject}
+                    className="rounded-md bg-gray-600 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStartNewProjectWithoutSaving}
+                    disabled={isSavingBeforeNewProject}
+                    className="rounded-md bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    New Without Saving
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveAndStartNewProject()}
+                    disabled={isSavingBeforeNewProject}
+                    className="rounded-md bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isSavingBeforeNewProject ? 'Saving…' : 'Save & New'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {confirmationModal && (
             <div className="fixed inset-0 bg-gray-900/80 z-50 flex items-center justify-center p-4 animate-fade-in">

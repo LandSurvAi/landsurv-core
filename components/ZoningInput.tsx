@@ -6,7 +6,11 @@ import { knowledgeBase } from '../services/KnowledgeBase';
 import { useAppState } from '../contexts/AppStateContext.tsx';
 import { A2UIEmbeddedContext } from './UploadShell.tsx';
 import { A2UIHostContext } from './A2UISurface.tsx';
-import { projectLocationZoningSeed } from '../utils/zoningJurisdiction.ts';
+import {
+  projectLocationZoningSeed,
+  resolveProjectLocationZoningSeed,
+  type ProjectZoningSeed,
+} from '../utils/zoningJurisdiction.ts';
 
 interface ZoningInputProps {
   onZoningSearch: (searchData: ZoningSearchData) => void;
@@ -86,66 +90,111 @@ const ZoningInput: React.FC<ZoningInputProps> = ({ onZoningSearch, onGoBack, bac
     return () => window.clearInterval(id);
   }, [countyList.loading, muniList.loading]);
   // --- Auto-prefill on mount from existing project data --------------------
-  // Priority: 1) live project-location cluster (reverse geocoded), 2) JobInfo,
-  // 3) KnowledgeBase parcel.gis facts. GPS is opt-in because it prompts.
+  // Priority: 1) live project-location cluster or drawn AOI (reverse geocoded),
+  // 2) JobInfo, 3) KnowledgeBase parcel.gis facts. GPS is opt-in because it prompts.
   useEffect(() => {
     if (state || county || municipality) return; // user already typed something
-    let filled = false;
-    let source: 'projectLocation' | 'jobInfo' | 'knowledgeBase' | null = null;
+    let cancelled = false;
+    const applySeed = (seed: ProjectZoningSeed) => {
+      if (seed.state) setState(prev => prev || seed.state);
+      if (seed.county) setCounty(prev => prev || seed.county);
+      if (seed.municipality) setMunicipality(prev => prev || seed.municipality);
+    };
 
-    const projectSeed = projectLocationZoningSeed(host.getProjectLocationSnapshot?.());
-    if (projectSeed) {
-      if (projectSeed.state) { setState(projectSeed.state); filled = true; }
-      if (projectSeed.county) { setCounty(projectSeed.county); filled = true; }
-      if (projectSeed.municipality) { setMunicipality(projectSeed.municipality); filled = true; }
-      if (filled) source = 'projectLocation';
-    }
+    const hydrate = async () => {
+      let filled = false;
+      let source: 'projectLocation' | 'jobInfo' | 'knowledgeBase' | null = null;
+      const snapshot = host.getProjectLocationSnapshot?.();
 
-    if (jobInfo) {
-      if (!projectSeed?.municipality && jobInfo.siteMunicipality) { setMunicipality(jobInfo.siteMunicipality); filled = true; }
-      if (jobInfo.zoningDistrict)   { setZoningDistrict(jobInfo.zoningDistrict); filled = true; }
-      if (jobInfo.desiredUse)       { setDesiredUse(jobInfo.desiredUse); filled = true; }
-      // siteAddress sometimes contains ", <County> County, <State>" — best-effort parse.
-      if (!projectSeed?.county && jobInfo.siteAddress) {
-        const addr = jobInfo.siteAddress;
-        const m = addr.match(/,\s*([A-Za-z .'-]+?)\s+County\s*,\s*([A-Za-z ]+?)(?:\s+\d{5})?\s*$/i);
-        if (m) {
-          setCounty(m[1].trim()); filled = true;
-          if (!projectSeed?.state) setState(stateNameOf(m[2].trim()));
+      let projectSeed = projectLocationZoningSeed(snapshot);
+      const needsAoiFill = !projectSeed || !projectSeed.county || !projectSeed.municipality;
+      if (snapshot?.inclusionArea && needsAoiFill) {
+        setPrefilling(true);
+        try {
+          projectSeed = await resolveProjectLocationZoningSeed(snapshot, reverseGeocodeUs);
+        } catch { /* AOI lookup is best-effort; manual entry remains available */ }
+        finally {
+          if (!cancelled) setPrefilling(false);
         }
+        if (cancelled) return;
       }
-      if (filled && !source) source = 'jobInfo';
-    }
+      if (projectSeed) {
+        applySeed(projectSeed);
+        filled = Boolean(projectSeed.state || projectSeed.county || projectSeed.municipality);
+        if (filled) source = 'projectLocation';
+      }
 
-    if (!filled) {
-      // Try the project KnowledgeBase — parcel.gis facts often carry jurisdiction info.
-      try {
-        const kb = knowledgeBase.queryFacts({ category: ['parcel.gis', 'deed.metadata', 'project'], limit: 100 });
-        const find = (pred: string) => kb.find(f => f.predicate.toLowerCase() === pred.toLowerCase());
-        const m = find('municipality') || find('city') || find('place');
-        const c = find('county');
-        const s = find('state');
-        if (m && typeof m.value === 'string') { setMunicipality(m.value); filled = true; }
-        if (c && typeof c.value === 'string') { setCounty(c.value); filled = true; }
-        if (s && typeof s.value === 'string') { setState(stateNameOf(s.value)); filled = true; }
-        if (filled) source = 'knowledgeBase';
-      } catch { /* ignore */ }
-    }
+      if (jobInfo) {
+        if (!projectSeed?.municipality && jobInfo.siteMunicipality) {
+          setMunicipality(prev => prev || jobInfo.siteMunicipality!);
+          filled = true;
+        }
+        if (jobInfo.zoningDistrict) { setZoningDistrict(prev => prev || jobInfo.zoningDistrict!); filled = true; }
+        if (jobInfo.desiredUse) { setDesiredUse(prev => prev || jobInfo.desiredUse!); filled = true; }
+        // siteAddress sometimes contains ", <County> County, <State>" — best-effort parse.
+        if (!projectSeed?.county && jobInfo.siteAddress) {
+          const addr = jobInfo.siteAddress;
+          const m = addr.match(/,\s*([A-Za-z .'-]+?)\s+County\s*,\s*([A-Za-z ]+?)(?:\s+\d{5})?\s*$/i);
+          if (m) {
+            setCounty(prev => prev || m[1].trim());
+            filled = true;
+            if (!projectSeed?.state) setState(prev => prev || stateNameOf(m[2].trim()));
+          }
+        }
+        if (filled && !source) source = 'jobInfo';
+      }
 
-    if (source) setPrefillSource(source);
+      if (!filled) {
+        // Try the project KnowledgeBase — parcel.gis facts often carry jurisdiction info.
+        try {
+          const kb = knowledgeBase.queryFacts({ category: ['parcel.gis', 'deed.metadata', 'project'], limit: 100 });
+          const find = (pred: string) => kb.find(f => f.predicate.toLowerCase() === pred.toLowerCase());
+          const m = find('municipality') || find('city') || find('place');
+          const c = find('county');
+          const s = find('state');
+          if (m && typeof m.value === 'string') { setMunicipality(prev => prev || m.value as string); filled = true; }
+          if (c && typeof c.value === 'string') { setCounty(prev => prev || c.value as string); filled = true; }
+          if (s && typeof s.value === 'string') { setState(prev => prev || stateNameOf(s.value as string)); filled = true; }
+          if (filled) source = 'knowledgeBase';
+        } catch { /* ignore */ }
+      }
+
+      if (source && !cancelled) setPrefillSource(source);
+    };
+
+    void hydrate();
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleUseProjectLocation = () => {
-    const seed = projectLocationZoningSeed(host.getProjectLocationSnapshot?.());
-    if (!seed) {
-      notifyError('No project location is available yet. Load georeferenced survey points or use GPS.');
+  const handleUseProjectLocation = async () => {
+    const snapshot = host.getProjectLocationSnapshot?.();
+    const seed = projectLocationZoningSeed(snapshot);
+    if (!snapshot?.inclusionArea) {
+      if (!seed) {
+        notifyError('No project location or AOI is available yet. Draw an inclusion boundary, load georeferenced survey points, or use GPS.');
+        return;
+      }
+      if (seed.state) setState(seed.state);
+      if (seed.county) setCounty(seed.county);
+      if (seed.municipality) setMunicipality(seed.municipality);
+      setPrefillSource('projectLocation');
       return;
     }
-    if (seed.state) setState(seed.state);
-    if (seed.county) setCounty(seed.county);
-    if (seed.municipality) setMunicipality(seed.municipality);
-    setPrefillSource('projectLocation');
+
+    setPrefilling(true);
+    try {
+      const resolved = await resolveProjectLocationZoningSeed(snapshot, reverseGeocodeUs) ?? seed;
+      if (!resolved) throw new Error('The project AOI could not be matched to a US jurisdiction.');
+      if (resolved.state) setState(resolved.state);
+      if (resolved.county) setCounty(resolved.county);
+      if (resolved.municipality) setMunicipality(resolved.municipality);
+      setPrefillSource('projectLocation');
+    } catch (e: any) {
+      notifyError(`Could not resolve the project AOI: ${String(e?.message || e)}`);
+    } finally {
+      setPrefilling(false);
+    }
   };
 
   const handleUseMyLocation = async () => {
@@ -284,7 +333,7 @@ const ZoningInput: React.FC<ZoningInputProps> = ({ onZoningSearch, onGoBack, bac
           )}
         </div>
         <p className="text-[11px] text-gray-500 -mt-3">
-          Reads the project’s georeferenced location first; GPS is an optional fallback. Every field remains editable below.
+          Reads the project’s georeferenced points or drawn AOI first; GPS is an optional fallback. Every field remains editable below.
         </p>
 
         {/* Jurisdiction — required */}

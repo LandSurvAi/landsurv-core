@@ -27,6 +27,18 @@ import {
 import { fetchEsriJson, getServiceInfo, reprojectBbox } from './esriRestClient.ts';
 import { ESRI_STATE_SERVICES } from '../utils/esriStateServices.ts';
 import { USGS_CONTOUR_WFS_SERVICE_URL } from '../utils/usgsNationalContours.ts';
+import {
+  candidateGroundingDecision,
+  clearScoutGroundingCache,
+  resolveScoutJurisdiction,
+  SCOUT_GROUNDING_VERSION,
+  type ScoutGroundingDecision,
+} from '../utils/scoutGrounding.ts';
+import type {
+  ScoutCandidateAudit,
+  ScoutJurisdictionResolution,
+  ScoutRejectReason,
+} from '../types.ts';
 
 export type GisLayerKind = 'contours' | 'parcels' | 'flood' | 'soils' | 'custom';
 
@@ -51,6 +63,11 @@ export interface GisResolvedSource {
   verified: boolean;
   portal?: string;
   notes?: string;
+  /** Jurisdiction when the candidate declares one (curated/state layers). */
+  state?: string;
+  county?: string;
+  /** Service extent in WGS84, used for the neighbor-clip rule. */
+  extent?: [number, number, number, number];
 }
 
 export interface GisResolutionAttempt {
@@ -60,6 +77,8 @@ export interface GisResolutionAttempt {
   ok: boolean;
   message: string;
   featureCount?: number;
+  decision?: ScoutCandidateAudit['decision'];
+  reason?: ScoutRejectReason;
 }
 
 export interface GisResolution {
@@ -73,6 +92,15 @@ export interface GisResolution {
   cached: boolean;
   resolvedAt: number;
   warnings: string[];
+  /** The jurisdiction Scout grounded this run to. */
+  jurisdiction?: ScoutJurisdictionResolution;
+  /** Accepted and rejected candidates, preserved for the audit panel. */
+  candidates?: ScoutCandidateAudit[];
+  /** Present when the AOI touches multiple states and the caller requires a choice. */
+  needsJurisdiction?: {
+    options: Array<{ state: string; county?: string; label: string; reason: string }>;
+  };
+  groundingVersion?: number;
 }
 
 export interface GisActivityEvent {
@@ -82,6 +110,9 @@ export interface GisActivityEvent {
   message: string;
   url?: string;
   level?: 'info' | 'success' | 'warn' | 'error';
+  kind?: 'start' | 'jurisdiction' | 'agol' | 'portal' | 'probe' | 'verified' | 'rejected' | 'cache' | 'error' | 'done';
+  candidateId?: string;
+  reason?: ScoutRejectReason;
 }
 
 export interface ResolveGisOptions {
@@ -103,6 +134,12 @@ export interface ResolveGisOptions {
   limit?: number;
   /** Ignore the cache and probe everything again. */
   force?: boolean;
+  /** Explicit jurisdiction chosen by the user in Quick Thought. */
+  jurisdiction?: { state: string; county?: string };
+  /** Project identity used for the grounding cache. */
+  projectKey?: string;
+  /** Return needs_jurisdiction instead of crawling when the AOI is ambiguous. */
+  requireJurisdiction?: boolean;
   /** Live activity stream for the A2UI Scout surface. */
   onActivity?: (event: GisActivityEvent) => void;
   /** Abort Scout discovery without throwing away already-running verification. */
@@ -309,6 +346,7 @@ function buildBuiltInCandidates(
         provider: stateEntry!.abbr === 'PA' ? 'pasda' : 'state',
         verified: false,
         portal: stateEntry!.portalUrl,
+        state: stateEntry!.abbr,
         notes: layer.notes ?? layer.attribution,
       });
     }
@@ -327,6 +365,7 @@ function parcelDefToSource(def: ParcelGisServiceDef): GisResolvedSource {
     verified: false,
     portal: def.state === 'PA' ? PASDA_PORTAL_URL : undefined,
     notes: def.region,
+    state: def.state,
   };
 }
 
@@ -349,11 +388,12 @@ function agolQueries(kind: GisLayerKind, county?: string, stateName?: string, qu
     .replace(/\bcounty\b/gi, '')
     .replace(/["\\]/g, '')
     .trim();
+  const statePhrase = stateName
+    ? `"${stateName.replace(/["\\]/g, '')}"`
+    : '';
   const locality = countyKey
-    ? `"${countyKey} County"`
-    : stateName
-      ? `"${stateName.replace(/["\\]/g, '')}"`
-      : '';
+    ? `"${countyKey} County"${statePhrase ? ` AND ${statePhrase}` : ''}`
+    : statePhrase;
   const topic = String(query ?? '').trim().replace(/["\\]/g, ' ').replace(/\s+/g, ' ');
 
   // A free-form topic is the search intent. Do not append the old kind
@@ -482,9 +522,12 @@ async function discoverAgolCandidates(
       if (!item.url || !/arcgis|FeatureServer|MapServer/i.test(item.url)) continue;
       if (seen.has(url.toLowerCase())) continue;
 
-      if (item.extent?.[0] && item.extent?.[1]) {
-        const [ixmin, iymin] = item.extent[0];
-        const [ixmax, iymax] = item.extent[1];
+      const extent: [number, number, number, number] | undefined = item.extent?.[0] && item.extent?.[1]
+        ? [item.extent[0][0], item.extent[0][1], item.extent[1][0], item.extent[1][1]]
+        : undefined;
+
+      if (extent) {
+        const [ixmin, iymin, ixmax, iymax] = extent;
         const outside =
           ixmax < xmin - pad || ixmin > xmax + pad ||
           iymax < ymin - pad || iymin > ymax + pad;
@@ -504,6 +547,7 @@ async function discoverAgolCandidates(
         provider: 'agol',
         verified: false,
         portal: 'https://www.arcgis.com/',
+        extent,
         notes: [item.owner, countyKey && title.toLowerCase().includes(countyKey) ? 'county-name match' : '']
           .filter(Boolean).join(' · ') || undefined,
       });
@@ -515,7 +559,7 @@ async function discoverAgolCandidates(
 
 // ─── Playwright Scout ────────────────────────────────────────────────────────
 
-const SCOUT_BASE = '/api/scout';
+const SCOUT_BASE = '/api/scout/v2';
 
 function scoutSessionId(): string {
   try {
@@ -532,6 +576,9 @@ interface ScoutCandidate {
   provider?: string;
   portal?: string;
   notes?: string;
+  state?: string;
+  county?: string;
+  extent?: [number, number, number, number];
 }
 
 function allowedProvider(value: unknown): GisSourceProvider {
@@ -635,6 +682,9 @@ async function discoverWithScout(
         verified: false,
         portal: c.portal,
         notes: c.notes,
+        state: c.state,
+        county: c.county,
+        extent: c.extent,
       }));
     return { candidates };
   } catch (error) {
@@ -905,7 +955,7 @@ function scoreSource(source: GisResolvedSource, county?: string, query?: string)
   return score;
 }
 
-const CACHE_KEY = 'landsurv.gisResolver.v3';
+const CACHE_KEY = 'landsurv.gisResolver.v4';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface CacheEntry {
@@ -942,10 +992,12 @@ export function clearGisResolutionCache(): void {
       // Drop the pre-fallback caches too: they may contain layers that only
       // passed the old geometry check (watershed rings for streams, roads as
       // contours, warrants as parcels).
+      localStorage.removeItem('landsurv.gisResolver.v3');
       localStorage.removeItem('landsurv.gisResolver.v2');
       localStorage.removeItem('landsurv.gisResolver.v1');
     }
   } catch { /* ignore */ }
+  clearScoutGroundingCache();
 }
 
 function cacheKey(opts: ResolveGisOptions): string {
@@ -955,7 +1007,29 @@ function cacheKey(opts: ResolveGisOptions): string {
   const abbr = normalizeStateAbbr(opts.state) ?? '';
   const county = String(opts.county ?? '').replace(/[^a-z]/gi, '').toLowerCase();
   const query = String(opts.query ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  return `${opts.kind}|${query}|${abbr}|${county}|${cx},${cy}`;
+  return `v${SCOUT_GROUNDING_VERSION}|${opts.kind}|${query}|${abbr}|${county}|${cx},${cy}`;
+}
+
+/** Turn a resolved source + grounding decision into an audit record. */
+function toCandidateAudit(
+  source: GisResolvedSource,
+  decision: ScoutGroundingDecision,
+): ScoutCandidateAudit {
+  return {
+    id: source.id,
+    label: source.label,
+    url: source.url,
+    provider: source.provider,
+    kind: source.kind,
+    jurisdiction: { state: source.state, county: source.county },
+    extent: source.extent,
+    geometryType: source.geometryType,
+    featureCount: source.featureCount,
+    verified: source.verified,
+    decision: decision.decision,
+    reason: decision.reason,
+    message: decision.message,
+  };
 }
 
 // ─── Main entry point ────────────────────────────────────────────────────────
@@ -968,7 +1042,43 @@ export async function resolveGisServices(opts: ResolveGisOptions): Promise<GisRe
     throw new Error('A valid WGS84 bounding box is required to resolve a GIS service.');
   }
 
-  const key = cacheKey(opts);
+  const grounding = await resolveScoutJurisdiction(bbox, {
+    state: opts.state,
+    county: opts.county,
+    explicit: opts.jurisdiction,
+    projectKey: opts.projectKey,
+    signal: opts.signal,
+  });
+  const abbr = grounding.resolution.stateAbbr
+    ?? normalizeStateAbbr(grounding.resolution.state)
+    ?? (isLikelyPennsylvania(bbox) ? 'PA' : undefined);
+  const county = (grounding.resolution.county ?? opts.county?.trim()) || undefined;
+  const pasdaAvailable = abbr === 'PA';
+
+  if (grounding.ambiguous && opts.requireJurisdiction && !opts.jurisdiction) {
+    emitActivity(
+      opts,
+      'jurisdiction',
+      'This footprint touches more than one state — pick a jurisdiction before searching.',
+      { level: 'warn' },
+    );
+    return {
+      kind: opts.kind,
+      bboxWgs84: bbox,
+      sources: [],
+      attempts: [],
+      pasdaAvailable,
+      cached: false,
+      resolvedAt: Date.now(),
+      warnings: ['Scout needs a jurisdiction before it can search this footprint.'],
+      jurisdiction: grounding.resolution,
+      candidates: [],
+      needsJurisdiction: { options: grounding.options },
+      groundingVersion: SCOUT_GROUNDING_VERSION,
+    };
+  }
+
+  const key = cacheKey({ ...opts, state: abbr, county });
   if (!opts.force) {
     const cached = readCache()[key];
     if (cached && Date.now() - cached.at < CACHE_TTL_MS && cached.resolution.sources.length > 0) {
@@ -978,9 +1088,6 @@ export async function resolveGisServices(opts: ResolveGisOptions): Promise<GisRe
     }
   }
 
-  const abbr = normalizeStateAbbr(opts.state) ?? (isLikelyPennsylvania(bbox) ? 'PA' : undefined);
-  const county = opts.county?.trim() || undefined;
-  const pasdaAvailable = abbr === 'PA' || (!abbr && isLikelyPennsylvania(bbox));
   emitActivity(
     opts,
     'start',
@@ -1033,6 +1140,20 @@ export async function resolveGisServices(opts: ResolveGisOptions): Promise<GisRe
           cached: false,
           resolvedAt: Date.now(),
           warnings: [],
+          jurisdiction: grounding.resolution,
+          candidates: pasdaChecks.map((entry): ScoutCandidateAudit => {
+            const decision = candidateGroundingDecision(entry.source, grounding.resolution, bbox);
+            return {
+              ...toCandidateAudit(entry.source, decision),
+              geometryType: entry.source.geometryType,
+              featureCount: entry.source.featureCount,
+              verified: entry.source.verified,
+              message: entry.attempt.message,
+              decision: entry.source.verified ? decision.decision : 'rejected',
+              reason: entry.source.verified ? decision.reason : 'zero_features',
+            };
+          }),
+          groundingVersion: SCOUT_GROUNDING_VERSION,
         };
         const cache = readCache();
         for (const [entryKey, entry] of Object.entries(cache)) {
@@ -1102,8 +1223,28 @@ export async function resolveGisServices(opts: ResolveGisOptions): Promise<GisRe
     log('[GisResolver] scout discovery', { kind: opts.kind, found: scout.candidates.length, portals });
   }
 
+  // Ground every candidate before spending a probe on it. Federal layers are
+  // admitted on AOI coverage; local layers must match the grounded state or
+  // actually clip the AOI (the riverfront/neighbor rule).
+  const candidateDecisions = new Map<string, ScoutGroundingDecision>();
+  const rejectedSources: Array<{ source: GisResolvedSource; decision: ScoutGroundingDecision }> = [];
+  const admissible: GisResolvedSource[] = [];
+  for (const source of candidates.values()) {
+    const decision = candidateGroundingDecision(source, grounding.resolution, bbox);
+    candidateDecisions.set(source.url.toLowerCase(), decision);
+    if (decision.decision === 'rejected') {
+      rejectedSources.push({ source, decision });
+      emitActivity(opts, 'rejected', `${source.label}: ${decision.message}`, {
+        level: 'warn',
+        url: source.url,
+      });
+    } else {
+      admissible.push(source);
+    }
+  }
+
   // Verify in a stable order: built-ins first (PASDA), then everything else.
-  const ordered = Array.from(candidates.values())
+  const ordered = admissible
     .sort((a, b) => scoreSource(b, county, opts.query) - scoreSource(a, county, opts.query))
     .slice(0, Math.max(1, Math.min(opts.limit ?? 10, 16)));
 
@@ -1143,6 +1284,24 @@ export async function resolveGisServices(opts: ResolveGisOptions): Promise<GisRe
   const liveUrls = new Set(liveAttempts.map(attempt => attempt.url?.toLowerCase()).filter(Boolean));
   const remainingQueued = attempts.filter(attempt => !liveUrls.has(attempt.url?.toLowerCase()));
 
+  const audited: ScoutCandidateAudit[] = [
+    ...rejectedSources.map(({ source, decision }) => toCandidateAudit(source, decision)),
+    ...verified.map(entry => {
+      const decision = candidateDecisions.get(entry.source.url.toLowerCase())
+        ?? candidateGroundingDecision(entry.source, grounding.resolution, bbox);
+      const base = toCandidateAudit(entry.source, decision);
+      return {
+        ...base,
+        geometryType: entry.source.geometryType,
+        featureCount: entry.source.featureCount,
+        verified: entry.source.verified,
+        decision: entry.source.verified ? base.decision : 'rejected',
+        reason: entry.source.verified ? base.reason : 'zero_features',
+        message: entry.attempt.message,
+      } satisfies ScoutCandidateAudit;
+    }),
+  ];
+
   const sources = verified
     .map(entry => entry.source)
     .filter(source => source.verified)
@@ -1174,6 +1333,9 @@ export async function resolveGisServices(opts: ResolveGisOptions): Promise<GisRe
     cached: false,
     resolvedAt: Date.now(),
     warnings,
+    jurisdiction: grounding.resolution,
+    candidates: audited,
+    groundingVersion: SCOUT_GROUNDING_VERSION,
   };
 
   if (sources.some(source => source.verified)) {

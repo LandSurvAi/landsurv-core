@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useMemo, useState, useSyncExternalStore } from 'react';
-import { ArrowRight, CheckCircle2, ListChecks } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Crosshair, ListChecks } from 'lucide-react';
 import type { A2UIInputFormSpec } from '../types.ts';
 import {
   buildA2UIInputInitialValues,
@@ -7,17 +7,25 @@ import {
   validateA2UIInputValues,
 } from '../utils/a2uiInputForm.ts';
 import { isSurfaceNameField, projectInputChoices } from '../services/projectInputChoices.ts';
+import {
+  applyA2UIPointPickResult,
+  describeA2UIPointPickResult,
+  findA2UIPointPickTargets,
+  type A2UIPointPickResult,
+} from '../utils/a2uiPointPick.ts';
 
 interface A2UIInputFormProps {
   form: A2UIInputFormSpec;
   /** Send the completed values back to the agent that requested them. */
   onSubmit?: (message: string) => void;
+  /** Pick a snapped point/coordinate from the canvas for this form. */
+  onPickCanvasPoint?: () => Promise<A2UIPointPickResult | null>;
 }
 
 const inputClass =
   'w-full rounded-md border border-white/[0.1] bg-[#060d17] px-2.5 py-1.5 text-[11.5px] text-slate-100 placeholder:text-slate-600 outline-none transition-colors focus:border-cyan-400/50 focus:ring-1 focus:ring-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-60';
 
-export const A2UIInputForm: React.FC<A2UIInputFormProps> = ({ form, onSubmit }) => {
+export const A2UIInputForm: React.FC<A2UIInputFormProps> = ({ form, onSubmit, onPickCanvasPoint }) => {
   const formId = useId();
   const surfaceNames = useSyncExternalStore(
     projectInputChoices.subscribe,
@@ -25,21 +33,47 @@ export const A2UIInputForm: React.FC<A2UIInputFormProps> = ({ form, onSubmit }) 
     projectInputChoices.getSnapshot,
   ).surfaceNames;
   const initialValues = useMemo(() => buildA2UIInputInitialValues(form), [form]);
+  const pointPickTargets = useMemo(() => findA2UIPointPickTargets(form), [form]);
 
   const [values, setValues] = useState<Record<string, string>>(initialValues);
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [isPickingPoint, setIsPickingPoint] = useState(false);
+  const [pointPickNotice, setPointPickNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setValues(initialValues);
     setError(null);
     setSubmitted(false);
+    setIsPickingPoint(false);
+    setPointPickNotice(null);
   }, [initialValues]);
 
   const updateValue = (id: string, value: string) => {
     setValues(previous => ({ ...previous, [id]: value }));
     setError(null);
     setSubmitted(false);
+  };
+
+  const handlePickCanvasPoint = async () => {
+    if (!onPickCanvasPoint || !pointPickTargets || isPickingPoint) return;
+    setIsPickingPoint(true);
+    setPointPickNotice(null);
+    setError(null);
+    try {
+      const pick = await onPickCanvasPoint();
+      if (!pick) {
+        setPointPickNotice('No point picked — click the canvas on a point or snap location.');
+        return;
+      }
+      setValues(previous => applyA2UIPointPickResult(pointPickTargets, previous, pick));
+      setSubmitted(false);
+      setPointPickNotice(`${describeA2UIPointPickResult(pick)} — adjust the values or pick again.`);
+    } catch {
+      setPointPickNotice('Could not read a point from the canvas.');
+    } finally {
+      setIsPickingPoint(false);
+    }
   };
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -81,6 +115,23 @@ export const A2UIInputForm: React.FC<A2UIInputFormProps> = ({ form, onSubmit }) 
 
       <form onSubmit={handleSubmit} noValidate>
         <div className="grid grid-cols-1 gap-x-3 gap-y-2.5 p-3 sm:grid-cols-2">
+          {pointPickTargets && onPickCanvasPoint && (
+            <div className="col-span-full flex flex-wrap items-center gap-2 rounded-md border border-dashed border-cyan-400/25 bg-cyan-400/[0.04] px-2.5 py-1.5">
+              <button
+                type="button"
+                data-testid="a2ui-input-pick-canvas"
+                onClick={() => void handlePickCanvasPoint()}
+                disabled={isPickingPoint}
+                className="inline-flex items-center gap-1.5 rounded-md border border-cyan-400/40 bg-cyan-400/15 px-2.5 py-1 text-[10.5px] font-semibold text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/25 disabled:cursor-wait disabled:opacity-60"
+              >
+                <Crosshair className="h-3.5 w-3.5" />
+                {isPickingPoint ? 'Click a point on the canvas…' : 'Pick point / snap on canvas'}
+              </button>
+              <p className="min-w-0 flex-1 text-[9.5px] leading-snug text-slate-400">
+                {pointPickNotice ?? 'Uses the active object snaps and fills the point fields.'}
+              </p>
+            </div>
+          )}
           {form.fields.map((field, index) => {
             const inputId = `${formId}-${field.id}`;
             const hintId = field.hint ? `${inputId}-hint` : undefined;

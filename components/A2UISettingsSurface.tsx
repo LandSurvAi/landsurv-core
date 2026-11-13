@@ -42,6 +42,8 @@ interface A2UISettingsSurfaceProps {
   projectBboxWgs84?: [number, number, number, number] | null;
   /** Latest GPS fix, for CRS suggestions. */
   gpsPosition?: { latitude: number; longitude: number } | null;
+  /** Record the fix used to detect the CRS so project location can reuse it. */
+  onGpsFixDetected?: (fix: { latitude: number; longitude: number }) => void;
 }
 
 const SECTION_META: Record<
@@ -147,6 +149,7 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
   onApplyClusterProjection,
   projectBboxWgs84,
   gpsPosition,
+  onGpsFixDetected,
 }) => {
   const settingsCtx = useContext(SettingsContext);
   const [fallbackSettings, setFallbackSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -194,6 +197,7 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
     try {
       const detected = await detectProjectionFromBrowser();
       updateSetting('projection', detected.projection);
+      onGpsFixDetected?.({ latitude: detected.latitude, longitude: detected.longitude });
       setProjectionStatus(
         `Applied ${detected.projection.zoneName ?? 'the local CRS'} (EPSG:${detected.projection.epsg ?? '—'}) from your GPS location.`,
       );

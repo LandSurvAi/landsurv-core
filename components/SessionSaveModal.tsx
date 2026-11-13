@@ -6,7 +6,7 @@ import { generateSessionFileName } from '../utils/sessionZip.ts';
 interface SessionSaveModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (options: SessionSaveOptions) => void;
+  onSave: (options: SessionSaveOptions) => void | Promise<unknown>;
   defaultFileName: string;
   defaultAuthor?: string;
   jobName?: string;
@@ -44,6 +44,7 @@ const SessionSaveModal: React.FC<SessionSaveModalProps> = ({
   associatedFiles,
 }) => {
   const [options, setOptions] = useState<SessionSaveOptions>(() => defaultOptionsFromProps(defaultFileName, defaultAuthor, jobNumber, activeAgent));
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -65,12 +66,22 @@ const SessionSaveModal: React.FC<SessionSaveModalProps> = ({
     setOptions(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const handleSaveClick = () => {
-    onSave({
+  const handleSaveClick = async () => {
+    if (isSaving) return;
+    const result = onSave({
       ...options,
       jobNumber,
       activeAgent,
     });
+    // Only take over the button state when the host actually returns a
+    // promise (the native picker/archive path). Synchronous hosts stay inert.
+    if (!result || typeof (result as PromiseLike<unknown>).then !== 'function') return;
+    setIsSaving(true);
+    try {
+      await result;
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const Checkbox = ({ id, label, description, checked, onChange }: { id: string; label: string; description: string; checked: boolean; onChange: () => void; }) => (
@@ -179,8 +190,8 @@ const SessionSaveModal: React.FC<SessionSaveModalProps> = ({
           </div>
         </main>
         <footer className="p-4 bg-gray-700/50 flex justify-end gap-3 rounded-b-lg">
-          <button onClick={onClose} className="px-4 py-2 text-sm font-semibold bg-gray-600 hover:bg-gray-500 text-white rounded-md">Cancel</button>
-          <button onClick={handleSaveClick} className="px-4 py-2 text-sm font-semibold bg-cyan-600 hover:bg-cyan-700 text-white rounded-md">Save .lsvz</button>
+          <button onClick={onClose} disabled={isSaving} className="px-4 py-2 text-sm font-semibold bg-gray-600 hover:bg-gray-500 text-white rounded-md disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
+          <button onClick={() => void handleSaveClick()} disabled={isSaving} className="px-4 py-2 text-sm font-semibold bg-cyan-600 hover:bg-cyan-700 text-white rounded-md disabled:cursor-not-allowed disabled:opacity-50">{isSaving ? 'Saving…' : 'Save .lsvz'}</button>
         </footer>
       </div>
     </div>

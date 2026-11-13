@@ -7,6 +7,7 @@ export type ChainLineMode =
   | 'baseline'
   | 'breaklines'
   | 'inclusion'
+  | 'aoi'
   | 'exclusion'
   | 'boundary-line';
 
@@ -15,6 +16,7 @@ const CHAIN_LINE_MODES: readonly string[] = [
   'baseline',
   'breaklines',
   'inclusion',
+  'aoi',
   'exclusion',
   'boundary-line',
 ];
@@ -35,6 +37,9 @@ export function chainLineSurveyType(mode: ChainLineMode): SurveyLine['type'] {
     case 'breaklines':
       return 'breakline';
     case 'inclusion':
+      // AOIs are inclusion-typed on purpose: the shared clipping engine consumes
+      // both. Their `aoi_` polyline id keeps them out of inclusion management.
+    case 'aoi':
       return 'inclusion';
     case 'exclusion':
       return 'exclusion';

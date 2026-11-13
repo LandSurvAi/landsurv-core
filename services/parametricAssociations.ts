@@ -28,6 +28,7 @@ export interface CenterlineAssociationOptions {
   id?: string;
   ownerKind?: 'road-model' | 'manual';
   ownerId?: string;
+  roadObjectId?: string;
   label?: string;
 }
 
@@ -62,6 +63,7 @@ export const createCenterlineOffsetAssociation = (
   polylinePrefix,
   ownerKind: options.ownerKind,
   ownerId: options.ownerId,
+  roadObjectId: options.roadObjectId,
   label: options.label,
   sourceSignature: centerlineGeometrySignature(cl),
 });
@@ -92,6 +94,7 @@ export const createCenterlineStationPointAssociation = (
   offsetFt,
   ownerKind: options.ownerKind,
   ownerId: options.ownerId,
+  roadObjectId: options.roadObjectId,
   label: options.label,
   sourceSignature: centerlineGeometrySignature(cl),
 });

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Maximize2 } from 'lucide-react';
 import { AgentType } from '../types.ts';
 import type { DockMode } from './DockModeControl.tsx';
 import { agentConfig } from '../constants/agents.ts';
@@ -24,6 +25,10 @@ export interface DockableToolItem {
   onDock: () => void;
   /** Callback to pop out the tool onto the canvas. */
   onUndock?: () => void;
+  /** Optional header actions for the active tool (for example placement controls). */
+  headerActions?: React.ReactNode;
+  /** Optional header action that expands the active tool to fullscreen. */
+  onFullscreen?: () => void;
 }
 
 interface AgentToolDockProps {
@@ -114,6 +119,19 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
             {toolsRowAccessories}
             {headerControls}
           </div>
+          {activeDockedItem?.headerActions}
+          {activeDockedItem?.onFullscreen && (
+            <button
+              type="button"
+              onClick={activeDockedItem.onFullscreen}
+              data-testid="agent-tool-fullscreen"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-cyan-500/10 hover:text-cyan-300"
+              title={`Open ${activeDockedItem.title} fullscreen`}
+              aria-label={`Open ${activeDockedItem.title} fullscreen`}
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}

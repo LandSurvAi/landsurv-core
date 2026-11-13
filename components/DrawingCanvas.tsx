@@ -46,6 +46,7 @@ import {
     type AnnotationTextStyle,
     type RedlineGhost,
     type GisFeature,
+    type PointMarkerStyle,
     DEFAULT_ANNOTATION_TEXT_STYLES,
 } from '../types.ts';
 import type { ParcelFeatureSummary } from '../services/parcelGisService.ts';
@@ -74,6 +75,7 @@ import { buildSymbolMatchers, resolveSymbol } from '../utils/symbolResolver.ts';
 import { findMatchingSymbol, libraryToSymbolDefinition } from '../data/surveySymbolLibrary.ts';
 import { buildAnnotationMatchers, resolveAnnotation, renderAnnotationTemplate } from '../utils/annotationResolver.ts';
 import { perBoundaryAnnotationLines, shouldRenderGlobalDeedAnnotation, bearingDistanceAnnotationHeight, boundaryReadingAngle, isBoundaryAnnotationLine, isManualBoundaryLine, createManualBoundaryPolylineId } from '../utils/boundaryAnnotations.ts';
+import { createAoiPolylineId } from '../utils/aoiBoundary.ts';
 import { fetchImageBlobViaProxy } from '../utils/corsProxy.ts';
 import { getCachedBitmap, planMapTiles, mapWithConcurrency, decodeImageCached, trackTileLoad, subscribeTileActivity, getPendingTileCount, type PlannedTile } from '../utils/mapTileCache.ts';
 import { WebGpuBasemap, GpuLineBatch, parseCssColor, isWebGpuEnabled, WEBGPU_PREF_EVENT, type BasemapLayer, type BasemapSource, type WorldQuad } from '../utils/webgpuBasemap.ts';
@@ -85,10 +87,13 @@ import { createCanvasTextAnnotation } from '../services/annotationStudio.ts';
 import {
     bucketProjectedPoints,
     createPointPrimitiveBucketBuffer,
+    getPointDotSize,
     isIntermediateCurvePoint,
     POINT_PRIMITIVE_CELL_SIZE,
+    shouldCompressPointCloud,
     shouldDrawPointPrimitives,
 } from '../utils/pointEfficiency.ts';
+import { createPointStyleResolver } from '../services/pointStyles.ts';
 import { findNearestPointInWorld, getPointSpatialIndex } from '../utils/pointSpatialIndex.ts';
 import { getStaticMap, type StaticMapRequest } from '../services/staticMapsService.ts';
 import { useCadManager } from '../contexts/CadManagerContext.tsx';
@@ -290,6 +295,13 @@ export interface DrawingCanvasHandles {
   closeDrawingToolsMenu: () => void;
   /** Arm the canvas add-point tool from the A2UI point-entry surface. */
   startPointPlacement: (options: { pointNumber?: string; elevation?: string; description?: string }) => void;
+  /** Arm the AOI boundary drawing tool from the header AOI menu. */
+  startAoiDrawing?: () => void;
+  /** Arm a one-click snapped pick for an A2UI point/coordinate input. */
+  startCoordinatePick: (
+    onPick: (coordinates: { northing: number; easting: number; pointNumber?: string }) => void,
+    onCancel?: () => void,
+  ) => void;
   /** Zoom canvas to a specific bounding box in project coordinates. */
   zoomToBbox: (minE: number, maxE: number, minN: number, maxN: number, padding?: number) => void;
   redraw: () => void;
@@ -491,6 +503,8 @@ interface DrawingCanvasProps {
     /** Force Agent test override, forwarded to the command line. */
     forcedAgent?: AgentType | null;
     settings: Settings;
+    /** Point Studio named styles, assignments, and render-only overrides. */
+    pointStudio?: import('../types.ts').PointStudioState;
     zoomTarget: SurveyPoint | null;
     onZoomComplete: () => void;
     /** Point numbers queued for deletion — rendered with a pulsing red ring so the user can verify before confirming. */
@@ -516,6 +530,12 @@ interface DrawingCanvasProps {
     onUpsertCenterline?: (centerline: Centerline) => void;
     /** Open the shared A2UI Stationing Controls surface. */
     onOpenStationingSettings?: () => void;
+    /** Dock the lightweight Draw & Edit menu as an A2UI toolshelf surface. */
+    onDockDrawingMenu?: () => void;
+    /** Dock the formatted HELP reference as an A2UI toolshelf surface. */
+    onDockCommandHelp?: (reference: CommandReference) => void;
+    /** Expose the terminal's deterministic command runner to the host. */
+    onCanvasCommandRunnerReady?: (runner: ((raw: string) => void) | null) => void;
     /** Double-click a drawn CL / BASELINE to open its alignment tools. */
     onOpenCenterlineTools?: (centerlineId: string) => void;
     /** Apply a multi-entity edit as a single undo step (used by typed CAD commands). */
@@ -1285,8 +1305,96 @@ const ContourLabelStrikeOverlay: React.FC<ContourLabelStrikeOverlayProps> = ({
     );
 };
 
+function drawPointMarker(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    marker?: PointMarkerStyle,
+): void {
+    const style = marker ?? {
+        shape: 'circle' as const,
+        sizePx: 3,
+        color: '#FFD700',
+        strokeColor: '#000000',
+        strokeWidthPx: 0.5,
+        opacity: 1,
+    };
+    const half = Math.max(0.5, style.sizePx / 2);
+    ctx.save();
+    ctx.globalAlpha = style.opacity;
+    ctx.fillStyle = style.color;
+    ctx.strokeStyle = style.strokeColor;
+    ctx.lineWidth = style.strokeWidthPx;
+    ctx.beginPath();
+    switch (style.shape) {
+        case 'dot':
+            ctx.arc(x, y, Math.max(1, half * 0.55), 0, 2 * Math.PI);
+            ctx.fill();
+            break;
+        case 'circle':
+            ctx.arc(x, y, half, 0, 2 * Math.PI);
+            ctx.fill();
+            if (style.strokeWidthPx > 0) ctx.stroke();
+            break;
+        case 'ring':
+            ctx.arc(x, y, half, 0, 2 * Math.PI);
+            if (style.strokeWidthPx > 0) ctx.stroke();
+            break;
+        case 'square':
+            ctx.rect(x - half, y - half, style.sizePx, style.sizePx);
+            ctx.fill();
+            if (style.strokeWidthPx > 0) ctx.stroke();
+            break;
+        case 'triangle':
+            ctx.moveTo(x, y - half);
+            ctx.lineTo(x - half, y + half);
+            ctx.lineTo(x + half, y + half);
+            ctx.closePath();
+            ctx.fill();
+            break;
+        case 'diamond':
+            ctx.moveTo(x, y - half);
+            ctx.lineTo(x + half, y);
+            ctx.lineTo(x, y + half);
+            ctx.lineTo(x - half, y);
+            ctx.closePath();
+            ctx.fill();
+            break;
+        case 'cross':
+            ctx.moveTo(x - half, y);
+            ctx.lineTo(x + half, y);
+            ctx.moveTo(x, y - half);
+            ctx.lineTo(x, y + half);
+            ctx.stroke();
+            break;
+        case 'x':
+            ctx.moveTo(x - half, y - half);
+            ctx.lineTo(x + half, y + half);
+            ctx.moveTo(x + half, y - half);
+            ctx.lineTo(x - half, y + half);
+            ctx.stroke();
+            break;
+        default:
+            ctx.arc(x, y, Math.max(1, half * 0.55), 0, 2 * Math.PI);
+            ctx.fill();
+            break;
+    }
+    ctx.restore();
+}
+
 export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps>((props, ref) => {
     useDocumentScrollLock(true);
+    const pointStyleResolver = useMemo(
+        () => props.pointStudio ? createPointStyleResolver(props.pointStudio) : null,
+        [props.pointStudio],
+    );
+    const pointListIdByPointNumber = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const list of props.pointLists ?? []) {
+            for (const point of list.points) map.set(point.pointNumber, list.id);
+        }
+        return map;
+    }, [props.pointLists]);
 
     const { 
         initialTransform,
@@ -1532,6 +1640,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         | 'baseline'
         | 'breaklines'
         | 'inclusion'
+        | 'aoi'
         | 'exclusion'
         | 'circle'
         | 'polygon'
@@ -1586,6 +1695,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         onCancel?: () => void;
     } | null>(null);
     const [isPickingBaselineStart, setIsPickingBaselineStart] = useState(false);
+    const coordinatePickRef = useRef<{
+        onPick: (coordinates: { northing: number; easting: number; pointNumber?: string }) => void;
+        onCancel?: () => void;
+    } | null>(null);
+    const [isPickingCoordinate, setIsPickingCoordinate] = useState(false);
     const [typedSegmentLength, setTypedSegmentLength] = useState('');
     // AutoCAD-style Arc submode for the polyline tool (A toggles on, L back off).
     const [polylineArcMode, setPolylineArcMode] = useState(false);
@@ -1861,6 +1975,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     // call gives the chain a parcel centroid, so its B&D labels read from
     // inside exactly like a drafted boundary's do.
     const boundaryLinePolylineIdRef = useRef<string | null>(null);
+    /** One AOI polyline id per drawn chain. AOI linework is inclusion-typed, so
+     *  the shared clipping engine consumes it without a second geometry path. */
+    const aoiPolylineIdRef = useRef<string | null>(null);
     // Annotation mode: controls what is shown on line labels and boundary overlay labels.
     // Lifted to App.tsx (see props) so the toggle button can live in the app header.
 
@@ -2391,9 +2508,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         boundaryLinePolylineIdRef.current = mode === 'boundary-line'
             ? createManualBoundaryPolylineId()
             : null;
+        if (mode === 'aoi') aoiPolylineIdRef.current = createAoiPolylineId();
         const label = mode === 'boundary-line' ? 'BOUNDARY LINE'
             : mode === 'breaklines' ? 'BREAKLINE'
             : mode === 'inclusion' ? 'INCLUSION'
+            : mode === 'aoi' ? 'AOI'
             : mode === 'exclusion' ? 'EXCLUSION'
             : 'LINE';
         setDrawingMode(mode);
@@ -4249,8 +4368,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         return synthetic;
     }, [isBuiltinSymbolEnabled]);
 
-    const getSymbolForPoint = useCallback((point: SurveyPoint): CustomSymbol | undefined => {
-        if (settings.showPointSymbols !== true) return undefined;
+    const getSymbolForPoint = useCallback((point: SurveyPoint, allowSymbols = settings.showPointSymbols === true): CustomSymbol | undefined => {
+        if (allowSymbols !== true) return undefined;
         if (point.description && excludedSymbolDescriptions.has(point.description.trim().toUpperCase())) return undefined;
         if (point.description) {
             const res = resolveSymbol(point.description, customSymbols, symbolMatchers);
@@ -6454,6 +6573,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         redraw,
         startTextPlacement,
         startTextEdit,
+        startAoiDrawing: () => startChainLineMode('aoi'),
         finishDrawing,
         closeDrawingToolsMenu: () => setIsDrawingToolsMenuOpen(false),
         toggleDrawingToolsMenu: () => {
@@ -6525,6 +6645,22 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setIsPickingBaselineStart(true);
             setTerminalIncoming({
                 text: 'BASELINE START: Pick a start point on the canvas [Esc cancels]',
+                tone: 'ok',
+            });
+        },
+        startCoordinatePick: (onPick, onCancel) => {
+            finishDrawing();
+            setActiveCommandPrompt(null);
+            setIsSelectionMode(false);
+            setIsBoxSelectMode(false);
+            setPendingSelectionCommand(null);
+            setIsTrimmingLines(false);
+            setIsExtendingLines(false);
+            setIsDeletingLines(false);
+            coordinatePickRef.current = { onPick, onCancel };
+            setIsPickingCoordinate(true);
+            setTerminalIncoming({
+                text: 'PICK POINT: Click a point or snap location on the canvas [Esc cancels]',
                 tone: 'ok',
             });
         },
@@ -11233,7 +11369,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         // are on screen than labels can usefully distinguish, skip symbols,
         // text, callouts, and hit-boxes. Points collapse into a screen-space
         // dot grid that is painted with one batched fill call.
-        const pointEfficiencyEnabled = settings.pointEfficiencyMode === true;
+        const activeEfficiencyProfile = pointStyleResolver?.defaultEfficiency;
+        const pointEfficiencyEnabled = activeEfficiencyProfile?.enabled ?? settings.pointEfficiencyMode === true;
         const pointCanvasWidth = canvas.clientWidth;
         const pointCanvasHeight = canvas.clientHeight;
         const pointScale = transform.scale;
@@ -11284,11 +11421,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         // A fixed zoom cutoff misses dense site-scale views: 1,000 points can
         // still be crowded at a zoom where labels are technically readable.
         // Decide from what is actually on screen, now that it is counted.
-        const usePointPrimitives = shouldDrawPointPrimitives(
-            pointEfficiencyEnabled,
-            pointScale,
-            visiblePointCount,
-        );
+        const usePointPrimitives = activeEfficiencyProfile
+            ? shouldCompressPointCloud(activeEfficiencyProfile, pointScale, visiblePointCount)
+            : shouldDrawPointPrimitives(pointEfficiencyEnabled, pointScale, visiblePointCount);
 
         if (usePointPrimitives) {
             // Collapse the cloud into 4 CSS-pixel cells with a numeric grid.
@@ -11300,17 +11435,19 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 pointCanvasWidth,
                 pointCanvasHeight,
                 pointBucketBufferRef.current,
+                activeEfficiencyProfile?.cellSizePx,
             );
             const bucketCellSize = primitiveBuckets.cellSize;
             if (primitiveBuckets.length > 0) {
                 if (gpuPointBatch) {
                     // WebGPU path: one instanced draw call for the whole cloud.
-                    const rgba = parseCssColor(isLightTheme ? '#111827' : '#FFD700');
+                    const rgba = parseCssColor(isLightTheme
+                        ? (activeEfficiencyProfile?.lightThemeColor ?? '#111827')
+                        : (activeEfficiencyProfile?.color ?? '#FFD700'));
+                    const dotOpacity = activeEfficiencyProfile?.opacity ?? 1;
+                    if (dotOpacity < 1) rgba[3] *= dotOpacity;
                     for (let bucketIndex = 0; bucketIndex < primitiveBuckets.length; bucketIndex++) {
-                        const dotSize = Math.min(
-                            POINT_PRIMITIVE_CELL_SIZE,
-                            2 + Math.min(2, Math.floor(Math.log2(primitiveBuckets.counts[bucketIndex]))),
-                        );
+                        const dotSize = getPointDotSize(activeEfficiencyProfile, primitiveBuckets.counts[bucketIndex]);
                         gpuPointBatch.push(
                             primitiveBuckets.cellsX[bucketIndex] * bucketCellSize + dotSize / 2,
                             primitiveBuckets.cellsY[bucketIndex] * bucketCellSize + dotSize / 2,
@@ -11321,19 +11458,24 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 } else {
                     ctx.beginPath();
                     for (let bucketIndex = 0; bucketIndex < primitiveBuckets.length; bucketIndex++) {
-                        const dotSize = Math.min(
-                            POINT_PRIMITIVE_CELL_SIZE,
-                            2 + Math.min(2, Math.floor(Math.log2(primitiveBuckets.counts[bucketIndex]))),
-                        );
-                        ctx.rect(
-                            primitiveBuckets.cellsX[bucketIndex] * bucketCellSize,
-                            primitiveBuckets.cellsY[bucketIndex] * bucketCellSize,
-                            dotSize,
-                            dotSize,
-                        );
+                        const dotSize = getPointDotSize(activeEfficiencyProfile, primitiveBuckets.counts[bucketIndex]);
+                        const cellX = primitiveBuckets.cellsX[bucketIndex] * bucketCellSize;
+                        const cellY = primitiveBuckets.cellsY[bucketIndex] * bucketCellSize;
+                        if (activeEfficiencyProfile?.dotShape === 'circle') {
+                            const centerX = cellX + dotSize / 2;
+                            const centerY = cellY + dotSize / 2;
+                            ctx.moveTo(centerX + dotSize / 2, centerY);
+                            ctx.arc(centerX, centerY, dotSize / 2, 0, 2 * Math.PI);
+                        } else {
+                            ctx.rect(cellX, cellY, dotSize, dotSize);
+                        }
                     }
-                    ctx.fillStyle = isLightTheme ? '#111827' : '#FFD700';
+                    ctx.fillStyle = isLightTheme
+                        ? (activeEfficiencyProfile?.lightThemeColor ?? '#111827')
+                        : (activeEfficiencyProfile?.color ?? '#FFD700');
+                    ctx.globalAlpha = activeEfficiencyProfile?.opacity ?? 1;
                     ctx.fill();
+                    ctx.globalAlpha = 1;
                 }
             }
 
@@ -11354,7 +11496,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const screenY = pt.y;
                 if (screenX < -20 || screenX > canvas.clientWidth + 20 || screenY < -20 || screenY > canvas.clientHeight + 20) continue;
 
-                if (selectedPointNumbers.has(p.pointNumber)) {
+                if ((activeEfficiencyProfile?.keepSelectionRing ?? true) && selectedPointNumbers.has(p.pointNumber)) {
                     ctx.save();
                     ctx.beginPath();
                     ctx.arc(screenX, screenY, 8, 0, 2 * Math.PI);
@@ -11365,7 +11507,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ctx.restore();
                 }
 
-                if (shrinkwrapPnSet?.has(p.pointNumber)) {
+                if ((activeEfficiencyProfile?.keepShrinkwrapBadges ?? true) && shrinkwrapPnSet?.has(p.pointNumber)) {
                     const isHov = p.pointNumber === hoveredShrinkwrapPn;
                     ctx.save();
                     ctx.beginPath();
@@ -11376,7 +11518,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ctx.restore();
                 }
 
-                if (pendingDeleteSet?.has(p.pointNumber)) {
+                if ((activeEfficiencyProfile?.keepPendingDeleteRings ?? true) && pendingDeleteSet?.has(p.pointNumber)) {
                     ctx.beginPath();
                     ctx.arc(screenX, screenY, 9, 0, 2 * Math.PI);
                     ctx.strokeStyle = 'rgba(239, 68, 68, 0.9)';
@@ -11425,6 +11567,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const p = visiblePoints[pointIndex];
             const screenX = pointProjectionBuffer[pointIndex * 2];
             const screenY = pointProjectionBuffer[pointIndex * 2 + 1];
+            const styleForPoint = pointStyleResolver?.resolve(p, pointListIdByPointNumber.get(p.pointNumber));
+            const markerStyle = styleForPoint?.marker;
+            const labelStyle = styleForPoint?.labels;
 
             // Select-mode pick ring — drawn under the glyph like the shrinkwrap ring.
             if (selectedPointNumbers.has(p.pointNumber)) {
@@ -11454,10 +11599,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             ctx.strokeStyle = '#000000';
             ctx.lineWidth = 0.5;
 
-            const symbolKey = p.description ?? '';
+            const allowSymbols = styleForPoint
+                ? styleForPoint.renderSymbols === true
+                : settings.showPointSymbols === true;
+            const symbolKey = `${p.description ?? ''}|${allowSymbols ? '1' : '0'}`;
             let symbol = symbolCache.get(symbolKey);
             if (symbol === undefined && !symbolCache.has(symbolKey)) {
-                symbol = getSymbolForPoint(p);
+                symbol = getSymbolForPoint(p, allowSymbols);
                 symbolCache.set(symbolKey, symbol);
             }
             if (symbol && (symbol.svgPath || symbol.fillPath || (symbol.texts && symbol.texts.length > 0))) {
@@ -11518,11 +11666,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
                 ctx.restore();
             } else {
-                const pointRadius = 1.5;
-                ctx.beginPath();
-                ctx.arc(screenX, screenY, pointRadius, 0, 2 * Math.PI);
-                ctx.fill();
-                ctx.stroke();
+                drawPointMarker(ctx, screenX, screenY, markerStyle);
             }
 
             // Shrinkwrap toggle badges sit above the glyph so a red X / green +
@@ -11543,49 +11687,56 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
             // Draw labels. Screen scaling is resolved once per frame above;
             // labels only cost anything when they are legible.
-            const screenTextSize = labelScreenTextSize;
+            const screenTextSize = labelStyle
+                ? labelStyle.fontSizePx * attributeScale * (labelStyle.scaleMode === 'world' ? pointScale : 1)
+                : labelScreenTextSize;
             
             // Optimization: Skip labels if they are too small to read
             if (screenTextSize < 5) continue;
 
-            ctx.font = labelFont;
+            ctx.font = labelStyle ? `${screenTextSize}px ${labelStyle.fontFamily || 'Arial'}` : labelFont;
             
-            // Base text offset in screen pixels
-            const baseTextOffset = 5 * attributeScale;
+            const baseTextOffsetX = labelStyle ? labelStyle.offsetXPx * attributeScale : 5 * attributeScale;
+            const baseTextOffsetY = labelStyle ? labelStyle.offsetYPx * attributeScale : 5 * attributeScale;
             
             // Label offsets are always stored in world coordinates
             // Leader line length ALWAYS scales with zoom (for both modes)
             // Only the text size differs between modes
             const labelOffsetX = p.labelOffset 
               ? p.labelOffset.x * transform.scale
-              : baseTextOffset;
+              : baseTextOffsetX;
             const labelOffsetY = p.labelOffset 
               ? p.labelOffset.y * transform.scale
-              : baseTextOffset;
+              : baseTextOffsetY;
             
-            const areAnyLabelsVisible = pointLayers.pointNumber.visible || pointLayers.elevation.visible || pointLayers.description.visible;
+            const showPointNumber = labelStyle?.showPointNumber ?? pointLayers.pointNumber.visible;
+            const showElevation = labelStyle?.showElevation ?? pointLayers.elevation.visible;
+            const showDescription = labelStyle?.showDescription ?? pointLayers.description.visible;
+            const areAnyLabelsVisible = showPointNumber || showElevation || showDescription;
+            const hasPerPointOffset = Boolean(p.labelOffset && (p.labelOffset.x !== 0 || p.labelOffset.y !== 0));
+            const leaderMode = labelStyle?.leader ?? 'when-offset';
 
-            if (p.labelOffset && (p.labelOffset.x !== 0 || p.labelOffset.y !== 0) && areAnyLabelsVisible) {
+            if ((leaderMode === 'always' || (leaderMode === 'when-offset' && hasPerPointOffset)) && areAnyLabelsVisible) {
                 ctx.beginPath();
                 ctx.moveTo(screenX, screenY);
                 ctx.lineTo(screenX + labelOffsetX, screenY + labelOffsetY);
-                ctx.strokeStyle = "rgba(128, 128, 128, 0.7)";
-                ctx.lineWidth = 1;
-                ctx.setLineDash([4, 2]);
+                ctx.strokeStyle = labelStyle?.leaderColor ?? "rgba(128, 128, 128, 0.7)";
+                ctx.lineWidth = labelStyle?.leaderWidthPx ?? 1;
+                ctx.setLineDash(labelStyle?.leaderDash ?? [4, 2]);
                 ctx.stroke();
                 ctx.setLineDash([]);
             }
             
-            if (pointLayers.pointNumber.visible) {
-                ctx.fillStyle = pointLayers.pointNumber.color;
+            if (showPointNumber) {
+                ctx.fillStyle = labelStyle?.pointNumberColor ?? pointLayers.pointNumber.color;
                 ctx.fillText(p.pointNumber, screenX + labelOffsetX, screenY + labelOffsetY - screenTextSize);
             }
-            if (pointLayers.elevation.visible && p.elevation !== undefined) {
-                ctx.fillStyle = pointLayers.elevation.color;
+            if (showElevation && p.elevation !== undefined) {
+                ctx.fillStyle = labelStyle?.elevationColor ?? pointLayers.elevation.color;
                 ctx.fillText(p.elevation.toFixed(settings.coordinatePrecision), screenX + labelOffsetX, screenY + labelOffsetY);
             }
             let descriptionText = '';
-            if (pointLayers.description.visible) {
+            if (showDescription) {
                 const descriptionKey = p.description ?? '';
                 descriptionText = descriptionCache.get(descriptionKey) ?? '';
                 if (!descriptionCache.has(descriptionKey)) {
@@ -11594,13 +11745,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 }
             }
             if (descriptionText) {
-                ctx.fillStyle = pointLayers.description.color;
+                ctx.fillStyle = labelStyle?.descriptionColor ?? pointLayers.description.color;
                 ctx.fillText(descriptionText, screenX + labelOffsetX, screenY + labelOffsetY + screenTextSize);
             }
 
                     // Pending-delete ring — pulsing red halo so the user can verify
                     // which points are about to be removed before confirming.
-                    if (pendingDeleteSet?.has(p.pointNumber)) {
+                    if ((activeEfficiencyProfile?.keepPendingDeleteRings ?? true) && pendingDeleteSet?.has(p.pointNumber)) {
                         const pulse = 0.75 + 0.25 * Math.sin(Date.now() / 180);
                         ctx.save();
                         ctx.beginPath();
@@ -12108,7 +12259,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         ctx.restore(); // --- End screen-space pass ---
-    }, [transform, renderRevision, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, contourLabelSlide, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, isOffsetMode, offsetTargetId, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, trimFence, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.shrinkwrapAddPns, props.shrinkwrapExcludedPns, props.pendingDeletePointNumbers, freehandStroke, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id, rasterUnderlays, selectedRasterUnderlayId, rasterUnderlayImages, offsetSelectionIds, mendPickActive, mendPickPreview]);
+    }, [transform, renderRevision, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, pointStyleResolver, pointListIdByPointNumber, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, contourLabelSlide, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, isOffsetMode, offsetTargetId, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, trimFence, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.shrinkwrapAddPns, props.shrinkwrapExcludedPns, props.pendingDeletePointNumbers, freehandStroke, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id, rasterUnderlays, selectedRasterUnderlayId, rasterUnderlayImages, offsetSelectionIds, mendPickActive, mendPickPreview]);
 
     // Throttled draw using requestAnimationFrame to prevent flickering during rapid updates
     const scheduleDraw = useCallback(() => {
@@ -13245,6 +13396,15 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             requestAnimationFrame(() => drawRef.current?.());
             return;
         }
+        if (e.key === 'Escape' && !isTextInput && coordinatePickRef.current) {
+            e.preventDefault();
+            const pick = coordinatePickRef.current;
+            coordinatePickRef.current = null;
+            setIsPickingCoordinate(false);
+            pick.onCancel?.();
+            setTerminalIncoming({ text: 'PICK POINT: Cancelled', tone: 'info' });
+            return;
+        }
         if (e.key === 'Escape' && !isTextInput && baselineStartPickRef.current) {
             e.preventDefault();
             const pick = baselineStartPickRef.current;
@@ -13873,7 +14033,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     layer: activeDrawingLayer || undefined,
                     polylineId: drawingMode === 'boundary-line'
                         ? (boundaryLinePolylineIdRef.current ??= createManualBoundaryPolylineId())
-                        : undefined,
+                        : drawingMode === 'aoi'
+                            ? (aoiPolylineIdRef.current ??= createAoiPolylineId())
+                            : undefined,
                 }));
                 setTerminalIncoming({ text: 'CLOSE: Closed the shape with a straight segment back to the first point', tone: 'ok' });
                 finishDrawing();
@@ -15195,6 +15357,28 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         return screenToWorld(screenX, screenY);
     }, [inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, screenToWorld]);
 
+    /** Snap-aware coordinate plus point number for an A2UI point input. */
+    const resolveSnappedCoordinate = useCallback((
+        screenX: number,
+        screenY: number,
+        hoveredSnap: { easting: number; northing: number; sourcePoint?: SurveyPoint } | null,
+    ): { easting: number; northing: number; pointNumber?: string } => {
+        const activeOsnapModes = inlineOsnapOverride
+            ? new Set<OsnapMode>([inlineOsnapOverride])
+            : (runningOsnaps.size > 0 ? runningOsnaps : new Set<OsnapMode>(['endpoint', 'midpoint', 'intersection', 'nearest']));
+        const snapped = hoveredSnap || resolveOsnapAtScreen(screenX, screenY, activeOsnapModes, 25);
+        if (snapped) {
+            return {
+                easting: snapped.easting,
+                northing: snapped.northing,
+                pointNumber: snapped.sourcePoint?.pointNumber,
+            };
+        }
+        const nearest = findNearestSurveyPoint(screenX, screenY, 25);
+        if (nearest) return { easting: nearest.easting, northing: nearest.northing, pointNumber: nearest.pointNumber };
+        return screenToWorld(screenX, screenY);
+    }, [inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, screenToWorld]);
+
     /** Move by a world-space displacement (canvas picks are already in feet). */
     const moveSelectionByWorld = useCallback((dE: number, dN: number): number => {
         if (selectedEntityCount === 0) return 0;
@@ -15220,6 +15404,31 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             document.body.classList.add('panning');
             setIsPanning(true);
             lastMousePos.current = { x: e.clientX, y: e.clientY };
+            return;
+        }
+
+        // An A2UI point input arms this pick; consume the next left click and
+        // return the snapped coordinate (plus point number) before any tool.
+        if (e.button === 0 && coordinatePickRef.current) {
+            e.preventDefault();
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const world = resolveSnappedCoordinate(
+                e.clientX - rect.left,
+                e.clientY - rect.top,
+                activeOsnapPoint,
+            );
+            const pick = coordinatePickRef.current;
+            coordinatePickRef.current = null;
+            setIsPickingCoordinate(false);
+            setActiveOsnapPoint(null);
+            setInlineOsnapOverride(null);
+            setTerminalIncoming({
+                text: `PICK POINT: N ${world.northing.toFixed(2)}, E ${world.easting.toFixed(2)}${world.pointNumber ? ` (Pt ${world.pointNumber})` : ''} selected.`,
+                tone: 'ok',
+            });
+            pick.onPick(world);
             return;
         }
 
@@ -16727,7 +16936,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     layer: activeDrawingLayer || undefined,
                     polylineId: drawingMode === 'boundary-line'
                         ? (boundaryLinePolylineIdRef.current ??= createManualBoundaryPolylineId())
-                        : undefined,
+                        : drawingMode === 'aoi'
+                            ? (aoiPolylineIdRef.current ??= createAoiPolylineId())
+                            : undefined,
                     arc: candidate.arc,
                 }));
                 const fromUnit: LinearUnit = settings.linearUnits || 'usSurveyFoot';
@@ -18582,7 +18793,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 // contract as deed-drafted boundaries, one id per chain.
                 polylineId: drawingMode === 'boundary-line'
                     ? (boundaryLinePolylineIdRef.current ??= createManualBoundaryPolylineId())
-                    : undefined,
+                    : drawingMode === 'aoi'
+                        ? (aoiPolylineIdRef.current ??= createAoiPolylineId())
+                        : undefined,
                 arc,
             });
             onAddLine(chainLine);
@@ -19300,7 +19513,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     shiftHoverAnchorRef.current = null;
                 }
             }}
-            style={{ cursor: isPickingBaselineStart ? 'crosshair' : isDraggingUnderlay ? 'move' : isStationLabelDragging ? 'grabbing' : isPanning ? 'grabbing' : (contourLabelSlide || hoveredContourLabelIndex !== null ? 'move' : (isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && (isOverLabel || hoveredStationLabelKey !== null) ? 'grab' : (isZoomBoxMode || drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))))), overflow: 'visible', isolation: 'isolate' }}
+            style={{ cursor: isPickingBaselineStart ? 'crosshair' : isDraggingUnderlay ? 'move' : isStationLabelDragging ? 'grabbing' : isPanning ? 'grabbing' : (contourLabelSlide || hoveredContourLabelIndex !== null ? 'move' : (isPickingCoordinate || isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && (isOverLabel || hoveredStationLabelKey !== null) ? 'grab' : (isZoomBoxMode || drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))))), overflow: 'visible', isolation: 'isolate' }}
         >
             <CanvasFlashLayer />
             <canvas
@@ -20909,14 +21122,34 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                 >
                                     <div className="mb-1.5 flex items-center justify-between border-b border-white/[0.07] px-1.5 pb-1.5">
                                         <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Draw &amp; Edit</span>
-                                        <button
-                                            type="button"
-                                            onClick={() => setIsDrawingToolsMenuOpen(false)}
-                                            className="rounded p-0.5 text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-white"
-                                            title="Close"
-                                        >
-                                            <XMarkIcon className="h-3.5 w-3.5" />
-                                        </button>
+                                        <div className="flex items-center gap-0.5">
+                                            {props.onDockDrawingMenu ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        props.onDockDrawingMenu?.();
+                                                        setIsDrawingToolsMenuOpen(false);
+                                                    }}
+                                                    className="rounded p-0.5 text-slate-500 transition-colors hover:bg-cyan-400/10 hover:text-cyan-300"
+                                                    title="Dock Draw & Edit in the toolshelf"
+                                                    aria-label="Dock Draw & Edit in the toolshelf"
+                                                >
+                                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                                        <rect x="3.5" y="4" width="17" height="16" rx="2" />
+                                                        <path d="M15 4v16" />
+                                                        <path d="M18 9h-1M18 12h-1M18 15h-1" />
+                                                    </svg>
+                                                </button>
+                                            ) : null}
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsDrawingToolsMenuOpen(false)}
+                                                className="rounded p-0.5 text-slate-500 transition-colors hover:bg-white/[0.06] hover:text-white"
+                                                title="Close"
+                                            >
+                                                <XMarkIcon className="h-3.5 w-3.5" />
+                                            </button>
+                                        </div>
                                     </div>
                                     <div className="space-y-1.5">
                                         <button onClick={() => { 
@@ -21971,6 +22204,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onOpenProperties={() => setIsPropertiesOpen(true)}
                 propertiesSelectionCount={selectedLineIds.size + (selectedTextAnnotationId ? 1 : 0)}
                 onOpenTextEditor={props.onOpenTextEditor}
+                onDockCommandHelp={props.onDockCommandHelp}
+                onCommandRunnerReady={props.onCanvasCommandRunnerReady}
                 activePrompt={
                     activeCommandPrompt
                         ? activeCommandPrompt.id === 'polar_array' && isPickingPolarCenter
@@ -22083,6 +22318,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         setTerminalIncoming({ text: 'Command: P (ADD POINT) — pick directly on the canvas [Esc to finish]', tone: 'ok' });
                     },
                     onStartLine: () => startChainLineMode('polylines'),
+                    onStartBaseline: () => {
+                        finishDrawing();
+                        startBaselineMode();
+                    },
+                    onStartBreakline: () => startChainLineMode('breaklines'),
+                    onStartExclusion: () => startChainLineMode('exclusion'),
+                    onStartBoundaryLine: () => startChainLineMode('boundary-line'),
                     onStartCircle: (options?: { ttr?: boolean }) => {
                         setDrawingMode('circle');
                         setCircleCenter(null);

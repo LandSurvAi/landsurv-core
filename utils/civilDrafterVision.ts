@@ -22,6 +22,7 @@
 import type { SurveyPoint, SurveyLine, BoundaryFile } from '../types';
 import { parseBearingToRadians, parseDistance, direct, directCurve } from './cogo';
 import { resolveArcGeometry } from './offsetGeometry';
+import { inferParcelGapRoads } from './parcelRoadInference';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -77,6 +78,9 @@ export interface VisionSurvey {
   /** Which pass produced these frames. Defaults to the geometry pass. */
   pass?: VisionPass;
   hasBackgroundImagery?: boolean;
+  /** False when parcel/frontage lines were used for grounding but deliberately
+   *  left out of the raster so the road evidence stays legible. */
+  parcelLinesRendered?: boolean;
 }
 
 export interface MapOverlayTile {
@@ -84,6 +88,25 @@ export interface MapOverlayTile {
   bbox: [number, number, number, number];
   quad?: [number, number][];
   opacity?: number;
+}
+
+export interface VisionFailureWindow {
+  /** Corridor label, e.g. R2. */
+  corridorId: string;
+  /** Gate that produced this window, e.g. continuity. */
+  gate: string;
+  stationStartFt: number;
+  stationEndFt: number;
+  bounds: { minE: number; maxE: number; minN: number; maxN: number };
+  /** Pre-formatted label shown on the frame and in the prompt. */
+  label: string;
+}
+
+export interface VisionDefectMarker {
+  easting: number;
+  northing: number;
+  label: string;
+  severity: 'red' | 'amber';
 }
 
 export interface VisionCaptureOptions {
@@ -111,12 +134,57 @@ export interface VisionCaptureOptions {
   pass?: VisionPass;
   /** Render survey points, parcel/boundary linework and labels. Default true. */
   renderVectors?: boolean;
+  /** Draw parcel/tax-lot linework into the frames. They still participate in
+   *  parcel-gap inference and grounding when false. Defaults to true. */
+  renderParcelLines?: boolean;
   /**
    * Second Gimbal inspection: render the just-drafted take over the field
    * shots (overview + corridor sweep) and label the frames as PASS 2 so the
    * redraw model can see its own first attempt. Geometry-only; never imagery.
    */
   draftInspection?: boolean;
+  /** Targeted pass-2 windows. When present, only the overview and these
+   *  windows are captured — no zone/detail tour. */
+  failureWindows?: VisionFailureWindow[];
+  /** Pass-1 target geometry, rendered dashed magenta under the current take. */
+  referenceLines?: SurveyLine[];
+  /** Defect pins rendered at the failed station with a short label. */
+  defectMarkers?: VisionDefectMarker[];
+  /** Active area of interest in project coordinates. When present, it replaces
+   *  the computed survey extent so Surveyors Eye only frames the held AOI. */
+  aoiBounds?: { minE: number; maxE: number; minN: number; maxN: number };
+}
+
+/** Parcel/tax-lot linework is grounding evidence, not road pavement geometry. */
+export function isParcelVisionLine(line: Pick<SurveyLine, 'type' | 'layer'>): boolean {
+  return line.type === 'parcel' || /PARCEL|TAX.?LOT|CADASTRE/i.test(line.layer ?? '');
+}
+
+/**
+ * Road takes keep parcel frontage in memory but out of the raster. Keeping this
+ * filter pure makes the visual scope testable without a canvas.
+ */
+export function filterVisionRenderLines<T extends Pick<SurveyLine, 'type' | 'layer'>>(
+  lines: T[],
+  renderParcelLines = true,
+): T[] {
+  return renderParcelLines ? lines : lines.filter(line => !isParcelVisionLine(line));
+}
+
+/** Clamp a camera window to the held AOI. Returns null when the window is fully
+ *  outside it, so no frame can show land beyond the area of interest. */
+export function clampVisionBoundsToAoi(
+  bounds: { minE: number; maxE: number; minN: number; maxN: number },
+  aoi: { minE: number; maxE: number; minN: number; maxN: number } | null | undefined,
+): { minE: number; maxE: number; minN: number; maxN: number } | null {
+  if (!aoi) return bounds;
+  const clipped = {
+    minE: Math.max(bounds.minE, aoi.minE),
+    maxE: Math.min(bounds.maxE, aoi.maxE),
+    minN: Math.max(bounds.minN, aoi.minN),
+    maxN: Math.min(bounds.maxN, aoi.maxN),
+  };
+  return clipped.minE < clipped.maxE && clipped.minN < clipped.maxN ? clipped : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,7 +230,7 @@ function descColor(desc: string | undefined): string {
   return '#B0BEC5'; // default silver
 }
 
-const ROAD_CORRIDOR_POINT_RE = /^(EP|EOP|EDGE|ER|ES|EG|EC|ET|ROAD|ROW|CL|C\/L|CENTER|CTR|CURB|GUTTER|TC|BC|DEP|TBC|FL|FLOW|PAV|PVMT|DYL|WL|SWL|SHOULDER|SHLD)/i;
+const ROAD_CORRIDOR_POINT_RE = /^(EP|EOP|EDGE|ER|ES|EG|EC|ET|ROAD|ROW|CL|C\/L|CENTER|CTR|CURB|GUTTER|TC|BC|DEP|TBC|FL|FLOW|PAV|PVMT|DYL|WL|SWL|SHOULDER|SHLD|(?:POC|PC|PT)\b)/i;
 
 /** True when a shot belongs to the road corridor rather than site/topo clutter. */
 export function isRoadCorridorPoint(p: SurveyPoint): boolean {
@@ -515,6 +583,10 @@ export interface GimbalMentalModelInput {
   detailFrameCount: number;
   centerlineShotCount: number;
   parcelLineCount: number;
+  /** False when parcel frontage is grounding-only and not visible in the frames. */
+  parcelLinesRendered?: boolean;
+  /** High-confidence road corridors inferred from gaps between parcel fabrics. */
+  parcelGapRoadCount?: number;
   boundaryCallCount: number;
 }
 
@@ -527,7 +599,7 @@ export function buildGimbalMentalModel(input: GimbalMentalModelInput): string {
   const {
     totalPoints, totalLines, extentFt, pointTypes, roadShotCount, roadSpanFt,
     corridorFrameCount, zoneFrameCount, detailFrameCount, centerlineShotCount,
-    parcelLineCount, boundaryCallCount,
+    parcelLineCount, parcelLinesRendered = true, parcelGapRoadCount = 0, boundaryCallCount,
   } = input;
   const plural = (n: number, one: string, many = `${one}s`) => n === 1 ? one : many;
 
@@ -542,8 +614,16 @@ export function buildGimbalMentalModel(input: GimbalMentalModelInput): string {
     : 'Detail: no separate detail frames; the corridor and zone frames carry the close-up evidence.';
 
   const parcelLine = parcelLineCount > 0
-    ? `Parcel context: ${parcelLineCount} cyan cadastral/frontage ${plural(parcelLineCount, 'line')} — legal context only, not pavement edges.`
+    ? parcelLinesRendered
+      ? `Parcel context: ${parcelLineCount} cyan cadastral/frontage ${plural(parcelLineCount, 'line')} — frontage/boundary context, not pavement edges. The strip between two different parcel fabrics is a road candidate, not vacant land.`
+      : `Parcel context: ${parcelLineCount} cadastral/frontage ${plural(parcelLineCount, 'line')} are held in memory for right-of-way and parcel-gap inference but are NOT drawn in these frames. Do not claim to see cyan parcel lines; use the road shots and boundary geometry only.`
     : 'Parcel context: no parcel/tax-lot linework; rely on field shots and ROW geometry.';
+
+  const parcelGapLine = parcelGapRoadCount > 0
+    ? `Parcel-fabric gaps: ${parcelGapRoadCount} high-confidence road ${plural(parcelGapRoadCount, 'corridor')} inferred where different parcel frontages face each other across an empty strip. Draft these gaps as roads when the request covers them; never fill them with buildings or arbitrary linework.`
+    : 'Parcel-fabric gaps: no high-confidence road gap inferred from the available parcel frontages; do not invent a road through a parcel interior.';
+
+  const intersectionLine = 'Intersections: classify every T, cross, skew and Y from the drawn centre lines. Preserve the arm count, angle, station and absolute location; a skewed crossing is still a crossing, not a T.';
 
   const centerline = centerlineShotCount > 0
     ? `Centerline: ${centerlineShotCount} coded CL ${plural(centerlineShotCount, 'shot')} anchor the corridor cross-section order — internal reference only; do not draw a baseline/centerline unless requested.`
@@ -559,6 +639,8 @@ export function buildGimbalMentalModel(input: GimbalMentalModelInput): string {
     roadLine,
     detailLine,
     parcelLine,
+    parcelGapLine,
+    intersectionLine,
     centerline,
     boundary,
     'Zoom out: after the detail frames, return to the wide overview and reconcile every line to the full scene. A frame edge is not an endpoint.',
@@ -608,7 +690,7 @@ export function isPointRelevantForCorridor(desc: string | undefined, featureType
   const DRIVEWAY_TOKENS = /\b(DW\d*|DRV\d*|DRIVE\d*|DRWY\d*|APRON\d*|ENTRANCE)\b/;
 
   // Road-specific tokens (edges of pavement/road, curbs, centerlines)
-  const ROAD_TOKENS = /\b(ER\d*|EP\d*|EOP\d*|ET\d*|ES\d*|EG\d*|EC\d*|EDGE\d*|PAV\d*|PVMT\d*|ROAD\d*|CURB\d*|TC\d*|BC\d*|TBC\d*|GUTTER\d*|FL\d*|FLOW\d*|CL\d*|CTR\d*|TIE)\b/;
+  const ROAD_TOKENS = /\b(ER\d*|EP\d*|EOP\d*|ET\d*|ES\d*|EG\d*|EC\d*|EDGE\d*|PAV\d*|PVMT\d*|ROAD\d*|CURB\d*|TC\d*|BC\d*|TBC\d*|GUTTER\d*|FL\d*|FLOW\d*|CL\d*|CTR\d*|TIE|POC\d*|PC\d*|PT\d*)\b/;
 
   const DEP_CURB_TOKEN = /(^| )DEP[0-9]*( |$)/i;
 
@@ -1089,6 +1171,9 @@ interface RenderOpts {
     bounds?: { minE: number; maxE: number; minN: number; maxN: number };
   } | null;
   mapTiles?: MapOverlayTile[];
+  referenceLines?: SurveyLine[];
+  defectMarkers?: VisionDefectMarker[];
+  draftInspection?: boolean;
 }
 
 function renderToCanvas(
@@ -1351,6 +1436,29 @@ function renderToCanvas(
     drawSegment(fp, tp, l.layer, 0.88);
   }
 
+  // ── Pass-1 target reference (dashed magenta) ────────────────────────────────
+  // The pass-2 model must see the corridor it is being measured against, not
+  // just its own redraw. This layer is reference only; it is never linework.
+  if (opts.referenceLines && opts.referenceLines.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = '#E879F9';
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.78;
+    ctx.setLineDash([7, 5]);
+    for (const line of opts.referenceLines) {
+      if (line.hidden) continue;
+      const a = resolveEndpoint(line, 'from');
+      const b = resolveEndpoint(line, 'to');
+      if (!a || !b) continue;
+      ctx.beginPath();
+      ctx.moveTo(...toScreen(a.easting, a.northing));
+      ctx.lineTo(...toScreen(b.easting, b.northing));
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
   // ── Survey points ────────────────────────────────────────────────────────────
   // Vision frames are evidence, not a CAD screen. At a dense cluster, glow
   // halos plus hundreds of overlapping point-number labels turn the shots into
@@ -1409,6 +1517,29 @@ function renderToCanvas(
   }
   for (const p of visiblePoints) {
     if (isRoadShot(p)) drawPoint(p, true);
+  }
+
+  // ── Defect pins ──────────────────────────────────────────────────────────────
+  if (opts.defectMarkers && opts.defectMarkers.length > 0) {
+    ctx.save();
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'left';
+    for (const marker of opts.defectMarkers) {
+      const [mx, my] = toScreen(marker.easting, marker.northing);
+      const color = marker.severity === 'red' ? '#FB7185' : '#FBBF24';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(mx, my, 9, 0, Math.PI * 2);
+      ctx.stroke();
+      const text = marker.label;
+      const width = ctx.measureText(text).width;
+      ctx.fillStyle = 'rgba(3, 7, 18, 0.88)';
+      ctx.fillRect(mx + 12, my - 9, width + 8, 14);
+      ctx.fillStyle = color;
+      ctx.fillText(text, mx + 16, my + 2);
+    }
+    ctx.restore();
   }
 
   // ── Frame HUD overlay ───────────────────────────────────────────────────────
@@ -1568,6 +1699,7 @@ export async function captureVisionSurvey(
     canvasHeight     = VISION_H,
     pass             = 'geometry',
     renderVectors    = true,
+    renderParcelLines = true,
     draftInspection  = false,
   } = opts;
 
@@ -1582,13 +1714,28 @@ export async function captureVisionSurvey(
   canvas.height = canvasHeight;
 
   const boundaryGeom = extractBoundaryGeometry(opts.boundaryFiles);
-  const ext = computeExtent(points, lines, boundaryGeom.vertices);
+  const aoi = opts.aoiBounds;
+  const renderedLines = filterVisionRenderLines(lines, renderParcelLines);
+  const insideAoi = (p: SurveyPoint) =>
+    !aoi ||
+    (p.easting >= aoi.minE && p.easting <= aoi.maxE
+      && p.northing >= aoi.minN && p.northing <= aoi.maxN);
+  const pointsInScope = points.filter(insideAoi);
+  const ext: Extent | null = aoi
+    ? {
+        ...aoi,
+        cE: (aoi.minE + aoi.maxE) / 2,
+        cN: (aoi.minN + aoi.maxN) / 2,
+        spanE: Math.max(1, aoi.maxE - aoi.minE),
+        spanN: Math.max(1, aoi.maxN - aoi.minN),
+      }
+    : computeExtent(points, lines, boundaryGeom.vertices);
 
-  if (!ext || (points.length < 2 && boundaryGeom.vertices.length < 2 && lines.length === 0)) {
+  if (!ext || (pointsInScope.length < 2 && boundaryGeom.vertices.length < 2 && lines.length === 0)) {
     return {
       frames: [],
       spatialNarrative: 'Insufficient spatial data for visual survey — no points or boundary lines loaded.',
-      totalPoints: points.length,
+      totalPoints: pointsInScope.length,
       totalLines: lines.length,
       surveyExtentFt: { width: 0, height: 0 },
       capturedAt: Date.now(),
@@ -1597,10 +1744,10 @@ export async function captureVisionSurvey(
 
   // If survey points are sparse/empty, synthesize reference points from boundary vertices
   // so the grid partitioning and quadrant clustering zoom in on key sections of the property.
-  const effectivePoints: SurveyPoint[] = points.length >= 2
-    ? points
+  const effectivePoints: SurveyPoint[] = pointsInScope.length >= 2
+    ? pointsInScope
     : [
-        ...points,
+        ...pointsInScope,
         ...boundaryGeom.vertices.map((v, i) => ({
           pointNumber: v.label || `BND-${i + 1}`,
           northing: v.northing,
@@ -1621,18 +1768,21 @@ export async function captureVisionSurvey(
     const passTag = draftInspection
       ? 'PASS 2 · DRAFT INSPECTION'
       : pass === 'imagery' ? 'PASS B · IMAGERY' : 'PASS A · GEOMETRY';
-    renderToCanvas(canvas, renderVectors ? points : [], renderVectors ? lines : [], minE, maxE, minN, maxN, {
+    renderToCanvas(canvas, renderVectors ? pointsInScope : [], renderVectors ? renderedLines : [], minE, maxE, minN, maxN, {
       frameLabel: `${passTag} | ${label}`,
       fadedPtNums,
       boundarySegments: renderVectors ? boundaryGeom.segments : undefined,
       boundaryVertices: renderVectors ? boundaryGeom.vertices : undefined,
       backgroundImage,
       mapTiles,
+      referenceLines: draftInspection ? opts.referenceLines : undefined,
+      defectMarkers: draftInspection ? opts.defectMarkers : undefined,
+      draftInspection,
     });
     const dataUrl = canvas.toDataURL('image/png');
     const base64  = dataUrl.split(',')[1];
     const visible = renderVectors
-      ? points.filter(p =>
+      ? pointsInScope.filter(p =>
           p.easting  >= minE && p.easting  <= maxE &&
           p.northing >= minN && p.northing <= maxN,
         )
@@ -1652,39 +1802,73 @@ export async function captureVisionSurvey(
     };
   };
 
-  // ── Frame 1: Overview (full extent + 15% padding) ──────────────────────────
-  const padE = ext.spanE * 0.15;
-  const padN = ext.spanN * 0.15;
+  // Every camera window is clipped to the held AOI. The overview is exactly the
+  // AOI bounds; there is no outer padding that would pull neighboring parcels
+  // back into the first frame.
+  const captureInBounds = (
+    minE: number, maxE: number,
+    minN: number, maxN: number,
+    label: string,
+    zoomLevel: number,
+    fadedPtNums?: Set<string>,
+  ): void => {
+    const clipped = clampVisionBoundsToAoi({ minE, maxE, minN, maxN }, aoi);
+    if (!clipped) return;
+    frames.push(capture(
+      clipped.minE, clipped.maxE, clipped.minN, clipped.maxN,
+      label, zoomLevel, fadedPtNums,
+    ));
+  };
+
+  // ── Frame 1: Overview (exactly the held AOI when one is active) ────────────
+  const padE = aoi ? 0 : ext.spanE * 0.15;
+  const padN = aoi ? 0 : ext.spanN * 0.15;
   const overviewCountLabel = !renderVectors
     ? 'background only'
-    : points.length > 0
-      ? `${points.length} pts`
+    : pointsInScope.length > 0
+      ? `${pointsInScope.length} pts`
       : `${boundaryGeom.segments.length} boundary lines`;
-  frames.push(capture(
+  captureInBounds(
     ext.minE - padE, ext.maxE + padE,
     ext.minN - padN, ext.maxN + padN,
     `FRAME 1/? | OVERVIEW  ${overviewCountLabel}  ${ext.spanE.toFixed(0)}ft × ${ext.spanN.toFixed(0)}ft`,
     1.0,
-  ));
+  );
+
+  // ── Targeted pass-2 failure windows ────────────────────────────────────────
+  // A redraw turn looks at the station that failed, not another full tour.
+  const targetedWindows = draftInspection ? (opts.failureWindows ?? []) : [];
+  for (const win of targetedWindows) {
+    const inside = (p: SurveyPoint) =>
+      p.easting >= win.bounds.minE && p.easting <= win.bounds.maxE
+      && p.northing >= win.bounds.minN && p.northing <= win.bounds.maxN;
+    const faded = new Set(pointsInScope.filter(p => !inside(p)).map(p => p.pointNumber));
+    captureInBounds(
+      win.bounds.minE, win.bounds.maxE, win.bounds.minN, win.bounds.maxN,
+      win.label,
+      1,
+      faded,
+    );
+  }
 
   // ── Corridor sweep: cover the whole road, not just the densest cells ──────
-  const corridorPoints = pass === 'geometry' ? points.filter(isRoadCorridorPoint) : [];
-  const corridorWindows = buildCorridorWindows(corridorPoints);
+  const corridorPoints = pass === 'geometry' ? pointsInScope.filter(isRoadCorridorPoint) : [];
+  const corridorWindows = targetedWindows.length > 0 ? [] : buildCorridorWindows(corridorPoints);
   for (let i = 0; i < corridorWindows.length; i++) {
     const win = corridorWindows[i];
     const inside = (p: SurveyPoint) =>
       p.easting >= win.minE && p.easting <= win.maxE
       && p.northing >= win.minN && p.northing <= win.maxN;
-    const faded = new Set(points.filter(p => !inside(p)).map(p => p.pointNumber));
+    const faded = new Set(pointsInScope.filter(p => !inside(p)).map(p => p.pointNumber));
     const ov = ext.spanE * ext.spanN;
     const zv = (win.maxE - win.minE) * (win.maxN - win.minN);
     const roadInWindow = corridorPoints.filter(inside).length;
-    frames.push(capture(
+    captureInBounds(
       win.minE, win.maxE, win.minN, win.maxN,
       `FRAME ${frames.length + 1}/? | CORRIDOR ${i + 1}/${corridorWindows.length}  ${win.alongStartFt.toFixed(0)}–${win.alongEndFt.toFixed(0)} ft  ${roadInWindow} road shots`,
       ov / Math.max(zv, 1),
       faded,
-    ));
+    );
   }
 
   // ── Frames 2–N: Top density clusters (zone zoom) ───────────────────────────
@@ -1693,24 +1877,24 @@ export async function captureVisionSurvey(
   // the total frame budget stays bounded.
   const zoneLimit = corridorWindows.length > 0 ? Math.min(maxClusterFrames, 3) : maxClusterFrames;
   const detailLimit = corridorWindows.length > 0 ? Math.min(maxDetailFrames, 2) : maxDetailFrames;
-  const topCells  = clusters.slice(0, zoneLimit);
-  const detailFrames = Math.min(detailLimit, topCells.length);
+  const topCells  = targetedWindows.length > 0 ? [] : clusters.slice(0, zoneLimit);
+  const detailFrames = targetedWindows.length > 0 ? 0 : Math.min(detailLimit, topCells.length);
 
   for (let i = 0; i < topCells.length; i++) {
     const cell    = topCells[i];
     const spanMax = Math.max(cell.maxE - cell.minE, cell.maxN - cell.minN);
     const pad     = spanMax * 0.28;
     const dir     = cardinalOf(cell, ext);
-    const faded   = new Set(points.filter(p => !cell.points.includes(p)).map(p => p.pointNumber));
+    const faded   = new Set(pointsInScope.filter(p => !cell.points.includes(p)).map(p => p.pointNumber));
     const ov      = ext.spanE * ext.spanN;
     const zv      = (cell.maxE - cell.minE + 2 * pad) * (cell.maxN - cell.minN + 2 * pad);
     const zoom    = ov / Math.max(zv, 1);
-    frames.push(capture(
+    captureInBounds(
       cell.minE - pad, cell.maxE + pad,
       cell.minN - pad, cell.maxN + pad,
       `FRAME ${frames.length + 1}/? | ZONE ${dir}  ${cell.points.length} features`,
       zoom, faded,
-    ));
+    );
   }
 
   // ── Frames N+1…M: Detail zoom on densest clusters ─────────────────────────
@@ -1722,12 +1906,12 @@ export async function captureVisionSurvey(
     const ov        = ext.spanE * ext.spanN;
     const zv        = (cellExt.spanE + 2 * pad) * (cellExt.spanN + 2 * pad);
     const zoom      = ov / Math.max(zv, 1);
-    frames.push(capture(
+    captureInBounds(
       cellExt.minE - pad, cellExt.maxE + pad,
       cellExt.minN - pad, cellExt.maxN + pad,
       `FRAME ${frames.length + 1}/? | DETAIL ${dir}  ${cell.points.length} features`,
       zoom,
-    ));
+    );
   }
 
   // Fix the /? placeholder now that we know total count
@@ -1737,25 +1921,26 @@ export async function captureVisionSurvey(
   }
 
   // ── Spatial narrative ──────────────────────────────────────────────────────
-  const descSummary   = points.length > 0 ? topDescriptions(points, 12) : ['BOUNDARY CORNERS'];
-  const layerNames    = [...new Set(lines.map(l => l.layer ?? '').filter(Boolean))].slice(0, 8);
+  const descSummary   = pointsInScope.length > 0 ? topDescriptions(pointsInScope, 12) : ['BOUNDARY CORNERS'];
+  const layerNames    = [...new Set(renderedLines.map(l => l.layer ?? '').filter(Boolean))].slice(0, 8);
   const clusterSummary = topCells.map(c => `${cardinalOf(c, ext)}(${c.points.length})`).join(', ');
   const hasImagery    = Boolean((mapTiles && mapTiles.length > 0) || backgroundImage?.image);
   const corridorSpanFt = corridorWindows.length > 0
     ? corridorWindows[corridorWindows.length - 1].alongEndFt
     : 0;
-  const corridorNarrative = corridorWindows.length > 0
-    ? `Road corridor sweep: ${corridorPoints.length} road/curb/centerline shots span ${corridorSpanFt.toFixed(0)} ft; ${corridorWindows.length} overlapping frames cover the full run. Frame boundaries are NOT road endpoints — follow the shot row from the first shot to the last, even where density drops.`
-    : 'Road corridor sweep: no dedicated corridor frames this turn; use the overview and zone frames.';
+  const corridorNarrative = targetedWindows.length > 0
+    ? `Targeted failure windows: ${targetedWindows.length} close-up${targetedWindows.length === 1 ? '' : 's'} at the failed stations. These are not the whole corridor — fix the labelled station, then re-check the full run on the overview.`
+    : corridorWindows.length > 0
+      ? `Road corridor sweep: ${corridorPoints.length} road/curb/centerline shots span ${corridorSpanFt.toFixed(0)} ft; ${corridorWindows.length} overlapping frames cover the full run. Frame boundaries are NOT road endpoints — follow the shot row from the first shot to the last, even where density drops.`
+      : 'Road corridor sweep: no dedicated corridor frames this turn; use the overview and zone frames.';
   const centerlineShotCount = corridorPoints.filter(p =>
     /^(CL|C\/L|CENTER|CTR)/i.test((p.description ?? '').trim()),
   ).length;
-  const parcelLineCount = lines.filter(l =>
-    /PARCEL|TAX.?LOT|CADASTRE/i.test(l.layer ?? ''),
-  ).length;
+  const parcelLineCount = lines.filter(isParcelVisionLine).length;
+  const parcelGapRoadCount = inferParcelGapRoads(lines).length;
   const mentalModel = pass === 'geometry'
     ? buildGimbalMentalModel({
-        totalPoints: points.length,
+        totalPoints: pointsInScope.length,
         totalLines: lines.length,
         extentFt: { width: ext.spanE, height: ext.spanN },
         pointTypes: descSummary,
@@ -1766,6 +1951,8 @@ export async function captureVisionSurvey(
         detailFrameCount: detailFrames,
         centerlineShotCount,
         parcelLineCount,
+        parcelLinesRendered: renderParcelLines,
+        parcelGapRoadCount,
         boundaryCallCount: boundaryGeom.segments.length,
       })
     : '';
@@ -1787,7 +1974,11 @@ export async function captureVisionSurvey(
     pass === 'geometry' ? mentalModel : '',
     pass === 'geometry' ? corridorNarrative : '',
     boundaryGeom.segments.length > 0 && renderVectors ? `Property boundary: ${boundaryGeom.segments.length} calls enclosing site (highlighted in amber #F59E0B).` : '',
-    pass === 'geometry' ? `Parcel / tax-lot frontage lines are rendered in cyan (#22D3EE); they are property boundaries, not pavement edges.` : '',
+    pass === 'geometry'
+      ? renderParcelLines
+        ? `Parcel / tax-lot frontage lines are rendered in cyan (#22D3EE); they are property boundaries, not pavement edges.`
+        : `Parcel / tax-lot frontage (${parcelLineCount} lines) is held in memory for right-of-way and parcel-gap reasoning but is NOT drawn in this pass. Only road evidence, field shots and boundary geometry are visible.`
+      : '',
     hasImagery ? `Background aerial imagery (NAIP/satellite): ACTIVE in this separate imagery pass only.` : '',
     pass === 'geometry' ? `Background aerial imagery: NOT RENDERED in this pass. Do not infer geometry from the dark canvas background.` : '',
     `Point type distribution: ${descSummary.join(', ')}.`,
@@ -1801,12 +1992,13 @@ export async function captureVisionSurvey(
   return {
     frames,
     spatialNarrative,
-    totalPoints: points.length,
-    totalLines: lines.length,
+    totalPoints: pointsInScope.length,
+    totalLines: renderedLines.length,
     surveyExtentFt: { width: ext.spanE, height: ext.spanN },
     capturedAt: Date.now(),
     pass,
     hasBackgroundImagery: hasImagery,
+    parcelLinesRendered: renderParcelLines,
   };
 }
 
@@ -1907,10 +2099,13 @@ export function buildVisionParts(
   parts.push({
     text:
       `${textContext}\n\n` +
-      `CIVIL DRAFTER — GIMBAL VISION · TWO SEPARATE PASSES\n` +
+      `CIVIL DRAFTER — SURVEYORS EYE · TWO SEPARATE PASSES\n` +
       `PASS A — POINT + PARCEL GEOMETRY (PRIMARY, ${vision.frames.length} frames)\n` +
       `This pass is rendered on a clean dark canvas. Background imagery is deliberately absent.\n` +
-      `The frames show the actual field shots, parcel/frontage lines and boundary geometry only.\n` +
+      (vision.parcelLinesRendered === false
+        ? `The frames show field shots, road linework and boundary geometry only. Parcel/tax-lot\n` +
+          `frontage is retained in memory for right-of-way and parcel-gap reasoning, but is NOT drawn.\n`
+        : `The frames show the actual field shots, parcel/frontage lines and boundary geometry only.\n`) +
       `The camera starts wide, sweeps the full corridor, then zooms into the densest zones.\n` +
       `Before drafting, zoom back out and reconcile every detail against the overview.\n\n` +
       `Study PASS A for:\n` +
@@ -1982,7 +2177,9 @@ export function buildVisionParts(
       `\n─── ROAD EVIDENCE HIERARCHY (HIGHEST FIRST) ───\n` +
       `1. FIELD SHOTS — exact plan position. Parallel EP/EOP/CL/CURB/ROW rows define the corridor.\n` +
       `2. PARCEL / ROW FRONTAGE — legal corridor context. It can keep a road in the right-of-way\n` +
-      `   and continue it across a shot gap, but a parcel line is not a pavement edge.\n` +
+      `   and continue it across a shot gap, but a parcel line is not a pavement edge. The empty\n` +
+      `   strip between two DIFFERENT parcel fabrics is the road corridor itself; do not treat it\n` +
+      `   as vacant land or fill it with arbitrary linework.\n` +
       `3. OSM ROAD WAY — street continuity, name and alignment context. It is not a survey.\n` +
       `4. BACKGROUND IMAGERY — pavement width, canopy, driveways and visible edge context. It may\n` +
       `   supply a coarse image-only alignment only when ranks 1–3 are absent for that corridor.\n` +
@@ -1993,6 +2190,8 @@ export function buildVisionParts(
       `  shots exist, draw them even when there is no centerline.\n` +
       `• Paint layers: DYL/DBL → L-ROAD-PAINT-Y; WL/SWL → L-ROAD-PAINT-W; both CONTINUOUS.\n` +
       `• EP is a reference edge, never paint.\n` +
+      `• PC/PT/POC marks a bend: approximate it with a smooth curve through the shots; a rough\n` +
+      `  fitted arc is acceptable and preferred over a hard straight chord.\n` +
       `• Do NOT emit a baseline/centerline (CL, CTR, C-ROAD-CNTR) unless the user explicitly asks\n` +
       `  for a centerline, baseline, alignment, or stationing. CL shots are internal ordering evidence.\n`,
   });
@@ -2016,6 +2215,7 @@ export function buildVisionParts(
       `   (b) the two edges never cross and each stays on its own side of the road;\n` +
       `   (c) a side road or driveway T-s into the edge — it never cuts across the pavement;\n` +
       `   (d) no orphan stub, no duplicate, no stray line left lying across the road;\n` +
+      `   (d2) every T, cross, skew and Y has the same arm count, angle and station as the target;\n` +
       `   (e) the road reaches the true first and last road shots. If the shot row continues past the\n` +
       `       last vertex, or a CORRIDOR frame shows more shots beyond it, the take is incomplete.\n` +
       `   If the take fails any check, fix it and re-check. Never send a take you can see is wrong.\n` +

@@ -65,12 +65,20 @@ export function layoutLegend(
 
   const xRight = Math.max(SHEET_MARGIN_IN, sheetWidthIn - widthIn - SHEET_MARGIN_IN);
   const yBottom = Math.max(SHEET_MARGIN_IN, sheetHeightIn - heightIn - SHEET_MARGIN_IN);
-  const xIn = settings.position === 'bottom-right' || settings.position === 'top-right'
+  // A dragged legend stores an explicit position; the corner preset remains the
+  // fallback for sheets that have never been moved.
+  const explicitX = Number.isFinite(settings.xIn)
+    ? clamp(settings.xIn as number, 0, Math.max(0, sheetWidthIn - widthIn))
+    : null;
+  const explicitY = Number.isFinite(settings.yIn)
+    ? clamp(settings.yIn as number, 0, Math.max(0, sheetHeightIn - heightIn))
+    : null;
+  const xIn = explicitX ?? (settings.position === 'bottom-right' || settings.position === 'top-right'
     ? xRight
-    : SHEET_MARGIN_IN;
-  const yIn = settings.position === 'top-left' || settings.position === 'top-right'
+    : SHEET_MARGIN_IN);
+  const yIn = explicitY ?? (settings.position === 'top-left' || settings.position === 'top-right'
     ? SHEET_MARGIN_IN
-    : yBottom;
+    : yBottom);
 
   return {
     xIn,

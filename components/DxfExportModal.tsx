@@ -19,6 +19,7 @@ const DxfExportModal: React.FC<DxfExportModalProps> = ({ isOpen, onClose, onExpo
   const [includeCenterlines, setIncludeCenterlines] = useState(true);
   const [pointScale, setPointScale] = useState(1);
   const [steepSlopeFillStyle, setSteepSlopeFillStyle] = useState<'solid' | 'hatch' | 'native-hatch'>('solid');
+  const [includePointStyleNames, setIncludePointStyleNames] = useState(true);
 
   useEffect(() => {
     // FIX: Changed default file extension from .docx to .dxf to match the export format.
@@ -41,6 +42,7 @@ const DxfExportModal: React.FC<DxfExportModalProps> = ({ isOpen, onClose, onExpo
       includeCenterlines,
       pointScale,
       steepSlopeFillStyle,
+      includePointStyleNames,
     });
   };
 
@@ -92,6 +94,7 @@ const DxfExportModal: React.FC<DxfExportModalProps> = ({ isOpen, onClose, onExpo
               <Checkbox id="includePoints" label="Points" checked={includePoints} onChange={(e) => setIncludePoints(e.target.checked)} />
               <Checkbox id="includeLines" label="Lines" checked={includeLines} onChange={(e) => setIncludeLines(e.target.checked)} />
               <Checkbox id="includeCenterlines" label="Centerlines" checked={includeCenterlines} onChange={(e) => setIncludeCenterlines(e.target.checked)} />
+              <Checkbox id="includePointStyleNames" label="Point style names" checked={includePointStyleNames} onChange={(e) => setIncludePointStyleNames(e.target.checked)} />
             </div>
           </div>
           <div>

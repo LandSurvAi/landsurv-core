@@ -4,6 +4,7 @@
 
 import React, { createContext, useContext, useState, ReactNode, useCallback, useEffect, useRef } from 'react';
 import { AgentType, JobInfo, Settings, type AppNotification } from '../types';
+import { createDefaultPointStudioState } from '../services/pointStyles.ts';
 import { errorLogger } from '../utils/errorLogger';
 import {
   subscribeToErrors,
@@ -125,8 +126,10 @@ export const AppStateProvider: React.FC<AppStateProviderProps> = ({ children, av
     pointAttributeScaling: 'screen', // Point attributes default to locked screen-relative size so scaling thousands of points doesn't slow the system
     showPointSymbols: false,
     pointEfficiencyMode: true,
+    pointStudio: createDefaultPointStudioState(),
     debugPreflightEstimate: false,
     debugGimbalHud: false,
+    debugA2UIDecisionInspector: false,
     enableGeoAiDrafting: (typeof window !== 'undefined' && localStorage.getItem('landsurv_enable_geo_ai_drafting') === 'true') || false,
     showCacpNotifications: false,
     showCacpHandlerNotifications: false,

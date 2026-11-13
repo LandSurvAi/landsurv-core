@@ -51,6 +51,8 @@ import {
 } from '../types';
 import { rectifyBuildings, type RectifyStats } from './buildingRectifier';
 import { registerRoadingSkillHandlers } from './roadingSkillHandlers';
+import { roadLinkRegistry } from './roadLinkRegistry';
+import { extractRoadObject } from './roadObjectExtraction';
 import { registerRoadPaintSkillHandlers } from './roadPaintSkillHandlers';
 import { registerStormwaterSkillHandlers } from './stormwaterSkillHandlers';
 import { registerDirtVolumeSkillHandlers } from './dirtVolumeSkillHandlers';
@@ -1802,6 +1804,147 @@ export function registerDomainSkillHandlers(
       return respond(message, AgentType.PROFILE_AGENT, true, {
         offsets,
         elevations,
+      });
+    }),
+  );
+
+  // ── 6b. Road object extraction and linked-profile presentation ─────────
+  unsubs.push(
+    interAgentComm.onCommand('road_object_extract', async (message) => {
+      const opts = getOpts();
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const roadObjectId = typeof d.roadObjectId === 'string' ? d.roadObjectId : '';
+      const road = roadLinkRegistry.get(roadObjectId);
+      if (!road) {
+        return respond(message, AgentType.PROFILE_AGENT, false, undefined, 'ROAD_OBJECT_NOT_FOUND');
+      }
+      const context = {
+        centerlines: opts.centerlines,
+        points: opts.points,
+        lines: opts.lines,
+        tinSurfaces: opts.tinSurfaces,
+      };
+      const signature = roadLinkRegistry.buildInputSignature(road, context);
+      const result = extractRoadObject(road, context, { inputSignature: signature });
+
+      if (result.kind === 'complete') {
+        const updated = roadLinkRegistry.applyExtraction(road.id, {
+          existingProfile: result.existingProfile,
+          designProfile: result.designProfile,
+          crossSections: result.crossSections,
+          issues: result.issues,
+        }, signature);
+        opts.logActionToFieldbook(
+          `Profile Agent: extracted road object "${road.name}" (${result.existingProfile.samples.length} profile samples, ${result.crossSections.stations.length} sections).`,
+        );
+        return respond(message, AgentType.PROFILE_AGENT, true, {
+          status: updated?.status ?? 'live',
+          roadObjectId: road.id,
+          existingProfileId: result.existingProfile.id,
+          designProfileId: result.designProfile?.id ?? null,
+          sectionSetId: result.crossSections.id,
+          existingSampleCount: result.existingProfile.samples.length,
+          sectionStationCount: result.crossSections.stations.length,
+          issues: result.issues,
+        });
+      }
+
+      if (result.kind === 'needs-input') {
+        roadLinkRegistry.markNeedsInput(road.id, result.issues, signature);
+        return respond(message, AgentType.PROFILE_AGENT, true, {
+          status: 'needs-input',
+          roadObjectId: road.id,
+          previewId: `${road.id}:${signature}`,
+          missing: result.missing,
+          issues: result.issues,
+        });
+      }
+
+      roadLinkRegistry.failExtraction(road.id, result.error);
+      return respond(message, AgentType.PROFILE_AGENT, false, undefined, result.error);
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('road_object_resolve_missing_data', async (message) => {
+      const opts = getOpts();
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const roadObjectId = typeof d.roadObjectId === 'string' ? d.roadObjectId : '';
+      const decision = d.decision === 'gaps' || d.decision === 'extrapolate' ? d.decision : 'cancel';
+      const road = roadLinkRegistry.get(roadObjectId);
+      if (!road) {
+        return respond(message, AgentType.PROFILE_AGENT, false, undefined, 'ROAD_OBJECT_NOT_FOUND');
+      }
+      if (decision === 'cancel') {
+        return respond(message, AgentType.PROFILE_AGENT, true, {
+          status: roadLinkRegistry.get(roadObjectId)?.status ?? 'needs-input',
+          roadObjectId,
+          decision,
+        });
+      }
+      const context = {
+        centerlines: opts.centerlines,
+        points: opts.points,
+        lines: opts.lines,
+        tinSurfaces: opts.tinSurfaces,
+      };
+      const signature = roadLinkRegistry.buildInputSignature(road, context);
+      const result = extractRoadObject(road, context, {
+        inputSignature: signature,
+        missingDataPolicy: decision,
+      });
+      if (result.kind !== 'complete') {
+        return respond(message, AgentType.PROFILE_AGENT, false, undefined,
+          result.kind === 'failed' ? result.error : 'ROAD_MISSING_ELEVATION');
+      }
+      const updated = roadLinkRegistry.applyExtraction(road.id, {
+        existingProfile: result.existingProfile,
+        designProfile: result.designProfile,
+        crossSections: result.crossSections,
+        issues: result.issues,
+      }, signature);
+      return respond(message, AgentType.PROFILE_AGENT, true, {
+        status: updated?.status ?? 'live',
+        roadObjectId,
+        decision,
+        existingProfileId: result.existingProfile.id,
+        sectionSetId: result.crossSections.id,
+      });
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('road_profile_show', async (message) => {
+      const opts = getOpts();
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const roadObjectId = typeof d.roadObjectId === 'string' ? d.roadObjectId : '';
+      const profileKind = d.profileKind === 'design' ? 'design' : 'existing';
+      const road = roadLinkRegistry.get(roadObjectId);
+      if (!road) {
+        return respond(message, AgentType.PROFILE_AGENT, false, undefined, 'ROAD_OBJECT_NOT_FOUND');
+      }
+      const profile = profileKind === 'design' ? road.designProfile : road.existingProfile;
+      if (!profile) {
+        return respond(message, AgentType.PROFILE_AGENT, false, undefined,
+          profileKind === 'design' ? 'ROAD_NO_DESIGN_GRADE' : 'ROAD_MISSING_ELEVATION');
+      }
+      const samples = profile.samples
+        .filter(sample => sample.elevation !== null)
+        .map(sample => ({
+          station: sample.station - road.baselineBeginStation,
+          elevation: sample.elevation as number,
+        }));
+      opts.setProfileData(samples);
+      opts.setProfileInfo({
+        name: `${road.name} — ${profileKind === 'design' ? 'Design' : 'Existing Ground'}`,
+        type: 'centerline',
+      });
+      return respond(message, AgentType.PROFILE_AGENT, true, {
+        roadObjectId,
+        profileKind,
+        sampleCount: samples.length,
+        beginStation: road.baselineBeginStation,
+        endStation: road.baselineBeginStation + road.baselineLengthFt,
       });
     }),
   );

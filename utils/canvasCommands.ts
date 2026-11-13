@@ -14,6 +14,11 @@ export interface ParsedCommand {
 export interface CommandContext {
   onAddPoint?: () => void;
   onStartLine?: () => void;
+  /** Start a Centerline baseline (the B tool in the Draw menu). */
+  onStartBaseline?: () => void;
+  onStartBreakline?: () => void;
+  onStartExclusion?: () => void;
+  onStartBoundaryLine?: () => void;
   /** Start CIRCLE; `ttr` opens the tangent-tangent-radius pick flow. */
   onStartCircle?: (options?: { ttr?: boolean }) => void;
   /** Start the interactive aligned-dimension tool (D / DIMALIGNED). */
@@ -130,6 +135,8 @@ export interface HelpEntry {
   description: string;
   /** Short qualifier rendered in italics (e.g. “bare M = picks”). */
   note?: string;
+  /** Deterministic command executed when this row is clicked in docked A2UI help. */
+  run?: string;
 }
 
 export interface HelpGroup {
@@ -223,6 +230,17 @@ const COMMAND_ALIASES: Record<string, string> = {
   i: 'inclusion',
   inc: 'inclusion',
   inclusion: 'inclusion',
+  p: 'add_point',
+  point: 'add_point',
+  baseline: 'baseline',
+  bl: 'baseline',
+  breakline: 'breakline',
+  breaklines: 'breakline',
+  bk: 'breakline',
+  exclusion: 'exclusion',
+  excl: 'exclusion',
+  boundaryline: 'boundaryline',
+  boundary: 'boundaryline',
   u: 'undo',
   undo: 'undo',
   redo: 'redo',
@@ -315,6 +333,11 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
   text: 'Place annotation text with the in-canvas editor',
   ortho: 'Toggle orthogonal drawing',
   inclusion: 'Draw an inclusion boundary',
+  add_point: 'Place a survey point',
+  baseline: 'Start a Centerline baseline alignment',
+  breakline: 'Draw breaklines',
+  exclusion: 'Draw an exclusion boundary',
+  boundaryline: 'Draw a boundary line',
   undo: 'Undo the last change',
   redo: 'Redo the last change',
   zoom_extents: 'Fit the drawing in view',
@@ -429,6 +452,54 @@ export const HELP_GROUPS: HelpGroup[] = [
     ],
   },
 ];
+
+/**
+ * Rows that can run immediately from the docked A2UI command reference.
+ * Gestures and context-dependent shortcuts intentionally have no runner.
+ */
+const HELP_RUNS: Record<string, string> = {
+  'L / PLINE': 'line',
+  'B (BASELINE)': 'baseline',
+  'C / CIRCLE': 'circle',
+  'H / HATCH': 'hatch',
+  'D / DIMALIGNED': 'd',
+  'TEXT / MTEXT': 'text',
+  'REC / RECTANGLE': 'rec',
+  'POL / POLYGON': 'pol',
+  'P': 'p',
+  'I / INCLUSION': 'i',
+  'S / SELECT': 's',
+  'B / BOX': 'b',
+  'T / TRIM': 't',
+  'F / FILLET': 'f',
+  'EX / EXTEND': 'ex',
+  'CP / CC / COPY': 'cp',
+  'OS / OFFSET': 'os',
+  'M / MOVE': 'm',
+  'RO / R': 'ro',
+  'SC / SCALE': 'sc',
+  'MI / MIRROR': 'mi',
+  'J / JOIN': 'j',
+  'EXPLODE': 'explode',
+  'X / E / DEL': 'x',
+  'AR': 'ar',
+  'PA': 'pa',
+  'ZE': 'ze',
+  'U / REDO': 'u',
+  'ALL / DS': 'all',
+  'DI': 'di',
+  'ORTHO': 'ortho',
+  'PROP': 'prop',
+  'KEY': 'key',
+  'CLEAR': 'clear',
+  'HELP / ?': 'help',
+};
+for (const group of HELP_GROUPS) {
+  for (const entry of group.entries) {
+    const run = HELP_RUNS[entry.command];
+    if (run) entry.run = run;
+  }
+}
 
 export const HELP_NOTES: string[] = [
   'B starts the baseline chain when no selection is active; inside SELECT, B toggles box selection. Baselines are Centerline objects shared with Stationing & CL and use the same A arc / L line chain as PLINE.',
@@ -666,6 +737,26 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
   const args = cmd.args;
 
   switch (cmd.verb) {
+    case 'add_point':
+      ctx.onAddPoint?.();
+      return { status: 'ok', message: 'POINT: Click the canvas to place a survey point [Esc to finish]' };
+
+    case 'baseline':
+      ctx.onStartBaseline?.();
+      return { status: 'ok', message: 'BASELINE: Pick the start point, then chain line/arc segments [A arc · L line · Enter finish · Esc cancel]' };
+
+    case 'breakline':
+      ctx.onStartBreakline?.();
+      return { status: 'ok', message: 'BREAKLINE: Pick the start point, then chain line/arc segments [Esc to finish]' };
+
+    case 'exclusion':
+      ctx.onStartExclusion?.();
+      return { status: 'ok', message: 'EXCLUSION: Pick the start point, then chain line/arc segments [Esc to finish]' };
+
+    case 'boundaryline':
+      ctx.onStartBoundaryLine?.();
+      return { status: 'ok', message: 'BOUNDARY LINE: Pick the start point, then chain line/arc segments [Esc to finish]' };
+
     case 'line':
       ctx.onStartLine?.();
       return { status: 'ok', message: 'LINE: Specify next point or length [A for Arc, Esc to cancel]' };

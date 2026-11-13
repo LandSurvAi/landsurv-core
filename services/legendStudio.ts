@@ -55,6 +55,11 @@ export interface LegendSettings {
   fontScale: number;
   showBorder: boolean;
   showOnSheet: boolean;
+  /** Explicit paper-space position in inches. Falls back to `position` when omitted. */
+  xIn?: number;
+  yIn?: number;
+  /** Locked paper objects ignore move and scale gestures. */
+  locked?: boolean;
   entries: LegendEntry[];
   selectedEntryId?: string | null;
 }
@@ -213,6 +218,9 @@ function normalizeSettings(raw: unknown): LegendSettings {
       : DEFAULT_LEGEND_SETTINGS.fontScale,
     showBorder: value.showBorder !== false,
     showOnSheet: value.showOnSheet !== false,
+    xIn: Number.isFinite(value.xIn) ? Math.max(0, Number(value.xIn)) : undefined,
+    yIn: Number.isFinite(value.yIn) ? Math.max(0, Number(value.yIn)) : undefined,
+    locked: value.locked === true,
     entries,
     selectedEntryId: typeof value.selectedEntryId === 'string' ? value.selectedEntryId : null,
   };

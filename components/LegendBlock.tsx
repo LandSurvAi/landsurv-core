@@ -1,6 +1,8 @@
 import React, { useSyncExternalStore } from 'react';
 import { legendStore, legendEntryResolvedStyle } from '../services/legendStudio.ts';
 import { layoutLegend, legendSwatchDashArray } from '../utils/legendLayout.ts';
+import { PaperObjectLockButton, PaperResizeHandle } from './PaperObjectChrome.tsx';
+import { clampPaperPosition, paperScaleFromDrag } from '../utils/paperObjects.ts';
 
 interface LegendBlockProps {
   /** Pixels per sheet inch (SheetView's effectivePpi). */
@@ -16,8 +18,9 @@ interface LegendBlockProps {
  * edit in the Legend A2UI appears here immediately, and clicking an entry
  * selects the same entry in the editor.
  *
- * Everything drawn here is plot content: transparent background, line samples,
- * and text — the same marks `legendToSvgMarkup` puts in the exported PDF.
+ * The block is a first-class paper object: drag it to move, drag the corner
+ * handle to proportionally scale it, and lock it to prevent both. Position and
+ * size are stored in the same settings the PDF exporter reads.
  */
 export const LegendBlock: React.FC<LegendBlockProps> = ({
   ppi,
@@ -31,6 +34,72 @@ export const LegendBlock: React.FC<LegendBlockProps> = ({
     legendStore.getSnapshot,
   );
 
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    // Consume the click even while locked so it cannot start a sheet pan.
+    e.stopPropagation();
+    if (settings.locked) return;
+    // Capture the gesture before the layout recomputes from the new position.
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const layout = layoutLegend(settings, sheetWidthIn, sheetHeightIn);
+    const origX = layout.xIn;
+    const origY = layout.yIn;
+    const previousCursor = document.body.style.cursor;
+    document.body.style.cursor = 'grabbing';
+
+    const onMove = (ev: MouseEvent) => {
+      const next = clampPaperPosition({
+        xIn: origX + (ev.clientX - startX) / ppi,
+        yIn: origY + (ev.clientY - startY) / ppi,
+        widthIn: layout.widthIn,
+        heightIn: layout.heightIn,
+      }, sheetWidthIn, sheetHeightIn);
+      legendStore.update({ xIn: next.xIn, yIn: next.yIn });
+    };
+    const onUp = () => {
+      document.body.style.cursor = previousCursor;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('blur', onUp);
+  };
+
+  const onResizeMouseDown = (e: React.MouseEvent) => {
+    if (settings.locked) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const layout = layoutLegend(settings, sheetWidthIn, sheetHeightIn);
+    const startX = e.clientX;
+    const origWidth = settings.widthIn ?? layout.widthIn;
+    const origFontScale = settings.fontScale ?? 1;
+    const maxWidth = Math.max(1.4, sheetWidthIn - layout.xIn - 0.1);
+    const previousCursor = document.body.style.cursor;
+    document.body.style.cursor = 'nwse-resize';
+
+    const onMove = (ev: MouseEvent) => {
+      const ratio = paperScaleFromDrag(origWidth, (ev.clientX - startX) / ppi, { min: 0.5, max: 2.5 });
+      const widthIn = Math.min(origWidth * ratio, maxWidth);
+      const applied = widthIn / origWidth;
+      legendStore.update({
+        widthIn,
+        fontScale: Math.min(1.8, Math.max(0.7, origFontScale * applied)),
+      });
+    };
+    const onUp = () => {
+      document.body.style.cursor = previousCursor;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('blur', onUp);
+  };
+
   if (!settings.showOnSheet) return null;
   const layout = layoutLegend(settings, sheetWidthIn, sheetHeightIn);
   if (layout.visibleEntries.length === 0) return null;
@@ -42,12 +111,17 @@ export const LegendBlock: React.FC<LegendBlockProps> = ({
   const swatchW = Math.max(4, px(layout.swatchWIn));
   const swatchH = Math.max(3, px(layout.rowIn * 0.56));
   const ruleWidth = Math.max(0.75, px(0.012));
+  const locked = settings.locked === true;
 
   return (
     <div
       data-testid="paperspace-legend"
+      className="group"
+      onMouseDown={onMouseDown}
       onDoubleClick={() => onOpenEditor?.()}
-      title="Double-click to edit the legend"
+      title={locked
+        ? 'Legend locked — unlock to move or scale'
+        : 'Legend — drag to move, corner handle to scale, double-click to edit'}
       style={{
         position: 'absolute',
         left: px(layout.xIn),
@@ -62,6 +136,8 @@ export const LegendBlock: React.FC<LegendBlockProps> = ({
         zIndex: 36,
         pointerEvents: 'auto',
         overflow: 'hidden',
+        cursor: locked ? 'default' : 'move',
+        userSelect: 'none',
       }}
     >
       <div
@@ -168,6 +244,18 @@ export const LegendBlock: React.FC<LegendBlockProps> = ({
           );
         })}
       </div>
+
+      <PaperObjectLockButton
+        locked={locked}
+        name="legend"
+        onToggle={() => legendStore.update({ locked: !locked })}
+      />
+      {!locked && (
+        <PaperResizeHandle
+          onMouseDown={onResizeMouseDown}
+          title="Drag to scale the legend"
+        />
+      )}
     </div>
   );
 };

@@ -8,9 +8,10 @@
  * - Real-time sync status
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { PointList, SurveyPoint } from '../types.ts';
 import { useAppState } from '../contexts/AppStateContext.tsx';
+import { createPointStyleResolver } from '../services/pointStyles.ts';
 
 // Icons
 const SyncIcon = () => (
@@ -93,7 +94,7 @@ export const PointEditorC3DSync: React.FC<PointEditorC3DSyncProps> = ({
   const [connectionStatus, setConnectionStatus] = useState<'checking' | 'connected' | 'disconnected' | null>(null);
   const [c3dPointCount, setC3dPointCount] = useState<number | null>(null);
   const [pointGroupFilter, setPointGroupFilter] = useState<string>('');
-  const { addNotification } = useAppState();
+  const { addNotification, settings } = useAppState();
 
   const notifyError = (message: string) => {
     addNotification({ kind: 'c3d-sync', severity: 'error', title: 'C3D Sync', message });
@@ -101,6 +102,19 @@ export const PointEditorC3DSync: React.FC<PointEditorC3DSyncProps> = ({
 
   // Calculate point counts
   const allPoints = pointLists.flatMap(l => l.points);
+  const pointStyleNames = useMemo(() => {
+    const names = new Map<string, string>();
+    if (!settings.pointStudio) return names;
+    const resolver = createPointStyleResolver(settings.pointStudio);
+    const nameById = new Map(settings.pointStudio.styles.map(style => [style.id, style.name]));
+    for (const list of pointLists) {
+      for (const p of list.points) {
+        const resolved = resolver.resolve(p, list.id);
+        names.set(p.pointNumber, nameById.get(resolved.styleId) ?? resolved.styleId);
+      }
+    }
+    return names;
+  }, [pointLists, settings.pointStudio]);
   const selectedCount = selectedPointNumbers.size;
   const selectedListPoints = selectedListId 
     ? pointLists.find(l => l.id === selectedListId)?.points.length || 0 
@@ -177,6 +191,7 @@ export const PointEditorC3DSync: React.FC<PointEditorC3DSyncProps> = ({
           easting: p.easting,
           elevation: p.elevation || 0,
           rawDescription: p.description || '',
+          pointStyleName: pointStyleNames.get(p.pointNumber),
         })),
         options: {
           createPointGroup: true,
@@ -213,7 +228,7 @@ export const PointEditorC3DSync: React.FC<PointEditorC3DSyncProps> = ({
       notifyError(errorMessage);
       setLoading(false);
     }
-  }, [sessionToken, getPointsToExport, onSyncComplete, checkConnectionStatus]);
+  }, [sessionToken, getPointsToExport, onSyncComplete, checkConnectionStatus, pointStyleNames]);
 
   // Import points from Civil 3D
   const handleImportPoints = useCallback(async () => {
@@ -289,6 +304,7 @@ export const PointEditorC3DSync: React.FC<PointEditorC3DSyncProps> = ({
             easting: p.easting,
             elevation: p.elevation || 0,
             rawDescription: p.description || '',
+            pointStyleName: pointStyleNames.get(p.pointNumber),
           })),
           options: {
             createPointGroup: true,
@@ -340,7 +356,7 @@ export const PointEditorC3DSync: React.FC<PointEditorC3DSyncProps> = ({
       notifyError(errorMessage);
       setLoading(false);
     }
-  }, [sessionToken, getPointsToExport, allPoints, onImportPoints, onSyncComplete, checkConnectionStatus]);
+  }, [sessionToken, getPointsToExport, allPoints, onImportPoints, onSyncComplete, checkConnectionStatus, pointStyleNames]);
 
   const handleAction = useCallback(() => {
     switch (syncMode) {

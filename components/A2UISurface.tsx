@@ -3,6 +3,7 @@ import { FileText, KeyRound, Maximize2, Settings2, Table2, Wrench } from 'lucide
 import {
   type AgentType,
   type A2UIPayload,
+  type AoiBoundary,
   type BoundaryFile,
   type DeedSummary,
   type A2UICacpReviewItem,
@@ -24,6 +25,8 @@ import {
 } from '../types.ts';
 import { agentThemeColors } from '../constants/agents.ts';
 import { A2UIEmbeddedContext } from './UploadShell.tsx';
+import { RoadLinksSurface } from './RoadLinksSurface.tsx';
+import { useA2UIFileDrop } from './a2uiFileDrop.tsx';
 import { BoundaryDeedIntake } from './BoundaryDeedIntake.tsx';
 import { A2UIBoundarySummary } from './A2UIBoundarySummary.tsx';
 import PointEditorInput from './PointEditorInput.tsx';
@@ -85,15 +88,21 @@ export const WORKSPACE_TOOL_LABELS: Record<A2UIWorkspaceToolId, string> = {
   'closure-report': 'Closure Reports',
   'steep-slope-report': 'Steep Slope Report',
   'legal-writer': 'Legal Description Writer',
-  'sheet-view': 'Sheet View (24×36 Plot Layout)',
+  'sheet-view': 'Sheet View',
   'roading-panel': 'Roading Studio',
+  'road-links': 'Road Links',
   'stormwater-quick-check': 'Stormwater Quick-Check',
   'dirt-volume-panel': 'Dirt Volume',
   'redline-workspace': 'Redline Workspace',
   'road-paint-studio': 'Road Paint Studio',
   'tin-surfaces': 'TIN Surfaces',
+  'point-studio': 'Point Studio',
   'point-tools': 'Point Tools',
+  'surveyors-eye': 'Surveyors Eye',
   'legend': 'Legend',
+  'area-of-interest': 'Area of Interest',
+  'draw-menu': 'Draw & Edit',
+  'command-help': 'Command Help',
 };
 
 export interface A2UIKeyEntryStatus {
@@ -123,6 +132,12 @@ export interface A2UIHostContextValue {
     elevation: string;
     description: string;
   }) => void;
+  /** Pick a snapped point/coordinate from the canvas for an A2UI input form. */
+  onPickCanvasPoint?: () => Promise<{
+    northing: number;
+    easting: number;
+    pointNumber?: string;
+  } | null>;
   /** Project WGS84 coordinates to the active CRS for Plus Code entry. */
   convertLatLon?: (lat: number, lon: number) => { northing: number; easting: number } | null;
   /** Project centre or GPS fix used to recover shortened Plus Codes. */
@@ -165,6 +180,21 @@ export interface A2UIHostContextValue {
   onGisUploaded?: (content: string, fileName: string, source?: 'file' | 'url') => void;
   inclusionBoundaries?: InclusionBoundary[];
   activeInclusionBoundaryId?: string | null;
+  /** Held AOIs; active AOI takes precedence over inclusion clipping. */
+  aoiBoundaries?: AoiBoundary[];
+  activeAoiBoundaryId?: string | null;
+  onStartAoiDraw?: () => void;
+  onSetActiveAoi?: (id: string | null) => void;
+  onDeleteAoi?: (id: string) => void;
+  onCreateAoiFromInclusion?: (id: string) =>
+    | { ok: boolean; message?: string }
+    | Promise<{ ok: boolean; message?: string }>;
+  onCreateAoiFromBoundaryFile?: (id: string) =>
+    | { ok: boolean; message?: string }
+    | Promise<{ ok: boolean; message?: string }>;
+  onCreateAoiFromAddress?: (address: string) =>
+    | { ok: boolean; message?: string }
+    | Promise<{ ok: boolean; message?: string }>;
   hasInclusionLines?: boolean;
   getInclusionBboxWgs84?: (boundaryId: string | null) => [number, number, number, number] | null;
   // Zoning Agent
@@ -245,7 +275,8 @@ export interface A2UIHostContextValue {
   /** Render a workspace manager/tool panel inside an A2UI surface. */
   renderWorkspaceTool?: (
     toolId: A2UIWorkspaceToolId,
-    presentation: 'inline' | 'floating' | 'docked'
+    presentation: 'inline' | 'floating' | 'docked',
+    payload?: A2UIPayload,
   ) => React.ReactNode;
   /** Project files available to the in-chat text editor. */
   textFiles?: SessionFile[];
@@ -307,6 +338,8 @@ export interface A2UIHostContextValue {
   projectBboxWgs84?: [number, number, number, number] | null;
   /** Latest GPS fix used to suggest a CRS in the A2UI settings surface. */
   gpsPosition?: { latitude: number; longitude: number } | null;
+  /** Record the fix used by "Use my GPS location" so project location can reuse it. */
+  onGpsFixDetected?: (fix: { latitude: number; longitude: number }) => void;
   /** Retry the last County parcel fetch. */
   onProjectLocationCountyRetry?: () => void;
   /** Open the County Parcels workspace to pick or add a server. */
@@ -500,6 +533,14 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
   cadManagerContent,
 }) => {
   const host = useContext(A2UIHostContext);
+  const fileDrop = useA2UIFileDrop({
+    host,
+    widgetType: payload.widgetType,
+    enabled:
+      payload.kind === 'upload-widget' &&
+      presentation === 'inline' &&
+      payload.widgetType !== 'standards-compliance-intake',
+  });
   const [isCollapsed, setIsCollapsed] = useState<boolean>(
     payload.status === 'completed' || payload.status === 'dismissed'
   );
@@ -662,6 +703,7 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
           onApplyClusterProjection={host.onApplyClusterProjection}
           projectBboxWgs84={host.projectBboxWgs84}
           gpsPosition={host.gpsPosition}
+          onGpsFixDetected={host.onGpsFixDetected}
         />
       </div>
     );
@@ -852,33 +894,50 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
     const embedded = presentation !== 'inline';
     // Sheet View is a visual canvas: give it the room a plot sheet needs.
     const isSheetView = toolId === 'sheet-view';
-    const rendered = host.renderWorkspaceTool?.(toolId, presentation);
+    // These compact canvas utilities keep their own tiny heading; the shelf
+    // chrome should not wrap them in a second, heavier panel.
+    const isLightweightCanvasTool = toolId === 'draw-menu' || toolId === 'command-help';
+    // These tools already have a title in the fullscreen/floating/toolshelf
+    // chrome. Drop the duplicated workspace heading there, but keep it in the
+    // inline chat card where it is the only title.
+    const hideToolHeading =
+      (toolId === 'surveyors-eye' || toolId === 'area-of-interest' || isLightweightCanvasTool) && embedded;
+    const hasSurfaceActions = Boolean(onPopOut || onDock || onChat || onFullscreen || onMinimize);
+    const rendered = host.renderWorkspaceTool?.(toolId, presentation, payload);
     return (
       <div
         data-testid={`a2ui-surface-${toolId}`}
         className={embedded ? 'flex h-full min-h-0 flex-col' : 'mt-3 w-full'}
       >
-        <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
-          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">
-            <Wrench className="h-3 w-3" />
-            {toolLabel}
-          </span>
-          <SurfaceActions
-            onPopOut={onPopOut}
-            onDock={onDock}
+        {(!hideToolHeading || hasSurfaceActions) && (
+          <div className={`mb-1.5 flex items-center gap-2 px-0.5 ${hideToolHeading ? 'justify-end' : 'justify-between'}`}>
+            {!hideToolHeading && (
+              <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">
+                <Wrench className="h-3 w-3" />
+                {toolLabel}
+              </span>
+            )}
+            <SurfaceActions
+              onPopOut={onPopOut}
+              onDock={onDock}
               onChat={onChat}
-            onFullscreen={onFullscreen}
-            onMinimize={onMinimize}
-          />
-        </div>
+              onFullscreen={onFullscreen}
+              onMinimize={onMinimize}
+            />
+          </div>
+        )}
         <div
-          className={`overflow-hidden rounded-xl border border-cyan-400/25 bg-[#070e18]/90 ${
-            embedded
+          className={
+            isLightweightCanvasTool && embedded
               ? 'min-h-0 flex-1 overflow-y-auto'
-              : isSheetView
-                ? 'h-[min(80vh,820px)] overflow-y-auto'
-                : 'max-h-[min(62vh,520px)] overflow-y-auto'
-          }`}
+              : `overflow-hidden rounded-xl border border-cyan-400/25 bg-[#070e18]/90 ${
+                  embedded
+                    ? 'min-h-0 flex-1 overflow-y-auto'
+                    : isSheetView
+                      ? 'h-[min(80vh,820px)] overflow-y-auto'
+                      : 'max-h-[min(62vh,520px)] overflow-y-auto'
+                }`
+          }
         >
           {rendered ?? (
             <div className="p-4 text-xs text-slate-300">
@@ -1008,6 +1067,7 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
         <A2UIInputForm
           form={payload.inputForm}
           onSubmit={message => host.onSubmitInput?.(message, payload)}
+          onPickCanvasPoint={host.onPickCanvasPoint}
         />
       </div>
     );
@@ -1589,6 +1649,9 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
           />
         );
 
+      case 'road-links':
+        return <RoadLinksSurface />;
+
       case 'roading-intake':
       case 'roading-designer':
         return (
@@ -1636,7 +1699,8 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
     <A2UIEmbeddedContext.Provider value={true}>
       <div
         data-testid={`a2ui-surface-${payload.widgetType}`}
-        className="mt-3 w-full"
+        className="relative mt-3 w-full"
+        {...fileDrop.handlers}
       >
         <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
           <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-400">
@@ -1654,9 +1718,19 @@ export const A2UISurface: React.FC<A2UISurfaceProps> = ({
             </button>
           </div>
         </div>
+        {fileDrop.enabled && (
+          <div
+            data-testid="a2ui-file-drop-hint"
+            className="mb-1.5 flex items-center gap-1.5 rounded-md border border-dashed border-white/15 px-2 py-1 text-[9.5px] text-slate-400"
+          >
+            <span aria-hidden="true">⤓</span>
+            Drag &amp; drop a file here
+          </div>
+        )}
         <Suspense fallback={<div className="p-3 text-xs text-slate-400">Loading upload options…</div>}>
           {renderWidget()}
         </Suspense>
+        {fileDrop.overlay}
       </div>
     </A2UIEmbeddedContext.Provider>
   );

@@ -48,8 +48,8 @@ export const AGENT_INITIAL_QUICK_THOUGHTS: Record<AgentType, string[]> = {
   ],
   [AgentType.CIVIL_DRAFTER]: [
     'Set up Auto Draft',
+    'Open Point Studio',
     'Set up context',
-    'Yes, upload a point or PDF file',
   ],
   [AgentType.DEED_READER]: [
     'Upload or paste a deed',
@@ -124,7 +124,8 @@ export const AGENT_INITIAL_QUICK_THOUGHTS: Record<AgentType, string[]> = {
   [AgentType.PROFILE_AGENT]: [
     'Generate a profile along a line',
     'Create cross sections every 50 ft',
-    'Open Profile Generator',
+    'Show linked road profiles',
+    'Open Road Links',
   ],
   [AgentType.COGO_AGENT]: [
     'Inverse between two points',
@@ -198,6 +199,8 @@ export const AGENT_INITIAL_QUICK_THOUGHTS: Record<AgentType, string[]> = {
     'Synthesize an existing road',
     'Design a new road corridor',
     'Open Roading Studio',
+    'Open Road Links',
+    'Refresh road profiles & sections',
   ],
   [AgentType.REDLINE_AGENT]: [
     'Upload a marked-up plan package',

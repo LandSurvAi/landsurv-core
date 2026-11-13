@@ -321,6 +321,121 @@ const ALL_ROADING_SKILLS: SkillSchema[] = [
       'User: "Clear the road corridor" -> roading_clear({})',
     ],
   },
+  {
+    id: 'road_object_link',
+    name: 'Link Road Model to Road Object',
+    type: 'action',
+    description:
+      'Creates or updates the first-class RoadObject for a parametric road model and its baseline. Idempotent per baseline.',
+    inputs: {
+      roadModelId: { type: 'string', required: true, description: 'RoadCorridorRun id.' },
+    },
+    outputs: {
+      roadObjectId: { type: 'string', required: true },
+      status: { type: 'string', required: true },
+    },
+    examples: ['Link road model road-model-1760000000000 to its baseline.'],
+  },
+  {
+    id: 'road_object_get',
+    name: 'Get Road Object',
+    type: 'query',
+    description: 'Returns one RoadObject by id or baseline id, including profiles, sections, links, attachments, and issues.',
+    inputs: {
+      roadObjectId: { type: 'string' },
+      baselineId: { type: 'string' },
+    },
+    outputs: {
+      roadObject: { type: 'object', required: true },
+      found: { type: 'boolean', required: true },
+    },
+  },
+  {
+    id: 'road_object_list',
+    name: 'List Road Objects',
+    type: 'query',
+    description: 'Lists road-object summaries with status, profile/section counts, and issues.',
+    inputs: {},
+    outputs: {
+      roadObjects: { type: 'array', required: true, items: { type: 'object' } },
+      count: { type: 'integer', required: true },
+    },
+  },
+  {
+    id: 'road_object_set_preferences',
+    name: 'Set Road Object Preferences',
+    type: 'action',
+    description: 'Updates per-road elevation-source order, TIN selection, sampling intervals, ground margin, or missing-data policy.',
+    inputs: {
+      roadObjectId: { type: 'string', required: true },
+      preferences: { type: 'object', required: true },
+    },
+    outputs: {
+      roadObject: { type: 'object' },
+      status: { type: 'string' },
+    },
+  },
+  {
+    id: 'road_object_refresh',
+    name: 'Refresh Road Object',
+    type: 'action',
+    description: 'Delegates extraction of existing/design profiles and cross sections to the Profile Agent.',
+    inputs: {
+      roadObjectId: { type: 'string', required: true },
+      reason: { type: 'string' },
+    },
+    outputs: {
+      status: { type: 'string' },
+      existingProfileId: { type: 'string' },
+      sectionSetId: { type: 'string' },
+    },
+  },
+  {
+    id: 'road_object_unlink',
+    name: 'Unlink Road Object',
+    type: 'action',
+    description: 'Removes a RoadObject, its profiles, sections, links, and attachments. The baseline and linework remain.',
+    inputs: {
+      roadObjectId: { type: 'string', required: true },
+      confirm: { type: 'boolean', required: true },
+    },
+    outputs: {
+      removedRoadObjectId: { type: 'string', required: true },
+    },
+  },
+  {
+    id: 'road_object_attach',
+    name: 'Attach Road Object Consumer',
+    type: 'action',
+    description: 'Validates a registered consumer payload and attaches station/offset anchors and section hooks.',
+    inputs: {
+      roadObjectId: { type: 'string', required: true },
+      consumerId: { type: 'string', required: true },
+      kind: { type: 'string', required: true },
+      targetKind: { type: 'string', required: true },
+      targetId: { type: 'string', required: true },
+      payload: { type: 'object', required: true },
+    },
+    outputs: {
+      link: { type: 'object', required: true },
+      attachments: { type: 'array', required: true, items: { type: 'object' } },
+      sectionRefreshQueued: { type: 'boolean' },
+    },
+  },
+  {
+    id: 'road_object_detach',
+    name: 'Detach Road Object Consumer',
+    type: 'action',
+    description: 'Removes a consumer link and its attachments from a RoadObject.',
+    inputs: {
+      roadObjectId: { type: 'string', required: true },
+      linkId: { type: 'string', required: true },
+    },
+    outputs: {
+      detached: { type: 'boolean', required: true },
+      sectionRefreshQueued: { type: 'boolean' },
+    },
+  },
 ];
 
 export const ROADING_SKILLS: SkillSchema[] = ALL_ROADING_SKILLS;

@@ -15,6 +15,10 @@ const ROAD_HINT_RE =
 const BOUNDARY_HINT_RE =
   /\b(?:boundar(?:y|ies)|property\s+(?:line|lines|corner|corners)|parcel\s+(?:line|lines|corner|corners|boundar(?:y|ies))|lot\s+(?:line|lines|corner|corners)|frontage|easement|right[-\s]?of[-\s]?way)\b/i;
 
+export function isRoadGroundingQuery(query: string): boolean {
+  return ROAD_HINT_RE.test(query);
+}
+
 export function shouldFetchParcelLineGrounding(
   agent: AgentType,
   query: string,

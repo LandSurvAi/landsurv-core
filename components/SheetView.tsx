@@ -19,12 +19,14 @@
 //   • Export: current sheet to PDF, or the entire sheet set to a multi-page
 //     PDF (one page per sheet, page size = that sheet's paper size).
 
-import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useMemo, useEffect, useSyncExternalStore } from 'react';
 import type {
     SurveyPoint, SurveyLine, ProfilePoint, ProfileInfo, CanvasHatch,
     ContourLabel, StreetLabel, ParcelLabel, MapAreaLabel, CanvasTextAnnotation,
     AnnotationCategoryStyle, AnnotationTextStyle, ParcelLabelFormatter, ParcelCadTextStyle,
+    RoadObject, RoadCrossSectionStation,
 } from '../types.ts';
+import { roadLinkRegistry } from '../services/roadLinkRegistry.ts';
 import { buildSheetAnnotations, type SheetPointLayers } from '../utils/sheetAnnotations.ts';
 import { explodeHatchToLines } from '../utils/hatchExplode.ts';
 import { getHatchByName, type HatchDefinition } from '../services/hatchLibrary.ts';
@@ -32,6 +34,8 @@ import { LegendBlock } from './LegendBlock.tsx';
 import { openLegendStudioSurface } from './A2UILegendStudio.tsx';
 import { legendStore } from '../services/legendStudio.ts';
 import { legendToSvgMarkup } from '../utils/legendLayout.ts';
+import { PaperObjectLockButton, PaperResizeHandle } from './PaperObjectChrome.tsx';
+import { clampPaperPosition, paperScaleFromDrag } from '../utils/paperObjects.ts';
 import { Compass, FileDown, Files, Frame, Layers, Lock, Map as MapIcon, Maximize2, Palette, RotateCw, Ruler, Tag, Target, Trash2, Unlock } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { parseDxfForSymbol } from '../utils/dxfParser.ts';
@@ -43,6 +47,8 @@ import { useCanvasState } from '../contexts/CanvasStateContext';
 import { getStaticMap, clearStaticMapsCache } from '../services/staticMapsService';
 import { WebGpuBasemap, isWebGpuEnabled, WEBGPU_PREF_EVENT } from '../utils/webgpuBasemap';
 import { clearMapCache, decodeImageCached } from '../utils/mapTileCache';
+import type { SheetViewCommand, SheetViewSnapshot } from '../services/sheetViewProtocol.ts';
+import { screenDragToSheetPanDelta } from '../utils/sheetViewPan.ts';
 import {
     TitleblockEditor,
     TitleblockRenderer,
@@ -749,6 +755,8 @@ export interface SheetScaleBar {
     unitLabel: string;
     showNumericScale: boolean;
     color: string;
+    /** When true, the graphic scale cannot be moved or scaled on paper. */
+    locked?: boolean;
 }
 
 export function makeDefaultScaleBar(vpId = ''): SheetScaleBar {
@@ -771,8 +779,12 @@ export function makeDefaultScaleBar(vpId = ''): SheetScaleBar {
 interface Viewport {
     id: string;
     xIn: number; yIn: number; wIn: number; hIn: number;
-    /** 'plan' = normal survey plan view; 'profile' = vertical profile chart. */
-    type: 'plan' | 'profile';
+    /** 'plan' = normal survey plan view; 'profile' = vertical profile chart; 'cross-section' = station section chart. */
+    type: 'plan' | 'profile' | 'cross-section';
+    /** Linked road object for profile/cross-section viewports. */
+    roadObjectId?: string | null;
+    profileKind?: 'existing' | 'design';
+    crossSectionStation?: number | null;
     centerE: number | null;
     centerN: number | null;
     scaleFt: number;
@@ -810,6 +822,8 @@ interface SheetNotesBlock {
     topIn: number;
     widthIn: number;
     fontPt: number;
+    /** When true, the block cannot be moved or scaled on paper. */
+    locked?: boolean;
 }
 
 interface Sheet {
@@ -862,6 +876,9 @@ const makeDefaultViewport = (): Viewport => {
         profileId: null,
         profileHScaleFt: 50,
         profileVExag: 2,
+        roadObjectId: null,
+        profileKind: 'existing',
+        crossSectionStation: null,
         showBasemap: false,
         basemapType: 'satellite',
         basemapOpacity: 0.8,
@@ -998,11 +1015,13 @@ interface SheetViewProps {
     parcelLabelFormatter?: ParcelLabelFormatter;
     parcelCadTextStyles?: ParcelCadTextStyle[];
     /**
-     * CACP command bus — Sheet View registers itself here so the Civil Drafter
-     * and Auto Draft orchestrator can push viewports/styles programmatically.
-     * Signature: onSheetViewCommand(cmd, payload) → void
+     * CACP/A2UI command queue. The id makes consumption idempotent when React
+     * re-runs the effect. Commands use the same handlers as the visible tools.
      */
-    onSheetViewCommand?: (cmd: 'add_plan_viewport' | 'add_profile_viewport' | 'set_sheet_style', payload: Record<string, unknown>) => void;
+    command?: { id: string; command: SheetViewCommand } | null;
+    onCommandConsumed?: (id: string) => void;
+    /** Publish the live sheet state so CACP peers can query it. */
+    onStateChange?: (snapshot: SheetViewSnapshot | null) => void;
     /**
      * Agent notes queued for the active sheet. The id makes the handoff
      * idempotent when React re-runs the effect.
@@ -1311,7 +1330,8 @@ const SheetView: React.FC<SheetViewProps> = ({
     mapAreaLabels = [], textAnnotations = [], pointLayers, annotationCategories = [],
     annotationTextStyles = [], activeTextStyleName, annotationScale = 1,
     parcelLabelFormatter, parcelCadTextStyles = [],
-    onSheetViewCommand, pendingNotes, onPendingNotesConsumed, soilLimitationsNotes,
+    command, onCommandConsumed, onStateChange,
+    pendingNotes, onPendingNotesConsumed, soilLimitationsNotes,
 }) => {
     const layerColors = cadLayerColors ?? {};
     const plotHatches = hatches ?? EMPTY_HATCHES;
@@ -1413,9 +1433,13 @@ const SheetView: React.FC<SheetViewProps> = ({
         });
     }, [soilLimitationsNotes]);
 
-    const addSheet = () => {
+    const addSheet = (name?: string, sheetNumber?: string) => {
         const nextNum = (set.sheets.length + 1).toString().padStart(3, '0');
-        const s = makeDefaultSheet(`Sheet ${set.sheets.length + 1}`, `C-${nextNum}`, projectName ?? 'Untitled Project');
+        const s = makeDefaultSheet(
+            name?.trim() || `Sheet ${set.sheets.length + 1}`,
+            sheetNumber?.trim() || `C-${nextNum}`,
+            projectName ?? 'Untitled Project',
+        );
         // Copy non-page-specific titleblock fields from the active sheet so
         // project name / drawn by / date carry over without retyping.
         s.tbFields = {
@@ -1519,6 +1543,13 @@ const SheetView: React.FC<SheetViewProps> = ({
         e.target.value = '';
     }, [set.tbLayout, updateSet, reportError]);
 
+    // Live linked road objects for profile/cross-section viewports.
+    const roadObjects = useSyncExternalStore(
+        roadLinkRegistry.subscribe,
+        roadLinkRegistry.getSnapshot,
+        roadLinkRegistry.getSnapshot,
+    );
+
     // ── Viewports on the active sheet ─────────────────────────────────────
     const viewports = activeSheet.viewports;
     const [selectedVpId, setSelectedVpId] = useState<string>(viewports[0]?.id ?? '');
@@ -1534,19 +1565,20 @@ const SheetView: React.FC<SheetViewProps> = ({
 
     const selectedVp = viewports.find(v => v.id === selectedVpId) ?? viewports[0];
 
-    const addViewport = () => {
+    const addViewport = (): Viewport => {
         // extents is defined later in the component body; at call-time it is
         // fully initialized — safe to reference here via closure.
         const vp: Viewport = { ...makeDefaultViewport(), xIn: 1, yIn: 1, wIn: 6, hIn: 4,
             scaleFt: computeGoodScale(6, 4, extents) };
         updateActiveSheet(s => ({ viewports: [...s.viewports, vp] }));
         setSelectedVpId(vp.id);
+        return vp;
     };
     /** Add a profile viewport pre-loaded with the current profile data. */
-    const addProfileViewport = () => {
+    const addProfileViewport = (): Viewport | null => {
         if (!profileData || profileData.length === 0) {
             reportError({ title: 'No profile data', message: 'No profile data loaded. Generate a profile in the Profile Agent first.' });
-            return;
+            return null;
         }
         // Size profile viewport to span roughly 80% of the sheet width, 25% height.
         const wIn = Math.max(4, effW * 0.75);
@@ -1567,6 +1599,34 @@ const SheetView: React.FC<SheetViewProps> = ({
         };
         updateActiveSheet(s => ({ viewports: [...s.viewports, vp] }));
         setSelectedVpId(vp.id);
+        return vp;
+    };
+    const addCrossSectionViewport = (roadObjectId: string, station?: number): Viewport | null => {
+        const road = roadObjects.find(candidate => candidate.id === roadObjectId) ?? roadObjects[0];
+        const section = road?.crossSections?.stations.find(item =>
+            station === undefined || Math.abs(item.station - station) < 0.01,
+        ) ?? road?.crossSections?.stations[0];
+        if (!road || !section) {
+            reportError({ title: 'No cross sections', message: 'The road object has no extracted cross sections yet. Refresh it in Road Links first.' });
+            return null;
+        }
+        const wIn = Math.max(4, effW * 0.55);
+        const hIn = Math.max(2, effH * 0.24);
+        const vp: Viewport = {
+            ...makeDefaultViewport(),
+            type: 'cross-section',
+            roadObjectId: road.id,
+            crossSectionStation: section.station,
+            xIn: Math.max(0.5, (effW - wIn) / 2),
+            yIn: Math.max(0.5, effH - hIn - (set.tbLayout.heightIn + 0.75)),
+            wIn,
+            hIn,
+            profileHScaleFt: 20,
+            profileVExag: 2,
+        };
+        updateActiveSheet(s => ({ viewports: [...s.viewports, vp] }));
+        setSelectedVpId(vp.id);
+        return vp;
     };
     const removeViewport = (id: string) => {
         if (viewports.length === 1) return;
@@ -1679,6 +1739,7 @@ const SheetView: React.FC<SheetViewProps> = ({
     // ── Entity clusters (points & lines) & Model Space ──────────────────
     const entityClusters = useMemo(() => detectClusters(points, lines), [points, lines]);
     const [activeModelSpaceVpId, setActiveModelSpaceVpId] = useState<string | null>(null);
+    const [isPanningModelSpace, setIsPanningModelSpace] = useState(false);
     const [editingTbElement, setEditingTbElement] = useState<TitleblockElement | null>(null);
 
     const zoomExtents = useCallback((vpId?: string) => {
@@ -1999,16 +2060,6 @@ const SheetView: React.FC<SheetViewProps> = ({
         return () => ro.disconnect();
     }, [effW, effH]);
 
-    // ── CACP outbound: register sheet view as a listener for push commands ─
-    useEffect(() => {
-        if (!onSheetViewCommand) return;
-        // Expose this component's imperative actions to the CACP bus.
-        // Currently handled by the parent (App.tsx) which maps the CACP
-        // command response back to this callback prop.
-        // This effect intentionally empty on mount — the parent calls the
-        // prop when it receives a CACP 'sheet_view_command' message.
-    }, [onSheetViewCommand]);
-
     // ── Shared paper annotation source ────────────────────────────────────
     const annotationSourceForVp = (vp: Viewport) => ({
         points,
@@ -2115,8 +2166,88 @@ const SheetView: React.FC<SheetViewProps> = ({
         );
     };
 
+    // ── Cross-section SVG renderer ───────────────────────────────────────
+    const buildCrossSectionVpSvg = (vp: Viewport, renderPpi = effectivePpi): React.ReactElement => {
+        const wpx = vp.wIn * renderPpi;
+        const hpx = vp.hIn * renderPpi;
+        const road = roadObjects.find(candidate => candidate.id === vp.roadObjectId) ?? roadObjects[0];
+        const section = road?.crossSections?.stations.find(item =>
+            Math.abs(item.station - (vp.crossSectionStation ?? item.station)) < 0.01,
+        ) ?? road?.crossSections?.stations[0];
+        if (!road || !section) {
+            return (
+                <svg width={wpx} height={hpx} viewBox={`0 0 ${wpx} ${hpx}`} style={{ display: 'block', background: '#fff' }}>
+                    <rect x={0} y={0} width={wpx} height={hpx} fill="#f9fafb" />
+                    <text x={wpx / 2} y={hpx / 2} textAnchor="middle" fontSize={10} fill="#aaa" fontFamily="monospace">
+                        No linked cross section — refresh Road Links
+                    </text>
+                </svg>
+            );
+        }
+        const marginL = 0.55 * renderPpi, marginR = 0.2 * renderPpi;
+        const marginT = 0.2 * renderPpi, marginB = 0.45 * renderPpi;
+        const chartW = wpx - marginL - marginR;
+        const chartH = hpx - marginT - marginB;
+        const left = -road.crossSections!.leftWidthFt;
+        const right = road.crossSections!.rightWidthFt;
+        const zs = [...section.ground, ...section.design]
+            .map(point => 'elevationFt' in point ? point.elevationFt : null)
+            .filter((z): z is number => z !== null);
+        const zMin = zs.length > 0 ? Math.min(...zs) : 0;
+        const zMax = zs.length > 0 ? Math.max(...zs) : 1;
+        const zRange = Math.max(1, zMax - zMin);
+        const offToPx = (offset: number) => marginL + ((offset - left) / Math.max(1, right - left)) * chartW;
+        const zToPx = (z: number) => marginT + (1 - (z - zMin) / zRange) * chartH;
+        const groundSegments: string[] = [];
+        let current: string[] = [];
+        for (const point of section.ground) {
+            if (point.elevationFt === null) {
+                if (current.length > 1) groundSegments.push(current.join(' '));
+                current = [];
+            } else {
+                current.push(`${offToPx(point.offsetFt).toFixed(1)},${zToPx(point.elevationFt).toFixed(1)}`);
+            }
+        }
+        if (current.length > 1) groundSegments.push(current.join(' '));
+        const design = section.design
+            .filter(point => point.elevationFt !== null)
+            .sort((a, b) => a.offsetFt - b.offsetFt);
+        return (
+            <svg width={wpx} height={hpx} viewBox={`0 0 ${wpx} ${hpx}`} style={{ display: 'block', background: '#fff' }}>
+                <rect x={0} y={0} width={wpx} height={hpx} fill="#fff" />
+                <rect x={marginL} y={marginT} width={chartW} height={chartH} fill="#fafafa" stroke="#999" strokeWidth={0.8} />
+                {[0, 0.25, 0.5, 0.75, 1].map(fraction => (
+                    <line key={fraction} x1={marginL} x2={marginL + chartW}
+                        y1={marginT + fraction * chartH} y2={marginT + fraction * chartH}
+                        stroke="#d4d4d4" strokeWidth={0.4} />
+                ))}
+                <line x1={offToPx(0)} x2={offToPx(0)} y1={marginT} y2={marginT + chartH} stroke="#888" strokeDasharray="2 3" />
+                {groundSegments.map((points, index) => (
+                    <polyline key={`ground-${index}`} points={points} fill="none" stroke="#1d4ed8" strokeWidth={1.1} />
+                ))}
+                {design.length > 1 && (
+                    <polyline
+                        points={design.map(point => `${offToPx(point.offsetFt).toFixed(1)},${zToPx(point.elevationFt as number).toFixed(1)}`).join(' ')}
+                        fill="none" stroke="#d97706" strokeWidth={1.1}
+                    />
+                )}
+                {section.hooks.map(hook => (
+                    <g key={hook.attachmentId}>
+                        <circle cx={offToPx(hook.offsetFt)} cy={marginT + chartH - 5} r={2.5} fill="#db2777" />
+                        <text x={offToPx(hook.offsetFt) + 3} y={marginT + chartH - 3} fontSize={5} fill="#9d174d" fontFamily="monospace">{hook.label}</text>
+                    </g>
+                ))}
+                <text x={marginL} y={marginT - 4} fontSize={7} fill="#222" fontFamily="sans-serif" fontWeight="bold">{road.name} — {section.stationLabel}</text>
+                <text x={marginL} y={hpx - 4} fontSize={6} fill="#555" fontFamily="monospace">
+                    {left.toFixed(1)}′ LT · CL · {right.toFixed(1)}′ RT · {section.reason}
+                </text>
+            </svg>
+        );
+    };
+
     // ── Viewport SVG renderer (live preview) ──────────────────────────────
     const buildVpSvg = (vp: Viewport, renderPpi = effectivePpi): React.ReactElement => {
+        if (vp.type === 'cross-section') return buildCrossSectionVpSvg(vp, renderPpi);
         if (vp.type === 'profile') return buildProfileVpSvg(vp, renderPpi);
         const worldFtPerInch = vp.scaleFt;
         const wpx = vp.wIn * renderPpi;
@@ -2590,12 +2721,107 @@ const SheetView: React.FC<SheetViewProps> = ({
         }
     }, [set.sheets, activeSheet, buildSheetSvg, reportError, fetchBasemapForVp]);
 
+    // Publish the live sheet state for CACP peers. The snapshot is deliberately
+    // small: agents get the facts they need to decide, not the entire sheet set.
+    const sheetSnapshot = useMemo<SheetViewSnapshot>(() => ({
+        open: true,
+        activeSheetId: activeSheet.id,
+        activeSheetName: activeSheet.name,
+        projectName: activeSheet.tbFields.projectName,
+        sheetNumber: activeSheet.tbFields.sheetNumber,
+        sheetCount: set.sheets.length,
+        paperSize: baseSize.label,
+        landscape: activeSheet.landscape,
+        viewportCount: activeSheet.viewports.length,
+        selectedViewportId: selectedVp?.id ?? null,
+        selectedScaleFt: selectedVp?.scaleFt ?? null,
+    }), [activeSheet, baseSize.label, selectedVp, set.sheets.length]);
+
+    useEffect(() => {
+        onStateChange?.(sheetSnapshot);
+    }, [onStateChange, sheetSnapshot]);
+
+    useEffect(() => () => onStateChange?.(null), [onStateChange]);
+
+    // Apply CACP/A2UI commands through the same handlers as the visible tools.
+    // The id guard makes this idempotent across React re-renders.
+    const appliedSheetCommandIdRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (!command || appliedSheetCommandIdRef.current === command.id) return;
+        appliedSheetCommandIdRef.current = command.id;
+        const cmd = command.command;
+        try {
+            switch (cmd.action) {
+                case 'open':
+                    break;
+                case 'add_plan_viewport': {
+                    const vp = addViewport();
+                    if (cmd.scaleFt !== undefined) {
+                        updateVp(vp.id, { scaleFt: Math.max(1, cmd.scaleFt) });
+                    }
+                    break;
+                }
+                case 'add_profile_viewport':
+                    addProfileViewport();
+                    break;
+                case 'add_cross_section_viewport':
+                    addCrossSectionViewport(cmd.roadObjectId, cmd.station);
+                    break;
+                case 'update_viewport': {
+                    const id = cmd.viewportId ?? selectedVp?.id;
+                    if (!id) break;
+                    const patch: Partial<Viewport> = {};
+                    if (cmd.scaleFt !== undefined) patch.scaleFt = Math.max(1, cmd.scaleFt);
+                    if (cmd.rotationDeg !== undefined) {
+                        patch.rotationDeg = ((Math.round(cmd.rotationDeg) % 360) + 360) % 360;
+                    }
+                    if (cmd.showBasemap !== undefined) patch.showBasemap = cmd.showBasemap;
+                    if (cmd.basemapOpacity !== undefined) {
+                        patch.basemapOpacity = Math.min(1, Math.max(0.1, cmd.basemapOpacity));
+                    }
+                    if (cmd.lockPosition !== undefined) patch.lockPosition = cmd.lockPosition;
+                    if (cmd.lockZoom !== undefined) patch.lockZoom = cmd.lockZoom;
+                    if (Object.keys(patch).length > 0) updateVp(id, patch);
+                    break;
+                }
+                case 'update_sheet':
+                    if (cmd.sheetId) handleSheetSizeChange(cmd.sheetId);
+                    if (cmd.landscape !== undefined) updateActiveSheet({ landscape: cmd.landscape });
+                    if (cmd.name?.trim()) renameSheet(activeSheet.id, cmd.name.trim());
+                    break;
+                case 'update_titleblock':
+                    updateActiveSheet(s => ({
+                        tbFields: { ...s.tbFields, [cmd.field]: cmd.value },
+                    }));
+                    break;
+                case 'add_sheet':
+                    addSheet(cmd.name, cmd.sheetNumber);
+                    break;
+                case 'select_sheet':
+                    setSet(prev => prev.sheets.some(s => s.id === cmd.sheetId)
+                        ? { ...prev, activeSheetId: cmd.sheetId }
+                        : prev);
+                    break;
+                case 'export_pdf':
+                    if (cmd.scope === 'set') void handleExportSetPdf();
+                    else void handleExportCurrentPdf();
+                    break;
+            }
+        } finally {
+            onCommandConsumed?.(command.id);
+        }
+    }, [
+        command, onCommandConsumed, addViewport, addProfileViewport, addCrossSectionViewport, updateVp,
+        selectedVp?.id, handleSheetSizeChange, updateActiveSheet, activeSheet.id,
+        renameSheet, addSheet, handleExportSetPdf, handleExportCurrentPdf,
+    ]);
+
     // ── Viewport drag-to-move / Shift+drag-to-pan / edge-resize ───────────
     // dragRef supports three modes: 'move' (default), 'pan' (Shift+drag),
     // and 'resize' (edge/corner handles).
     type DragState =
         | { type: 'move'; id: string; startX: number; startY: number; origX: number; origY: number }
-        | { type: 'pan'; id: string; startX: number; startY: number; origCenterE: number | null; origCenterN: number | null; fallbackE: number; fallbackN: number }
+        | { type: 'pan'; id: string; startX: number; startY: number; origCenterE: number | null; origCenterN: number | null; fallbackE: number; fallbackN: number; scaleFt: number; renderPpi: number; rotationDeg: number }
         | { type: 'resize'; id: string; dir: string; startX: number; startY: number; origX: number; origY: number; origW: number; origH: number };
     const dragRef = useRef<DragState | null>(null);
 
@@ -2612,6 +2838,7 @@ const SheetView: React.FC<SheetViewProps> = ({
         if (((e.ctrlKey || e.metaKey) || isModelSpace) && vp.type === 'plan') {
             // Ctrl+drag (or Cmd+drag on Mac), or plain drag in Active Model Space = pan viewport contents (adjust centerE/centerN).
             // If center is null (auto-fit), seed it from current extents so panning works.
+            e.preventDefault();
             const fallbackE = extents ? (extents.minE + extents.maxE) / 2 : 0;
             const fallbackN = extents ? (extents.minN + extents.maxN) / 2 : 0;
             dragRef.current = {
@@ -2619,7 +2846,11 @@ const SheetView: React.FC<SheetViewProps> = ({
                 startX: e.clientX, startY: e.clientY,
                 origCenterE: vp.centerE, origCenterN: vp.centerN,
                 fallbackE, fallbackN,
+                scaleFt: vp.scaleFt,
+                renderPpi: effectivePpi,
+                rotationDeg: getEffectiveVpRotation(vp),
             };
+            setIsPanningModelSpace(true);
         } else if (!vp.lockPosition) {
             dragRef.current = {
                 type: 'move', id: vp.id,
@@ -2627,6 +2858,15 @@ const SheetView: React.FC<SheetViewProps> = ({
                 origX: vp.xIn, origY: vp.yIn,
             };
         }
+        let panFrame = 0;
+        let pendingPan: { id: string; centerE: number; centerN: number } | null = null;
+        const flushPan = () => {
+            panFrame = 0;
+            if (!pendingPan) return;
+            const next = pendingPan;
+            pendingPan = null;
+            updateVp(next.id, { centerE: next.centerE, centerN: next.centerN });
+        };
         const onMove = (ev: MouseEvent) => {
             const st = dragRef.current; if (!st) return;
             if (st.type === 'move') {
@@ -2637,26 +2877,37 @@ const SheetView: React.FC<SheetViewProps> = ({
                     yIn: Math.max(0, Math.min(effH - vp.hIn, st.origY + dyIn)),
                 });
             } else if (st.type === 'pan') {
-                // Convert pixel drag to world feet. Drag right => content moves right => center decreases (E).
-                // Drag down => content moves down => center increases (N), because screen-Y inverts world-N.
-                const dxPx = ev.clientX - st.startX;
-                const dyPx = ev.clientY - st.startY;
-                const dE = -(dxPx / ppi) * vp.scaleFt;
-                const dN =  (dyPx / ppi) * vp.scaleFt;
-                const baseE = st.origCenterE ?? st.fallbackE;
-                const baseN = st.origCenterN ?? st.fallbackN;
-                updateVp(st.id, { centerE: baseE + dE, centerN: baseN + dN });
+                const delta = screenDragToSheetPanDelta({
+                    dxPx: ev.clientX - st.startX,
+                    dyPx: ev.clientY - st.startY,
+                    scaleFt: st.scaleFt,
+                    pixelsPerInch: st.renderPpi,
+                    rotationDeg: st.rotationDeg,
+                });
+                pendingPan = {
+                    id: st.id,
+                    centerE: (st.origCenterE ?? st.fallbackE) + delta.east,
+                    centerN: (st.origCenterN ?? st.fallbackN) + delta.north,
+                };
+                if (!panFrame) panFrame = window.requestAnimationFrame(flushPan);
             }
         };
         const onUp = () => {
+            if (panFrame) {
+                window.cancelAnimationFrame(panFrame);
+                panFrame = 0;
+            }
+            flushPan();
             dragRef.current = null;
+            setIsPanningModelSpace(false);
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
+            window.removeEventListener('blur', onUp);
         };
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
+        window.addEventListener('blur', onUp);
     };
-
 
     const onScaleBarMouseDown = (e: React.MouseEvent) => {
         if (e.button === 1 || e.buttons === 4) {
@@ -2667,6 +2918,7 @@ const SheetView: React.FC<SheetViewProps> = ({
         }
         e.stopPropagation();
         const sb = activeSheet.scaleBar ?? makeDefaultScaleBar(activeSheet.viewports[0]?.id ?? '');
+        if (sb.locked) return;
         dragRef.current = {
             type: 'scalebar' as any,
             id: 'scalebar',
@@ -2699,6 +2951,110 @@ const SheetView: React.FC<SheetViewProps> = ({
         };
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
+    };
+
+    /** Move the soil/notes block by dragging it on paper. */
+    const onNotesBlockMouseDown = (e: React.MouseEvent) => {
+        const block = activeSheet.notesBlock;
+        if (!block) return;
+        if (e.button === 1 || e.buttons === 4) {
+            e.preventDefault();
+            e.stopPropagation();
+            startPaperspacePan(e.clientX, e.clientY);
+            return;
+        }
+        if (e.button !== 0) return;
+        // Consume the click even while locked so it cannot start a sheet pan.
+        e.stopPropagation();
+        if (block.locked) return;
+        const { heightPx } = buildSheetNotesBlockSvg(block, effectivePpi);
+        const startX = e.clientX;
+        const startY = e.clientY;
+        const origX = block.xIn;
+        const origY = block.topIn;
+        const previousCursor = document.body.style.cursor;
+        document.body.style.cursor = 'grabbing';
+        const onMove = (ev: MouseEvent) => {
+            const next = clampPaperPosition({
+                xIn: origX + (ev.clientX - startX) / effectivePpi,
+                yIn: origY + (ev.clientY - startY) / effectivePpi,
+                widthIn: block.widthIn,
+                heightIn: heightPx / effectivePpi,
+            }, effW, effH);
+            updateActiveSheet(s => s.notesBlock
+                ? { notesBlock: { ...s.notesBlock, xIn: next.xIn, topIn: next.yIn } }
+                : {});
+        };
+        const onUp = () => {
+            document.body.style.cursor = previousCursor;
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            window.removeEventListener('blur', onUp);
+        };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        window.addEventListener('blur', onUp);
+    };
+
+    /** Scale the soil/notes block proportionally from its bottom-right corner. */
+    const onNotesBlockResizeMouseDown = (e: React.MouseEvent) => {
+        const block = activeSheet.notesBlock;
+        if (!block || block.locked) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX;
+        const origWidth = block.widthIn;
+        const origFont = block.fontPt;
+        const maxWidth = Math.max(1, effW - block.xIn);
+        const previousCursor = document.body.style.cursor;
+        document.body.style.cursor = 'nwse-resize';
+        const onMove = (ev: MouseEvent) => {
+            const ratio = paperScaleFromDrag(origWidth, (ev.clientX - startX) / effectivePpi, { min: 0.5, max: 2.5 });
+            const widthIn = Math.min(origWidth * ratio, maxWidth);
+            const applied = widthIn / origWidth;
+            updateActiveSheet(s => s.notesBlock
+                ? { notesBlock: { ...s.notesBlock, widthIn, fontPt: Math.max(3, Math.min(30, origFont * applied)) } }
+                : {});
+        };
+        const onUp = () => {
+            document.body.style.cursor = previousCursor;
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            window.removeEventListener('blur', onUp);
+        };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        window.addEventListener('blur', onUp);
+    };
+
+    /** Scale the graphic scale bar from its bottom-right corner. */
+    const onScaleBarResizeMouseDown = (e: React.MouseEvent) => {
+        const sb = activeSheet.scaleBar ?? makeDefaultScaleBar(activeSheet.viewports[0]?.id ?? '');
+        if (sb.locked) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX;
+        const origWidth = sb.widthIn || 3;
+        const maxWidth = Math.max(1, effW - sb.xIn);
+        const previousCursor = document.body.style.cursor;
+        document.body.style.cursor = 'nwse-resize';
+        const onMove = (ev: MouseEvent) => {
+            const ratio = paperScaleFromDrag(origWidth, (ev.clientX - startX) / effectivePpi, { min: 0.5, max: 3 });
+            const widthIn = Math.min(origWidth * ratio, maxWidth);
+            updateActiveSheet(s => {
+                const cur = s.scaleBar ?? makeDefaultScaleBar(s.viewports[0]?.id ?? '');
+                return { scaleBar: { ...cur, widthIn } };
+            });
+        };
+        const onUp = () => {
+            document.body.style.cursor = previousCursor;
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            window.removeEventListener('blur', onUp);
+        };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        window.addEventListener('blur', onUp);
     };
 
     // Mouse down on a resize handle (corner or edge) — midpoints independent, corners proportional.
@@ -2787,10 +3143,10 @@ const SheetView: React.FC<SheetViewProps> = ({
 
     // ── Render ────────────────────────────────────────────────────────────
     return (
-        <div className="flex flex-col h-full w-full bg-gray-900 text-gray-100 text-sm">
+        <div className="flex flex-col h-full w-full bg-slate-950 text-slate-100 text-sm">
             {/* Sheet Set Manager — top tab bar */}
-            <div className="flex-shrink-0 border-b border-gray-700 bg-gray-950/60 px-2 py-1 flex items-center gap-1 overflow-x-auto">
-                <span className="text-[10px] uppercase tracking-wide text-gray-500 mr-2">Sheet Set:</span>
+            <div className="flex-shrink-0 border-b border-slate-800 bg-slate-950 px-2 py-1 flex items-center gap-1 overflow-x-auto">
+                <span className="text-[10px] uppercase tracking-wide text-slate-500 mr-2">Sheet Set:</span>
                 {set.sheets.map((s, i) => (
                     <div key={s.id}
                         onClick={() => updateSet({ activeSheetId: s.id })}
@@ -2800,8 +3156,8 @@ const SheetView: React.FC<SheetViewProps> = ({
                         }}
                         className={`group flex items-center gap-1 px-2 py-1 rounded text-[11px] cursor-pointer whitespace-nowrap ${
                             s.id === set.activeSheetId
-                                ? 'bg-amber-700/40 border border-amber-500/60 text-amber-100'
-                                : 'bg-gray-800 border border-transparent hover:border-gray-600 text-gray-300'
+                                ? 'bg-cyan-500/15 border border-cyan-400/50 text-cyan-100'
+                                : 'bg-slate-900 border border-transparent hover:border-slate-700 text-slate-300'
                         }`}
                         title="Click to switch, double-click to rename"
                     >
@@ -2820,8 +3176,8 @@ const SheetView: React.FC<SheetViewProps> = ({
                         )}
                     </div>
                 ))}
-                <button onClick={addSheet}
-                    className="ml-1 px-2 py-1 rounded text-[11px] bg-emerald-700/40 hover:bg-emerald-600/60 text-emerald-100 font-semibold"
+                <button onClick={() => addSheet()}
+                    className="ml-1 px-2 py-1 rounded text-[11px] bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold"
                     title="Add a new sheet to the set">
                     + Sheet
                 </button>
@@ -2916,7 +3272,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                             ? '0 0 10px rgba(245,158,11,0.25)'
                                             : 'none',
                                         background: '#fff',
-                                        cursor: isModelSpace ? 'grab' : (vp.lockPosition ? 'default' : 'move'),
+                                        cursor: isModelSpace ? (isPanningModelSpace ? 'grabbing' : 'grab') : (vp.lockPosition ? 'default' : 'move'),
                                         overflow: 'hidden',
                                         zIndex: isModelSpace ? 25 : isSelected ? 15 : 1,
                                     }}
@@ -2961,7 +3317,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                             onClick={() => updateVp(vp.id, { lockPosition: !vp.lockPosition })}
                                             className={`px-1.5 py-0.5 rounded flex items-center gap-1 font-medium transition-colors ${
                                                 vp.lockPosition
-                                                    ? 'bg-amber-400/15 text-amber-300 border border-amber-400/30'
+                                                    ? 'bg-cyan-400/15 text-cyan-200 border border-cyan-400/30'
                                                     : 'text-slate-400 hover:text-slate-100 hover:bg-white/5 border border-transparent'
                                             }`}
                                             title={vp.lockPosition ? "Position Locked (click to unlock moving/resizing on sheet)" : "Position Unlocked (click to lock moving/resizing on sheet)"}
@@ -3038,7 +3394,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                             <button
                                                 type="button"
                                                 onClick={() => zoomToLargestCluster(vp.id)}
-                                                className="px-2 py-0.5 rounded bg-amber-400/15 hover:bg-amber-400/25 text-amber-200 font-medium transition-colors flex items-center gap-1 border border-amber-400/25"
+                                                className="px-2 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-200 font-medium transition-colors flex items-center gap-1 border border-white/10"
                                                 title="Zoom to primary / largest cluster of points & lines"
                                             >
                                                 <Target className="h-3 w-3" /> Largest Cluster
@@ -3069,10 +3425,10 @@ const SheetView: React.FC<SheetViewProps> = ({
                                                                 key={c.id}
                                                                 type="button"
                                                                 onClick={() => zoomToCluster(c, vp.id)}
-                                                                className="px-2.5 py-1.5 text-left text-[11px] hover:bg-amber-500/20 text-gray-200 hover:text-amber-200 flex items-center justify-between transition-colors"
+                                                                className="px-2.5 py-1.5 text-left text-[11px] hover:bg-cyan-500/10 text-slate-200 hover:text-cyan-100 flex items-center justify-between transition-colors"
                                                             >
                                                                 <span className="font-medium truncate">{c.name}</span>
-                                                                <span className="text-[10px] text-amber-400/80 font-mono ml-2">{c.count} pts</span>
+                                                                <span className="text-[10px] text-cyan-300/80 font-mono ml-2">{c.count} pts</span>
                                                             </button>
                                                         ))}
                                                     </div>
@@ -3123,28 +3479,56 @@ const SheetView: React.FC<SheetViewProps> = ({
                             );
                         })}
 
-                        {/* Compact agent notes block — wrapped text placed directly on paper space. */}
+                        {/* Movable / scalable agent notes block (soils, limitations, etc.). */}
                         {activeSheet.notesBlock && (() => {
                             const block = activeSheet.notesBlock!;
                             const { svg, widthPx, heightPx } = buildSheetNotesBlockSvg(block, effectivePpi);
                             return (
                                 <div
+                                    key="sheet-notes"
+                                    className="group"
                                     style={{
                                         position: 'absolute',
                                         left: block.xIn * effectivePpi,
                                         top: block.topIn * effectivePpi,
                                         width: widthPx,
                                         height: heightPx,
-                                        zIndex: 20,
-                                        pointerEvents: 'none',
+                                        zIndex: 30,
                                     }}
-                                    title="Paper-space limitations notes"
-                                    dangerouslySetInnerHTML={{ __html: svg }}
-                                />
+                                >
+                                    <div
+                                        data-testid="paperspace-notes"
+                                        onMouseDown={onNotesBlockMouseDown}
+                                        title={block.locked
+                                            ? 'Paper notes locked — unlock to move or scale'
+                                            : 'Paper notes — drag to move, corner handle to scale'}
+                                        style={{
+                                            width: '100%',
+                                            height: '100%',
+                                            cursor: block.locked ? 'default' : 'move',
+                                            pointerEvents: 'auto',
+                                            userSelect: 'none',
+                                        }}
+                                        dangerouslySetInnerHTML={{ __html: svg }}
+                                    />
+                                    <PaperObjectLockButton
+                                        locked={!!block.locked}
+                                        name="paper notes"
+                                        onToggle={() => updateActiveSheet(s => s.notesBlock
+                                            ? { notesBlock: { ...s.notesBlock, locked: !s.notesBlock.locked } }
+                                            : {})}
+                                    />
+                                    {!block.locked && (
+                                        <PaperResizeHandle
+                                            onMouseDown={onNotesBlockResizeMouseDown}
+                                            title="Drag to scale the notes block"
+                                        />
+                                    )}
+                                </div>
                             );
                         })()}
 
-                        {/* Draggable Graphic Scale Bar on paper */}
+                        {/* Movable / scalable graphic scale bar on paper */}
                         {activeSheet.scaleBar?.enabled !== false && (() => {
                             const sb = activeSheet.scaleBar ?? makeDefaultScaleBar(activeSheet.viewports[0]?.id ?? '');
                             const linkedVp = activeSheet.viewports.find(v => v.id === sb.viewportId) ?? activeSheet.viewports[0];
@@ -3152,21 +3536,45 @@ const SheetView: React.FC<SheetViewProps> = ({
                             return (
                                 <div
                                     key="scalebar"
-                                    onMouseDown={onScaleBarMouseDown}
+                                    className="group"
                                     style={{
                                         position: 'absolute',
                                         left: sb.xIn * effectivePpi,
                                         top: sb.yIn * effectivePpi,
                                         width: sb.widthIn * effectivePpi,
                                         height: (sb.heightIn || 0.6) * effectivePpi,
-                                        cursor: 'grab',
                                         zIndex: 35,
                                         pointerEvents: 'auto',
                                     }}
-                                    className="group hover:ring-2 hover:ring-amber-400 rounded transition-all select-none"
-                                    title={`Graphic Scale Bar (1" = ${linkedVp?.scaleFt ?? 50}') — Drag anywhere on sheet`}
-                                    dangerouslySetInnerHTML={{ __html: sbSvgMarkup }}
-                                />
+                                >
+                                    <div
+                                        data-testid="paperspace-scale-bar"
+                                        onMouseDown={onScaleBarMouseDown}
+                                        className="h-full w-full rounded transition-all hover:ring-2 hover:ring-cyan-400"
+                                        title={sb.locked
+                                            ? 'Graphic scale bar locked — unlock to move or scale'
+                                            : `Graphic Scale Bar (1" = ${linkedVp?.scaleFt ?? 50}') — drag to move, corner handle to scale`}
+                                        style={{
+                                            cursor: sb.locked ? 'default' : 'grab',
+                                            userSelect: 'none',
+                                        }}
+                                        dangerouslySetInnerHTML={{ __html: sbSvgMarkup }}
+                                    />
+                                    <PaperObjectLockButton
+                                        locked={!!sb.locked}
+                                        name="graphic scale bar"
+                                        onToggle={() => updateActiveSheet(s => {
+                                            const cur = s.scaleBar ?? makeDefaultScaleBar(s.viewports[0]?.id ?? '');
+                                            return { scaleBar: { ...cur, locked: !cur.locked } };
+                                        })}
+                                    />
+                                    {!sb.locked && (
+                                        <PaperResizeHandle
+                                            onMouseDown={onScaleBarResizeMouseDown}
+                                            title="Drag to scale the graphic scale bar"
+                                        />
+                                    )}
+                                </div>
                             );
                         })()}
 
@@ -3207,35 +3615,35 @@ const SheetView: React.FC<SheetViewProps> = ({
                 </div>
 
                 {/* 2. Modernized Toolset (RIGHT RAIL) */}
-                <aside className="w-80 flex-shrink-0 border-l border-gray-700/70 bg-gray-900/95 backdrop-blur-md p-3.5 overflow-y-auto space-y-4 shadow-2xl">
-                    <div className="bg-gradient-to-br from-gray-800/80 to-gray-900/90 border border-gray-700/70 p-3.5 rounded-xl shadow-md">
+                <aside className="w-80 flex-shrink-0 border-l border-slate-800 bg-slate-950/95 p-3.5 overflow-y-auto space-y-3 shadow-xl">
+                    <div className="bg-slate-900/70 border border-slate-800 p-3.5 rounded-lg">
                         <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800/60">
-                                Paperspace Studio
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                Paper Space
                             </span>
-                            <span className="text-[10px] text-gray-400 font-mono">v26.10</span>
+                            <span className="text-[10px] text-slate-500 font-mono">PLOT</span>
                         </div>
-                        <h2 className="text-base font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-amber-200 to-cyan-300 mt-1">
+                        <h2 className="text-[15px] font-semibold tracking-tight text-slate-100 mt-1">
                             Sheet View
                         </h2>
-                        <p className="text-[11px] text-gray-400 mt-0.5 leading-relaxed">
-                            Plot sheets & paper space. Double-click viewports to activate model space and zoom extents.
+                        <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                            Lay out plot sheets and viewports. Double-click a viewport to activate model space.
                         </p>
                     </div>
 
                     {/* Section 1: Sheet Size & Paper */}
-                    <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-2.5">
+                    <section className="bg-slate-900/60 border border-slate-800 rounded-lg p-3 space-y-2.5">
                         <div className="flex items-center justify-between">
-                            <h3 className="text-xs font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
-                                <Ruler className="h-3.5 w-3.5" /> Paper Size
+                            <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-300 flex items-center gap-1.5">
+                                <Ruler className="h-3.5 w-3.5 text-cyan-400" /> Paper Size
                             </h3>
-                            <span className="text-[10px] text-gray-400 font-mono">{effW}″ × {effH}″</span>
+                            <span className="text-[10px] text-slate-500 font-mono">{effW}″ × {effH}″</span>
                         </div>
 
                         <select
                             value={activeSheet.sheetId}
                             onChange={e => handleSheetSizeChange(e.target.value)}
-                            className="w-full bg-gray-900 border border-gray-700/80 hover:border-gray-600 rounded-lg px-2.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-amber-500 transition-colors"
+                            className="w-full bg-slate-950 border border-slate-700 hover:border-slate-600 rounded-md px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors"
                         >
                             {SHEET_PRESETS.map(s => (
                                 <option key={s.id} value={s.id}>{s.label}</option>
@@ -3265,8 +3673,8 @@ const SheetView: React.FC<SheetViewProps> = ({
                                 onClick={() => updateActiveSheet({ landscape: true })}
                                 className={`flex-1 py-1 px-2 rounded-md text-[11px] font-medium transition-all ${
                                     activeSheet.landscape
-                                        ? 'bg-amber-600/30 text-amber-200 border border-amber-500/60 shadow-sm'
-                                        : 'bg-gray-900 text-gray-400 hover:text-gray-200 border border-gray-700/60'
+                                        ? 'bg-cyan-500/15 text-cyan-100 border border-cyan-500/40'
+                                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-700'
                                 }`}
                             >
                                 ⤢ Landscape
@@ -3276,8 +3684,8 @@ const SheetView: React.FC<SheetViewProps> = ({
                                 onClick={() => updateActiveSheet({ landscape: false })}
                                 className={`flex-1 py-1 px-2 rounded-md text-[11px] font-medium transition-all ${
                                     !activeSheet.landscape
-                                        ? 'bg-amber-600/30 text-amber-200 border border-amber-500/60 shadow-sm'
-                                        : 'bg-gray-900 text-gray-400 hover:text-gray-200 border border-gray-700/60'
+                                        ? 'bg-cyan-500/15 text-cyan-100 border border-cyan-500/40'
+                                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-700'
                                 }`}
                             >
                                 ⤡ Portrait
@@ -3288,27 +3696,27 @@ const SheetView: React.FC<SheetViewProps> = ({
                     {/* Legend — one linked model shared with the drawing. */}
                     <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-2">
                         <div className="flex items-center justify-between gap-2">
-                            <h3 className="text-xs font-bold uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
-                                <span aria-hidden="true">▤</span> Legend
+                            <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-300 flex items-center gap-1.5">
+                                <span aria-hidden="true" className="text-cyan-400">▤</span> Legend
                             </h3>
                             <button
                                 type="button"
                                 onClick={() => openLegendStudioSurface()}
-                                className="px-2 py-0.5 text-[10px] font-semibold rounded-md bg-teal-600/30 hover:bg-teal-600 text-teal-200 hover:text-white border border-teal-500/40 transition-colors"
+                                className="px-2 py-0.5 text-[10px] font-semibold rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
                             >
                                 Edit legend
                             </button>
                         </div>
-                        <p className="text-[10.5px] text-gray-400 leading-relaxed">
-                            The paperspace legend is linked to the Legend A2UI. Changing a label, color, hatch, column count, or placement restyles the drawing and this sheet together.
+                        <p className="text-[10.5px] text-slate-400 leading-relaxed">
+                            The paper-space legend is linked to the Legend A2UI. Label, color, hatch, and placement edits update the drawing and this sheet together.
                         </p>
                     </section>
 
                     {/* Section 2: Viewports */}
                     <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-3">
                         <div className="flex items-center justify-between">
-                            <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
-                                <Frame className="h-3.5 w-3.5" /> Viewports
+                            <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-300 flex items-center gap-1.5">
+                                <Frame className="h-3.5 w-3.5 text-cyan-400" /> Viewports
                             </h3>
                             <div className="flex gap-1.5">
                                 <button onClick={addViewport}
@@ -3321,8 +3729,8 @@ const SheetView: React.FC<SheetViewProps> = ({
                                     type="button"
                                     className={`px-2 py-0.5 text-[10px] font-semibold rounded-md transition-colors ${
                                         profileData && profileData.length > 0
-                                            ? 'bg-emerald-600/30 hover:bg-emerald-600 text-emerald-200 hover:text-white border border-emerald-500/40'
-                                            : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed'
+                                            ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                                            : 'bg-slate-900 text-slate-500 border border-slate-800 cursor-not-allowed'
                                     }`}
                                     title={profileData && profileData.length > 0 ? 'Add profile viewport' : 'Generate profile in Profile Agent first'}
                                 >
@@ -3338,8 +3746,8 @@ const SheetView: React.FC<SheetViewProps> = ({
                                     onClick={() => setSelectedVpId(vp.id)}
                                     className={`px-2.5 py-1.5 rounded-lg text-xs cursor-pointer flex items-center justify-between gap-1.5 transition-all ${
                                         vp.id === selectedVpId
-                                            ? 'bg-cyan-950/70 border border-cyan-500/70 text-cyan-100 shadow-[0_0_10px_rgba(6,182,212,0.2)]'
-                                            : 'bg-gray-900 border border-gray-700/60 hover:border-gray-500 text-gray-300'
+                                            ? 'bg-cyan-500/10 border border-cyan-500/40 text-cyan-100'
+                                            : 'bg-slate-950 border border-slate-800 hover:border-slate-600 text-slate-300'
                                     }`}>
                                     <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider ${
                                         vp.type === 'profile' ? 'bg-emerald-900/60 text-emerald-300' : 'bg-sky-900/60 text-sky-300'
@@ -3378,7 +3786,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                         <button
                                             type="button"
                                             onClick={() => zoomToLargestCluster(selectedVp.id)}
-                                            className="w-full py-1.5 px-2 rounded-lg bg-amber-600/30 hover:bg-amber-600 text-amber-200 hover:text-white border border-amber-500/50 font-semibold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm"
+                                            className="w-full py-1.5 px-2 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors"
                                             title="Zoom to primary / largest cluster of points and lines"
                                         >
                                             <Target className="h-3.5 w-3.5" /> Largest Cluster
@@ -3398,7 +3806,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                         <div className="pt-1">
                                             <div className="text-[10px] text-gray-400 mb-1 flex items-center justify-between">
                                                 <span>Detected Point Clusters:</span>
-                                                <span className="font-mono text-amber-400 text-[10px]">{entityClusters.length} clusters</span>
+                                                <span className="font-mono text-cyan-300 text-[10px]">{entityClusters.length} clusters</span>
                                             </div>
                                             <div className="flex flex-wrap gap-1">
                                                 {entityClusters.slice(0, 4).map(c => (
@@ -3406,7 +3814,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                                         key={c.id}
                                                         type="button"
                                                         onClick={() => zoomToCluster(c, selectedVp.id)}
-                                                        className="px-2 py-0.5 rounded bg-gray-900 hover:bg-amber-600/20 text-gray-300 hover:text-amber-200 border border-gray-700/80 hover:border-amber-500/50 text-[10px] font-medium transition-colors"
+                                                        className="px-2 py-0.5 rounded bg-slate-950 hover:bg-cyan-500/10 text-slate-300 hover:text-cyan-100 border border-slate-700 hover:border-cyan-500/40 text-[10px] font-medium transition-colors"
                                                     >
                                                         C{c.id} ({c.count} pts)
                                                     </button>
@@ -3421,7 +3829,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                     <div className="space-y-1.5 pt-1 border-t border-gray-700/60">
                                         <div className="flex items-center justify-between text-[11px] text-gray-300">
                                             <span className="font-semibold">Drawing Scale</span>
-                                            <span className="font-mono font-bold text-amber-300 text-xs">1″ = {selectedVp.scaleFt}′</span>
+                                            <span className="font-mono font-semibold text-cyan-300 text-xs">1″ = {selectedVp.scaleFt}′</span>
                                         </div>
                                         <div className="grid grid-cols-4 gap-1">
                                             {[20, 30, 40, 50, 60, 100, 200, 500].map(s => (
@@ -3431,8 +3839,8 @@ const SheetView: React.FC<SheetViewProps> = ({
                                                     onClick={() => updateVp(selectedVp.id, { scaleFt: s })}
                                                     className={`py-1 rounded text-[10px] font-mono font-medium transition-all ${
                                                         selectedVp.scaleFt === s
-                                                            ? 'bg-amber-600/30 text-amber-200 border border-amber-500/70 font-bold'
-                                                            : 'bg-gray-900 text-gray-400 hover:text-gray-200 border border-gray-700/60'
+                                                            ? 'bg-cyan-500/15 text-cyan-100 border border-cyan-400/50 font-semibold'
+                                                            : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-700'
                                                     }`}
                                                 >
                                                     1″={s}′
@@ -3524,7 +3932,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                                                 fetchingBasemapsRef.current.clear();
                                                                 fetchBasemapForVp(selectedVp);
                                                             }}
-                                                            className="inline-flex items-center gap-1 text-amber-400 hover:text-amber-300 underline font-medium text-[10px]"
+                                                            className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 underline font-medium text-[10px]"
                                                             title="Dump map cache and reload fresh imagery"
                                                         >
                                                             <Trash2 className="h-3 w-3" /> Dump Cache
@@ -3702,9 +4110,9 @@ const SheetView: React.FC<SheetViewProps> = ({
                     </section>
 
                                         {/* Section: Graphic Scale Bar */}
-                    <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-2.5">
+                    <section className="bg-slate-900/60 border border-slate-800 rounded-lg p-3 space-y-2.5">
                         <div className="flex items-center justify-between">
-                            <h3 className="text-xs font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                            <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-300 flex items-center gap-1.5">
                                 <Ruler className="h-3.5 w-3.5" /> Graphic Scale Bar
                             </h3>
                             <label className="relative inline-flex items-center cursor-pointer">
@@ -3718,8 +4126,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                         }
                                     }))}
                                     className="sr-only peer"
-                                />
-                                <div className="w-7 h-4 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-amber-500"></div>
+                                />                                                <div className="w-7 h-4 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-cyan-500"></div>
                             </label>
                         </div>
 
@@ -3765,8 +4172,8 @@ const SheetView: React.FC<SheetViewProps> = ({
                                                 }))}
                                                 className={`py-1 px-2 rounded-md text-[10px] font-medium transition-all ${
                                                     (activeSheet.scaleBar?.style ?? 'subdivided-blocks') === st.id
-                                                        ? 'bg-amber-600/30 text-amber-200 border border-amber-500/70 font-bold'
-                                                        : 'bg-gray-900 text-gray-400 hover:text-gray-200 border border-gray-700'
+                                                        ? 'bg-cyan-500/15 text-cyan-100 border border-cyan-400/50 font-semibold'
+                                                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-700'
                                                 }`}
                                             >
                                                 {st.label}
@@ -3834,7 +4241,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                                 yIn: effH - 3.2,
                                             }
                                         }))}
-                                        className="text-[10px] text-amber-400 hover:text-amber-300 underline"
+                                        className="text-[10px] text-cyan-400 hover:text-cyan-300 underline"
                                     >
                                         Reset Position
                                     </button>
@@ -3847,7 +4254,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                     </section>
 
                     {/* Section 3: Titleblock Information */}
-                    <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-2.5">
+                    <section className="bg-slate-900/60 border border-slate-800 rounded-lg p-3 space-y-2.5">
                         <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
                             <Tag className="h-3.5 w-3.5" /> Titleblock Fields
                         </h3>
@@ -3896,40 +4303,40 @@ const SheetView: React.FC<SheetViewProps> = ({
                         <button
                             type="button"
                             onClick={() => setTbEditorOpen(true)}
-                            className="w-full py-1.5 px-2 text-[11px] rounded-lg bg-emerald-600/30 hover:bg-emerald-600 text-emerald-200 hover:text-white border border-emerald-500/50 font-semibold transition-all">
+                            className="w-full py-1.5 px-2 text-[11px] rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold transition-colors">
                             ✎ Edit Titleblock Layout…
                         </button>
                         <div className="flex gap-2">
                             <input ref={tbDxfRef} type="file" accept=".dxf" className="hidden" onChange={handleTbDxfUpload} />
                             <button onClick={() => tbDxfRef.current?.click()}
                                 type="button"
-                                className="flex-1 py-1 px-2 text-[10px] rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white border border-gray-700 font-medium transition-all">
+                                className="flex-1 py-1 px-2 text-[10px] rounded-md bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 font-medium transition-colors">
                                 Upload .dxf border
                             </button>
                             <button onClick={() => updateSet({ tbLayout: DEFAULT_TITLEBLOCK_LAYOUT })}
                                 type="button"
-                                className="py-1 px-2 text-[10px] rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white border border-gray-700" title="Reset layout">
+                                className="py-1 px-2 text-[10px] rounded-md bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-700" title="Reset layout">
                                 Reset
                             </button>
                         </div>
                     </section>
 
                     {/* Section 4: Export to PDF */}
-                    <section className="bg-gray-800/60 border border-gray-700/60 rounded-xl p-3 shadow-sm space-y-2">
-                        <h3 className="text-xs font-bold uppercase tracking-wider text-sky-300 flex items-center gap-1.5">
-                            <FileDown className="h-3.5 w-3.5" /> Publish & Export
+                    <section className="bg-slate-900/60 border border-slate-800 rounded-lg p-3 space-y-2">
+                        <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-300 flex items-center gap-1.5">
+                            <FileDown className="h-3.5 w-3.5 text-cyan-400" /> Publish & Export
                         </h3>
                         <button onClick={handleExportCurrentPdf}
                             type="button"
-                            className="w-full py-2.5 px-3 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-1.5">
+                            className="w-full py-2.5 px-3 rounded-md bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1.5">
                             <FileDown className="h-3.5 w-3.5" /> Export This Sheet (PDF)
                         </button>
                         <button onClick={handleExportSetPdf}
                             type="button"
-                            className="w-full py-2.5 px-3 rounded-lg bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-bold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-1.5">
+                            className="w-full py-2.5 px-3 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-xs font-semibold transition-colors flex items-center justify-center gap-1.5">
                             <Files className="h-3.5 w-3.5" /> Export Complete Set ({totalSheets} {totalSheets === 1 ? 'Page' : 'Pages'})
                         </button>
-                        <div className="text-[10px] text-gray-500 italic text-center pt-1">
+                        <div className="text-[10px] text-slate-500 text-center pt-1">
                             Persisted automatically per project name.
                         </div>
                     </section>
@@ -3941,7 +4348,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
                     <div className="bg-gray-900 border border-gray-700/80 rounded-2xl shadow-2xl p-5 max-w-md w-full space-y-4 text-xs">
                         <div className="flex items-center justify-between border-b border-gray-800 pb-2.5">
-                            <h3 className="text-sm font-bold text-amber-300 flex items-center gap-2">
+                            <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
                                 <span>✎</span> Edit Titleblock Entity ({editingTbElement.id})
                             </h3>
                             <button
@@ -3963,7 +4370,7 @@ const SheetView: React.FC<SheetViewProps> = ({
                                         rows={2}
                                         value={editingTbElement.text}
                                         onChange={e => setEditingTbElement({ ...editingTbElement, text: e.target.value })}
-                                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                                        className="w-full bg-slate-950 border border-slate-700 rounded-md px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
                                     />
                                     <div className="flex flex-wrap gap-1 mt-1.5">
                                         {['{PROJECT_NAME}', '{SHEET_NUMBER}', '{DRAWN_BY}', '{DATE}', '{SCALE}', '{PAGE_OF}', '{NOTES}'].map(ph => (

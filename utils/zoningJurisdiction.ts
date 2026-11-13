@@ -39,23 +39,44 @@ export interface ProjectZoningSeed {
   source: 'project-location';
 }
 
-function clusterSeed(cluster: ProjectLocationCluster): ProjectZoningSeed | null {
-  const jurisdiction = cluster.jurisdiction;
-  if (!jurisdiction || jurisdiction.status === 'unavailable') return null;
+/** The pieces of a Census/Nominatim result the zoning intake needs. */
+export interface ProjectZoningGeocode {
+  state?: string | null;
+  county?: string | null;
+  place?: string | null;
+  label?: string | null;
+}
 
-  const state = stateNameForZoning(jurisdiction.state);
-  const county = cleanText(jurisdiction.county).replace(/\s+county$/i, '').trim();
-  const municipality = cleanText(jurisdiction.place).replace(/\s+(township|borough|city|town|village)$/i, '').trim();
+/** Build an editable zoning seed from a reverse-geocoded jurisdiction. */
+export function projectZoningSeedFromGeocode(
+  geocode: ProjectZoningGeocode | null | undefined,
+  label?: string | null,
+): ProjectZoningSeed | null {
+  if (!geocode) return null;
+  const state = stateNameForZoning(geocode.state);
+  const county = cleanText(geocode.county).replace(/\s+county$/i, '').trim();
+  const municipality = cleanText(geocode.place).replace(/\s+(township|borough|city|town|village)$/i, '').trim();
 
   if (!state && !county && !municipality) return null;
   return {
     state,
     county,
     municipality,
-    clusterIndex: cluster.index,
-    label: jurisdiction.label || cluster.label,
+    label:
+      cleanText(label) ||
+      cleanText(geocode.label) ||
+      [municipality, county, state].filter(Boolean).join(', '),
     source: 'project-location',
   };
+}
+
+function clusterSeed(cluster: ProjectLocationCluster): ProjectZoningSeed | null {
+  const jurisdiction = cluster.jurisdiction;
+  if (!jurisdiction || jurisdiction.status === 'unavailable') return null;
+
+  const seed = projectZoningSeedFromGeocode(jurisdiction, jurisdiction.label || cluster.label);
+  if (!seed) return null;
+  return { ...seed, clusterIndex: cluster.index };
 }
 
 /**
@@ -82,4 +103,44 @@ export function projectLocationZoningSeed(
     .sort((a, b) => b.completeness - a.completeness || a.order - b.order);
 
   return ranked[0]?.seed ?? null;
+}
+
+/**
+ * Resolve a zoning seed from the project location. Point clusters are already
+ * reverse-geocoded by the LSAI project-location service, so they win. When the
+ * project only has a drawn inclusion boundary (AOI), reverse-geocode the
+ * bbox centre so zoning research can still start from location alone.
+ */
+export async function resolveProjectLocationZoningSeed(
+  snapshot: A2UIProjectLocationSnapshot | null | undefined,
+  reverseGeocode: (latitude: number, longitude: number) => Promise<ProjectZoningGeocode | null>,
+): Promise<ProjectZoningSeed | null> {
+  const cluster = projectLocationZoningSeed(snapshot);
+  if (cluster?.state && cluster.county && cluster.municipality) return cluster;
+
+  const aoi = snapshot?.inclusionArea;
+  const bbox = aoi?.bboxWgs84;
+  if (!bbox || bbox.length !== 4 || !bbox.every(Number.isFinite)) return cluster;
+
+  const [west, south, east, north] = bbox;
+  if (!(east > west) || !(north > south)) return cluster;
+
+  const geocode = await reverseGeocode((south + north) / 2, (west + east) / 2);
+  const aoiSeed = projectZoningSeedFromGeocode(
+    geocode,
+    aoi?.name ? `${aoi.name} (project AOI)` : 'Project AOI',
+  );
+  if (!cluster) return aoiSeed;
+  if (!aoiSeed) return cluster;
+
+  // A partially resolved cluster (often state-only from the project CRS) is
+  // improved by the AOI geocode without losing the cluster provenance.
+  return {
+    state: cluster.state || aoiSeed.state,
+    county: cluster.county || aoiSeed.county,
+    municipality: cluster.municipality || aoiSeed.municipality,
+    clusterIndex: cluster.clusterIndex,
+    label: cluster.label || aoiSeed.label,
+    source: 'project-location',
+  };
 }

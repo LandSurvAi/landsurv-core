@@ -2,6 +2,16 @@
 
 const releases = [
     {
+        version: "26.11.13.01",
+        date: "November 13, 2026",
+        highlights: [
+            "💾 Save and Start New Projects on Your Terms: Save Session now opens the native operating-system file picker for `.lsvz` archives instead of sending the file straight to Downloads, while the existing download fallback remains for browsers without the File System Access API. Canceling the picker leaves the Save dialog and project intact, and a new New Project action beside Save and Load asks whether to save first: Save & New writes the archive before resetting, New Without Saving discards the current project, and Cancel keeps working. The Save button shows a saving state and cannot be submitted twice, and starting fresh clears the previous project's GPS fix.",
+            "🛣️ Station Points Belong to Their Road Object: Automatic CL station markers, station/offset points created by Stationing & CL, and road-model centerline and pavement-edge points now carry a centerline-station association with the owning `roadObjectId`. The road object's `linework.pointIds` is kept in sync as points are generated, regenerated, or removed, and existing station points are adopted when a road object is created later. Because the points are now live baseline associations, editing the centerline moves them with the road, while existing linework associations are preserved.",
+            "⛰️ Mound Point Clouds Generate Locally at Full Count: Requests such as `draw a 100 ft diameter, 12 ft tall mound using 1,200 points` now parse in the client and generate the complete point cloud without a model round-trip. Counts in the thousands are supported, the mound is centered on the existing point centroid and local ground elevation unless explicit coordinates are supplied, and the result opens as its own visible point list ready for contouring.",
+            "🧭 Empty Projects Can Use the GPS Fix for Location and CRS: When the drawing has no points or linework, project-location clustering now reports the live GPS fix as the current project location instead of saying no location is available. Settings and chat can derive the local CRS or State Plane zone from that fix, an existing CRS is no longer falsely reported as missing, and the fix is passed through both the full and A2UI settings surfaces. Resetting to a new project clears the old fix.",
+        ],
+    },
+    {
         version: "26.11.12.01",
         date: "November 12, 2026",
         highlights: [

@@ -20,6 +20,7 @@ import { ROAD_PAINT_SKILLS } from './roadPaintSkillSchemas';
 import { STORMWATER_SKILLS } from './stormwaterSkillSchemas';
 import { DIRT_VOLUME_SKILLS } from './dirtVolumeSkillSchemas';
 import { CIVIL_DRAFTER_REDLINE_PATCH_SKILL, REDLINE_SKILLS } from './redlineSkillSchemas';
+import { SHEET_VIEW_SKILLS } from './sheetViewProtocol';
 
 /** A loose JSON-Schema-ish descriptor. Kept narrow on purpose. */
 export interface SkillFieldSchema {
@@ -630,7 +631,7 @@ agentRegistry.register({
       id: 'lsvz_delegate_agent',
       name: 'Delegate to Specialist Agent',
       description:
-        'Hands off a domain-specific or multimodal request (e.g. Civil Drafter Gimbal Vision linework, Boundary Agent deed parsing, Zoning ordinance web research) to the owning specialist agent while keeping results unified in the command bar.',
+        'Hands off a domain-specific or multimodal request (e.g. Civil Drafter Surveyors Eye linework, Boundary Agent deed parsing, Zoning ordinance web research) to the owning specialist agent while keeping results unified in the command bar.',
       inputs: {
         targetAgent: { type: 'string', required: true, description: 'Target AgentType (e.g. CIVIL_DRAFTER, DEED_READER, ZONING_AGENT, CIVIL_PLAN_EXPERT).' },
         query:       { type: 'string', required: true, description: 'The prompt or instruction to send to the specialist agent.' },
@@ -953,6 +954,7 @@ agentRegistry.register({
   cacpEnabled: true,
   version: '1.0.0',
   skills: [
+    ...SHEET_VIEW_SKILLS,
     {
       id: 'cad_get_layer_for_code',
       name: 'Get Layer for Code',
@@ -2179,7 +2181,7 @@ agentRegistry.register({
   agent: AgentType.PROFILE_AGENT,
   displayName: 'Profile & Cross Section',
   cacpEnabled: true,
-  version: '1.0.0',
+  version: '1.1.0',
   skills: [
     {
       id: 'generate_profile',
@@ -2218,6 +2220,60 @@ agentRegistry.register({
       outputs: {
         offsets:    { type: 'array', items: { type: 'number' }, required: true },
         elevations: { type: 'array', items: { type: 'number' }, required: true },
+      },
+    },
+    {
+      id: 'road_object_extract',
+      name: 'Extract Road Object Profiles & Sections',
+      type: 'action' as const,
+      description:
+        'Computes the existing-ground profile along the true alignment path, the grade-derived design profile, and one cross-section set at interval + critical stations for a linked RoadObject.',
+      inputs: {
+        roadObjectId: { type: 'string', required: true },
+        reason: { type: 'string', description: 'Why extraction was requested (corridor-design, live-input-change, manual-refresh).' },
+      },
+      outputs: {
+        status: { type: 'string', required: true },
+        existingProfileId: { type: 'string' },
+        designProfileId: { type: 'string' },
+        sectionSetId: { type: 'string' },
+        existingSampleCount: { type: 'integer' },
+        sectionStationCount: { type: 'integer' },
+        missing: { type: 'array', items: { type: 'object' } },
+      },
+      examples: ['Roading asks Profile to extract road object roadobj-cl-1 after a corridor design or baseline edit.'],
+    },
+    {
+      id: 'road_object_resolve_missing_data',
+      name: 'Resolve Road Object Missing Data',
+      type: 'action' as const,
+      description:
+        'Commits a missing-elevation decision for a RoadObject: keep gaps, extrapolate nearest, or cancel.',
+      inputs: {
+        roadObjectId: { type: 'string', required: true },
+        previewId: { type: 'string' },
+        decision: { type: 'string', required: true, enum: ['gaps', 'extrapolate', 'cancel'] },
+      },
+      outputs: {
+        status: { type: 'string', required: true },
+        roadObjectId: { type: 'string', required: true },
+        decision: { type: 'string' },
+      },
+    },
+    {
+      id: 'road_profile_show',
+      name: 'Show Road Profile',
+      type: 'action' as const,
+      description:
+        'Projects a linked RoadObject existing or design profile into the classic Profile view for inspection.',
+      inputs: {
+        roadObjectId: { type: 'string', required: true },
+        profileKind: { type: 'string', enum: ['existing', 'design'], default: 'existing' },
+      },
+      outputs: {
+        roadObjectId: { type: 'string', required: true },
+        profileKind: { type: 'string', required: true },
+        sampleCount: { type: 'integer', required: true },
       },
     },
   ],
@@ -2713,7 +2769,7 @@ agentRegistry.register({
   agent: AgentType.ROADING_AGENT,
   displayName: 'Roading Agent',
   cacpEnabled: true,
-  version: '1.0.0',
+  version: '1.1.0',
   skills: [
     ...ROADING_SKILLS,
   ],

@@ -3,8 +3,9 @@
 // Do not change existing type definitions without a very good reason, as it can break the entire application.
 
 import React, { createContext, useContext } from 'react';
-import type { Chat as GeminiChat, Part as GeminiPart } from '@google/genai';
-import type { LinearUnit } from './utils/linearUnits';
+import type { Chat as GeminiChat, Part as GeminiPart } from '@google/genai';import type { LinearUnit } from './utils/linearUnits';
+import type { RoadAcceptanceVerdict } from './utils/roadAcceptanceGates';
+import type { HelpGroup } from './utils/canvasCommands';
 
 // Re-exporting Gemini types locally to avoid direct dependencies in other components.
 export type Chat = GeminiChat;
@@ -223,6 +224,42 @@ export type A2UISettingsSection =
   | 'notion'
   | 'a2ui';
 
+export type A2UIPointStudioTab = 'marker' | 'labels' | 'efficiency' | 'assignments' | 'export';
+
+export type A2UIPointStudioFocus =
+  | 'marker-shape'
+  | 'marker-size'
+  | 'marker-fill'
+  | 'marker-light-fill'
+  | 'marker-stroke'
+  | 'marker-stroke-width'
+  | 'marker-opacity'
+  | 'label-number-color'
+  | 'label-elevation-color'
+  | 'label-description-color'
+  | 'label-font-size'
+  | 'efficiency-color'
+  | 'efficiency-light-color'
+  | 'efficiency-size'
+  | 'efficiency-shape'
+  | 'efficiency-opacity';
+
+/** A conversational Point Studio request bound to an A2UI workspace surface. */
+export interface A2UIPointStudioSpec {
+  tab?: A2UIPointStudioTab;
+  styleId?: string;
+  focus?: A2UIPointStudioFocus;
+  /** Human-readable summary of the requested change. */
+  summary?: string;
+  marker?: Partial<PointMarkerStyle>;
+  labels?: Partial<PointLabelStyle>;
+  efficiency?: Partial<PointEfficiencyStyle>;
+  /** Relative marker/dense-dot size change, applied to the current style. */
+  sizeScale?: number;
+  /** Relative label font-size change, applied to the current style. */
+  labelSizeScale?: number;
+}
+
 export type A2UIWorkspaceToolId =
   | 'stationing-controls'
   | 'centerline-list'
@@ -249,8 +286,14 @@ export type A2UIWorkspaceToolId =
   | 'redline-workspace'
   | 'road-paint-studio'
   | 'tin-surfaces'
+  | 'point-studio'
   | 'point-tools'
-  | 'legend';
+  | 'surveyors-eye'
+  | 'legend'
+  | 'area-of-interest'
+  | 'draw-menu'
+  | 'command-help'
+  | 'road-links';
 
 export interface A2UIInputField {
   id: string;
@@ -325,6 +368,7 @@ export type A2UIWidgetType =
   | 'roading-intake'
   | 'redline-upload'
   | 'roading-designer'
+  | 'road-links'
   | 'cad-manager-intake'
   | 'cad-manager-workspace'
   | 'cad-standards-table'
@@ -668,6 +712,11 @@ export interface A2UIScoutActivityEvent {
   message: string;
   url?: string;
   level?: 'info' | 'success' | 'warn' | 'error';
+  /** Structured phase so the mascot and panel do not parse prose. */
+  kind?: 'start' | 'jurisdiction' | 'agol' | 'portal' | 'probe' | 'verified' | 'rejected' | 'cache' | 'error' | 'done';
+  candidateId?: string;
+  reason?: ScoutRejectReason;
+  runId?: string;
 }
 
 /** Live state rendered by the A2UI Scout surface. */
@@ -675,11 +724,83 @@ export interface A2UIScoutActivitySnapshot {
   id: string;
   title: string;
   subtitle?: string;
-  status: 'running' | 'success' | 'error' | 'cancelled';
+  status: 'running' | 'success' | 'error' | 'cancelled' | 'needs_jurisdiction';
   startedAt: number;
   finishedAt?: number;
   events: A2UIScoutActivityEvent[];
   summary?: string;
+  candidates?: ScoutCandidateAudit[];
+  jurisdiction?: ScoutJurisdictionResolution;
+  warnings?: string[];
+  stats?: ScoutRunStats;
+}
+
+/** Canonical reason a grounded Scout candidate was rejected. */
+export type ScoutRejectReason =
+  | 'out_of_state'
+  | 'out_of_county'
+  | 'no_extent_overlap'
+  | 'zero_features'
+  | 'wrong_geometry'
+  | 'national_extent'
+  | 'unresolved_jurisdiction'
+  | 'blocked_tos'
+  | 'probe_failed';
+
+/** The jurisdiction Scout grounded a run to, and how it decided. */
+export interface ScoutJurisdictionResolution {
+  state: string;
+  stateAbbr?: string;
+  county?: string;
+  source: 'user' | 'census' | 'cluster-fallback';
+  confidence: 'high' | 'medium' | 'low';
+  aoiCentre: { latitude: number; longitude: number };
+  sampledStates?: string[];
+  decidedAt: number;
+}
+
+/** One candidate source, accepted or rejected, kept for the audit panel. */
+export interface ScoutCandidateAudit {
+  id: string;
+  label: string;
+  url: string;
+  provider: 'pasda' | 'federal' | 'state' | 'county' | 'agol' | 'scout' | 'custom';
+  kind: 'contours' | 'parcels' | 'flood' | 'soils' | 'zoning' | 'custom';
+  jurisdiction?: { state?: string; county?: string };
+  extent?: [number, number, number, number];
+  geometryType?: string;
+  featureCount?: number;
+  score?: number;
+  decision: 'accepted' | 'accepted_federal' | 'accepted_neighbor_clip' | 'accepted_ranked' | 'rejected';
+  reason?: ScoutRejectReason;
+  message: string;
+  verified?: boolean;
+}
+
+/** One short-lived Scout line shown in Quick Thought. */
+export interface ScoutNarration {
+  runId: string;
+  text: string;
+  at: number;
+  expiresAt: number;
+  tone: 'info' | 'success' | 'warn' | 'error';
+}
+
+export interface ScoutRunStats {
+  found: number;
+  accepted: number;
+  rejected: number;
+  verified: number;
+  cacheHit: boolean;
+  browserHops: number;
+}
+
+/** Full state of one Scout crawl run. */
+export interface ScoutRun extends A2UIScoutActivitySnapshot {
+  sessionId?: string;
+  candidates: ScoutCandidateAudit[];
+  warnings: string[];
+  stats: ScoutRunStats;
 }
 
 /** One Table E.1 limitation shown in the chat-hosted soil limitations surface. */
@@ -732,6 +853,12 @@ export interface A2UIExperimentalAgentSpec {
   summary: string;
   warning: string;
   capabilities: string[];
+}
+
+export interface A2UICommandHelpSpec {
+  groups: HelpGroup[];
+  notes?: string[];
+  text?: string;
 }
 
 export interface A2UIPayload {
@@ -817,12 +944,21 @@ export interface A2UIPayload {
   properties?: A2UIPropertiesSpec;
   /** Specific workspace manager/tool mounted inside the surface. */
   workspaceTool?: A2UIWorkspaceToolId;
+  /** Grouped reference bound to the dockable canvas command-help surface. */
+  commandHelp?: A2UICommandHelpSpec;
+  /** Focused point-style controls for a conversational Point Studio request. */
+  pointStudio?: A2UIPointStudioSpec;
   /** One independently addressable contour chip bound to live settings/actions. */
   contourChip?: A2UIContourChipSpec;
   /** Initial manifest selection for an in-chat CACP explorer. */
   cacpManifests?: { initialAgent?: AgentType };
   /** Roading Agent intake/design parameters bound to the A2UI surface. */
   roadingDesign?: Partial<RoadTypicalSection & { mode?: 'existing-synthesis' | 'corridor-design' | 'road-model'; centerlineId?: string }>;
+  /** Road Links workspace focus bound to the road-links surface/card. */
+  roadLinks?: {
+    roadObjectId?: string;
+    focus?: 'profiles' | 'sections' | 'missing-data' | 'broken';
+  };
 }
 
 /** Live state for the LSAI-owned project-location A2UI surface. */
@@ -906,6 +1042,8 @@ interface ParametricAssociationBase {
   label?: string;
   /** Geometry signature of the baseline this geometry was last built from. */
   sourceSignature?: string;
+  /** Live RoadObject this generated geometry belongs to, when linked. */
+  roadObjectId?: string;
 }
 
 /** Parallel linework generated at a fixed perpendicular offset from a baseline. */
@@ -1133,6 +1271,19 @@ export interface InclusionBoundary {
   name: string;
   /** Identifies all SurveyLines belonging to this boundary. */
   polylineId: string;
+}
+
+/**
+ * A user-held Area Of Interest. AOI linework intentionally shares the
+ * `type: 'inclusion'` contract so the same parcel/soil/contour clippers can
+ * consume it, but the polyline id is prefixed `aoi_` and the AOI is managed
+ * separately from named inclusion boundaries.
+ */
+export interface AoiBoundary extends InclusionBoundary {
+  source?: 'drawn' | 'inclusion' | 'boundary' | 'address';
+  address?: string;
+  bboxWgs84?: [number, number, number, number];
+  createdAt?: string;
 }
 
 export interface ContourLabel {
@@ -1786,6 +1937,155 @@ export interface PointLabelingSettings {
     nextNumber: number;
 }
 
+// ── Point Studio ────────────────────────────────────────────────────────────
+
+export type PointStyleId = string;
+
+export type PointMarkerShape =
+    | 'dot'
+    | 'circle'
+    | 'square'
+    | 'triangle'
+    | 'cross'
+    | 'x'
+    | 'diamond'
+    | 'ring';
+
+export interface PointMarkerStyle {
+    shape: PointMarkerShape;
+    sizePx: number;
+    color: string;
+    lightThemeColor?: string;
+    strokeColor: string;
+    strokeWidthPx: number;
+    opacity: number;
+}
+
+export interface PointLabelStyle {
+    showPointNumber: boolean;
+    showElevation: boolean;
+    showDescription: boolean;
+    pointNumberColor: string;
+    elevationColor: string;
+    descriptionColor: string;
+    fontSizePx: number;
+    fontFamily: string;
+    scaleMode: 'screen' | 'world';
+    offsetXPx: number;
+    offsetYPx: number;
+    leader: 'none' | 'when-offset' | 'always';
+    leaderColor: string;
+    leaderWidthPx: number;
+    leaderDash: number[];
+    labelBackground: {
+        enabled: boolean;
+        color: string;
+        paddingPx: number;
+    };
+}
+
+export interface PointHighlightStyle {
+    selectionRing: {
+        enabled: boolean;
+        color: string;
+        radiusPx: number;
+        widthPx: number;
+        dash: number[];
+    };
+    hoverRing: {
+        enabled: boolean;
+        color: string;
+        radiusPx: number;
+        widthPx: number;
+        dash: number[];
+    };
+    shrinkwrapBadges: boolean;
+    pendingDeleteRing: boolean;
+}
+
+export interface PointEfficiencyStyle {
+    enabled: boolean;
+    preset: 'current' | 'performance' | 'balanced' | 'detail' | 'custom';
+    detailScaleCutoff: number;
+    screenPointBudget: number;
+    cellSizePx: number;
+    dotShape: 'square' | 'circle';
+    minDotSizePx: number;
+    maxDotSizePx: number;
+    densityGrowth: number;
+    color: string;
+    lightThemeColor: string;
+    opacity: number;
+    suppressLabels: boolean;
+    suppressSymbols: boolean;
+    suppressCallouts: boolean;
+    keepSelectionRing: boolean;
+    keepHoverRing: boolean;
+    keepShrinkwrapBadges: boolean;
+    keepPendingDeleteRings: boolean;
+}
+
+export interface PointStyle {
+    id: PointStyleId;
+    name: string;
+    description?: string;
+    source: 'builtin' | 'user' | 'team' | 'imported';
+    marker: PointMarkerStyle;
+    labels: PointLabelStyle;
+    renderSymbols: boolean;
+    highlights: PointHighlightStyle;
+    efficiency: PointEfficiencyStyle;
+    dxfStyleName?: string;
+    c3dStyleName?: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export type PointStyleTarget =
+    | { kind: 'point-list'; listId: string }
+    | { kind: 'description'; match: string; matchMode: 'exact' | 'wildcard' }
+    | { kind: 'point'; pointNumber: string }
+    | { kind: 'layer'; layer: string };
+
+export interface PointStyleAssignment {
+    id: string;
+    styleId: PointStyleId;
+    target: PointStyleTarget;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface PointStyleOverride {
+    pointNumber: string;
+    marker?: Partial<PointMarkerStyle>;
+    labels?: Partial<PointLabelStyle>;
+    highlights?: Partial<PointHighlightStyle>;
+    efficiency?: Partial<PointEfficiencyStyle>;
+    updatedAt: string;
+}
+
+export interface PointStudioState {
+    version: 1;
+    styles: PointStyle[];
+    defaultStyleId: PointStyleId;
+    assignments: PointStyleAssignment[];
+    overrides: Record<string, PointStyleOverride>;
+    updatedAt: string;
+}
+
+export interface ResolvedPointRenderStyle {
+    styleId: PointStyleId;
+    styleName: string;
+    marker: PointMarkerStyle;
+    labels: PointLabelStyle;
+    renderSymbols: boolean;
+    highlights: PointHighlightStyle;
+    efficiency: PointEfficiencyStyle;
+    dxfStyleName: string;
+    c3dStyleName: string;
+    reason: 'point-override' | 'point' | 'description' | 'point-list' | 'layer' | 'default';
+}
+
 export interface ProjectionSetting {
     state: string | null;
     zoneName: string | null;
@@ -1896,6 +2196,8 @@ export interface Settings {
     /** BYOK: Anthropic API key (sk-ant-…). Stored in localStorage only; used browser-direct. */
     anthropicApiKey?: string;
     pointAttributeScaling: 'screen' | 'world'; // Controls if point labels scale with zoom or stay fixed size
+    /** Named point styles, assignments, and render-only per-point overrides. */
+    pointStudio?: PointStudioState;
     /** When true, point descriptions may render matching custom/CAD/built-in symbols. Default: false. */
     showPointSymbols?: boolean;
     /** When true, points compress into screen-space primitives while zoomed out or crowded. Default: true. */
@@ -1932,6 +2234,11 @@ export interface Settings {
        * whether the HUD overlay is visible.
        */
       debugGimbalHud?: boolean;
+      /**
+       * Developer / Testing: show the A2UI Decision 1 shadow inspector.
+       * Shadow only — the regex router still controls every surface.
+       */
+      debugA2UIDecisionInspector?: boolean;
       /**
        * Developer / Experimental setting: enable background aerial imagery extraction
        * and multi-source methodology prompting in Civil Drafter.
@@ -2096,6 +2403,10 @@ export interface DxfExportOptions {
     includeCenterlines: boolean;
     pointScale: number;
   steepSlopeFillStyle?: 'solid' | 'hatch' | 'native-hatch';
+  /** Include resolved Point Studio style names in the DXF metadata header. */
+  includePointStyleNames?: boolean;
+  /** Point number → Point Studio style name, used by the metadata header. */
+  pointStyleNames?: Record<string, string>;
 }
 
 export interface SymbolTextElement {
@@ -2706,6 +3017,59 @@ export interface RoadTypicalSection {
     designGradePct?: number;
 }
 
+/** One drafting turn inside a road acceptance run. Stored in the .lsvz so a
+ * reopened project can show the per-turn gate history without images. */
+export interface RoadAcceptanceTurnRecord {
+    turn: number;
+    source: 'initial' | 'redraw' | 'confirmation';
+    gatesPassed: number;
+    gatesApplicable: number;
+    score: number;
+    coveragePct: number;
+    widthDriftFt: number | null;
+    verdict: 'pass' | 'reject' | 'no_geometry';
+    redDefects: string[];
+    criticVerdict?: 'accept' | 'reject' | 'uncertain' | 'unavailable';
+    criticConfidence?: number;
+    frameLabels: string[];
+}
+
+/** Per-corridor tolerance derived from the pass-1 road math model. */
+export interface RoadAcceptanceCorridorTolerance {
+    corridorId: string;
+    lengthFt: number;
+    medianWidthFt: number | null;
+    widthSpreadFt: number;
+    widthTolFt: number;
+    gapTolFt: number;
+    endpointTolFt: number;
+}
+
+/** Audit record for one Civil Drafter / Roading road acceptance run. */
+export interface RoadAcceptanceRecord {
+    id: string;
+    createdAt: number;
+    agent: 'CIVIL_DRAFTER' | 'ROADING_AGENT';
+    requestText: string;
+    passOne: {
+        corridors: number;
+        sections: number;
+        totalLengthFt: number;
+        medianWidthFt: number | null;
+    };
+    tolerances: RoadAcceptanceCorridorTolerance[];
+    turns: RoadAcceptanceTurnRecord[];
+    committedTurn: number;
+    bestTurn?: number;
+    verified: boolean;
+    confirmationRegressed?: boolean;
+    /** Gate snapshot so the HUD can be restored after reopening a .lsvz. */
+    verdict?: RoadAcceptanceVerdict;
+    remainingDefects: string[];
+    widthDecision?: 'narrow' | 'wide' | 'transition' | 'custom' | 'assumed_narrow';
+    widthTargets?: Record<string, number>;
+}
+
 export interface RoadCorridorRun {
     id: string;
     name: string;
@@ -2722,8 +3086,214 @@ export interface RoadCorridorRun {
     associationIds?: string[];
     roadNames?: string[];
     profileGenerated?: boolean;
+    /** Back-link to the live RoadObject that owns this model's profiles/sections. */
+    roadObjectId?: string;
     createdAt: string;
     updatedAt?: string;
+}
+
+export type RoadObjectStatus =
+    | 'linked'
+    | 'refreshing'
+    | 'live'
+    | 'needs-input'
+    | 'failed'
+    | 'broken';
+
+export type ElevationSourceKind = 'tin' | 'contour' | 'points';
+
+export interface StationRange {
+    startStation: number;
+    endStation: number;
+}
+
+export interface ElevationSourcePreference {
+    order: ElevationSourceKind[];
+    tinId?: string | null;
+}
+
+export interface RoadObjectPreferences {
+    elevation: ElevationSourcePreference;
+    profileIntervalFt: number;
+    sectionIntervalFt: number;
+    sectionSampleIntervalFt: number;
+    sectionGroundMarginFt: number;
+    missingDataPolicy: 'ask' | 'gaps' | 'extrapolate';
+}
+
+export type RoadCriticalStationReason =
+    | 'bop' | 'eop' | 'pc' | 'pt'
+    | 'cul-de-sac' | 'driveway' | 'intersection' | 'user';
+
+export interface RoadCriticalStation {
+    station: number;
+    reason: RoadCriticalStationReason;
+    label: string;
+}
+
+export type RoadProfileSampleSource =
+    | 'tin' | 'contour' | 'points' | 'extrapolated' | 'gap';
+
+export interface RoadProfileSample {
+    station: number;
+    elevation: number | null;
+    source: RoadProfileSampleSource;
+}
+
+export interface RoadProfile {
+    id: string;
+    roadObjectId: string;
+    kind: 'existing' | 'design';
+    samples: RoadProfileSample[];
+    beginStation: number;
+    endStation: number;
+    lengthFt: number;
+    minElevation: number | null;
+    maxElevation: number | null;
+    gaps: StationRange[];
+    sourceOrder: ElevationSourceKind[];
+    status: 'ok' | 'partial' | 'unverified';
+    inputSignature: string;
+    computedAt: string;
+}
+
+export interface RoadSectionGroundPoint {
+    offsetFt: number;
+    elevationFt: number | null;
+    source: RoadProfileSampleSource;
+}
+
+export type RoadSectionDesignFeature =
+    | 'cl' | 'lane' | 'ep' | 'gutter' | 'curb-face' | 'curb-back'
+    | 'sidewalk-in' | 'sidewalk-out' | 'row';
+
+export interface RoadSectionDesignPoint {
+    offsetFt: number;
+    elevationFt: number | null;
+    feature: RoadSectionDesignFeature;
+    verticalFace?: boolean;
+}
+
+export interface RoadSectionHook {
+    attachmentId: string;
+    consumerId: string;
+    kind: string;
+    offsetFt: number;
+    elevationFt: number | null;
+    label: string;
+    stationDeltaFt: number;
+}
+
+export interface RoadCrossSectionStation {
+    id: string;
+    station: number;
+    stationLabel: string;
+    reason: RoadCriticalStationReason | 'interval';
+    sectionLine: {
+        startEasting: number;
+        startNorthing: number;
+        endEasting: number;
+        endNorthing: number;
+        bearingDeg: number;
+    };
+    ground: RoadSectionGroundPoint[];
+    design: RoadSectionDesignPoint[];
+    hooks: RoadSectionHook[];
+    gaps: StationRange[];
+}
+
+export interface RoadCrossSectionSet {
+    id: string;
+    roadObjectId: string;
+    stations: RoadCrossSectionStation[];
+    intervalFt: number;
+    sampleIntervalFt: number;
+    leftWidthFt: number;
+    rightWidthFt: number;
+    status: 'ok' | 'partial' | 'unverified';
+    inputSignature: string;
+    computedAt: string;
+}
+
+export type RoadLinkKind = 'profile' | 'cross-section' | 'utility' | 'custom';
+
+export interface RoadObjectLink {
+    id: string;
+    roadObjectId: string;
+    kind: RoadLinkKind;
+    targetKind: string;
+    targetId: string;
+    consumerId: string;
+    schemaVersion: string;
+    sourceSignature: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface RoadAttachmentAnchor {
+    id: string;
+    roadObjectId: string;
+    consumerId: string;
+    kind: string;
+    station: number;
+    offsetFt: number;
+    elevationFt?: number | null;
+    label: string;
+    payload: Record<string, unknown>;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface RoadObjectIssue {
+    code:
+        | 'missing-elevation'
+        | 'baseline-missing'
+        | 'baseline-invalid'
+        | 'road-model-missing'
+        | 'road-model-moved'
+        | 'no-design-grade'
+        | 'extraction-failed'
+        | 'profile-agent-unavailable'
+        | 'sampling-coarsened'
+        | 'consumer-invalid'
+        | 'attachment-out-of-range';
+    severity: 'info' | 'warning' | 'error';
+    message: string;
+    stationRange?: StationRange;
+}
+
+export interface RoadObject {
+    id: string;
+    schemaVersion: 1;
+    name: string;
+    baselineId: string;
+    baselineName: string;
+    baselineBeginStation: number;
+    baselineLengthFt: number;
+    baselineSignature: string;
+    roadModelId?: string;
+    roadModelName?: string;
+    typicalSection: RoadTypicalSection;
+    modelSignature: string;
+    linework: {
+        lineIds: string[];
+        pointIds: string[];
+        associationIds: string[];
+        signature: string;
+    };
+    preferences: RoadObjectPreferences;
+    criticalStations: RoadCriticalStation[];
+    existingProfile: RoadProfile | null;
+    designProfile: RoadProfile | null;
+    crossSections: RoadCrossSectionSet | null;
+    links: RoadObjectLink[];
+    attachments: RoadAttachmentAnchor[];
+    status: RoadObjectStatus;
+    issues: RoadObjectIssue[];
+    computedInputSignature?: string;
+    lastExtractedAt?: string;
+    createdAt: string;
+    updatedAt: string;
 }
 
 export type ToolWorkflowId = 'points' | 'underlays';
@@ -2997,6 +3567,10 @@ export interface SessionState {
     steepSlopeRuns?: SteepSlopeRunResult[];
     /** Saved Roading Agent synthesis & corridor design runs. */
     roadCorridors?: RoadCorridorRun[];
+    /** First-class road objects: live baseline/linework -> profiles/cross-sections links. */
+    roadObjects?: RoadObject[];
+    /** Per-turn road acceptance audit history (last 20 runs). */
+    roadAcceptanceRecords?: RoadAcceptanceRecord[];
     /** Redline Agent runs (marked-up plan packages, worklists, decisions). */
     redlineRuns?: RedlineRun[];
     /** Street-name labels placed on the plan (v26.05.19.4). Each label is a
@@ -3027,6 +3601,9 @@ export interface SessionState {
     /** Id of the currently-active inclusion boundary (the one Contour, Flood
      *  and other agents default to when narrowing inclusion lines). */
     activeInclusionBoundaryId?: string | null;
+    /** Named, held areas of interest used as the default clipping mask. */
+    aoiBoundaries?: AoiBoundary[];
+    activeAoiBoundaryId?: string | null;
 
     /** FEMA FIRMETTE image cached for the current flood query area (v26.05.19.1). */
     floodFirmette?: {

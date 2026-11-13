@@ -2,6 +2,7 @@
 // Pure constants for session management - NO LOGIC, just data
 
 import { Settings } from '../types';
+import { createDefaultPointStudioState } from '../services/pointStyles.ts';
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'dark',
@@ -39,8 +40,10 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   showPointSymbols: false,
   pointEfficiencyMode: true,
+  pointStudio: createDefaultPointStudioState(),
   debugPreflightEstimate: false,
   debugGimbalHud: false,
+  debugA2UIDecisionInspector: false,
   enableGeoAiDrafting: false,
   forceAgent: undefined,
   floodHatch: { style: 'lines', patternName: 'AUTO', scale: 10, angleDeg: 0, opacity: 0.35, color: '#22d3ee', showLabels: true },

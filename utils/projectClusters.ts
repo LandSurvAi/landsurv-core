@@ -53,6 +53,8 @@ export interface BuildProjectLocationClustersInput {
   centerlines?: Centerline[];
   /** Project CRS. Without it clusters are still grouped but not georeferenced. */
   epsg?: number | null;
+  /** Live GPS fix used when the drawing has no points or linework yet. */
+  gpsFix?: { latitude: number; longitude: number } | null;
   /** Margin applied around each cluster footprint for its WGS84 bbox. */
   marginProjected?: number;
   /** Override the auto-derived linkage distance, in project units. */
@@ -257,6 +259,7 @@ export function buildProjectLocationClusters(
     lines = [],
     centerlines = [],
     epsg = null,
+    gpsFix = null,
     marginProjected = 200,
   } = input;
 
@@ -371,6 +374,33 @@ export function buildProjectLocationClusters(
         linkageDistance: linkDistance,
         createdAt: Date.now(),
         warnings,
+      };
+    }
+  }
+
+  // Empty drawing with a live GPS fix: locate the project at the fix so the
+  // CRS and jurisdiction surfaces still work before the first point is stored.
+  if (working.length === 0 && gpsFix && epsg) {
+    const estimate = estimateProjectLocation({ gpsFix, epsg, marginProjected });
+    if (estimate.bounds) {
+      return {
+        clusters: [{
+          id: 'cluster-1',
+          index: 1,
+          label: 'Current GPS fix',
+          pointCount: 0,
+          pointNumbers: [],
+          estimate,
+          jurisdiction: null,
+        }],
+        epsg,
+        totalPoints: 0,
+        linkageDistance: linkDistance,
+        createdAt: Date.now(),
+        warnings: [
+          ...warnings,
+          'No survey points are loaded — using the current GPS fix as the project location.',
+        ],
       };
     }
   }

@@ -67,8 +67,10 @@ import { knowledgeBase } from './KnowledgeBase';
 import { isExperimentalAgentEnabled } from '../utils/experimentalAgents';
 import {
   createCenterlineOffsetAssociation,
+  createCenterlineStationPointAssociation,
   tagCenterlineOffsetLines,
 } from './parametricAssociations';
+import { roadLinkRegistry } from './roadLinkRegistry';
 
 export interface RoadingHandlerDeps {
   points: SurveyPoint[];
@@ -409,7 +411,7 @@ export interface SurveyRoadCorridor {
 }
 
 const GENERATED_ROAD_POINT = /^(EP|CL|DW|ROAD|POLY|TRIM)-/i;
-const EDGE_SHOT = /\b(EP|EOP|ER|EDGE|ES|EG|EC|ET|CURB|TBC|TC|BC|GUTTER|PAV|PVMT|SHLD|SH|DEP[0-9]*)\b/i;
+const EDGE_SHOT = /\b(EP|EOP|ER|EDGE|ES|EG|EC|ET|CURB|TBC|TC|BC|GUTTER|PAV|PVMT|SHLD|SH|DEP[0-9]*|POC[0-9]*|PC[0-9]*|PT[0-9]*)\b/i;
 const CENTERLINE_SHOT = /\b(CL|CTR|CENTER|CENTERLINE)\b/i;
 const WIDTH_CODE_RE = /(\d+(?:\.\d+)?)\s*W\b/i;
 
@@ -1783,6 +1785,32 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
           : Promise.resolve([]);
 
       const generatedPts: SurveyPoint[] = [];
+      const makeRoadStationPoint = (
+        pointNumber: string,
+        northing: number,
+        easting: number,
+        elevation: number,
+        description: string,
+        layer: string,
+        station: number,
+        offsetFt: number,
+      ): SurveyPoint => {
+        const association = createCenterlineStationPointAssociation(targetCl!, station, offsetFt, {
+          ownerKind: 'road-model',
+          ownerId: corridorId,
+          label: description,
+        });
+        associationIds.push(association.id);
+        return {
+          pointNumber,
+          northing,
+          easting,
+          elevation,
+          description,
+          layer,
+          parametricAssociation: association,
+        };
+      };
       let nextPn = deps.points.length + 1001;
       try {
         const stationsCount = Math.max(2, Math.floor(totalLen / stationIntervalFt) + 2);
@@ -1815,34 +1843,40 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         const rtCoord = calculatePointFromStationOffset(targetCl, sta, halfTravel);
 
         if (clCoord) {
-          generatedPts.push({
-            pointNumber: String(nextPn++),
-            northing: clCoord.northing,
-            easting: clCoord.easting,
-            elevation: clElev,
-            description: `ROAD CL STA ${formatStation(sta)}`,
-            layer: 'C-ROAD-CNTR',
-          });
+          generatedPts.push(makeRoadStationPoint(
+            String(nextPn++),
+            clCoord.northing,
+            clCoord.easting,
+            clElev,
+            `ROAD CL STA ${formatStation(sta)}`,
+            'C-ROAD-CNTR',
+            sta,
+            0,
+          ));
         }
         if (ltCoord) {
-          generatedPts.push({
-            pointNumber: String(nextPn++),
-            northing: ltCoord.northing,
-            easting: ltCoord.easting,
-            elevation: edgeElev,
-            description: `EP LT STA ${formatStation(sta)}`,
-            layer: 'L-ROAD',
-          });
+          generatedPts.push(makeRoadStationPoint(
+            String(nextPn++),
+            ltCoord.northing,
+            ltCoord.easting,
+            edgeElev,
+            `EP LT STA ${formatStation(sta)}`,
+            'L-ROAD',
+            sta,
+            -halfTravel,
+          ));
         }
         if (rtCoord) {
-          generatedPts.push({
-            pointNumber: String(nextPn++),
-            northing: rtCoord.northing,
-            easting: rtCoord.easting,
-            elevation: edgeElev,
-            description: `EP RT STA ${formatStation(sta)}`,
-            layer: 'L-ROAD',
-          });
+          generatedPts.push(makeRoadStationPoint(
+            String(nextPn++),
+            rtCoord.northing,
+            rtCoord.easting,
+            edgeElev,
+            `EP RT STA ${formatStation(sta)}`,
+            'L-ROAD',
+            sta,
+            halfTravel,
+          ));
         }
         if (sta >= endSta) break;
       }
@@ -1941,11 +1975,54 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         createdAt: existingModel?.createdAt ?? now,
         updatedAt: now,
       };
+      // First-class road object: the model is the design recipe, the RoadObject
+      // is the live baseline/linework/profile/section identity. Linking is
+      // automatic and idempotent per baseline.
+      const linkedRoadObject = roadLinkRegistry.linkRoadModel({
+        roadModel: run,
+        centerline: targetCl,
+        lines: newLines,
+      });
+      run.roadObjectId = linkedRoadObject.id;
+      const linkedLineIds = new Set(newLines.map(line => line.id || '').filter(Boolean));
+      deps.setLines(prev => prev.map(line => {
+        const association = line.parametricAssociation;
+        if (!association) return line;
+        if (!linkedLineIds.has(line.id || '') && association.ownerId !== corridorId) return line;
+        return {
+          ...line,
+          parametricAssociation: { ...association, roadObjectId: linkedRoadObject.id },
+        };
+      }));
       deps.setRoadCorridors?.((prev) =>
         existingModel
           ? [...prev.filter((model) => model.id !== corridorId), run]
           : [...prev, run],
       );
+
+      let linkedProfileStatus: 'pending' | 'live' | 'needs-input' | 'failed' = 'pending';
+      let linkedSectionSetId: string | undefined;
+      let linkedRoadLinkIssues: unknown[] = [];
+      try {
+        const extraction = await interAgentComm.askPeer(
+          AgentType.PROFILE_AGENT,
+          'road_object_extract',
+          { roadObjectId: linkedRoadObject.id, reason: 'corridor-design' },
+        );
+        const extractionData = (extraction.data ?? {}) as Record<string, unknown>;
+        linkedProfileStatus = extraction.success
+          ? ((extractionData.status as typeof linkedProfileStatus) ?? 'live')
+          : 'failed';
+        linkedSectionSetId = extractionData.sectionSetId as string | undefined;
+        linkedRoadLinkIssues = Array.isArray(extractionData.issues) ? extractionData.issues : [];
+      } catch (error) {
+        linkedProfileStatus = 'failed';
+        roadLinkRegistry.setStatus(linkedRoadObject.id, 'linked', [{
+          code: 'profile-agent-unavailable',
+          severity: 'warning',
+          message: error instanceof Error ? error.message : String(error),
+        }]);
+      }
 
       deps.logActionToFieldbook(
         `Roading Agent: designed "${name}" corridor (${totalTravelWidth}' travelway, ${rowWidthSpecified ? `${rowWidthFt}' ROW` : 'ROW width not specified \u2014 no ROW lines drawn'}, ${newLines.length} segments, ${generatedPts.length} stationed points).`,
@@ -1969,6 +2046,10 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
         addedLines: newLines.length,
         layersCreated: Array.from(layersCreated),
         profileGenerated,
+        roadObjectId: linkedRoadObject.id,
+        profileStatus: linkedProfileStatus,
+        sectionSetId: linkedSectionSetId,
+        roadLinkIssues: linkedRoadLinkIssues,
       });
     }),
   );
@@ -1993,6 +2074,38 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
           undefined,
           'No active road centerline found. Synthesize an existing road or design a road alignment first.',
         );
+      }
+
+      const linkedRoad = roadLinkRegistry.getByBaseline(cl.id);
+      if (linkedRoad) {
+        try {
+          const extraction = await interAgentComm.askPeer(
+            AgentType.PROFILE_AGENT,
+            'road_object_extract',
+            { roadObjectId: linkedRoad.id, reason: 'roading-generate-profile-and-sections' },
+          );
+          if (extraction.success) {
+            const updated = roadLinkRegistry.get(linkedRoad.id) ?? linkedRoad;
+            const samples = (updated.existingProfile?.samples ?? []).filter(sample => sample.elevation !== null);
+            deps.setProfileData(samples.map(sample => ({
+              station: sample.station - updated.baselineBeginStation,
+              elevation: sample.elevation as number,
+            })));
+            deps.setProfileInfo({ name: `${updated.name} — Existing Ground`, type: 'centerline' });
+            const extractionData = (extraction.data ?? {}) as Record<string, unknown>;
+            return respond(message, true, {
+              sampleCount: samples.length,
+              lengthFt: updated.baselineLengthFt,
+              minElevation: updated.existingProfile?.minElevation ?? 0,
+              maxElevation: updated.existingProfile?.maxElevation ?? 0,
+              crossSectionCount: updated.crossSections?.stations.length ?? 0,
+              roadObjectId: updated.id,
+              profileStatus: extractionData.status ?? updated.status,
+            });
+          }
+        } catch {
+          // Fall through to the legacy chord profile when the Profile Agent is unavailable.
+        }
       }
 
       const sampleIntervalFt =
@@ -2281,6 +2394,13 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
       const currentLines = deps.lines ?? [];
       let removedLines = 0;
       let removedCorridors = 0;
+      let removedRoadObjects = 0;
+      const linkedRoads = corridorId
+        ? roadLinkRegistry.list().filter(road => road.roadModelId === corridorId)
+        : roadLinkRegistry.list();
+      for (const road of linkedRoads) {
+        if (roadLinkRegistry.unlink(road.id)) removedRoadObjects++;
+      }
 
       if (corridorId && deps.roadCorridors) {
         const target = deps.roadCorridors.find((c) => c.id === corridorId);
@@ -2318,7 +2438,160 @@ export function registerRoadingSkillHandlers(getDeps: () => RoadingHandlerDeps):
       return respond(message, true, {
         removedLines,
         removedCorridors,
+        removedRoadObjects,
       });
+    }),
+  );
+
+  // ── 6. Road object link lifecycle ──────────────────────────────────────────
+  unsubs.push(
+    interAgentComm.onCommand('road_object_link', async (message) => {
+      const blocked = roadingExperimentalGate(message);
+      if (blocked) return blocked;
+      const deps = getDeps();
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const modelId = typeof d.roadModelId === 'string' ? d.roadModelId.trim() : '';
+      const model = deps.roadCorridors?.find(candidate => candidate.id === modelId);
+      if (!model) return respond(message, false, undefined, 'ROAD_MODEL_MISSING');
+      if (model.mode === 'existing-synthesis') return respond(message, false, undefined, 'ROAD_MODEL_NOT_PARAMETRIC');
+      const centerline = deps.centerlines.find(candidate => candidate.id === model.centerlineId);
+      if (!centerline) return respond(message, false, undefined, 'ROAD_BASELINE_NOT_FOUND');
+      if ((centerline.pis?.length ?? 0) < 2) return respond(message, false, undefined, 'ROAD_BASELINE_INVALID');
+      const road = roadLinkRegistry.linkRoadModel({ roadModel: model, centerline });
+      model.roadObjectId = road.id;
+      deps.setRoadCorridors?.(prev => prev.map(candidate => candidate.id === model.id ? { ...candidate, roadObjectId: road.id } : candidate));
+      deps.setLines(prev => prev.map(line => {
+        const association = line.parametricAssociation;
+        if (!association || association.ownerId !== model.id) return line;
+        return { ...line, parametricAssociation: { ...association, roadObjectId: road.id } };
+      }));
+      return respond(message, true, { roadObjectId: road.id, status: road.status, roadObject: road });
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('road_object_get', async (message) => {
+      const deps = getDeps();
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const roadObjectId = typeof d.roadObjectId === 'string' ? d.roadObjectId : '';
+      const baselineId = typeof d.baselineId === 'string' ? d.baselineId : '';
+      const road = roadObjectId
+        ? roadLinkRegistry.get(roadObjectId)
+        : baselineId
+          ? roadLinkRegistry.getByBaseline(baselineId)
+          : undefined;
+      if (!road) return respond(message, false, undefined, 'ROAD_OBJECT_NOT_FOUND');
+      return respond(message, true, { roadObject: road, found: true });
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('road_object_list', async (message) => {
+      const roads = roadLinkRegistry.list().map(road => ({
+        id: road.id,
+        name: road.name,
+        baselineId: road.baselineId,
+        baselineName: road.baselineName,
+        status: road.status,
+        roadModelId: road.roadModelId,
+        profileStatus: road.existingProfile?.status ?? 'none',
+        designProfile: Boolean(road.designProfile),
+        sectionCount: road.crossSections?.stations.length ?? 0,
+        attachmentCount: road.attachments.length,
+        issues: road.issues,
+      }));
+      return respond(message, true, { roadObjects: roads, count: roads.length });
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('road_object_set_preferences', async (message) => {
+      const blocked = roadingExperimentalGate(message);
+      if (blocked) return blocked;
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const roadObjectId = typeof d.roadObjectId === 'string' ? d.roadObjectId : '';
+      const road = roadLinkRegistry.get(roadObjectId);
+      if (!road) return respond(message, false, undefined, 'ROAD_OBJECT_NOT_FOUND');
+      const patch = (d.preferences ?? {}) as Record<string, unknown>;
+      const updated = roadLinkRegistry.updatePreferences(roadObjectId, {
+        elevation: patch.elevation as any,
+        profileIntervalFt: typeof patch.profileIntervalFt === 'number' ? patch.profileIntervalFt : undefined,
+        sectionIntervalFt: typeof patch.sectionIntervalFt === 'number' ? patch.sectionIntervalFt : undefined,
+        sectionSampleIntervalFt: typeof patch.sectionSampleIntervalFt === 'number' ? patch.sectionSampleIntervalFt : undefined,
+        sectionGroundMarginFt: typeof patch.sectionGroundMarginFt === 'number' ? patch.sectionGroundMarginFt : undefined,
+        missingDataPolicy: patch.missingDataPolicy as any,
+      });
+      return respond(message, true, { roadObject: updated, status: updated?.status ?? road.status });
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('road_object_refresh', async (message) => {
+      const blocked = roadingExperimentalGate(message);
+      if (blocked) return blocked;
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      const roadObjectId = typeof d.roadObjectId === 'string' ? d.roadObjectId : '';
+      if (!roadLinkRegistry.get(roadObjectId)) return respond(message, false, undefined, 'ROAD_OBJECT_NOT_FOUND');
+      try {
+        const extraction = await interAgentComm.askPeer(AgentType.PROFILE_AGENT, 'road_object_extract', {
+          roadObjectId,
+          reason: d.reason ?? 'manual-refresh',
+        });
+        return respond(message, extraction.success, extraction.data, extraction.error);
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        roadLinkRegistry.failExtraction(roadObjectId, messageText);
+        return respond(message, false, undefined, messageText);
+      }
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('road_object_unlink', async (message) => {
+      const blocked = roadingExperimentalGate(message);
+      if (blocked) return blocked;
+      const deps = getDeps();
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      if (d.confirm !== true) return respond(message, false, undefined, 'Set confirm: true to unlink a road object.');
+      const roadObjectId = typeof d.roadObjectId === 'string' ? d.roadObjectId : '';
+      const removed = roadLinkRegistry.unlink(roadObjectId);
+      if (!removed) return respond(message, false, undefined, 'ROAD_OBJECT_NOT_FOUND');
+      deps.setRoadCorridors?.(prev => prev.map(model =>
+        model.roadObjectId === roadObjectId ? { ...model, roadObjectId: undefined } : model,
+      ));
+      deps.logActionToFieldbook(`Roading Agent: unlinked road object "${removed.removed.name}".`);
+      return respond(message, true, { removedRoadObjectId: roadObjectId });
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('road_object_attach', async (message) => {
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      try {
+        const result = roadLinkRegistry.attach({
+          roadObjectId: String(d.roadObjectId ?? ''),
+          consumerId: String(d.consumerId ?? ''),
+          kind: (d.kind as any) ?? 'utility',
+          targetKind: String(d.targetKind ?? 'utility'),
+          targetId: String(d.targetId ?? ''),
+          payload: d.payload,
+        });
+        return respond(message, true, { ...result, sectionRefreshQueued: true });
+      } catch (error) {
+        return respond(message, false, undefined, error instanceof Error ? error.message : String(error));
+      }
+    }),
+  );
+
+  unsubs.push(
+    interAgentComm.onCommand('road_object_detach', async (message) => {
+      const d = (message.data ?? {}) as Record<string, unknown>;
+      try {
+        roadLinkRegistry.detach(String(d.roadObjectId ?? ''), String(d.linkId ?? ''));
+        return respond(message, true, { detached: true, sectionRefreshQueued: true });
+      } catch (error) {
+        return respond(message, false, undefined, error instanceof Error ? error.message : String(error));
+      }
     }),
   );
 
