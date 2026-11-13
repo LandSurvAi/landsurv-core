@@ -150,21 +150,31 @@ export const DEED_SKILLS: SkillSchema[] = [
     description:
       'Runs the heavy deed parse for one or more descriptions, producing bearing & distance calls ' +
       'and boundary files. Use this after the user selects a description or asks to extract its ' +
-      'calls. Optionally anchor the traverse at a point of beginning by point number or E/N.',
+      'calls. Optionally anchor the traverse at a point of beginning by point number or E/N. ' +
+      'Set draw:true when the user asked to draw or plot the deed, so the Boundary Agent commits ' +
+      'the parsed boundary to CAD linework in the same flow.',
     inputs: {
       tractIds: { type: 'array', items: { type: 'string' }, description: 'Descriptions to extract.' },
       tractId: tractIdField,
       pointNumber: { type: 'string', description: 'Optional POB point number in the project.' },
       easting: { type: 'number', description: 'Optional POB easting when no point number is used.' },
       northing: { type: 'number', description: 'Optional POB northing when no point number is used.' },
+      draw: {
+        type: 'boolean',
+        description:
+          'Set true when the user asked to draw or plot the deed, so the parsed boundary is ' +
+          'committed to CAD linework after extraction. Default false (amber preview only).',
+      },
     },
     outputs: {
       accepted: { type: 'boolean', required: true },
       tractIds: { type: 'array', items: { type: 'string' }, required: true },
+      drawRequested: { type: 'boolean' },
       message: { type: 'string', required: true },
     },
     examples: [
       'User: "extract the calls for Tract 2" -> deed_parse_description({tractIds:["Tract 2"]}).',
+      'User: "draw Lot 1 from this deed" -> deed_parse_description({tractId:"Lot 1", draw:true}).',
       'User: "start Parcel A at point 100" -> deed_parse_description({tractId:"Parcel A", pointNumber:"100"}).',
     ],
   },
@@ -174,13 +184,25 @@ export const DEED_SKILLS: SkillSchema[] = [
     type: 'action',
     description:
       'Runs extraction for every description in the loaded deed at once. Use when the user asks to ' +
-      '"extract all", "parse the whole deed", or process every pending description.',
-    inputs: {},
+      '"extract all", "parse the whole deed", or process every pending description. Set draw:true ' +
+      'when the user asked to draw or plot the whole deed.',
+    inputs: {
+      draw: {
+        type: 'boolean',
+        description:
+          'Set true to commit every parsed tract to CAD linework after extraction. ' +
+          'Default false (amber previews only).',
+      },
+    },
     outputs: {
       accepted: { type: 'boolean', required: true },
       tractCount: { type: 'integer', required: true },
+      drawRequested: { type: 'boolean' },
       message: { type: 'string', required: true },
     },
+    examples: [
+      'User: "draw the whole deed" -> deed_parse_all_descriptions({draw:true}).',
+    ],
   },
 
   // ── Boundary files & calls ──────────────────────────────────────────────

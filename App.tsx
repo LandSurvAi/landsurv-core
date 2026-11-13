@@ -1929,6 +1929,10 @@ const AppContent = () => {
   /** Ordered tract ids for a multi-description compute; stamped onto the
    *  resulting BoundaryFiles so the chat summary stays linked row-for-row. */
   const pendingTractIdsRef = useRef<string[]>([]);
+  /** Set when a CACP deed_parse_description / deed_parse_all request asked to draw. */
+  const pendingDeedDrawRef = useRef(false);
+  /** Boundary files created by that parse; drawn once they land in state. */
+  const pendingDeedDrawIdsRef = useRef<string[]>([]);
   /** Optional POB the user typed in for the pending tract being computed.
    *  Stamped onto the resulting BoundaryFile as `pobOverride` so the amber
    *  preview anchors where the user wants (instead of (0,0)). */
@@ -19053,6 +19057,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   pendingTractIdRef.current = null;
                   pendingTractIdsRef.current = [];
                   pendingTractPobRef.current = null;
+                  pendingDeedDrawRef.current = false;
+                  pendingDeedDrawIdsRef.current = [];
               }
               setHistory(prev => {
                   const next = [...prev];
@@ -20888,6 +20894,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 console.log('[DEED_PARSE_BF] About to setBoundaryFiles. newFiles:', newFiles.length,
                   'tractCallGroups sizes:', tractCallGroups.map(g => g.length));
                 setBoundaryFiles(prev => [...prev, ...newFiles]);
+                if (pendingDeedDrawRef.current) {
+                  pendingDeedDrawIdsRef.current = newFiles.map(file => file.id);
+                  pendingDeedDrawRef.current = false;
+                }
                 pendingTractIdsRef.current = [];
                 if (newFiles.length > 0) {
                   setActiveBoundaryFileId(newFiles[0].id);
@@ -21620,6 +21630,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             pendingTractIdRef.current = null;
             pendingTractIdsRef.current = [];
             pendingTractPobRef.current = null;
+            pendingDeedDrawRef.current = false;
+            pendingDeedDrawIdsRef.current = [];
           }
           setError(`Failed to parse JSON from model response:\n${(e as Error).message}`);
         }
@@ -24823,6 +24835,20 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   // debounced transform redraw (declared earlier) never fires with stale
   // state. See v26.05.17.21 notes on handleBoundaryTransformChange.
   handleDrawBoundaryToLineworkRef.current = handleDrawBoundaryToLinework;
+
+  // A deed parse requested with draw:true commits the freshly created boundary
+  // files to CAD linework once they land in state. The whole deed flow stays in
+  // the Boundary Agent — no Civil Drafter turn is involved.
+  useEffect(() => {
+    if (pendingDeedDrawIdsRef.current.length === 0) return;
+    const readyIds = pendingDeedDrawIdsRef.current.filter(id =>
+      boundaryFiles.some(file => file.id === id));
+    if (readyIds.length === 0) return;
+    pendingDeedDrawIdsRef.current = [];
+    for (const id of readyIds) {
+      handleDrawBoundaryToLineworkRef.current?.(id, { silent: true });
+    }
+  }, [boundaryFiles]);
 
   const handleDeleteLine = useCallback((lineId: string) => {
     pushHistory('Deleted line');
@@ -28118,12 +28144,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setIsBoundaryAlignmentOpen,
     setBoundaryCornerAlignRequest,
     onOpenDescription: handleOpenBoundaryDescriptionInEditor,
-    onParseTracts: (tractIds, pob) => {
+    onParseTracts: (tractIds, pob, parseOpts) => {
       if (isFreeTierTimeLocked) {
         setIsLockDismissed(false);
         setShowHostCostReminder(true);
         return;
       }
+      pendingDeedDrawRef.current = parseOpts?.draw === true;
       const tracts = (deedSummary?.tracts ?? []).filter(tract => tractIds.includes(tract.tractId));
       if (tracts.length === 0) return;
       pendingTractIdRef.current = tracts.length === 1 ? tracts[0].tractId : null;
@@ -28141,7 +28168,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           `Extract ONLY ${tract.tractId}${nameHint}${pageHint} from this deed. ` +
           `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${tract.tractId}", points, lines }]) for this tract only. ` +
           `Do not include any other tract.` +
-          pobHint
+          pobHint,
+          AgentType.DEED_READER
         );
         return;
       }
@@ -28153,20 +28181,22 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       void handleSendMessage(
         `Extract ONLY these deed descriptions: ${labels}. ` +
         'Return JSON with boundaries: [{ tractId, points, lines }] for exactly these descriptions. ' +
-        'Do not include any other tract.'
+        'Do not include any other tract.',
+        AgentType.DEED_READER
       );
     },
-    onParseAll: () => {
+    onParseAll: (parseOpts) => {
       if (isFreeTierTimeLocked) {
         setIsLockDismissed(false);
         setShowHostCostReminder(true);
         return;
       }
+      pendingDeedDrawRef.current = parseOpts?.draw === true;
       pendingTractIdRef.current = null;
       pendingTractIdsRef.current = deedSummary ? deedSummary.tracts.map(tract => tract.tractId) : [];
       pendingTractPobRef.current = null;
       if (deedSummary) setComputingTractIds(new Set(deedSummary.tracts.map(tract => tract.tractId)));
-      void handleSendMessage('Extract all boundary descriptions from this deed.');
+      void handleSendMessage('Extract all boundary descriptions from this deed.', AgentType.DEED_READER);
     },
     onUpdateCall: handleBoundaryCallUpdate,
     onAssociatePoints: handleAssociatePointsToBoundary,
@@ -28265,7 +28295,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       void handleSendMessage(
         `Extract ONLY these deed descriptions: ${labels}. ` +
         'Return JSON with boundaries: [{ tractId, points, lines }] for exactly these descriptions. ' +
-        'Do not include any other tract.'
+        'Do not include any other tract.',
+        AgentType.DEED_READER
       );
     },
     onBoundaryParseFullDeed: () => {
@@ -28278,7 +28309,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       pendingTractIdsRef.current = [];
       pendingTractPobRef.current = null;
       setComputingTractIds(new Set());
-      void handleSendMessage('Extract all boundary descriptions from this deed.');
+      void handleSendMessage('Extract all boundary descriptions from this deed.', AgentType.DEED_READER);
     },
     onBoundaryOpenEditor: (fileId) => {
       if (fileId) setActiveBoundaryFileId(fileId);
@@ -28870,7 +28901,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           `Extract ONLY ${t.tractId}${nameHint}${pageHint} from this deed. ` +
           `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${t.tractId}", points, lines }]) for this tract only. ` +
           `Do not include any other tract.` +
-          pobHint
+          pobHint,
+          AgentType.DEED_READER
         );
       }}
       onComputeAll={() => {
@@ -28885,7 +28917,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         if (deedSummary) {
           setComputingTractIds(new Set(deedSummary.tracts.map(t => t.tractId)));
         }
-        void handleSendMessage('Extract all boundary descriptions from this deed.');
+        void handleSendMessage('Extract all boundary descriptions from this deed.', AgentType.DEED_READER);
       }}
       onParseNow={() => {
         if (isFreeTierTimeLocked) {
@@ -28893,7 +28925,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           setShowHostCostReminder(true);
           return;
         }
-        void handleSendMessage('Extract all boundary descriptions from this deed.');
+        void handleSendMessage('Extract all boundary descriptions from this deed.', AgentType.DEED_READER);
       }}
       dockMode={mode}
       onDockModeChange={next => {

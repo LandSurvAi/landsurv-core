@@ -251,6 +251,18 @@ function scoreAgent(request: string, manifest: AgentManifest): IntentMatch {
 }
 
 /**
+ * Deed / legal-description geometry belongs to the Boundary Agent. This takes
+ * priority over the generic drafting routes so a deed parse or plot is never
+ * handed to the Civil Drafter.
+ */
+const DEED_REQUEST_RE =
+  /\b(?:deeds?|metes[\s-]+and[\s-]+bounds|legal\s+descriptions?|deed\s+calls?|bearing[\s-]+and[\s-]+distance|plot\s+the\s+deed|tracts?)\b/i;
+
+export function isDeedBoundaryRequest(request: string): boolean {
+  return DEED_REQUEST_RE.test(request || '');
+}
+
+/**
  * Route a natural-language request to the best agent. When `currentAgent` is
  * provided, the result reports whether that agent is actually the right one
  * (isMismatched) so the caller can hand off or ask around before acting.
@@ -269,6 +281,23 @@ export function routeIntent(request: string, currentAgent?: AgentType): IntentRo
       alternates: [],
       isMismatched: currentAgent !== undefined && currentAgent !== AgentType.COGO_AGENT,
       explanation: 'Divide line/arc request routed to COGO.',
+    };
+  }
+
+  // Deed work is the Boundary Agent's. Check before the linework authoring
+  // route so "extract the tract calls / draw the deed" cannot become a Civil
+  // Drafter request just because it mentions lines or a boundary.
+  if (isDeedBoundaryRequest(request)) {
+    return {
+      primary: {
+        agent: AgentType.DEED_READER,
+        displayName: 'Boundary Agent',
+        score: 99,
+        matchedOn: ['deed / legal description'],
+      },
+      alternates: [],
+      isMismatched: currentAgent !== undefined && currentAgent !== AgentType.DEED_READER,
+      explanation: 'Deed / legal-description request routed to Boundary Agent.',
     };
   }
 
@@ -381,6 +410,8 @@ const DRAFTING_OBJECT_RE = /\b(?:line|lines|linework|polyline|polylines|feature|
 export function isDraftingAuthoringRequest(request: string): boolean {
   const text = (request || '').trim();
   if (!text) return false;
+  // Deed parsing/plotting is Boundary Agent work, not CAD linework authoring.
+  if (isDeedBoundaryRequest(text)) return false;
   if (!DRAFTING_ACTION_RE.test(text) || !DRAFTING_OBJECT_RE.test(text)) return false;
   // These are CAD-management or reporting tasks even when they mention a
   // drafting object (e.g. "create a layer for roads", "road cost report").
@@ -403,6 +434,9 @@ export function resolveDraftingDelegateTarget(
   request: string,
   requestedTarget: AgentType,
 ): AgentType {
+  if (requestedTarget === AgentType.DEED_READER && isDeedBoundaryRequest(request)) {
+    return AgentType.DEED_READER;
+  }
   return isDraftingAuthoringRequest(request) ? AgentType.CIVIL_DRAFTER : requestedTarget;
 }
 

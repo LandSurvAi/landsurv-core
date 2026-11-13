@@ -38,8 +38,12 @@ export interface DeedSkillHandlersOpts {
   setBoundaryCornerAlignRequest: (request: { token: number; movableBfId: string } | null) => void;
 
   onOpenDescription: (tractId: string, snippet?: string) => void;
-  onParseTracts: (tractIds: string[], pob?: { easting: number; northing: number } | null) => void;
-  onParseAll: () => void;
+  onParseTracts: (
+    tractIds: string[],
+    pob?: { easting: number; northing: number } | null,
+    opts?: { draw?: boolean },
+  ) => void;
+  onParseAll: (opts?: { draw?: boolean }) => void;
   onUpdateCall: (fileId: string, callId: string, patch: Partial<BoundaryFileCall>) => void;
   onAssociatePoints: (fileId: string, pointIds: string[]) => void;
   onDisassociatePoint: (fileId: string, pointId: string) => void;
@@ -442,11 +446,13 @@ export function registerDeedSkillHandlers(getOpts: () => DeedSkillHandlersOpts):
       }
 
       const ids = tracts.map(tract => tract.tractId);
-      opts.onParseTracts(ids, pob);
+      const draw = d.draw === true;
+      opts.onParseTracts(ids, pob, { draw });
       return respond(message, true, {
         accepted: true,
         tractIds: ids,
-        message: `Started extraction for ${ids.join(', ')}.`,
+        drawRequested: draw,
+        message: `Started extraction for ${ids.join(', ')}${draw ? ' and will draft the boundary when it lands' : ''}.`,
       });
     }),
   );
@@ -455,15 +461,18 @@ export function registerDeedSkillHandlers(getOpts: () => DeedSkillHandlersOpts):
   unsubs.push(
     interAgentComm.onCommand('deed_parse_all_descriptions', async (message) => {
       const opts = getOpts();
+      const d = (message.data ?? {}) as Record<string, unknown>;
       const tracts = opts.deedSummary?.tracts ?? [];
       if (tracts.length === 0) {
         return respond(message, false, undefined, 'No descriptions are loaded. Upload or summarize a deed first.');
       }
-      opts.onParseAll();
+      const draw = d.draw === true;
+      opts.onParseAll({ draw });
       return respond(message, true, {
         accepted: true,
         tractCount: tracts.length,
-        message: `Started extraction for all ${tracts.length} description${tracts.length === 1 ? '' : 's'}.`,
+        drawRequested: draw,
+        message: `Started extraction for all ${tracts.length} description${tracts.length === 1 ? '' : 's'}${draw ? ' and will draft the boundaries when they land' : ''}.`,
       });
     }),
   );
