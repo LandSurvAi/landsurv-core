@@ -28,9 +28,12 @@ interface ContourManagementPanelProps {
   onSetColor: (id: string, color: string | undefined) => void;
   onSetOpacity: (id: string, opacity: number) => void;
   onToggleEsriBlend: (id: string, enabled: boolean) => void;
-  onSetEsriBlendPolylineId: (id: string, polylineId: string | null) => void;
+  /** Stage a blend proposal for review. Apply only happens from the dialog's OK. */
+  onPreviewEsriBlend: (id: string, options?: { boundaryPolylineId?: string | null; maxJoinDistance?: number | null }) => void;
   /** Latest automatic stitch result for each survey generation. */
   blendStatsById?: Record<string, ContourBlendStats>;
+  /** Generation currently staged in the review dialog, if any. */
+  blendPreviewGenerationId?: string | null;
   onCreateTinFromGeneration?: (id: string) => void;
   creatingTinGenerationId?: string | null;
   recentlyCreatedTinGenerationId?: string | null;
@@ -109,8 +112,9 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
   onSetColor,
   onSetOpacity,
   onToggleEsriBlend,
-  onSetEsriBlendPolylineId,
+  onPreviewEsriBlend,
   blendStatsById = {},
+  blendPreviewGenerationId = null,
   onCreateTinFromGeneration,
   creatingTinGenerationId,
   recentlyCreatedTinGenerationId,
@@ -477,45 +481,53 @@ export const ContourManagementPanel: React.FC<ContourManagementPanelProps> = ({
 
                     {/* ESRI Blend */}
                     <div className="rounded-lg border border-indigo-400/20 bg-indigo-400/[0.05] p-2">
-                      <label className="flex cursor-pointer items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={gen.esriBlendEnabled ?? false}
-                          onChange={e => onToggleEsriBlend(gen.id, e.target.checked)}
-                          className="h-3.5 w-3.5 accent-indigo-400"
-                        />
-                        <span className="text-[10.5px] font-semibold text-indigo-200">Blend with ESRI/State Contours</span>
-                      </label>
-                      {gen.esriBlendEnabled && (
-                        <>
-                          <p className="mt-1 text-[9px] leading-snug text-indigo-300/70">
-                            ESRI contours inside the selected boundary are trimmed away. Outside ESRI
-                            ends are automatically extended with curves to the nearest survey contour
-                            at the same elevation.
-                          </p>
-                          <div className="mt-1.5">
-                            <div className={`${CHIP_FIELD_LABEL_CLASS} mb-1`}>Blend boundary</div>
-                            <select
-                              value={gen.esriBlendInclusionPolylineId ?? ''}
-                              onChange={e => onSetEsriBlendPolylineId(gen.id, e.target.value || null)}
-                              className={CHIP_INPUT_CLASS}
-                              aria-label={`Blend boundary for ${gen.name}`}
-                            >
-                              <option value="">— select boundary —</option>
-                              {inclusionBoundaries.map(b => (
-                                <option key={b.id} value={b.polylineId}>{b.name}</option>
-                              ))}
-                            </select>
-                          </div>
-                          {!gen.esriBlendInclusionPolylineId && (
-                            <p className="mt-1 text-[9px] text-amber-300/80">Select an inclusion boundary to activate blend.</p>
-                          )}
-                          {gen.esriBlendInclusionPolylineId && blendStatus && (
-                            <p className={`mt-1 text-[9px] leading-snug ${blendStatus.className}`}>
-                              {blendStatus.text}
-                            </p>
-                          )}
-                        </>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10.5px] font-semibold text-indigo-200">ESRI / State Blend</span>
+                        <span className={`rounded-full border px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wide ${
+                          gen.esriBlendEnabled
+                            ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+                            : 'border-white/10 bg-white/[0.03] text-slate-400'
+                        }`}>
+                          {gen.esriBlendEnabled ? 'Active' : 'Review first'}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[9px] leading-snug text-indigo-300/70">
+                        Preview the ESRI trims, transition curves, open ends, and refused joins on the canvas.
+                        Nothing is applied until the review dialog's OK.
+                      </p>
+                      {gen.esriBlendEnabled && blendStatus && (
+                        <p className={`mt-1 text-[9px] leading-snug ${blendStatus.className}`}>
+                          {blendStatus.text}
+                        </p>
+                      )}
+                      {blendPreviewGenerationId === gen.id && (
+                        <p className="mt-1 flex items-start gap-1 text-[9px] leading-snug text-cyan-200">
+                          <span className="mt-0.5">◆</span> Preview open on canvas — awaiting OK.
+                        </p>
+                      )}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onPreviewEsriBlend(gen.id)}
+                          disabled={inclusionBoundaries.length === 0}
+                          className={chipButtonClass('indigo')}
+                        >
+                          {gen.esriBlendEnabled ? 'Review / Adjust…' : 'Preview Blend…'}
+                        </button>
+                        {gen.esriBlendEnabled && (
+                          <button
+                            type="button"
+                            onClick={() => onToggleEsriBlend(gen.id, false)}
+                            className={chipButtonClass('rose')}
+                          >
+                            Turn Off
+                          </button>
+                        )}
+                      </div>
+                      {inclusionBoundaries.length === 0 && (
+                        <p className="mt-1 text-[9px] text-amber-300/80">
+                          Draw an inclusion boundary before blending.
+                        </p>
                       )}
                     </div>
                   </div>

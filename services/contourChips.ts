@@ -201,11 +201,11 @@ export const CONTOUR_CHIP_META: Record<A2UIContourChipId, ContourChipMeta> = {
     color: '#818cf8',
     accent: 'sky',
     glyph: '⇄',
-    description: 'Auto-join outside ESRI contours to survey contours at the boundary.',
+    description: 'Review and blend outside ESRI contours into survey contours at the boundary.',
     capability: 'open_contour_blend_chip',
     keywords: ['contour blend', 'esri blend', 'blend contours', 'auto join contours', 'transition curves'],
     replyText:
-      'Here are the live <strong>Contour Blend</strong> controls. Turn on auto-join per survey generation, bind the boundary, and inspect how many ESRI ends matched same-elevation survey contours.',
+      'Here is the live <strong>Contour Blend</strong> review. Pick a survey generation and boundary, inspect the highlighted trims, transition curves, open ends, and refused joins on the canvas, then select OK to apply.',
     suggestedQuestions: [
       'Enable ESRI contour blend',
       'Open contour generations',

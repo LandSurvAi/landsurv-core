@@ -372,6 +372,14 @@ export interface A2UIHostContextValue {
   onContourDeleteGeneration?: (id: string) => void;
   onContourToggleBlend?: (id: string, enabled: boolean) => void;
   onContourSetBlendBoundary?: (id: string, polylineId: string | null) => void;
+  /** Stage a blend proposal; commits only from the review dialog's OK. */
+  onContourPreviewBlend?: (
+    id: string,
+    options?: { boundaryPolylineId?: string | null; maxJoinDistance?: number | null },
+  ) => void;
+  onContourApplyBlend?: () => void;
+  onContourCancelBlend?: () => void;
+  contourBlendPreviewGenerationId?: string | null;
   onContourCreateTinFromGeneration?: (id: string) => void;
   /** Raise one born contour generation as its own chip in chat. */
   onContourOpenGenerationChip?: (id: string) => void;

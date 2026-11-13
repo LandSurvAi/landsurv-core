@@ -2,6 +2,14 @@
 
 const releases = [
     {
+        version: "26.11.13.02",
+        date: "November 13, 2026",
+        highlights: [
+            "🧭 Contour Blending Is Now Review-First: Turning on a blend no longer edits the drawing. It stages a proposal on the canvas with cyan transition curves, matched ESRI/survey endpoints, amber open ends, rose paths that will be trimmed, sky paths that will be retained, red refused joins and the blend boundary, then opens a review dialog. Boundary and maximum join distance are adjustable with live counts and plain-language reasons for every refused join; OK is the only commit path, and reads 'OK, Apply Trim Only' when no curves can be built. Cancel, Escape or the backdrop leaves geometry untouched, while turning a blend off remains immediate. The approved join distance is stored on the generation, and preview and apply share one geometry engine so the result matches the highlights.",
+            "📐 Breaklines Are Drawn as Surface Breaklines: Requests such as 'draw breaklines', 'breakline the banks' or 'connect TB / BB' now carry `type: 'breakline'` onto every expanded segment instead of producing untyped L-LINEWORK. Left and right banks, benches, toe and flowline stay separate continuous chains, split only at gaps a crew would not have observed in one line. The Civil Drafter receives a breakline chain inventory that names the coded shots that can form a chain and explains single-shot, isolated or modifier-only codes that cannot; mixed road requests leave pavement, curb and driveway chains untyped, and single shots are never bridged across the channel. Breakline chains feed the TIN as hard edges so contours stop at the bank.",
+        ],
+    },
+    {
         version: "26.11.13.01",
         date: "November 13, 2026",
         highlights: [

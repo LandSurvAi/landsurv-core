@@ -72,7 +72,7 @@ export const LSVZ_SCHEMA = [
     description: 'Always present at the root of manifest.json.',
     fields: [
       { key: 'version',  description: 'App version string that wrote the file (date-based YY.MM.DD.xx since v26.x).',
-        example: '"26.11.13.01"' },
+        example: '"26.11.13.02"' },
       { key: 'savedAt',  description: 'ISO timestamp of when the .lsvz was packaged.',
         example: '"2026-11-12T15:30:00.000Z"' },
       { key: 'sessionMetadata', description: 'Optional save provenance metadata: author, note, exportFileName, exportedByAgent, and filename segment toggles.',

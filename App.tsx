@@ -283,6 +283,7 @@ import InclusionBoundariesPanel from './components/InclusionBoundariesPanel.tsx'
 import { ContourGenerationPanel } from './components/ContourGenerationPanel.tsx';
 import { ContourEsriPanel } from './components/ContourEsriPanel.tsx';
 import ContourManagementPanel from './components/ContourManagementPanel.tsx';
+import ContourBlendReviewDialog from './components/ContourBlendReviewDialog.tsx';
 import { A2UITinSurfaces } from './components/A2UITinSurfaces.tsx';
 import { A2UIContourChip } from './components/A2UIContourChips.tsx';
 import { A2UIPointTools } from './components/A2UIPointTools.tsx';
@@ -331,7 +332,7 @@ import {
 import { loadClaudeConfig, setClaudeConfig, type ClaudeModel } from './services/claudeConfig.ts';
 import { generateDxf } from './utils/dxf.ts';
 import { parseDxfGeometry } from './utils/dxfGeometryParser.ts';
-import { expandChainsToLines, expandWidthCodedChains, orderPointsAlongFeature, repairBankCorridorChains, repairRoadCorridorChains, type DrafterChain } from './utils/linework.ts';
+import { applyChainSurfaceTypes, breaklineTypeForLine, buildBreaklineChainInventory, expandChainsToLines, expandWidthCodedChains, isBreaklinePointDescription, isBreaklineRequest, orderPointsAlongFeature, repairBankCorridorChains, repairRoadCorridorChains, type DrafterChain } from './utils/linework.ts';
 import { buildCenterlineFromVertices } from './services/roadingSkillHandlers.ts';
 import {
   applyRoadCenterlineStyles,
@@ -363,7 +364,7 @@ import { parseClFile, calculateCenterlineLength, calculatePointFromStationOffset
 import { parseBearingToRadians, parseDistance, inverse, direct, directCurve, calculateChordDistance, calculateClosure, formatBearing, swapBearingDirection, rotateBearing } from './utils/cogo.ts';
 // FIX: Import the new `generateProfile` function to enable client-side profile calculations.
 import { generateContours, generateProfile, generateContoursAsIsoPaths, isoPathsToSurveyLines, surveyLinesToIsoPaths, buildPolygonFromSegments, pointInPolygon, getSegPairs, clipSegmentToPolygon, clipSegmentOutsidePolygon } from './utils/contouring.ts';
-import { applyContourBlends } from './utils/contourBlending.ts';
+import { applyContourBlends, previewContourBlend } from './utils/contourBlending.ts';
 import { generateContourLabelsFromIsoPaths, generateContourLabelsFromLines, strikeContourLabels } from './utils/contourLabels.ts';
 import { DEFAULT_CONTOUR_LINE_LAYERS, resolveContourLineLayersViaCacp, type ContourLineLayerAssignment } from './services/contourLayerResolver.ts';
 // FIX: Import `CustomSymbol`, `ContourSettings` and `ContourLabel` to be used with new features.
@@ -2528,6 +2529,12 @@ const AppContent = () => {
   // IsoPaths (mathematical representation) + settings for auto-regen and blend.
   const [contourGenerations, setContourGenerations] = useState<ContourGeneration[]>([]);
   const [contourBlendStats, setContourBlendStats] = useState<Record<string, ContourBlendStats>>({});
+  // Staged blend review. Nothing is committed until the dialog's OK handler runs.
+  const [contourBlendDraft, setContourBlendDraft] = useState<{
+    generationId: string;
+    boundaryPolylineId: string | null;
+    maxJoinDistance: number | null;
+  } | null>(null);
   const [contourLabelTool, setContourLabelTool] = useState<'place' | 'erase' | null>(null);
   const [isContourManagementVisible, setIsContourManagementVisible] = useState<boolean>(false);
   useEffect(() => {
@@ -2666,6 +2673,20 @@ const AppContent = () => {
   // ref instead of forcing the giant chat callback to re-create on every edit.
   const activeAoiBoundsRef = useRef(activeAoiBounds);
   useEffect(() => { activeAoiBoundsRef.current = activeAoiBounds; }, [activeAoiBounds]);
+
+  // Compute the review proposal from the same engine Apply uses. This is pure:
+  // it never writes to lines or generation state.
+  const contourBlendPreviewResult = useMemo(() => {
+    if (!contourBlendDraft) return { preview: null, error: null };
+    return previewContourBlend({
+      lines,
+      generations: contourGenerations,
+      boundaries: inclusionBoundaries,
+      generationId: contourBlendDraft.generationId,
+      boundaryPolylineId: contourBlendDraft.boundaryPolylineId,
+      maxJoinDistance: contourBlendDraft.maxJoinDistance,
+    });
+  }, [contourBlendDraft, contourGenerations, inclusionBoundaries, lines]);
 
   // Blend curves are derived from generation paths, so boundary geometry edits
   // must retrigger the blend even when generation metadata is unchanged.
@@ -10635,22 +10656,84 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setContourGenerations(prev => prev.map(g => g.id === id ? { ...g, opacity } : g));
   }, []);
 
+  const beginContourBlendPreview = useCallback((
+    id: string,
+    options?: { boundaryPolylineId?: string | null; maxJoinDistance?: number | null },
+  ) => {
+    const generation = contourGenerations.find(candidate => candidate.id === id);
+    if (!generation) return;
+    const savedBoundary = generation.esriBlendInclusionPolylineId
+      ?? inclusionBoundaries.find(boundary => boundary.id === generation.activeInclusionBoundaryId)?.polylineId
+      ?? inclusionBoundaries[0]?.polylineId
+      ?? null;
+    setContourBlendDraft({
+      generationId: id,
+      boundaryPolylineId: options?.boundaryPolylineId !== undefined
+        ? options.boundaryPolylineId
+        : savedBoundary,
+      maxJoinDistance: options?.maxJoinDistance !== undefined
+        ? options.maxJoinDistance
+        : generation.esriBlendMaxJoinDistance ?? null,
+    });
+  }, [contourGenerations, inclusionBoundaries]);
+
   const handleContourGenToggleBlend = useCallback((id: string, enabled: boolean) => {
+    if (enabled) {
+      // Enabling is a proposal, not a mutation. The review dialog must be OK'd.
+      beginContourBlendPreview(id);
+      return;
+    }
     setContourGenerations(prev => prev.map(g => (
-      g.id === id ? { ...g, esriBlendEnabled: enabled } : g
+      g.id === id ? { ...g, esriBlendEnabled: false } : g
     )));
-  }, []);
+    setContourBlendDraft(prev => (prev?.generationId === id ? null : prev));
+    logActionToFieldbook('Contour blend: turned off. Source contour generations were left intact.');
+  }, [beginContourBlendPreview, logActionToFieldbook]);
 
   const handleContourGenSetBlendPolylineId = useCallback((id: string, polylineId: string | null) => {
-    setContourGenerations(prev => prev.map(g => (
-      g.id === id ? { ...g, esriBlendInclusionPolylineId: polylineId } : g
-    )));
+    beginContourBlendPreview(id, { boundaryPolylineId: polylineId });
+  }, [beginContourBlendPreview]);
+
+  const handleContourBlendBoundaryChange = useCallback((polylineId: string | null) => {
+    setContourBlendDraft(prev => (prev ? { ...prev, boundaryPolylineId: polylineId } : prev));
   }, []);
+
+  const handleContourBlendMaxJoinDistanceChange = useCallback((maxJoinDistance: number | null) => {
+    setContourBlendDraft(prev => (prev ? { ...prev, maxJoinDistance } : prev));
+  }, []);
+
+  const handleContourBlendApply = useCallback(() => {
+    const draft = contourBlendDraft;
+    if (!draft || !draft.boundaryPolylineId) return;
+    const summary = contourBlendPreviewResult.preview?.stats;
+    setContourGenerations(prev => prev.map(g => (
+      g.id === draft.generationId
+        ? {
+            ...g,
+            esriBlendEnabled: true,
+            esriBlendInclusionPolylineId: draft.boundaryPolylineId,
+            esriBlendMaxJoinDistance: draft.maxJoinDistance,
+          }
+        : g
+    )));
+    setContourBlendDraft(null);
+    const rejectedText = summary?.rejectedConnectorCount ?? 0;
+    logActionToFieldbook(
+      `Contour blend applied after review: ${summary?.connectorCount ?? 0} transition curve(s), ${summary?.unmatchedGisEndpoints ?? 0} open ESRI end(s)${rejectedText > 0 ? `, ${rejectedText} implausible join(s) refused` : ''}.`,
+    );
+  }, [contourBlendDraft, contourBlendPreviewResult.preview, logActionToFieldbook]);
+
+  const handleContourBlendCancel = useCallback(() => {
+    if (!contourBlendDraft) return;
+    setContourBlendDraft(null);
+    logActionToFieldbook('Contour blend preview cancelled. No blend geometry was applied.');
+  }, [contourBlendDraft, logActionToFieldbook]);
 
   const handleContourGenDelete = useCallback((id: string) => {
     setContourGenerations(prev => prev.filter(g => g.id !== id));
     setLines(pl => pl.filter(l => l.contourGenId !== id));
     setContourLabels(prev => prev.filter(label => label.contourGenId !== id));
+    setContourBlendDraft(prev => (prev?.generationId === id ? null : prev));
   }, []);
 
   const handleClearContourLabels = useCallback(() => {
@@ -17354,6 +17437,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         // or other geometry already on the canvas.
         const lineworkContext = buildCivilDrafterLineworkContext(lines, points);
         if (lineworkContext) context += lineworkContext;
+        // Surveyor's eye: name the breakline chains the shots actually support
+        // and the coded shots that cannot form one (single shots, isolated
+        // gaps). This is what keeps a lone TOE shot or a BRK modifier tag from
+        // being turned into a bank line across ground nobody shot.
+        const breaklineInventory = buildBreaklineChainInventory(points);
+        if (breaklineInventory) context += breaklineInventory;
         // Road grounding: tax-parcel frontage already on the canvas plus OSM road
         // ways for the work area. This is what keeps the drafter honest when the
         // aerial is unusable (all canopy/shadow) — the road still has to follow a
@@ -19654,9 +19743,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                  : [],
              }));
              const isCorridorDrafter = agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT;
+             // "Draw breaklines" / "connect TB / BB" is a request for SURFACE
+             // data, not ordinary linework. Stamp the breakline type on the
+             // chains before expansion so contours, the TIN and the C3D
+             // connector all receive hard breaklines instead of untyped lines.
+             const surfaceTypedChains = isCorridorDrafter
+               ? applyChainSurfaceTypes(remappedChains, {
+                   query,
+                   describe: (pn) => chainLookup.get(pn)?.description,
+                 })
+               : remappedChains;
              const widthExpanded = isCorridorDrafter
-               ? expandWidthCodedChains(remappedChains, (pn) => chainLookup.get(pn))
-               : { chains: remappedChains, points: [] };
+               ? expandWidthCodedChains(surfaceTypedChains, (pn) => chainLookup.get(pn))
+               : { chains: surfaceTypedChains, points: [] };
              if (widthExpanded.points.length > 0) {
                currentBatchPoints = [...currentBatchPoints, ...widthExpanded.points];
                widthExpanded.points.forEach(point => chainLookup.set(point.pointNumber, point));
@@ -19671,8 +19770,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                  return next;
                });
              }
+             // Feed every breakline-coded shot in the project back to the bank
+             // repair. The repair only adds shots to a code group the model
+             // already declared, so an omitted TB/BB/TOE shot still completes
+             // its continuous chain instead of leaving a hole in the bank.
+             const bankCandidatePointNumbers = chainPoints
+               .filter(p => isBreaklinePointDescription(p.description))
+               .map(p => p.pointNumber);
              const bankRepairedChains = isCorridorDrafter
-               ? repairBankCorridorChains(widthExpanded.chains, (pn) => chainLookup.get(pn))
+               ? repairBankCorridorChains(widthExpanded.chains, (pn) => chainLookup.get(pn), bankCandidatePointNumbers)
                : widthExpanded.chains;
              const repairedChains = isCorridorDrafter
                ? repairRoadCorridorChains(bankRepairedChains, (pn) => chainLookup.get(pn))
@@ -19686,6 +19792,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                  ? [...parsedJson.lines, ...chainLines]
                  : chainLines;
                logActionToFieldbook(`Ordered ${repairedChains.length} feature chain(s) into ${chainLines.length} line segment(s) (deterministic bank/edge ordering).`);
+               const breaklineSegmentCount = chainLines.filter(line => line.type === 'breakline').length;
+               if (breaklineSegmentCount > 0) {
+                 logActionToFieldbook(`Tagged ${breaklineSegmentCount} segment(s) as surface breaklines (type: breakline) so the TIN treats them as hard edges.`);
+               } else if (isBreaklineRequest(query)) {
+                 logActionToFieldbook('Breakline request: no continuous breakline chain could be formed from the available shots — a code may have only one shot, the shots may be isolated by gaps, or no TB/BB/TOE/BRK shots exist. Nothing was drawn rather than inventing a line.');
+               }
 
                // When Civil Drafter or Roading Agent drafts road chains directly
                // from points, sync the centerline chain to Stationing & CL. Do
@@ -19825,6 +19937,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 if (!resolvedLineType) resolvedLineType = 'CONTINUOUS';
               }
 
+              // A breakline request must produce breakline-typed linework even
+              // when the model emits explicit `lines` instead of `chains`.
+              const surfaceType = breaklineTypeForLine({
+                query,
+                type: line.type,
+                layer: resolvedLayer ?? agentDefaultLineLayer,
+                descriptions: [fromPoint?.description, toPoint?.description],
+              });
+
               return {
                 ...line,
                 fromPt: fromPoint ? { x: fromPoint.easting, y: fromPoint.northing, z: fromPoint.elevation || 0 } : line.fromPt,
@@ -19832,6 +19953,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 // Layer priority: CAD Manager standard > AI's suggestion > agent default
                 layer: resolvedLayer ?? agentDefaultLineLayer,
                 lineType: resolvedLineType, // Use CAD Manager resolved lineType or AI's fallback
+                type: surfaceType,
               };
             });
 
@@ -28293,6 +28415,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     onContourDeleteGeneration: handleContourGenDelete,
     onContourToggleBlend: handleContourGenToggleBlend,
     onContourSetBlendBoundary: handleContourGenSetBlendPolylineId,
+    onContourPreviewBlend: beginContourBlendPreview,
+    onContourApplyBlend: handleContourBlendApply,
+    onContourCancelBlend: handleContourBlendCancel,
+    contourBlendPreviewGenerationId: contourBlendDraft?.generationId ?? null,
     onContourCreateTinFromGeneration: (id) => { void handleCreateTinFromContours(id); },
     onContourOpenGenerationChip: (id) => openContourChipSurface('contour-generation', id),
     onContourSelectBoundary: setActiveInclusionBoundaryId,
@@ -28482,6 +28608,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     handleContourGenDelete,
     handleContourGenToggleBlend,
     handleContourGenSetBlendPolylineId,
+    beginContourBlendPreview,
+    handleContourBlendApply,
+    handleContourBlendCancel,
+    contourBlendDraft,
     handleFetchEsriContours,
     contourGenerations.length,
     isImportingTin,
@@ -29494,8 +29624,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       onSetColor={handleContourGenSetColor}
       onSetOpacity={handleContourGenSetOpacity}
       onToggleEsriBlend={handleContourGenToggleBlend}
-      onSetEsriBlendPolylineId={handleContourGenSetBlendPolylineId}
+      onPreviewEsriBlend={beginContourBlendPreview}
       blendStatsById={contourBlendStats}
+      blendPreviewGenerationId={contourBlendDraft?.generationId ?? null}
       onCreateTinFromGeneration={handleCreateTinFromContours}
       creatingTinGenerationId={creatingTinGenerationId}
       recentlyCreatedTinGenerationId={recentlyCreatedTinGenerationId}
@@ -30719,6 +30850,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         lines={streamPreviewLines.length > 0 ? [...visibleLines, ...streamPreviewLines] : visibleLines} 
                                         contourLabels={contourLabels}
                                         contourGenerations={contourGenerations}
+                                        contourBlendPreview={contourBlendPreviewResult.preview}
                                         onMoveContourLabel={handleMoveContourLabel}
                                         contourLabelTool={contourLabelTool}
                                         onContourLabelStrike={handleContourLabelStrike}
@@ -32704,6 +32836,24 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           {/* Contour Generations Manager � persistent across agents (v26.05.19.3) */}
           {!showWelcome && isContourManagementVisible && getToolDockMode('contourMgmt') === 'floating' && (
             renderContourMgmtPanel('floating')
+          )}
+          {!showWelcome && contourBlendDraft && (
+            <ContourBlendReviewDialog
+              preview={contourBlendPreviewResult.preview}
+              previewError={contourBlendPreviewResult.error}
+              generationId={contourBlendDraft.generationId}
+              generationName={
+                contourGenerations.find(generation => generation.id === contourBlendDraft.generationId)?.name
+                ?? 'Contour generation'
+              }
+              boundaries={inclusionBoundaries}
+              boundaryPolylineId={contourBlendDraft.boundaryPolylineId}
+              maxJoinDistance={contourBlendDraft.maxJoinDistance}
+              onBoundaryChange={handleContourBlendBoundaryChange}
+              onMaxJoinDistanceChange={handleContourBlendMaxJoinDistanceChange}
+              onApply={handleContourBlendApply}
+              onCancel={handleContourBlendCancel}
+            />
           )}
           {!showWelcome && isClaudeSettingsVisible && (
             <ClaudeSettingsPanel

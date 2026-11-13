@@ -992,12 +992,13 @@ const blendStatusText = (stats: ContourBlendStats | undefined): { text: string; 
 const BlendChip: React.FC<ChipBodyProps> = ({ host }) => {
   const generations = (host.contourGenerations ?? []).filter(generation => generation.source !== 'esri');
   const boundaries = host.inclusionBoundaries ?? [];
+  const [boundaryDrafts, setBoundaryDrafts] = useState<Record<string, string>>({});
 
   return (
     <>
       <p className="rounded-md border border-indigo-400/20 bg-indigo-400/[0.06] px-2 py-1.5 text-[9.5px] leading-snug text-indigo-200/80">
-        Auto-join is non-destructive. Survey and ESRI generations both stay intact; only derived transition curves
-        are added at the boundary.
+        Blending is reviewed before it is applied. The canvas highlights the exact trims, transition curves,
+        open ends, and refused joins; nothing changes until you select OK.
       </p>
 
       {generations.length === 0 ? (
@@ -1009,45 +1010,89 @@ const BlendChip: React.FC<ChipBodyProps> = ({ host }) => {
         <div className="space-y-1.5">
           {generations.map(generation => {
             const status = blendStatusText(host.contourBlendStatsById?.[generation.id]);
+            const isPreviewing = host.contourBlendPreviewGenerationId === generation.id;
+            const fallbackBoundary = generation.esriBlendInclusionPolylineId
+              ?? boundaries.find(boundary => boundary.id === host.activeInclusionBoundaryId)?.polylineId
+              ?? boundaries[0]?.polylineId
+              ?? '';
+            const selectedBoundary = boundaryDrafts[generation.id] ?? fallbackBoundary;
             return (
               <div
                 key={generation.id}
                 className="space-y-1.5 rounded-lg border border-white/[0.08] bg-white/[0.02] px-2.5 py-2"
               >
-                <label className="flex cursor-pointer items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(generation.esriBlendEnabled)}
-                    onChange={event => host.onContourToggleBlend?.(generation.id, event.target.checked)}
-                    className="h-3.5 w-3.5 rounded accent-sky-500"
-                  />
-                  <span className="min-w-0 flex-1 text-[11px] font-semibold text-slate-200">
-                    Auto-join ESRI ends
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-slate-200">
+                    {generation.name}
                   </span>
-                  <span className="truncate text-[9px] text-slate-500">{generation.name}</span>
-                </label>
+                  <span className={`rounded-full border px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wide ${
+                    generation.esriBlendEnabled
+                      ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+                      : isPreviewing
+                        ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-200'
+                        : 'border-white/10 bg-white/[0.03] text-slate-400'
+                  }`}>
+                    {generation.esriBlendEnabled ? 'Active' : isPreviewing ? 'Reviewing' : 'Review first'}
+                  </span>
+                </div>
 
-                {generation.esriBlendEnabled && (
+                {generation.esriBlendEnabled ? (
+                  <>
+                    <p className={`flex items-start gap-1.5 text-[9.5px] leading-snug ${status.className}`}>
+                      <RefreshCw className="mt-0.5 h-3 w-3 flex-none" />
+                      {status.text}
+                    </p>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => host.onContourPreviewBlend?.(generation.id)}
+                        className={BUTTON_CLASS}
+                      >
+                        Review / Adjust…
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => host.onContourToggleBlend?.(generation.id, false)}
+                        className={BUTTON_CLASS}
+                      >
+                        Turn Off
+                      </button>
+                    </div>
+                  </>
+                ) : (
                   <>
                     <select
                       aria-label={`Blend boundary for ${generation.name}`}
-                      value={generation.esriBlendInclusionPolylineId ?? ''}
+                      value={selectedBoundary}
                       onChange={event =>
-                        host.onContourSetBlendBoundary?.(generation.id, event.target.value || null)
+                        setBoundaryDrafts(prev => ({ ...prev, [generation.id]: event.target.value }))
                       }
                       className={INPUT_CLASS}
                     >
-                      <option value="">Active inclusion boundary</option>
+                      <option value="">Select boundary…</option>
                       {boundaries.map(boundary => (
                         <option key={boundary.id} value={boundary.polylineId}>
                           {boundary.name}
                         </option>
                       ))}
                     </select>
-                    <p className={`flex items-start gap-1.5 text-[9.5px] leading-snug ${status.className}`}>
-                      <RefreshCw className="mt-0.5 h-3 w-3 flex-none" />
-                      {status.text}
-                    </p>
+                    {isPreviewing && (
+                      <p className="text-[9.5px] leading-snug text-cyan-200">
+                        Preview open on canvas — awaiting OK.
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      disabled={!selectedBoundary}
+                      onClick={() => host.onContourPreviewBlend?.(
+                        generation.id,
+                        { boundaryPolylineId: selectedBoundary || null },
+                      )}
+                      className={`${BUTTON_CLASS} w-full`}
+                    >
+                      <Combine className="h-3 w-3" />
+                      Preview Blend…
+                    </button>
                   </>
                 )}
               </div>
@@ -1209,7 +1254,6 @@ const SingleGenerationChip: React.FC<ChipBodyProps & { generationId?: string }> 
   const index = Math.max(0, generations.findIndex(candidate => candidate.id === generation.id));
   const color = generation.color ?? GENERATION_COLORS[index % GENERATION_COLORS.length];
   const blend = generation.esriBlendEnabled ? blendStatusText(host.contourBlendStatsById?.[generation.id]) : null;
-  const boundaries = host.inclusionBoundaries ?? [];
 
   return (
     <>
@@ -1298,35 +1342,40 @@ const SingleGenerationChip: React.FC<ChipBodyProps & { generationId?: string }> 
       </ChipSection>
 
       <ChipSection title="ESRI blend">
-        <CheckboxRow
-          checked={Boolean(generation.esriBlendEnabled)}
-          onChange={checked => host.onContourToggleBlend?.(generation.id, checked)}
-          label="Auto-join ESRI ends"
-          hint="Non-destructive transition curves at the boundary"
-        />
-        {generation.esriBlendEnabled && (
-          <>
-            <select
-              aria-label={`Blend boundary for ${generation.name}`}
-              value={generation.esriBlendInclusionPolylineId ?? ''}
-              onChange={event => host.onContourSetBlendBoundary?.(generation.id, event.target.value || null)}
-              className={INPUT_CLASS}
-            >
-              <option value="">Active inclusion boundary</option>
-              {boundaries.map(boundary => (
-                <option key={boundary.id} value={boundary.polylineId}>
-                  {boundary.name}
-                </option>
-              ))}
-            </select>
-            {blend && (
-              <p className={`flex items-start gap-1.5 text-[9.5px] leading-snug ${blend.className}`}>
-                <RefreshCw className="mt-0.5 h-3 w-3 flex-none" />
-                {blend.text}
-              </p>
-            )}
-          </>
+        <p className="text-[9.5px] leading-snug text-slate-500">
+          Review trims, transition curves, open ends, and refused joins before applying. Source generations stay intact.
+        </p>
+        {host.contourBlendPreviewGenerationId === generation.id && (
+          <p className="text-[9.5px] leading-snug text-cyan-200">
+            Preview open on canvas — awaiting OK.
+          </p>
         )}
+        {generation.esriBlendEnabled && blend && (
+          <p className={`flex items-start gap-1.5 text-[9.5px] leading-snug ${blend.className}`}>
+            <RefreshCw className="mt-0.5 h-3 w-3 flex-none" />
+            {blend.text}
+          </p>
+        )}
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => host.onContourPreviewBlend?.(generation.id)}
+            disabled={(host.inclusionBoundaries ?? []).length === 0}
+            className={BUTTON_CLASS}
+          >
+            <Combine className="h-3 w-3" />
+            {generation.esriBlendEnabled ? 'Review / Adjust…' : 'Preview Blend…'}
+          </button>
+          {generation.esriBlendEnabled && (
+            <button
+              type="button"
+              onClick={() => host.onContourToggleBlend?.(generation.id, false)}
+              className={BUTTON_CLASS}
+            >
+              Turn Off
+            </button>
+          )}
+        </div>
       </ChipSection>
 
       <button
@@ -1339,7 +1388,8 @@ const SingleGenerationChip: React.FC<ChipBodyProps & { generationId?: string }> 
         {host.creatingContourTinGenerationId === generation.id ? 'Building TIN…' : 'Create TIN From This Generation'}
       </button>
       <p className="text-[9px] leading-snug text-slate-500">
-        Changes here update the drawing immediately. Open Contour Generations for the full history.
+        Appearance changes apply immediately. Blend proposals wait for OK in the review dialog.
+        Open Contour Generations for the full history.
       </p>
     </>
   );

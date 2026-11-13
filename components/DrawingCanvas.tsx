@@ -12,6 +12,7 @@ import {
     type SurveyLine,
     type ContourLabel,
     type ContourGeneration,
+    type ContourBlendPreview,
     type IsoPath,
     type StreetLabel,
     type Centerline,
@@ -50,6 +51,7 @@ import {
     DEFAULT_ANNOTATION_TEXT_STYLES,
 } from '../types.ts';
 import type { ParcelFeatureSummary } from '../services/parcelGisService.ts';
+import { ContourBlendHighlightOverlay } from './ContourBlendHighlightOverlay.tsx';
 import { tinSurfaceDisplayMode } from '../services/TinService.ts';
 import {
     ALL_BUILT_IN_HATCHES,
@@ -468,6 +470,8 @@ interface DrawingCanvasProps {
     contourLabels: ContourLabel[];
     /** Stored contour generations supply the exact path a label slides along. */
     contourGenerations?: ContourGeneration[];
+    /** Staged contour blend highlights. Never part of drawing/export state. */
+    contourBlendPreview?: ContourBlendPreview | null;
     /** Move one contour label to a new point on its source contour. */
     onMoveContourLabel?: (index: number, patch: Pick<ContourLabel, 'x' | 'y' | 'angle'>) => void;
     /** Named road labels placed on the plan (v26.05.19.4). */
@@ -1399,7 +1403,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const { 
         initialTransform,
         onTransformChange,
-        points, lines, contourLabels, contourGenerations = [], onMoveContourLabel, centerlines, customSymbols, enabledBuiltinSymbolIds, pointLayers, attributeScale, setAttributeScale, lineLabelScale, setLineLabelScale, lineThickness, setLineThickness, contourLabelScale, onLayerColorChange, activeAgent, settings, zoomTarget, onZoomComplete,
+        points, lines, contourLabels, contourGenerations = [], contourBlendPreview = null, onMoveContourLabel, centerlines, customSymbols, enabledBuiltinSymbolIds, pointLayers, attributeScale, setAttributeScale, lineLabelScale, setLineLabelScale, lineThickness, setLineThickness, contourLabelScale, onLayerColorChange, activeAgent, settings, zoomTarget, onZoomComplete,
         onUpdatePointLabelOffset, onAddLine, onDeleteLine, onDeletePoints, onDeleteCenterline, onUpsertCenterline, onOpenStationingSettings, onOpenCenterlineTools, canUndo, canRedo, onUndo, onRedo, wmsServices, activeWmsLayers, offlineMapAreas, onRedrawAndShowAll, onOpenDxfExportModal, forcedAgent = null,
         onUpdatePointAnnotationOffset,
         isLayerPanelOpen, setIsLayerPanelOpen, onLayerToggle, activeAccent, currentPosition, projectedPosition, onZoomToPoint,
@@ -19534,6 +19538,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
             />
+
+            {contourBlendPreview && (
+                <ContourBlendHighlightOverlay
+                    preview={contourBlendPreview}
+                    worldToScreen={worldToScreen}
+                />
+            )}
 
             {redlineGhosts.length > 0 && (
                 <div

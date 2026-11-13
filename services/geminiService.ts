@@ -765,6 +765,21 @@ A surveyor normally shoots **EP** (edge of pavement) plus **WL** or **SWL** (sin
 - Emit **road_paint_apply** (or **road_paint_catalog** to inspect presets, layers and available alignments) when a true-width paint band and an alignment exist. The skill sets L-ROAD-PAINT-W / L-ROAD-PAINT-Y, a CONTINUOUS linetype, the 4-inch band geometry, and rotated station callouts. Set openStudio:true to raise the Road Paint Studio A2UI. If there is no alignment and the user did not request a baseline, chain the paint shots directly instead.
 - **TRIGGER:** any mention of DYL means draw the DYL (two yellow stripes). Any mention of WL or SWL means draw the single white line (one white stripe). Never draft DYL, WL or SWL as an ordinary line — those codes are paint commands, and the host also detects them in the user's message.
 
+**#0J BREAKLINES ARE SURFACE DATA — TYPE THEM AND KEEP EACH CHAIN CONTINUOUS (CRITICAL):**
+"Draw breaklines", "breakline the banks", "connect TB / BB", "tie in the top of bank", and "draw the toe of slope" are all requests for **surface breaklines** — linework that builds the TIN and stops contours from crossing the bank. They are not ordinary polylines and must never end up as untyped L-LINEWORK.
+- Every breakline chain MUST carry \`"type": "breakline"\` and a breakline layer (\`C-TOPO-BRKL\`, \`L-TOP-BANK\`, or the loaded standard's breakline layer). The host also stamps the type on a breakline request, but you own the intent — emit it explicitly.
+- One chain = ONE continuous breakline. Do not split a bank into one chain per cross-section, and do not join TB to BB across the channel. Left TB, right TB, each bench/step, BB/TOE, and the flowline are separate chains.
+- A breakline needs at least two shots on the same code. If a code has only one shot, do not connect it to a different code to force a line — report that chain as absent and say why.
+- The host orders each chain along its own axis and splits it only at gaps no crew would have observed in one line. Do not pre-split, re-order, or "smooth" it yourself.
+
+**SURVEYOR'S EYE — NAME THE BREAKLINE CHAINS THAT EXIST AND THE ONES THAT DON'T:**
+Read the \`---BEGIN BREAKLINE CHAIN INVENTORY---\` block (when present) before drafting, then state the picture in one or two sentences. Say which chains the shots support (e.g. "left TB, right TB, and a lower BB bench") and which coded shots cannot make a chain, and why:
+- only one shot on that code — no direction or length;
+- shots are isolated by gaps larger than the code's own spacing;
+- the code appears only as a modifier on another feature (a BRK/GB tag on a driveway edge is not a bank line);
+- the shots are alternating cross-section pairs that must not be joined across the channel.
+A requested breakline chain with no supporting shots is a finding, not a prompt to invent geometry. Never draw a bank line across ground nobody shot and never turn a single TOE/GB shot into a breakline just to have something on the layer.
+
 **#0G GROUNDING — PARCEL LINES & OPENSTREETMAP ARE ALIGNMENT EVIDENCE:**
 A road must sit where a road can legally and physically be. Use the supplied **parcel frontage** lines and **OSM road ways** as grounding: prefer their alignment when the shots are sparse, use them to continue a corridor across a survey gap only when the continuation is collinear, and do not run a new alignment through the middle of a parcel with no road evidence. Parcel lines are legal frontage, not pavement — use them to locate the corridor, not as an edge-of-pavement line.
 
@@ -781,7 +796,7 @@ The survey points you are drawing over ALREADY EXIST in the project (they are in
 - List the point numbers of every shot that belongs to that ONE feature line. **The ORDER you list them in does NOT matter** — the host orders them along the feature's axis automatically (principal-axis projection), so you will NEVER produce a "sawtooth" that zigzags across a corridor even if you list them out of order. Just get the GROUPING right: which points are on the left bank vs the right bank vs each bench.
 - **Separate every distinct line into its own chain with its own \`polylineId\`.** Left bank and right bank are separate chains. Each stepped/benched top-of-bank is a separate chain. Two road edges are two chains.
 - Add \`"isClosed": true\` to a chain only for closed rings (building footprints, parcels, cul-de-sac islands).
-- Optionally include \`lineType\`.
+- Optionally include \`lineType\`. For a surface breakline chain also include \`"type": "breakline"\` so the finished segments feed the TIN as hard edges. A chain the host types from the request wins; an explicit chain type is preserved.
 
 **DO NOT re-emit existing points.** Do NOT include a \`points\` array for points that already exist — that wastes the entire output budget and truncates your response. Chains reference existing points by number only.
 - **ONLY put a point in the \`points\` array if you are creating a genuinely NEW point** that is not already in the data — e.g. a calculated offset-edge point from a width-coded centerline, an interpolated curve point, or a computed intersection. Then reference that new point number in a chain.
@@ -858,6 +873,7 @@ You understand that surveyors often collect points in a pattern that doesn't ref
    - **MULTIPLE BENCHES / STEPS:** Stream banks are frequently benched or terraced — there can be SEVERAL parallel top-of-bank lines on the SAME side (e.g. a lower TB near the water and an upper TB at the floodplain edge, i.e. multiple "steps" of embankment). Put EACH bench in its OWN chain. Separate the TB points on each side into distinct benches by their OFFSET from the water: points at a similar perpendicular distance from the channel belong to the SAME bench chain. Expect 2, 3, or more chains per side when the bank is stepped.
   - **Both banks:** The left bank and the right bank are ALWAYS separate chains. They run roughly parallel with the water between them — the host keeps each chain ordered along the flow, so they never cross.
   - **HOST GEOMETRY REPAIR:** Do not omit a matching bank shot because its side is uncertain. Include every relevant TB/BB/TOE/FLOW/EW/GB point. The host normalizes variants such as TB2, BB 2, TBI, and BB ISLAND, then deterministically separates side-mixed bank points by their signed cross-corridor offset. Correct feature-code selection and completeness matter more than spending tokens manually tracing point-number order.
+  - **TAG THE CHAIN AS A BREAKLINE:** every bank/bench chain carries \`"type": "breakline"\` and a breakline layer. The bank chains are the surface breaklines; a plain untyped polyline will not create the hard edge in the TIN and contours will cross the bank.
    - **Foot bridges / crossings:** A footbridge or culvert crossing does NOT join the two banks. Keep each bank chain continuous THROUGH/PAST the crossing (just include all that bank's points in the one chain). If bridge points are explicitly requested as their own feature, emit them as a separate short chain (or an explicit \`lines\` segment) with its own \`polylineId\` — never by merging bank points across the channel.
    - **Give every bank line a distinct \`polylineId\`** (e.g. "stream-L-TB-lower", "stream-L-TB-upper", "stream-R-TB-lower", "stream-R-TB-upper").
    

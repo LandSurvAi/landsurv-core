@@ -1,3 +1,5 @@
+import type { SurveyLine } from '../types.ts';
+
 /**
  * Deterministic linework ordering for the Civil Drafter.
  *
@@ -309,8 +311,188 @@ export interface DrafterChain {
   polylineId?: string;
   layer?: string;
   lineType?: string;
+  /**
+   * Surface role for the finished linework. `breakline` is what makes the
+   * chain feed the TIN/contours as a hard edge; without it the same geometry
+   * is just ordinary linework.
+   */
+  type?: SurveyLine['type'];
   isClosed?: boolean;
   pointNumbers: string[];
+}
+
+const BREAKLINE_CODE_TOKEN_RE = /^(BRK|BRKL|BRKLN|BREAK|BREAKLINE|TB|TBI|TOB|BB|BBI|BOB|TOE|FL|FLOW|EW|GB)(\d*)$/;
+const ROAD_CODE_TOKEN_RE = /^(EP|EOP|EDGE|PAV|PVMT|CURB|CB|TC|BC|TBC|GUTTER|CL|CTR|CENTER|CENTERLINE|DW|DRV|DRIVE|DRWY|ROAD|ROW|SW|SIDEWALK|WALK|DYL|WL|SWL)\d*$/;
+
+function descriptionTokens(description: string | undefined): string[] {
+  return (description ?? '').toUpperCase().split(/[\s/,+&_.-]+/).filter(Boolean);
+}
+
+/**
+ * Canonical breakline code for a shot description. TB2 / TB 2 → TB-2, and
+ * island/bank variants stay distinct (TB ISLAND → TB-ISLAND).
+ */
+export function breaklineCodeLabel(description?: string): string | undefined {
+  const tokens = descriptionTokens(description);
+  const island = tokens.includes('I') || tokens.includes('ISLAND');
+  for (const [index, token] of tokens.entries()) {
+    const match = token.match(BREAKLINE_CODE_TOKEN_RE);
+    if (!match) continue;
+    const raw = match[1];
+    const base = raw === 'TBI' || raw === 'TOB' ? 'TB'
+      : raw === 'BBI' || raw === 'BOB' ? 'BB'
+        : raw;
+    // "TB 2" is the same bench as "TB2"; keep spaced bench numbers.
+    const namedIndex = match[2] || (/^\d+$/.test(tokens[index + 1] ?? '') ? tokens[index + 1] : '');
+    return `${base}${namedIndex}${island ? '-ISLAND' : ''}`;
+  }
+  return undefined;
+}
+
+/** True when a shot carries a code a breakline can be built from. */
+export function isBreaklinePointDescription(description?: string): boolean {
+  return breaklineCodeLabel(description) !== undefined;
+}
+
+function isRoadCodeDescription(description?: string): boolean {
+  return descriptionTokens(description).some(token => ROAD_CODE_TOKEN_RE.test(token));
+}
+
+/**
+ * True when the request is asking for surface breaklines, including the field
+ * shorthand "connect TB / BB" that never uses the word "breakline".
+ */
+export function isBreaklineRequest(query: string): boolean {
+  const text = (query ?? '').trim();
+  if (!text || /\btitle\s+block\b/i.test(text)) return false;
+  return /\b(?:break\s*-?\s*lines?|breaklines?|brkl|brkln|top\s+of\s+bank|toe\s+of\s+(?:bank|slope)|bottom\s+of\s+bank|flow\s*-?\s*lines?|thalweg|edge\s+of\s+water|tb|bb)\b/i.test(text);
+}
+
+export interface ChainSurfaceTypeOptions {
+  /** The user's request. "connect tb / bb" is enough to imply breaklines. */
+  query?: string;
+  /** Resolve a point number to its field description. */
+  describe?: (pointNumber: string) => string | undefined;
+}
+
+export interface LineSurfaceTypeArgs {
+  query?: string;
+  /** A type the model or a chain already assigned. */
+  type?: SurveyLine['type'];
+  layer?: string;
+  descriptions?: Array<string | undefined>;
+}
+
+/**
+ * Surface role for one line of a breakline request. An explicitly typed line
+ * keeps its type; a pavement/curb/driveway line is never relabelled by a mixed
+ * "draw breaklines and the road edge" request.
+ */
+export function breaklineTypeForLine(args: LineSurfaceTypeArgs): SurveyLine['type'] {
+  if (args.type) return args.type;
+  if (!isBreaklineRequest(args.query ?? '')) return undefined;
+  const descriptions = args.descriptions ?? [];
+  const breaklineShots = descriptions.filter(isBreaklinePointDescription).length;
+  const roadShots = descriptions.filter(isRoadCodeDescription).length;
+  const roadLayer = /(?:ROAD|PAVE|CURB|DRIVE|WALK|SIDEWALK|CENTER|CNTR)/.test((args.layer ?? '').toUpperCase());
+  if (roadLayer && breaklineShots === 0) return undefined;
+  if (breaklineShots === 0 && roadShots > 0) return undefined;
+  return 'breakline';
+}
+
+/**
+ * Stamp the surface role onto chains before they are expanded into segments.
+ *
+ * A chain the model explicitly typed keeps its type. On a breakline request,
+ * every chain the model grouped is a breakline unless its layer or most of its
+ * shots say pavement/curb/driveway — a mixed request must not relabel the road.
+ */
+export function applyChainSurfaceTypes(
+  chains: DrafterChain[],
+  options: ChainSurfaceTypeOptions = {},
+): DrafterChain[] {
+  if (!isBreaklineRequest(options.query ?? '')) return chains;
+  return chains.map(chain => {
+    if (chain.type) return chain;
+    const descriptions = (chain.pointNumbers ?? []).map(pn => options.describe?.(String(pn)) ?? '');
+    const type = breaklineTypeForLine({ query: options.query, layer: chain.layer, descriptions });
+    return type ? { ...chain, type } : chain;
+  });
+}
+
+export interface BreaklineChainInventoryEntry {
+  code: string;
+  shots: number;
+  drawableChains: number;
+  longestChainFt: number;
+  status: 'drawable' | 'single-shot' | 'isolated';
+}
+
+/** What breakline chains the shots support, and why some cannot be drawn. */
+export function inventoryBreaklineChains(
+  points: ReadonlyArray<OrderablePoint & { description?: string }>,
+): BreaklineChainInventoryEntry[] {
+  const groups = new Map<string, OrderablePoint[]>();
+  for (const point of points) {
+    const code = breaklineCodeLabel(point.description);
+    if (!code) continue;
+    const bucket = groups.get(code);
+    if (bucket) bucket.push(point);
+    else groups.set(code, [point]);
+  }
+
+  const entries: BreaklineChainInventoryEntry[] = [];
+  for (const [code, group] of groups) {
+    const byPointNumber = new Map(group.map(point => [point.pointNumber, point]));
+    const ordered = orderPointsAlongFeature(group)
+      .map(pointNumber => byPointNumber.get(pointNumber))
+      .filter((point): point is OrderablePoint => Boolean(point));
+    const drawable = splitChainsAtGaps(ordered).filter(run => run.length >= 2);
+    const longest = drawable.reduce<OrderablePoint[]>(
+      (best, run) => (chainRunLength(run) > chainRunLength(best) ? run : best),
+      [],
+    );
+    entries.push({
+      code,
+      shots: group.length,
+      drawableChains: drawable.length,
+      longestChainFt: chainRunLength(longest),
+      status: drawable.length > 0 ? 'drawable' : group.length === 1 ? 'single-shot' : 'isolated',
+    });
+  }
+  return entries.sort((a, b) => b.shots - a.shots || a.code.localeCompare(b.code));
+}
+
+/**
+ * Compact surveyor's-eye inventory injected into the Civil Drafter's context.
+ * It names the breakline chains the shots actually support and the codes that
+ * cannot form one, so the model does not invent a bank line from a lone shot.
+ */
+export function buildBreaklineChainInventory(
+  points: ReadonlyArray<OrderablePoint & { description?: string }>,
+): string {
+  const entries = inventoryBreaklineChains(points);
+  if (entries.length === 0) return '';
+  const totalShots = entries.reduce((sum, entry) => sum + entry.shots, 0);
+  const lines = [
+    '---BEGIN BREAKLINE CHAIN INVENTORY---',
+    `Breakline-coded shots in the point database: ${totalShots} across ${entries.length} code group(s).`,
+  ];
+  for (const entry of entries) {
+    if (entry.status === 'drawable') {
+      lines.push(`- ${entry.code}: ${entry.shots} shots → ${entry.drawableChains} continuous chain(s), longest ${entry.longestChainFt.toFixed(0)} ft. Draw every run as its own breakline.`);
+    } else if (entry.status === 'single-shot') {
+      lines.push(`- ${entry.code}: 1 shot → NOT drawable as a breakline (one shot has no direction or length). Do not connect it to another code to force a line.`);
+    } else {
+      lines.push(`- ${entry.code}: ${entry.shots} shots but no two share a chain → no continuous breakline; do not bridge the gaps.`);
+    }
+  }
+  lines.push(
+    'A breakline is a CONTINUOUS chain of at least two shots on the same code. Split only at gaps no crew would observe in one line. Never connect TB to BB across the channel, and never turn a BRK/GB modifier tag on another feature into a breakline by itself.',
+    '---END BREAKLINE CHAIN INVENTORY---',
+    '',
+  );
+  return lines.join('\n');
 }
 
 export interface WidthOffsetPoint extends OrderablePoint {
@@ -697,6 +879,7 @@ export interface ExpandedChainLine {
   to: string;
   layer?: string;
   lineType?: string;
+  type?: SurveyLine['type'];
   polylineId?: string;
 }
 
@@ -756,6 +939,7 @@ export function expandChainsToLines(
           to: run[i + 1].pointNumber,
           layer: chain.layer,
           lineType: chain.lineType,
+          type: chain.type,
           polylineId: runPolylineId,
         });
       }
@@ -769,6 +953,7 @@ export function expandChainsToLines(
             to: first.pointNumber,
             layer: chain.layer,
             lineType: chain.lineType,
+            type: chain.type,
             polylineId: runPolylineId,
           });
         }

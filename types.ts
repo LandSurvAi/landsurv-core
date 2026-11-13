@@ -1203,6 +1203,9 @@ export interface ContourGeneration {
   esriBlendEnabled?: boolean;
   /** polylineId of the inclusion boundary used as the blend zone. */
   esriBlendInclusionPolylineId?: string | null;
+  /** User-approved maximum gap a transition curve may bridge, in project units.
+   *  Null or undefined means use the boundary-derived automatic distance. */
+  esriBlendMaxJoinDistance?: number | null;
 }
 
 /** Result of fitting visible ESRI/State contours to a survey contour generation. */
@@ -1222,6 +1225,56 @@ export interface ContourBlendStats {
   targetGenerationIds: string[];
   /** Maximum endpoint gap this blend was allowed to bridge, in project units. */
   maxJoinDistance: number;
+}
+
+/** One contour end called out in a staged blend review. */
+export interface ContourBlendEndpoint {
+  x: number;
+  y: number;
+  elevation: number;
+  isMajor?: boolean;
+}
+
+/** A proposed or rejected hand-off between an ESRI end and a survey end. */
+export interface ContourBlendJoin {
+  gis: ContourBlendEndpoint;
+  survey: ContourBlendEndpoint;
+  /** Populated for rejected joins so the review can say why it was skipped. */
+  issues?: string[];
+}
+
+/**
+ * A fully computed but unapplied contour blend. The review dialog and the
+ * canvas highlight consume the same object, so what the user inspects is
+ * exactly what Apply will commit.
+ */
+export interface ContourBlendPreview {
+  generationId: string;
+  generationName: string;
+  boundaryPolylineId: string;
+  boundaryName: string;
+  boundary: Array<{ x: number; y: number }>;
+  /** Transition curves that would be added at the boundary. */
+  connectors: IsoPath[];
+  /** ESRI paths that would remain outside the boundary. */
+  gisOutsidePaths: IsoPath[];
+  /** ESRI paths inside the boundary that the blend would trim away. */
+  gisTrimmedPaths: IsoPath[];
+  matchedJoins: ContourBlendJoin[];
+  unmatchedGisEndpoints: ContourBlendEndpoint[];
+  rejectedJoins: ContourBlendJoin[];
+  targetGenerationIds: string[];
+  stats: ContourBlendStats;
+  /** Join distance this preview used (the user's value or the automatic one). */
+  maxJoinDistance: number;
+  /** Boundary-derived distance shown as the Auto option. */
+  autoMaxJoinDistance: number;
+}
+
+export interface ContourBlendPreviewResult {
+  preview: ContourBlendPreview | null;
+  /** Why no preview could be built; null when preview is present. */
+  error: string | null;
 }
 
 export type GenerationKind = 'contour' | 'flood' | 'soils';

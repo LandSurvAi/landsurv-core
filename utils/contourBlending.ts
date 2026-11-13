@@ -1,4 +1,8 @@
 import type {
+  ContourBlendEndpoint,
+  ContourBlendJoin,
+  ContourBlendPreview,
+  ContourBlendPreviewResult,
   ContourBlendStats,
   ContourGeneration,
   InclusionBoundary,
@@ -38,6 +42,14 @@ export interface ContourBlendGeometryResult {
   /** Human-readable reasons the rejected joins were not drawn. */
   rationalityIssues: string[];
   maxJoinDistance: number;
+  /** Boundary-derived maximum gap before any user override. */
+  autoMaxJoinDistance: number;
+  /** Accepted ESRI→survey hand-offs, retained for the review highlight. */
+  matchedJoins: ContourBlendJoin[];
+  /** ESRI ends left open, retained for the review highlight. */
+  unmatchedGisPoints: ContourBlendEndpoint[];
+  /** Candidate joins refused by the rationality gate, retained for review. */
+  rejectedJoins: ContourBlendJoin[];
 }
 
 export interface ContourConnectorRationality {
@@ -441,6 +453,26 @@ function collectBoundaryEndpoints(
   return endpoints;
 }
 
+function snapshotEndpoint(endpoint: BoundaryEndpoint): ContourBlendEndpoint {
+  return {
+    x: endpoint.point.x,
+    y: endpoint.point.y,
+    elevation: endpoint.elevation,
+    isMajor: endpoint.isMajor,
+  };
+}
+
+function snapshotJoin(
+  candidate: JoinCandidate,
+  issues?: string[],
+): ContourBlendJoin {
+  return {
+    gis: snapshotEndpoint(candidate.gis),
+    survey: snapshotEndpoint(candidate.survey),
+    ...(issues && issues.length > 0 ? { issues } : {}),
+  };
+}
+
 function buildConnector(
   gis: BoundaryEndpoint,
   survey: BoundaryEndpoint,
@@ -518,12 +550,17 @@ export function blendGisContoursToSurvey(
       rejectedConnectorCount: 0,
       rationalityIssues: [],
       maxJoinDistance: 0,
+      autoMaxJoinDistance: 0,
+      matchedJoins: [],
+      unmatchedGisPoints: [],
+      rejectedJoins: [],
     };
   }
 
+  const autoMaxJoinDistance = defaultMaxJoinDistance(boundary);
   const maxJoinDistance = Math.max(
     1,
-    options.maxJoinDistance ?? defaultMaxJoinDistance(boundary),
+    options.maxJoinDistance ?? autoMaxJoinDistance,
   );
   const boundaryTolerance = 0.5;
   // Survey generations are already clipped to the inside of their inclusion
@@ -567,11 +604,14 @@ export function blendGisContoursToSurvey(
   const usedGis = new Set<BoundaryEndpoint>();
   const connectors: IsoPath[] = [];
   const acceptedConnectors: IsoPath[] = [];
+  const matchedJoins: ContourBlendJoin[] = [];
+  const rejectedJoins: ContourBlendJoin[] = [];
   const rationalityIssues: string[] = [];
   let rejectedConnectorCount = 0;
 
-  const noteRejection = (issues: string[]) => {
+  const noteRejection = (candidate: JoinCandidate, issues: string[]) => {
     rejectedConnectorCount += 1;
+    if (rejectedJoins.length < 60) rejectedJoins.push(snapshotJoin(candidate, issues));
     for (const issue of issues) {
       if (rationalityIssues.length < 6 && !rationalityIssues.includes(issue)) {
         rationalityIssues.push(issue);
@@ -582,7 +622,7 @@ export function blendGisContoursToSurvey(
   for (const candidate of candidates) {
     if (usedSurvey.has(candidate.survey) || usedGis.has(candidate.gis)) continue;
     if (candidate.turnDeg > MAX_HANDOFF_DIRECTION_TURN_DEG) {
-      noteRejection([
+      noteRejection(candidate, [
         `contour directions differ by ${candidate.turnDeg.toFixed(0)}° at the boundary`,
       ]);
       continue;
@@ -593,27 +633,36 @@ export function blendGisContoursToSurvey(
       gisPaths: gisOutside,
     });
     if (!inspection.acceptable) {
-      noteRejection(inspection.issues);
+      noteRejection(candidate, inspection.issues);
       continue;
     }
     if (acceptedConnectors.some(existing => polylinesCross(existing.vertices, candidate.connector.vertices))) {
-      noteRejection(['transition curve would cross an accepted blend']);
+      noteRejection(candidate, ['transition curve would cross an accepted blend']);
       continue;
     }
     usedSurvey.add(candidate.survey);
     usedGis.add(candidate.gis);
     acceptedConnectors.push(candidate.connector);
     connectors.push(candidate.connector);
+    matchedJoins.push(snapshotJoin(candidate));
   }
+
+  const unmatchedGisPoints = gisEndpoints
+    .filter(endpoint => !usedGis.has(endpoint))
+    .map(snapshotEndpoint);
 
   return {
     gisOutsidePaths: gisOutside,
     connectors,
     matchedEndpoints: connectors.length,
-    unmatchedGisEndpoints: Math.max(0, gisEndpoints.length - usedGis.size),
+    unmatchedGisEndpoints: unmatchedGisPoints.length,
     rejectedConnectorCount,
     rationalityIssues,
     maxJoinDistance,
+    autoMaxJoinDistance,
+    matchedJoins,
+    unmatchedGisPoints,
+    rejectedJoins,
   };
 }
 
@@ -706,14 +755,8 @@ export function resolveIsoPathElevationsFromLines(
  * blend after point regeneration, boundary edits, visibility toggles, or a new
  * ESRI download without accumulating duplicate curves.
  */
-export function applyContourBlends(
-  lines: SurveyLine[],
-  generations: ContourGeneration[],
-  boundaries: InclusionBoundary[],
-  lineLayers: IsoPathLineLayers,
-): ApplyContourBlendsResult {
-  const hasDerivedLines = lines.some(line => line.blendDerived || line.blendHidden);
-  const baseLines = lines
+export function getContourBlendBaseLines(lines: SurveyLine[]): SurveyLine[] {
+  return lines
     .filter(line => !line.blendDerived)
     .map(line => {
       if (!line.blendHidden) return line;
@@ -725,6 +768,201 @@ export function applyContourBlends(
       delete restored.blendOriginalHidden;
       return restored;
     });
+}
+
+interface ContourBlendPlan {
+  generation: ContourGeneration;
+  boundaryRecord: InclusionBoundary;
+  polygon: Point[];
+  esriGenerations: ContourGeneration[];
+  surveyPaths: IsoPath[];
+  gisPaths: IsoPath[];
+  geometry: ContourBlendGeometryResult;
+}
+
+type ContourBlendPlanResult =
+  | { plan: ContourBlendPlan; error: null; message: null }
+  | { plan: null; error: 'no-boundary' | 'no-esri'; message: string };
+
+function planContourBlend(options: {
+  generation: ContourGeneration;
+  baseLines: SurveyLine[];
+  esriGenerations: ContourGeneration[];
+  boundaries: InclusionBoundary[];
+  boundaryPolylineId?: string | null;
+  /** Undefined uses the generation's saved value; null requests automatic. */
+  maxJoinDistance?: number | null;
+}): ContourBlendPlanResult {
+  const { generation, baseLines, esriGenerations, boundaries } = options;
+  if (esriGenerations.length === 0) {
+    return {
+      plan: null,
+      error: 'no-esri',
+      message: 'No visible ESRI/State contour generation is available to blend.',
+    };
+  }
+
+  // undefined means "use the generation's saved/active boundary"; an explicit
+  // null means the user cleared the selection and no fallback is allowed.
+  const hasExplicitBoundary = options.boundaryPolylineId !== undefined;
+  const explicitPolylineId = options.boundaryPolylineId ?? null;
+  const boundaryRecord = hasExplicitBoundary
+    ? (explicitPolylineId
+        ? boundaries.find(candidate => candidate.polylineId === explicitPolylineId)
+        : undefined)
+    : boundaries.find(candidate => candidate.polylineId === generation.esriBlendInclusionPolylineId)
+      ?? boundaries.find(candidate => candidate.id === generation.activeInclusionBoundaryId);
+  if (!boundaryRecord) {
+    return {
+      plan: null,
+      error: 'no-boundary',
+      message: explicitPolylineId
+        ? 'The selected inclusion boundary is no longer in the project.'
+        : 'Select an inclusion boundary before previewing the blend.',
+    };
+  }
+
+  const polygon = polygonForBoundary(baseLines, boundaryRecord.polylineId);
+  if (polygon.length < 3) {
+    return {
+      plan: null,
+      error: 'no-boundary',
+      message: 'The selected boundary does not enclose an area yet. Close or redraw it, then preview again.',
+    };
+  }
+
+  const associated = esriGenerations.filter(candidate =>
+    !candidate.activeInclusionBoundaryId || candidate.activeInclusionBoundaryId === boundaryRecord.id,
+  );
+  // Older sessions can have a different active-boundary id saved on the ESRI
+  // generation. Fall back to every visible ESRI generation rather than
+  // silently refusing to blend the contours already on the canvas.
+  const targets = associated.length > 0 ? associated : esriGenerations;
+
+  const surveyPaths = resolveIsoPathElevationsFromLines(
+    generation.isoPaths,
+    baseLines,
+    generation.id,
+  );
+  const gisPaths = targets.flatMap(candidate =>
+    resolveIsoPathElevationsFromLines(candidate.isoPaths, baseLines, candidate.id),
+  );
+
+  const requestedMaxJoinDistance = options.maxJoinDistance === undefined
+    ? generation.esriBlendMaxJoinDistance
+    : options.maxJoinDistance;
+  const maxJoinDistance = typeof requestedMaxJoinDistance === 'number'
+    && Number.isFinite(requestedMaxJoinDistance)
+    && requestedMaxJoinDistance > 0
+    ? requestedMaxJoinDistance
+    : undefined;
+
+  const geometry = blendGisContoursToSurvey({
+    surveyPaths,
+    gisPaths,
+    boundary: polygon,
+    contourInterval: generation.settings.contourInterval,
+    ...(maxJoinDistance !== undefined ? { maxJoinDistance } : {}),
+  });
+
+  return {
+    plan: {
+      generation,
+      boundaryRecord,
+      polygon,
+      esriGenerations: targets,
+      surveyPaths,
+      gisPaths,
+      geometry,
+    },
+    error: null,
+    message: null,
+  };
+}
+
+export interface PreviewContourBlendOptions {
+  lines: SurveyLine[];
+  generations: ContourGeneration[];
+  boundaries: InclusionBoundary[];
+  generationId: string;
+  /** Explicit boundary; omit to use the generation's saved/active boundary. */
+  boundaryPolylineId?: string | null;
+  /** Null means automatic join distance; omit to use the generation's saved value. */
+  maxJoinDistance?: number | null;
+}
+
+/**
+ * Compute the exact blend Apply would commit, without touching the drawing.
+ * The review dialog and canvas highlight both read this result.
+ */
+export function previewContourBlend(
+  options: PreviewContourBlendOptions,
+): ContourBlendPreviewResult {
+  const generation = options.generations.find(candidate => candidate.id === options.generationId);
+  if (!generation) {
+    return { preview: null, error: 'That contour generation is no longer in the project.' };
+  }
+
+  const baseLines = getContourBlendBaseLines(options.lines);
+  const visibleEsri = options.generations.filter(candidate =>
+    candidate.visible && candidate.source === 'esri' && candidate.isoPaths.length > 0,
+  );
+  const planned = planContourBlend({
+    generation,
+    baseLines,
+    esriGenerations: visibleEsri,
+    boundaries: options.boundaries,
+    boundaryPolylineId: options.boundaryPolylineId,
+    maxJoinDistance: options.maxJoinDistance,
+  });
+  if (!planned.plan) {
+    return { preview: null, error: planned.message };
+  }
+
+  const { plan } = planned;
+  const geometry = plan.geometry;
+  const targetGenerationIds = plan.esriGenerations.map(candidate => candidate.id);
+  const stats: ContourBlendStats = {
+    status: 'blended',
+    connectorCount: geometry.connectors.length,
+    matchedEndpoints: geometry.matchedEndpoints,
+    unmatchedGisEndpoints: geometry.unmatchedGisEndpoints,
+    rejectedConnectorCount: geometry.rejectedConnectorCount,
+    rationalityIssues: geometry.rationalityIssues,
+    targetGenerationIds,
+    maxJoinDistance: geometry.maxJoinDistance,
+  };
+
+  return {
+    preview: {
+      generationId: generation.id,
+      generationName: generation.name,
+      boundaryPolylineId: plan.boundaryRecord.polylineId,
+      boundaryName: plan.boundaryRecord.name,
+      boundary: plan.polygon,
+      connectors: geometry.connectors,
+      gisOutsidePaths: geometry.gisOutsidePaths,
+      gisTrimmedPaths: clipIsoPathsToPolygon(plan.gisPaths, plan.polygon, 'inside'),
+      matchedJoins: geometry.matchedJoins,
+      unmatchedGisEndpoints: geometry.unmatchedGisPoints,
+      rejectedJoins: geometry.rejectedJoins,
+      targetGenerationIds,
+      stats,
+      maxJoinDistance: geometry.maxJoinDistance,
+      autoMaxJoinDistance: geometry.autoMaxJoinDistance,
+    },
+    error: null,
+  };
+}
+
+export function applyContourBlends(
+  lines: SurveyLine[],
+  generations: ContourGeneration[],
+  boundaries: InclusionBoundary[],
+  lineLayers: IsoPathLineLayers,
+): ApplyContourBlendsResult {
+  const hasDerivedLines = lines.some(line => line.blendDerived || line.blendHidden);
+  const baseLines = getContourBlendBaseLines(lines);
 
   const active = generations.filter(generation =>
     generation.visible
@@ -756,42 +994,25 @@ export function applyContourBlends(
   const activeBlends: ActiveBlend[] = [];
 
   for (const generation of active) {
-    const boundary = boundaries.find(candidate =>
-      candidate.polylineId === generation.esriBlendInclusionPolylineId,
-    );
-    if (!boundary) {
-      stats[generation.id] = emptyStats('no-boundary');
-      continue;
-    }
-    const polygon = polygonForBoundary(baseLines, boundary.polylineId);
-    if (polygon.length < 3) {
-      stats[generation.id] = emptyStats('no-boundary');
-      continue;
-    }
-
-    const associated = esriGenerations.filter(candidate =>
-      !candidate.activeInclusionBoundaryId || candidate.activeInclusionBoundaryId === boundary.id,
-    );
-    // Older sessions can have a different active-boundary id saved on the ESRI
-    // generation. Fall back to every visible ESRI generation rather than
-    // silently refusing to blend the contours already on the canvas.
-    const targets = associated.length > 0 ? associated : esriGenerations;
-
-    const surveyPaths = resolveIsoPathElevationsFromLines(
-      generation.isoPaths,
+    const planned = planContourBlend({
+      generation,
       baseLines,
-      generation.id,
-    );
-    const gisPaths = targets.flatMap(candidate =>
-      resolveIsoPathElevationsFromLines(candidate.isoPaths, baseLines, candidate.id),
-    );
-    const geometry = blendGisContoursToSurvey({
-      surveyPaths,
-      gisPaths,
-      boundary: polygon,
-      contourInterval: generation.settings.contourInterval,
+      esriGenerations,
+      boundaries,
     });
-    activeBlends.push({ generation, boundary: polygon, esriGenerations: targets, geometry });
+    if (!planned.plan) {
+      stats[generation.id] = emptyStats(planned.error);
+      continue;
+    }
+
+    const plan = planned.plan;
+    activeBlends.push({
+      generation,
+      boundary: plan.polygon,
+      esriGenerations: plan.esriGenerations,
+      geometry: plan.geometry,
+    });
+    const geometry = plan.geometry;
     stats[generation.id] = {
       status: 'blended',
       connectorCount: geometry.connectors.length,
@@ -799,7 +1020,7 @@ export function applyContourBlends(
       unmatchedGisEndpoints: geometry.unmatchedGisEndpoints,
       rejectedConnectorCount: geometry.rejectedConnectorCount,
       rationalityIssues: geometry.rationalityIssues,
-      targetGenerationIds: targets.map(candidate => candidate.id),
+      targetGenerationIds: plan.esriGenerations.map(candidate => candidate.id),
       maxJoinDistance: geometry.maxJoinDistance,
     };
   }
