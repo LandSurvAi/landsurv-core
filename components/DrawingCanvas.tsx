@@ -2,9 +2,9 @@
 // - Pay close attention to the `draw` function. This is where all points, lines, and symbols are rendered.
 // - The `transform` state (scale, offsetX, offsetY) controls the user's viewport (pan and zoom).
 // - Event handlers (`handleWheel`, `handleMouseDown`, etc.) manage user interaction. When modifying them, be very careful with dependency arrays in `useCallback` to avoid stale closures.
-// - The floating toolbar's default seat is the right edge, directly below the north arrow. Preserve its contents and functionality unless specifically asked to change it.
+// - The canvas toolbar docks in the header by default and can be dragged back out. Preserve its contents and functionality unless specifically asked to change it.
 
-import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, forwardRef, useImperativeHandle, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
     AgentType,
@@ -591,6 +591,8 @@ interface DrawingCanvasProps {
         viewOriginY?: number;
         placed?: boolean;
     }>>;
+    /** Header slot that hosts the canvas tool strip while docked. */
+    toolbarDockTargetRef?: React.RefObject<HTMLDivElement | null>;
     onTogglePointListVisibility: (listId: string) => void;
     deedMetadata?: DeedMetadata; // Deed information to display on canvas
     onToolStateChange?: (state: {
@@ -603,12 +605,19 @@ interface DrawingCanvasProps {
         lineType?: 'normal' | 'breakline' | 'inclusion' | 'exclusion';
     }) => void;
     onShowSettings?: () => void;
+    /** Current global model route shown in the lower command bar. */
+    modelMode?: 'normal' | 'high' | 'custom';
+    /** Configured high-thinking model name shown in the picker. */
+    highThinkingModelName?: string;
+    /** Switch between Normal Auto routing and the configured High Thinking route. */
+    onSelectModelMode?: (mode: 'normal' | 'high') => void;
     // C3D Integration props
     isC3DConnected?: boolean;
     /** Faint futuristic background grid — toggled from the app header. */
     isGridVisible?: boolean;
-    /** TIN shading — toggled from the app header. */
+    /** TIN shading — toggled from the canvas tool strip. */
     tinShading?: boolean;
+    onToggleTinShading?: () => void;
     // Agent draw mode
     agentDrawMode: 'both' | 'points' | 'lines';
     onCycleAgentDrawMode: () => void;
@@ -813,6 +822,10 @@ interface DrawingCanvasProps {
     workflowThought?: import('./WorkflowQuickThought.tsx').WorkflowQuickThoughtNotice | null;
     /** Reports the command bar height so overlay drawers can rest on its top edge. */
     onCommandBarHeightChange?: (height: number) => void;
+    /** Reports the quick-thought card's height so the sidebar can clear it. */
+    onQuickThoughtHeightChange?: (height: number) => void;
+    /** Current measured quick-thought card height, used to keep the origin HUD clear. */
+    quickThoughtHeight?: number;
     /** Pixels the command bar extends right, underneath the open agent tool shelf. */
     commandBarRightExtension?: number;
     /** Flash the command bar's Tools tab after the first-run shelf tour. */
@@ -2020,7 +2033,29 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     });
 
     const toolbarRef = useRef<HTMLDivElement>(null);
-    // Toolbar dragging state — the default is the right edge, below the north arrow.
+    const [toolbarDockTarget, setToolbarDockTarget] = useState<HTMLDivElement | null>(null);
+    const [isToolbarHeaderDocked, setIsToolbarHeaderDocked] = useState<boolean>(() => {
+        if (!props.toolbarDockTargetRef) return false;
+        try {
+            return localStorage.getItem('landsurv-canvas-toolbar-header-docked-v1') !== 'false';
+        } catch {
+            return true;
+        }
+    });
+
+    useLayoutEffect(() => {
+        setToolbarDockTarget(props.toolbarDockTargetRef?.current ?? null);
+    }, [props.toolbarDockTargetRef]);
+
+    const applyToolbarHeaderDock = useCallback((docked: boolean) => {
+        setIsToolbarHeaderDocked(docked);
+        try {
+            localStorage.setItem('landsurv-canvas-toolbar-header-docked-v1', docked ? 'true' : 'false');
+        } catch { /* ignore */ }
+    }, []);
+
+    // Toolbar dragging state — header docked by default, with a free-floating
+    // position remembered whenever the user pulls it out.
     // The position key is versioned so the new right-side default is picked up once.
     const [viewToolbarPosition, setViewToolbarPosition] = useState<ViewToolbarPosition | null>(() => {
         try {
@@ -2068,7 +2103,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     // If toolbar is NOT docked but positioned behind the agent chat (e.g. chat just expanded or container resized),
     // push it out so it remains visible and does not get lost behind the chat.
     const pushToolbarOutOfChatIfNeeded = useCallback(() => {
-        if (isViewToolbarDragging) return;
+        if (isViewToolbarDragging || (isToolbarHeaderDocked && isDesktop && props.toolbarDockTargetRef?.current)) return;
         const container = containerRef.current;
         if (!container) return;
 
@@ -2092,7 +2127,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 localStorage.setItem('landsurv-canvas-toolbar-position-v3', JSON.stringify(nextPos));
             } catch { /* ignore */ }
         }
-    }, [isViewToolbarDragging, isDesktop, isChatPanelVisible, chatPanelWidth, toolbarOrientation]);
+    }, [isViewToolbarDragging, isToolbarHeaderDocked, isDesktop, isChatPanelVisible, chatPanelWidth, toolbarOrientation, props.toolbarDockTargetRef]);
 
     // Handle chat panel expand/collapse transitions & width updates
     useEffect(() => {
@@ -10977,86 +11012,6 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             });
         }
 
-        // Draw World/UCS Origin Tuple on canvas at (originX, originY) if active or placed
-        const otMode = orientationTuple?.mode ?? 'drafting';
-        const otAngle = otMode === 'drafting' 
-            ? (orientationTuple?.draftingAngle ?? orientationTuple?.angle ?? 0)
-            : (orientationTuple?.viewAngle ?? orientationTuple?.angle ?? 0);
-        const otOriginX = otMode === 'drafting'
-            ? (orientationTuple?.draftingOriginX ?? orientationTuple?.originX ?? 0)
-            : (orientationTuple?.viewOriginX ?? orientationTuple?.originX ?? 0);
-        const otOriginY = otMode === 'drafting'
-            ? (orientationTuple?.draftingOriginY ?? orientationTuple?.originY ?? 0)
-            : (orientationTuple?.viewOriginY ?? orientationTuple?.originY ?? 0);
-
-        if (orientationTuple && (orientationTuple.placed || otAngle !== 0 || otOriginX !== 0 || otOriginY !== 0)) {
-            const ox = otOriginX;
-            const oy = otOriginY;
-            const axisLen = 42 * inverseScale;
-            const arrowHead = 8 * inverseScale;
-            const textOffset = 8 * inverseScale;
-            const fontH = 11 * inverseScale;
-            const localAngle = otMode === 'view' ? 0 : otAngle;
-
-            ctx.save();
-            ctx.translate(ox, oy);
-            if (localAngle !== 0) {
-                ctx.rotate(localAngle);
-            }
-            ctx.lineWidth = Math.max(1.8 * inverseScale, 1.5 * minScreenPixelWidth);
-
-            // Origin box
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-            ctx.strokeRect(-3 * inverseScale, -3 * inverseScale, 6 * inverseScale, 6 * inverseScale);
-
-            // X-Axis (Green)
-            ctx.strokeStyle = '#34D399';
-            ctx.fillStyle = '#34D399';
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(axisLen, 0);
-            ctx.stroke();
-            // X Arrowhead
-            ctx.beginPath();
-            ctx.moveTo(axisLen, 0);
-            ctx.lineTo(axisLen - arrowHead, arrowHead * 0.4);
-            ctx.lineTo(axisLen - arrowHead, -arrowHead * 0.4);
-            ctx.closePath();
-            ctx.fill();
-
-            // Y-Axis (Red)
-            ctx.strokeStyle = '#F87171';
-            ctx.fillStyle = '#F87171';
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(0, axisLen);
-            ctx.stroke();
-            // Y Arrowhead
-            ctx.beginPath();
-            ctx.moveTo(0, axisLen);
-            ctx.lineTo(arrowHead * 0.4, axisLen - arrowHead);
-            ctx.lineTo(-arrowHead * 0.4, axisLen - arrowHead);
-            ctx.closePath();
-            ctx.fill();
-
-            // Labels 'X' and 'Y'
-            ctx.save();
-            ctx.scale(1, -1);
-            ctx.font = `bold ${fontH}px sans-serif`;
-            ctx.fillStyle = '#34D399';
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('X', axisLen + textOffset, 0);
-
-            ctx.fillStyle = '#F87171';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'bottom';
-            ctx.fillText('Y', 0, -(axisLen + textOffset));
-            ctx.restore();
-
-            ctx.restore();
-        }
-
         ctx.restore(); // --- End world-space pass ---
 
         // --- Pass 2: Draw screen-space items (Points, Labels, GPS) ---
@@ -14662,7 +14617,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             });
         };
 
-        const handlePointerUp = () => {
+        const handlePointerUp = (event: PointerEvent) => {
             if (isViewToolbarDragging) {
                 if (viewToolbarRafRef.current) {
                     cancelAnimationFrame(viewToolbarRafRef.current);
@@ -14670,6 +14625,27 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 }
                 setIsViewToolbarDragging(false);
                 viewToolbarDragStart.current = null;
+
+                const dockSlot = props.toolbarDockTargetRef?.current;
+                const headerRect = dockSlot?.closest('[data-canvas-header]')?.getBoundingClientRect();
+                const overHeaderDock = event.type !== 'pointercancel'
+                    && isDesktop
+                    && !!headerRect
+                    && event.clientX >= headerRect.left
+                    && event.clientX <= headerRect.right
+                    && event.clientY >= headerRect.top
+                    && event.clientY <= headerRect.bottom;
+
+                if (overHeaderDock) {
+                    applyToolbarHeaderDock(true);
+                    latestToolbarPosRef.current = null;
+                    setViewToolbarPosition(null);
+                    try {
+                        localStorage.removeItem('landsurv-canvas-toolbar-position-v3');
+                    } catch { /* ignore */ }
+                    return;
+                }
+
                 const finalPos = latestToolbarPosRef.current;
                 if (finalPos) {
                     setViewToolbarPosition(finalPos);
@@ -14690,7 +14666,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 window.removeEventListener('pointercancel', handlePointerUp);
             };
         }
-    }, [isViewToolbarDragging, isDesktop, toolbarOrientation, commandBarHeight]);
+    }, [isViewToolbarDragging, isDesktop, toolbarOrientation, commandBarHeight, applyToolbarHeaderDock, props.toolbarDockTargetRef]);
     
     const handleContainerMouseMove = useCallback((e: React.MouseEvent) => {
         // Floating canvas dialogs (Properties, etc.) own their own hover: skip
@@ -19539,6 +19515,74 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onTouchEnd={handleTouchEnd}
             />
 
+            {/* Origin HUD in the quick-thought corner. Its position is fixed to
+                the viewport, but its axes follow the current rotation so it still
+                reads as the same UCS widget. It lifts above the quick-thought card
+                whenever that card is open. */}
+            {(() => {
+                const originMode = orientationTuple?.mode ?? 'drafting';
+                const originAngle = originMode === 'drafting'
+                    ? (orientationTuple?.draftingAngle ?? orientationTuple?.angle ?? 0)
+                    : (orientationTuple?.viewAngle ?? orientationTuple?.angle ?? 0);
+                const originX = originMode === 'drafting'
+                    ? (orientationTuple?.draftingOriginX ?? orientationTuple?.originX ?? 0)
+                    : (orientationTuple?.viewOriginX ?? orientationTuple?.originX ?? 0);
+                const originY = originMode === 'drafting'
+                    ? (orientationTuple?.draftingOriginY ?? orientationTuple?.originY ?? 0)
+                    : (orientationTuple?.viewOriginY ?? orientationTuple?.originY ?? 0);
+                const localTheta = originMode === 'drafting' ? originAngle : 0;
+                const p0 = worldToScreen(originX, originY);
+                const p1 = worldToScreen(originX + Math.cos(localTheta), originY + Math.sin(localTheta));
+                const widgetAngleDeg = Math.round(Math.atan2(p1.y - p0.y, p1.x - p0.x) * (180 / Math.PI) * 100) / 100;
+                const commandBarInset = commandBarHeight > 0 ? commandBarHeight : 148;
+                const quickThoughtInset = (props.quickThoughtHeight ?? 0) > 0
+                    ? (props.quickThoughtHeight ?? 0) + 36
+                    : 16;
+                const widgetBottom = commandBarInset + quickThoughtInset;
+                const isPickingOrigin = isPickingOtOrigin || isPickingOtLineAlign;
+
+                return (
+                    <button
+                        type="button"
+                        data-testid="canvas-origin-widget"
+                        aria-label="Open Origin Tools"
+                        aria-haspopup="dialog"
+                        aria-expanded={isOtPopupOpen}
+                        title="Origin — click for drafting rotation and world origin"
+                        onClick={() => {
+                            setIsOtPopupOpen(p => {
+                                const willOpen = !p;
+                                if (willOpen) {
+                                    setIsZoomExtentsOpen(false);
+                                    setIsAttributeFlyoutOpen(false);
+                                    setIsZoomToPointOpen(false);
+                                    setIsLayerPanelOpen(false);
+                                    setIsDrawingToolsMenuOpen(false);
+                                    setIsDimFlyoutOpen(false);
+                                }
+                                return willOpen;
+                            });
+                        }}
+                        className={`absolute z-30 flex h-16 w-16 cursor-pointer items-start justify-start rounded-md border border-transparent transition-colors hover:border-cyan-400/35 hover:bg-cyan-400/[0.06] focus-visible:border-cyan-400/60 focus-visible:outline-none ${
+                            isPickingOrigin ? 'pointer-events-none' : ''
+                        }`}
+                        style={{ left: 12, bottom: widgetBottom }}
+                    >
+                        <svg className="h-16 w-16 overflow-visible" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+                            <g transform={`rotate(${widgetAngleDeg} 14 50)`}>
+                                <rect x="11" y="47" width="6" height="6" stroke="rgba(255,255,255,0.9)" strokeWidth="1.8" />
+                                <path d="M14 50H56" stroke="#34D399" strokeWidth="2" strokeLinecap="round" />
+                                <path d="M56 50l-7-2.2v4.4z" fill="#34D399" />
+                                <text x="55" y="44" fill="#34D399" fontSize="10" fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, monospace">X</text>
+                                <path d="M14 50V8" stroke="#F87171" strokeWidth="2" strokeLinecap="round" />
+                                <path d="M14 8l-2.2 7h4.4z" fill="#F87171" />
+                                <text x="18" y="16" fill="#F87171" fontSize="10" fontWeight="700" fontFamily="ui-monospace, SFMono-Regular, monospace">Y</text>
+                            </g>
+                        </svg>
+                    </button>
+                );
+            })()}
+
             {contourBlendPreview && (
                 <ContourBlendHighlightOverlay
                     preview={contourBlendPreview}
@@ -20905,11 +20949,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             )}
             {/* View/Navigation Toolbar — Default Vertical, flippable */}
             {(() => {
-                const isDocked = viewToolbarPosition ? (viewToolbarPosition.isDocked ?? false) : false;
+                const isHeaderDocked = isToolbarHeaderDocked && !!toolbarDockTarget && isDesktop;
+                const isRightDocked = !isHeaderDocked && (viewToolbarPosition ? (viewToolbarPosition.isDocked ?? false) : false);
+                const isVertical = toolbarOrientation === 'vertical' && !isHeaderDocked;
                 const containerW = containerRef.current?.clientWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 1000);
                 const containerH = containerRef.current?.clientHeight ?? (typeof window !== 'undefined' ? window.innerHeight : 800);
-                const toolbarW = toolbarRef.current?.offsetWidth ?? (toolbarOrientation === 'vertical' ? 50 : 380);
-                const toolbarH = toolbarRef.current?.offsetHeight ?? (toolbarOrientation === 'vertical' ? 450 : 50);
+                const toolbarW = toolbarRef.current?.offsetWidth ?? (isHeaderDocked ? 360 : isVertical ? 50 : 380);
+                const toolbarH = toolbarRef.current?.offsetHeight ?? (isHeaderDocked ? 48 : isVertical ? 450 : 50);
                 // Until CanvasTerminal reports its measured height, use the
                 // established fallback. The default seat still clears it.
                 const commandBarInset = commandBarHeight > 0 ? commandBarHeight : 148;
@@ -20921,7 +20967,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     commandBarInset,
                     northArrowHeight: (NORTH_ARROW_SIZE[settings.northArrowStyle] ?? NORTH_ARROW_SIZE.classic).height,
                 });
-                const effectiveX = isDocked ? (containerW - toolbarW - NORTH_ARROW_RIGHT_INSET) : (viewToolbarPosition?.x ?? defaultPos.x);
+                const effectiveX = isRightDocked ? (containerW - toolbarW - NORTH_ARROW_RIGHT_INSET) : (viewToolbarPosition?.x ?? defaultPos.x);
                 const maxAnchoredY = Math.max(8, containerH - toolbarH - commandBarInset - 8);
                 const effectiveY = viewToolbarPosition?.y === undefined
                     ? defaultPos.y
@@ -20930,17 +20976,23 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 // Placement must be decided in viewport coordinates, not container
                 // coordinates, and the toolbar's real size is part of its center.
                 const containerRect = containerRef.current?.getBoundingClientRect();
-                const viewportX = (containerRect?.left ?? 0) + effectiveX + toolbarW / 2;
-                const viewportY = (containerRect?.top ?? 0) + effectiveY + toolbarH / 2;
+                const dockRect = toolbarDockTarget?.getBoundingClientRect();
+                const viewportX = isHeaderDocked
+                    ? (dockRect?.left ?? 0) + (dockRect?.width ?? toolbarW) / 2
+                    : (containerRect?.left ?? 0) + effectiveX + toolbarW / 2;
+                const viewportY = isHeaderDocked
+                    ? (dockRect?.bottom ?? 56)
+                    : (containerRect?.top ?? 0) + effectiveY + toolbarH / 2;
                 const viewDirection = getFlyoutDirection(viewportX, viewportY);
-                const isVertical = toolbarOrientation === 'vertical';
 
                 // Pick the side with real room for the flyout, then clamp its max
-                // height to that room. This is what keeps a tall flyout on screen
-                // whether the toolbar is at the top, bottom, or middle.
-                const availableAbove = effectiveY + (isVertical ? toolbarH : 0);
-                const availableBelow = containerH - effectiveY - (isVertical ? 0 : toolbarH);
-                const shouldFlyoutGoAbove = availableBelow < availableAbove;
+                // height to that room. Docked-in-header flyouts always open below
+                // the header; floating flyouts still choose the roomier side.
+                const availableAbove = isHeaderDocked ? 0 : effectiveY + (isVertical ? toolbarH : 0);
+                const availableBelow = isHeaderDocked
+                    ? (typeof window !== 'undefined' ? window.innerHeight : 800) - (dockRect?.bottom ?? 56)
+                    : containerH - effectiveY - (isVertical ? 0 : toolbarH);
+                const shouldFlyoutGoAbove = !isHeaderDocked && availableBelow < availableAbove;
                 const flyoutMaxHeight = Math.max(220, Math.floor((shouldFlyoutGoAbove ? availableAbove : availableBelow) - 16));
 
                 const handleToolbarPointerDown = (e: React.PointerEvent) => {
@@ -20951,6 +21003,27 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
                     const containerRect = container.getBoundingClientRect();
                     const elRect = el.getBoundingClientRect();
+
+                    if (isHeaderDocked) {
+                        const nextPos: ViewToolbarPosition = {
+                            x: Math.max(8, e.clientX - containerRect.left - 20),
+                            y: Math.max(8, e.clientY - containerRect.top - 12),
+                            isDocked: false,
+                        };
+                        applyToolbarHeaderDock(false);
+                        latestToolbarPosRef.current = nextPos;
+                        setViewToolbarPosition(nextPos);
+                        viewToolbarDragStart.current = {
+                            clientX: e.clientX,
+                            clientY: e.clientY,
+                            toolbarX: nextPos.x ?? 0,
+                            toolbarY: nextPos.y ?? 0,
+                        };
+                        setIsViewToolbarDragging(true);
+                        e.preventDefault();
+                        return;
+                    }
+
                     const curX = elRect.left - containerRect.left;
                     const curY = elRect.top - containerRect.top;
 
@@ -20976,20 +21049,24 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     });
                 };
 
-                const flyoutPlacementClass = isVertical
+                const flyoutPlacementClass = isHeaderDocked
+                    ? `top-full mt-2 ${viewDirection.horizontal === 'left' ? 'right-0' : 'left-0'}`
+                    : isVertical
                     ? `${viewDirection.horizontal === 'left' ? 'right-full mr-2' : 'left-full ml-2'} ${shouldFlyoutGoAbove ? 'bottom-0' : 'top-0'}`
                     : `${shouldFlyoutGoAbove ? 'bottom-full mb-2' : 'top-full mt-2'} ${viewDirection.horizontal === 'left' ? 'right-0' : 'left-0'}`;
                 const FLYOUT_SHELL = 'max-h-[var(--flyout-max-height)] overflow-y-auto backdrop-blur-xl bg-[#0b1119]/95 border border-white/[0.09] shadow-[0_24px_70px_-16px_rgba(0,0,0,0.9)] text-slate-200';
 
-                const wrapperStyle: React.CSSProperties = isViewToolbarDragging
+                const wrapperStyle: React.CSSProperties = isHeaderDocked
+                    ? {}
+                    : isViewToolbarDragging
                     ? { left: `${viewToolbarPosition?.x ?? effectiveX}px`, top: `${effectiveY}px` }
-                    : isDocked
+                    : isRightDocked
                     ? { right: '1rem', top: `${effectiveY}px` }
                     : !viewToolbarPosition
                     ? { right: `${NORTH_ARROW_RIGHT_INSET}px`, top: `${effectiveY}px` }
                     : { left: `${viewToolbarPosition.x ?? effectiveX}px`, top: `${effectiveY}px` };
 
-                return (
+                const toolbarNode = (
                     <div 
                         ref={toolbarRef}
                         style={{
@@ -20997,7 +21074,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             transition: isViewToolbarDragging ? 'none' : 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1), right 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                             '--flyout-max-height': `${flyoutMaxHeight}px`,
                         } as React.CSSProperties}
-                        className="absolute z-20"
+                        className={isHeaderDocked ? 'relative flex items-center' : 'absolute z-20'}
                     >
                         {/* Flyouts with orientation-aware placement */}
                             {isAttributeFlyoutOpen && (
@@ -21654,22 +21731,41 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     });
                                 };
 
-                                return (
+                                // Anchor the flyout beside the fixed corner HUD.
+                                const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
+                                const viewportHeight = typeof window === 'undefined' ? 900 : window.innerHeight;
+                                const commandBarInset = commandBarHeight > 0 ? commandBarHeight : 148;
+                                const quickThoughtInset = (props.quickThoughtHeight ?? 0) > 0
+                                    ? (props.quickThoughtHeight ?? 0) + 36
+                                    : 16;
+                                const widgetBottomInset = commandBarInset + quickThoughtInset;
+                                const canvasRect = containerRef.current?.getBoundingClientRect();
+                                const widgetLeft = (canvasRect?.left ?? 0) + 12;
+                                const widgetBottom = (canvasRect?.bottom ?? viewportHeight) - widgetBottomInset;
+                                const popupGap = 12;
+                                const popupWidth = 288;
+                                const popupLeft = Math.min(widgetLeft + 76, viewportWidth - popupWidth - 8);
+                                const originPopupStyle: React.CSSProperties = {
+                                    position: 'fixed',
+                                    left: Math.max(8, popupLeft),
+                                    bottom: Math.max(8, viewportHeight - widgetBottom + popupGap),
+                                    maxHeight: 'calc(100vh - 2rem)',
+                                };
+
+                                return typeof document === 'undefined' ? null : createPortal(
                                     <div
                                         role="dialog"
-                                        aria-label="Orientation Tuple settings"
-                                        className={`absolute ${flyoutPlacementClass} rounded-xl p-3.5 w-72 text-xs z-30 animate-fade-in-up ${FLYOUT_SHELL}`}
+                                        aria-label="Origin Tools"
+                                        className={`fixed z-[100] w-72 max-w-[calc(100vw-1rem)] rounded-xl p-3.5 text-xs animate-fade-in-up ${FLYOUT_SHELL}`}
+                                        style={originPopupStyle}
                                     >
                                         <div className="mb-2.5 flex items-center justify-between border-b border-white/[0.07] pb-2">
-                                            <div className="flex items-center gap-1.5">
-                                                <span className="font-bold text-cyan-400">Orientation Tuple (OT)</span>
-                                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 border border-cyan-700/50 font-mono">UCS</span>
-                                            </div>
+                                            <span className="font-bold text-cyan-400">Origin Tools</span>
                                             <button
                                                 type="button"
                                                 onClick={() => setIsOtPopupOpen(false)}
                                                 className="text-gray-400 hover:text-white p-0.5 rounded"
-                                                title="Close orientation controls"
+                                                title="Close Origin Tools"
                                             >
                                                 ✕
                                             </button>
@@ -21686,7 +21782,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                                 ? 'bg-cyan-600 text-white shadow-sm'
                                                                 : 'text-gray-400 hover:text-gray-200'
                                                         }`}
-                                                        title="Drafting: Geometry & North stay put, new lines with Ortho follow OT angle"
+                                                        title="Drafting: Geometry & North stay put, new lines with Ortho follow the rotation angle"
                                                     >
                                                         Drafting
                                                     </button>
@@ -21779,7 +21875,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
                                             <div className="pt-2 border-t border-gray-800/80">
                                                 <div className="flex justify-between items-center text-[11px] text-gray-400 mb-1.5">
-                                                    <span className="font-semibold text-gray-300">Origin / Pivot Point:</span>
+                                                    <span className="font-semibold text-gray-300">Origin:</span>
                                                     <span className="text-[10px] text-gray-500 font-mono">World Coords</span>
                                                 </div>
                                                 <div className="grid grid-cols-2 gap-2 mb-2">
@@ -21835,7 +21931,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 </div>
                                             </div>
                                         </div>
-                                    </div>
+                                    </div>,
+                                    document.body
                                 );
                             })()}
                             
@@ -21847,7 +21944,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             >
                                 {/* Drag handle + Flip button */}
                                 <div className={`flex ${isVertical ? 'flex-col py-1' : 'flex-row px-1'} items-center gap-1 cursor-grab active:cursor-grabbing text-gray-500 hover:text-gray-300`}>
-                                    <div className="toolbar-drag-handle flex items-center justify-center p-0.5" title={isDocked ? "Drag toolbar (docked to agent chat)" : "Drag toolbar"}>
+                                    <div className="toolbar-drag-handle flex items-center justify-center p-0.5" title={isHeaderDocked ? "Drag toolbar out of the header" : isRightDocked ? "Drag toolbar (docked to agent chat)" : "Drag toolbar"}>
                                         {isVertical ? (
                                             <div className="flex flex-row gap-0.5">
                                                 <div className="w-1 h-1 rounded-full bg-current"></div>
@@ -21862,22 +21959,24 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             </div>
                                         )}
                                     </div>
-                                    <button
-                                        data-no-drag
-                                        type="button"
-                                        onClick={toggleOrientation}
-                                        className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-cyan-300 transition-colors"
-                                        title={isVertical ? 'Flip toolbar to Horizontal' : 'Flip toolbar to Vertical'}
-                                        aria-label={isVertical ? 'Flip to horizontal' : 'Flip to vertical'}
-                                    >
-                                        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                                            {isVertical ? (
-                                                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h8m0 0l-3-3m3 3l-3 3M16 17H8m0 0l3 3m-3-3l3-3" />
-                                            ) : (
-                                                <path strokeLinecap="round" strokeLinejoin="round" d="M7 8v8m0 0l-3-3m3 3l3-3M17 16V8m0 0l3 3m-3-3l-3 3" />
-                                            )}
-                                        </svg>
-                                    </button>
+                                    {!isHeaderDocked && (
+                                        <button
+                                            data-no-drag
+                                            type="button"
+                                            onClick={toggleOrientation}
+                                            className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-cyan-300 transition-colors"
+                                            title={isVertical ? 'Flip toolbar to Horizontal' : 'Flip toolbar to Vertical'}
+                                            aria-label={isVertical ? 'Flip to horizontal' : 'Flip to vertical'}
+                                        >
+                                            <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                                                {isVertical ? (
+                                                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h8m0 0l-3-3m3 3l-3 3M16 17H8m0 0l3 3m-3-3l3-3" />
+                                                ) : (
+                                                    <path strokeLinecap="round" strokeLinejoin="round" d="M7 8v8m0 0l-3-3m3 3l3-3M17 16V8m0 0l3 3m-3-3l-3 3" />
+                                                )}
+                                            </svg>
+                                        </button>
+                                    )}
                                 </div>
 
                                 <button
@@ -22004,78 +22103,33 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                     </button>
                                 )}
 
-                                {/* UCS / Orientation Tuple (OT) button on the floating toolbar */}
-                                {(() => {
-                                    const curMode = orientationTuple.mode ?? 'drafting';
-                                    const curAngle = curMode === 'drafting'
-                                        ? (orientationTuple.draftingAngle ?? orientationTuple.angle ?? 0)
-                                        : (orientationTuple.viewAngle ?? orientationTuple.angle ?? 0);
-                                    const curOriginX = curMode === 'drafting'
-                                        ? (orientationTuple.draftingOriginX ?? orientationTuple.originX ?? 0)
-                                        : (orientationTuple.viewOriginX ?? orientationTuple.originX ?? 0);
-                                    const curOriginY = curMode === 'drafting'
-                                        ? (orientationTuple.draftingOriginY ?? orientationTuple.originY ?? 0)
-                                        : (orientationTuple.viewOriginY ?? orientationTuple.originY ?? 0);
-                                    const curAngleDeg = Math.round((curAngle * 180) / Math.PI * 100) / 100;
-                                    const p0 = worldToScreen(curOriginX, curOriginY);
-                                    const localTheta = curMode === 'drafting' ? curAngle : 0;
-                                    const p1 = worldToScreen(curOriginX + Math.cos(localTheta), curOriginY + Math.sin(localTheta));
-                                    const screenAngleDeg = Math.round(Math.atan2(p1.y - p0.y, p1.x - p0.x) * (180 / Math.PI) * 100) / 100;
-                                    const isOtActive = isOtPopupOpen || isPickingOtOrigin || isPickingOtLineAlign || Math.abs(curAngleDeg) > 0.01;
+                                <button
+                                    data-no-drag
+                                    onClick={() => props.onToggleTinShading?.()}
+                                    className={`p-2.5 rounded-lg transition-colors ${isTinShadingEnabled ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-800'}`}
+                                    title={isTinShadingEnabled ? 'Default TIN display: Shaded (per-surface modes override)' : 'Default TIN display: Wireframe (per-surface modes override)'}
+                                    aria-label="Toggle TIN shading"
+                                >
+                                    <ToolbarSurfaceIcon className="w-5 h-5" />
+                                </button>
 
-                                    return (
-                                        <button
-                                            data-no-drag
-                                            type="button"
-                                            data-testid="toolbar-ot-button"
-                                            onClick={() => {
-                                                setIsOtPopupOpen(p => {
-                                                    const willOpen = !p;
-                                                    if (willOpen) {
-                                                        setIsZoomExtentsOpen(false);
-                                                        setIsAttributeFlyoutOpen(false);
-                                                        setIsZoomToPointOpen(false);
-                                                        setIsLayerPanelOpen(false);
-                                                        setIsDrawingToolsMenuOpen(false);
-                                                        setIsDimFlyoutOpen(false);
-                                                    }
-                                                    return willOpen;
-                                                });
-                                            }}
-                                            className={`p-2 rounded-lg transition-colors flex flex-col items-center justify-center gap-0.5 ${
-                                                isOtPopupOpen
-                                                    ? 'bg-cyan-600 text-white'
-                                                    : isOtActive
-                                                    ? 'bg-cyan-950/60 text-cyan-200 ring-1 ring-cyan-500/40 hover:bg-gray-800'
-                                                    : 'hover:bg-gray-800 text-slate-300'
-                                            }`}
-                                            title={`Orientation Tuple (OT / UCS) — ${curAngleDeg.toFixed(1)}°. Click to adjust orientation and pivot origin.`}
-                                            aria-label="Open orientation tuple settings"
-                                            aria-expanded={isOtPopupOpen}
-                                        >
-                                            <svg className="w-5 h-5 overflow-visible" viewBox="0 0 32 32" fill="none" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                                                <g transform={`rotate(${screenAngleDeg} 9 23)`}>
-                                                    <path d="M9 6.5A16.5 16.5 0 0 1 25.5 23" stroke="#22d3ee" strokeOpacity="0.28" strokeWidth="0.8" strokeDasharray="1.5 2" />
-                                                    <line x1="9" y1="23" x2="27.4" y2="23" stroke="#34d399" />
-                                                    <path d="M27.6 23l-4.1-2.2v4.4z" fill="#34d399" stroke="none" />
-                                                    <text x="24.6" y="20.4" fontSize="4.1" fontWeight="700" fill="#34d399" stroke="none" fontFamily="ui-monospace, SFMono-Regular, monospace">X</text>
-                                                    <line x1="9" y1="23" x2="9" y2="4.6" stroke="#f87171" />
-                                                    <path d="M9 4.4L6.8 8.6h4.4z" fill="#f87171" stroke="none" />
-                                                    <text x="10.8" y="7.6" fontSize="4.1" fontWeight="700" fill="#f87171" stroke="none" fontFamily="ui-monospace, SFMono-Regular, monospace">Y</text>
-                                                    <circle cx="9" cy="23" r="2.4" fill="#0b1119" stroke="#e2e8f0" strokeWidth="1.2" />
-                                                    <line x1="7.2" y1="23" x2="10.8" y2="23" stroke="#e2e8f0" strokeWidth="0.9" />
-                                                    <line x1="9" y1="21.2" x2="9" y2="24.8" stroke="#e2e8f0" strokeWidth="0.9" />
-                                                </g>
-                                            </svg>
-                                            <span className="font-mono text-[7px] font-bold leading-none tracking-[0.16em] text-cyan-300/90">
-                                                {Math.abs(curAngleDeg) > 0.01 ? `${curAngleDeg.toFixed(0)}°` : 'OT'}
-                                            </span>
-                                        </button>
-                                    );
-                                })()}
+                                <button
+                                    data-no-drag
+                                    onClick={() => setIsLayerPanelOpen(v => !v)}
+                                    className={`p-2.5 rounded-lg transition-colors ${isLayerPanelOpen ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-800'}`}
+                                    title="Data Visibility"
+                                    aria-label="Data Visibility"
+                                >
+                                    <ToolbarLayersIcon className="w-5 h-5" />
+                                </button>
                             </div>
                         </div>
                     );
+
+                    if (isHeaderDocked && toolbarDockTarget) {
+                        return createPortal(toolbarNode, toolbarDockTarget);
+                    }
+                    return toolbarNode;
                 })()}
             {/* Quick-access CAD Standards spreadsheet editor (full-screen modal) */}
             {isCadStandardsEditorOpen && cadStandard && (
@@ -22749,6 +22803,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onCycleAgentDrawMode={onCycleAgentDrawMode}
                 onCycleAgentAnnotMode={onCycleAgentAnnotMode}
                 activeAgent={activeAgent}
+                modelMode={props.modelMode}
+                highThinkingModelName={props.highThinkingModelName}
+                onSelectModelMode={props.onSelectModelMode}
                 forcedAgent={forcedAgent}
                 isWorkspaceEmpty={
                     points.length === 0 &&
@@ -22785,6 +22842,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 showShortcutHints={props.settings.commandBar?.showShortcutHints ?? true}
                 showStatusBadges={props.settings.commandBar?.showStatusBadges ?? true}
                 onHeightChange={handleCommandBarHeightChange}
+                onQuickThoughtHeightChange={props.onQuickThoughtHeightChange}
                 rightExtension={props.commandBarRightExtension ?? 0}
                 introPulse={props.commandBarIntroPulse}
             />

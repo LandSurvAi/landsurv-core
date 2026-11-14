@@ -23,6 +23,7 @@ import type {
     ResolvedPointRenderStyle,
     SurveyPoint,
 } from '../types.ts';
+import { POINT_EFFICIENCY_DETAIL_SCALE } from '../utils/pointEfficiency.ts';
 
 export const POINT_STUDIO_VERSION = 1 as const;
 export const SURVEY_STANDARD_STYLE_ID = 'builtin-survey-standard';
@@ -66,7 +67,7 @@ const DEFAULT_HIGHLIGHTS: PointHighlightStyle = {
 const DEFAULT_EFFICIENCY: PointEfficiencyStyle = {
     enabled: true,
     preset: 'current',
-    detailScaleCutoff: 3,
+    detailScaleCutoff: POINT_EFFICIENCY_DETAIL_SCALE,
     screenPointBudget: 240,
     cellSizePx: 4,
     dotShape: 'square',
@@ -565,10 +566,21 @@ function normalizeHighlights(highlights: PointHighlightStyle): PointHighlightSty
 }
 
 function normalizeEfficiency(efficiency: PointEfficiencyStyle): PointEfficiencyStyle {
+    const normalizedCutoff = clampNumber(
+        efficiency.detailScaleCutoff,
+        0.1,
+        100,
+        POINT_EFFICIENCY_DETAIL_SCALE,
+    );
+    // "Current" styles saved before the relaxed cutoff still carry the old 3x
+    // default. Migrate only that untouched preset; explicit custom values stay.
+    const isLegacyCurrentDefault =
+        efficiency.preset === 'current'
+        && Math.abs(normalizedCutoff - 3) < 0.001;
     return {
         ...DEFAULT_EFFICIENCY,
         ...efficiency,
-        detailScaleCutoff: clampNumber(efficiency.detailScaleCutoff, 0.1, 100, 3),
+        detailScaleCutoff: isLegacyCurrentDefault ? POINT_EFFICIENCY_DETAIL_SCALE : normalizedCutoff,
         screenPointBudget: clampNumber(efficiency.screenPointBudget, 1, 1_000_000, 240),
         cellSizePx: clampNumber(efficiency.cellSizePx, 2, 16, 4),
         minDotSizePx: clampNumber(efficiency.minDotSizePx, 1, 32, 2),

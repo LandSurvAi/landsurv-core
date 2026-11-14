@@ -196,7 +196,7 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
   const [isPointEditorExpanded, setIsPointEditorExpanded] = useState(true);
   const [isChatPanelVisible, setIsChatPanelVisible] = useState(false);
   const toggleChatPanel = useCallback(() => setIsChatPanelVisible(prev => !prev), []);
-  const [isToolShelfVisible, setIsToolShelfVisible] = useState(false);
+  const [isToolShelfVisible, setIsToolShelfVisible] = useState(true);
   const toggleToolShelf = useCallback(() => setIsToolShelfVisible(prev => !prev), []);
   const [isToolsDrawerOpen, setIsToolsDrawerOpen] = useState(false);
   const toggleToolsDrawer = useCallback(() => setIsToolsDrawerOpen(prev => !prev), []);

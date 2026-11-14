@@ -5,6 +5,7 @@
 // - The `activeAgent` state determines which agent is currently in use. The `handleAgentChange` function is the primary way to switch between agents.
 
 import React, { useState, useCallback, useEffect, useRef, useMemo, useLayoutEffect, Suspense, lazy } from 'react';
+import { createPortal } from 'react-dom';
 import RedlinePanel, { type RedlinePatchResult } from './components/Redline/RedlinePanel.tsx';
 import { buildRedlineGhosts } from './services/redline/ghosts.ts';
 import FileUpload from './components/FileUpload.tsx';
@@ -24,7 +25,7 @@ import PermissiveSourcesExplainer from './components/PermissiveSourcesExplainer.
 import { TitleSearchPanel } from './components/TitleSearchPanel.tsx';
 // FIX: Changed default import to named import for ChatInterface.
 import { ChatInterface } from './components/ChatInterface.tsx';
-import { AgentToolDock, type DockableToolItem } from './components/AgentToolDock.tsx';
+import { AgentToolDock, type DockableToolItem, type ShelfPanelCatalogItem } from './components/AgentToolDock.tsx';
 import { AgentToolShelf } from './components/AgentToolShelf.tsx';
 import StationingChat from './components/StationingChat.tsx';
 import { A2UICenterlineList } from './components/A2UICenterlineList.tsx';
@@ -537,8 +538,8 @@ import {
 import { DEFAULT_SETTINGS, COMPATIBLE_VERSIONS, isVersionCompatible } from './utils/sessionDefaults.ts';
 import { mergeSettingsWithDefaults, migrateMessage } from './utils/sessionMigration.ts';
 // FIX: Added ProfileIcon to the imports for the new Profile Agent.
-import { HomeIcon, SheetViewIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, FloodIcon, StructuresIcon, SoilsIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, CogIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon, CogoIcon, CivilDrafterIcon } from './components/icons.tsx';
-import { ToolbarSurfaceIcon, ToolbarLayersIcon } from './components/toolbarIcons.tsx';
+import { HomeIcon, SheetViewIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, FloodIcon, StructuresIcon, SoilsIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, CogIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon, CogoIcon, CivilDrafterIcon, FolderIcon, PlusIcon, CodeBracketIcon } from './components/icons.tsx';
+import { StyleLibraryIcon, C3DLinkIcon, AnnotateManagerIcon, FieldBookToolIcon, ClosureReportIcon } from './components/toolbarIcons.tsx';
 import { suggestedQuestionsText } from './assets/suggested_questions.ts';
 import { userSuggestedQuestionsText } from './assets/user_suggested_questions.ts';
 import { deedSuggestedQuestionsText } from './assets/deed_suggested_questions.ts';
@@ -1334,6 +1335,7 @@ const AppContent = () => {
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
   const [isQuickHistoryOpen, setIsQuickHistoryOpen] = useState(false);
   const [commandBarHeight, setCommandBarHeight] = useState(0);
+  const [quickThoughtHeight, setQuickThoughtHeight] = useState(0);
   useUndoShortcuts({
     undo,
     redo,
@@ -1754,6 +1756,11 @@ const AppContent = () => {
   const requestToolShelfTab = useCallback((tabId: string) => {
     setToolShelfTabRequest(prev => ({ tabId, token: (prev?.token ?? 0) + 1 }));
   }, []);
+  /** Open tabs in the unified tool shelf. Command Reference is the default tab. */
+  const [openToolShelfPanelIds, setOpenToolShelfPanelIds] = useState<string[]>(['command-help']);
+  /** The shelf owns the canvas right edge only while the canvas workspace is visible. */
+  const showToolShelf =
+    activeVisualPanel === 'canvas' && isToolShelfVisible && !isInitialScreen && !showWelcome;
   const isBoundaryDialogDocked = boundaryDockMode === 'toolshelf';
   const setIsBoundaryDialogDocked = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
     setBoundaryDockMode(prevMode => {
@@ -2256,39 +2263,6 @@ const AppContent = () => {
   const cutSheetRef = useRef<CutSheetPanelHandles>(null);
   const [canvasTransform, setCanvasTransform] = useState<{ scale: number; offsetX: number; offsetY: number } | null>(null);
 
-  // First-run tour: open the agent tool shelf briefly, slide it closed, then
-  // flash the command bar's Tools tab so the re-open affordance is discoverable.
-  const [toolShelfIntroPulse, setToolShelfIntroPulse] = useState(false);
-  const toolShelfIntroPlayedRef = useRef(false);
-  const isToolShelfVisibleRef = useRef(isToolShelfVisible);
-  useEffect(() => {
-    isToolShelfVisibleRef.current = isToolShelfVisible;
-  }, [isToolShelfVisible]);
-  useEffect(() => {
-    if (toolShelfIntroPlayedRef.current) return;
-    if (isInitialScreen || showWelcome || activeVisualPanel !== 'canvas') return;
-    toolShelfIntroPlayedRef.current = true;
-
-    try {
-      if (localStorage.getItem('landsurv.tool-shelf-intro.v2') === '1') return;
-      localStorage.setItem('landsurv.tool-shelf-intro.v2', '1');
-    } catch { /* private mode — still run once this session */ }
-
-    // If an agent already opened a real panel, don't hide the user's workspace.
-    if (isToolShelfVisibleRef.current) return;
-
-    const closeDelayMs = 2200;
-    const pulseDelayMs = 760;
-    setIsToolShelfVisible(true);
-    window.setTimeout(() => {
-      setIsToolShelfVisible(false);
-      window.setTimeout(() => setToolShelfIntroPulse(true), pulseDelayMs);
-    }, closeDelayMs);
-    window.setTimeout(
-      () => setToolShelfIntroPulse(false),
-      closeDelayMs + pulseDelayMs + 3600
-    );
-  }, [isInitialScreen, showWelcome, activeVisualPanel, setIsToolShelfVisible]);
   
   // Ref to always access current pointLists (avoids stale closure in async handlers)
   const pointListsRef = useRef(pointLists);
@@ -2904,7 +2878,6 @@ const AppContent = () => {
   // Per-agent model override state - allows overriding the default model for specific agents
   const [agentModelOverrides, setAgentModelOverrides] = useState<Partial<Record<AgentType, string>>>({});
   const [autoHighThinkingModel, setAutoHighThinkingModel] = useState<string>(DEFAULT_AUTO_HIGH_THINKING_MODEL);
-  const [showQuickModelSelector, setShowQuickModelSelector] = useState(false);
 
   const shouldSuppressApiKeyModal = useMemo(() => {
     const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
@@ -3001,29 +2974,21 @@ const AppContent = () => {
   // True when the active agent is running under Auto smart-routing (no per-agent
   // override and the global selector is set to Auto).
   const isAutoRoutingForActive = !agentModelOverrides[activeAgent] && activeModel === AUTO_MODEL_OPTION;
+  // The command-bar Model control is global: any per-agent override shows as a
+  // custom model instead of silently pretending one of the two routes is active.
+  const modelMode: 'normal' | 'high' | 'custom' = Object.keys(agentModelOverrides).length > 0
+    ? 'custom'
+    : activeModel === autoHighThinkingModel
+      ? 'high'
+      : activeModel === AUTO_MODEL_OPTION
+        ? 'normal'
+        : 'custom';
 
   const openClaudeModelSettings = useCallback((model: ClaudeModel) => {
     setClaudeConfig({ ...loadClaudeConfig(), enabled: true, model });
     setClaudeSettingsModel(model);
     setIsClaudeSettingsVisible(true);
   }, []);
-
-  const openContextAwareModelSettings = useCallback(() => {
-    setShowQuickModelSelector(false);
-    if (isAutoRoutingForActive) {
-      setShowModelConfigPopup(true);
-      return;
-    }
-    if (isClaudeModel(currentModelName)) {
-      openClaudeModelSettings(currentModelName as ClaudeModel);
-      return;
-    }
-    if (currentModelName.startsWith('gemini-3') || currentModelName.startsWith('gemini-4')) {
-      setShowGemini3Panel(true);
-      return;
-    }
-    setShowModelConfigPopup(true);
-  }, [currentModelName, isAutoRoutingForActive, openClaudeModelSettings]);
 
   const formatDuration = useCallback((remainingMs: number | null): string => {
     if (remainingMs === null || !Number.isFinite(remainingMs)) return 'unknown time';
@@ -3345,6 +3310,41 @@ const AppContent = () => {
   const [c3dDrawingsMenuOpen, setC3dDrawingsMenuOpen] = useState(false);
   const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false);
   const insertMenuRef = useRef<HTMLDivElement | null>(null);
+  const [isHeaderHelpOpen, setIsHeaderHelpOpen] = useState(false);
+  const headerHelpRef = useRef<HTMLDivElement | null>(null);
+  const headerHelpMenuRef = useRef<HTMLDivElement | null>(null);
+  const [headerHelpMenuPos, setHeaderHelpMenuPos] = useState<{ top: number; right: number } | null>(null);
+  const [isHeaderFileOpen, setIsHeaderFileOpen] = useState(false);
+  const headerFileRef = useRef<HTMLDivElement | null>(null);
+    const canvasToolbarDockRef = useRef<HTMLDivElement | null>(null);
+
+  // The header Help menu is portaled to <body> so it paints above the tool
+  // shelf, its docked panels, and any floating workspace chips. Rendering it
+  // inline traps it in the header's stacking context (z-35), below the shelf.
+  useLayoutEffect(() => {
+    if (!isHeaderHelpOpen) {
+      setHeaderHelpMenuPos(null);
+      return;
+    }
+    const placeMenu = () => {
+      const trigger = headerHelpRef.current?.getBoundingClientRect();
+      if (!trigger) return;
+      const next = {
+        top: Math.round(trigger.bottom + 6),
+        right: Math.max(8, Math.round(window.innerWidth - trigger.right)),
+      };
+      setHeaderHelpMenuPos(prev =>
+        prev && prev.top === next.top && prev.right === next.right ? prev : next
+      );
+    };
+    placeMenu();
+    window.addEventListener('resize', placeMenu);
+    window.addEventListener('scroll', placeMenu, true);
+    return () => {
+      window.removeEventListener('resize', placeMenu);
+      window.removeEventListener('scroll', placeMenu, true);
+    };
+  }, [isHeaderHelpOpen]);
 
   // Escape dismisses header dropdowns and the mobile navigation drawer.
   useEffect(() => {
@@ -3367,6 +3367,14 @@ const AppContent = () => {
         setIsMobileMenuOpen(false);
         closed = true;
       }
+      if (isHeaderHelpOpen) {
+        setIsHeaderHelpOpen(false);
+        closed = true;
+      }
+      if (isHeaderFileOpen) {
+        setIsHeaderFileOpen(false);
+        closed = true;
+      }
       if (isInsertMenuOpen) {
         setIsInsertMenuOpen(false);
         closed = true;
@@ -3379,7 +3387,7 @@ const AppContent = () => {
 
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [c3dDrawingsMenuOpen, isHistoryPanelOpen, isQuickHistoryOpen, isMobileMenuOpen, isInsertMenuOpen, setIsMobileMenuOpen]);
+  }, [c3dDrawingsMenuOpen, isHistoryPanelOpen, isQuickHistoryOpen, isMobileMenuOpen, isHeaderHelpOpen, isHeaderFileOpen, isInsertMenuOpen, setIsMobileMenuOpen]);
 
   // Clicking elsewhere in the workspace dismisses the Insert menu.
   useEffect(() => {
@@ -3392,6 +3400,34 @@ const AppContent = () => {
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [isInsertMenuOpen]);
+
+  // Clicking elsewhere dismisses the header Help menu.
+  useEffect(() => {
+    if (!isHeaderHelpOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        headerHelpRef.current && !headerHelpRef.current.contains(target) &&
+        !headerHelpMenuRef.current?.contains(target)
+      ) {
+        setIsHeaderHelpOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [isHeaderHelpOpen]);
+
+  // Clicking elsewhere dismisses the header File menu.
+  useEffect(() => {
+    if (!isHeaderFileOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (headerFileRef.current && !headerFileRef.current.contains(event.target as Node)) {
+        setIsHeaderFileOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [isHeaderFileOpen]);
 
   // Persisted per-browser baseline for sync conflict detection.
   const c3dSyncBaselineKey = 'landsurv_c3d_sync_baseline';
@@ -4522,7 +4558,7 @@ const AppContent = () => {
     setIsHelpModalVisible(false);
     setIsSettingsVisible(false);
     setIsChatPanelVisible(false);
-    setIsToolShelfVisible(false);
+    setIsToolShelfVisible(true);
     setPointWorkflowStarted(false);
     setPointWorkflowPanelSeen(false);
     setDismissedPointWorkflowKey(null);
@@ -13036,8 +13072,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     );
   }, [activeAgent, openStandaloneA2UISurface]);
 
-  /** Closing the AOI float dismisses it; only the Chat placement opens chat. */
-  const handleCloseAoiFloat = useCallback(() => {
+  /** Closing a floating A2UI surface dismisses it; only Chat placement opens chat. */
+  const handleDismissA2UIFloat = useCallback(() => {
     setFloatingA2UIKey(null);
     setFloatingA2UIFallback(null);
   }, []);
@@ -15041,7 +15077,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, [openStandaloneA2UISurface]);
 
   /** Open the named-style Point Studio surface. */
-  const openPointStudioSurface = useCallback(() => {
+  const openPointStudioSurface = useCallback((initialMode: 'floating' | 'toolshelf' = 'floating') => {
     setSettings(prev => prev.pointStudio
       ? prev
       : { ...prev, pointStudio: ensurePointStudioState(prev, attributeScale, pointLayers) });
@@ -15055,7 +15091,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         workspaceTool: 'point-studio',
         status: 'expanded',
       },
-    });
+    }, initialMode);
   }, [openStandaloneA2UISurface, setSettings, attributeScale, pointLayers]);
 
   /** Open Add Point through the standard standalone A2UI presentation path. */
@@ -22594,6 +22630,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     handleReset();
   }, [activeModel, confirmFableSelection, handleReset]);
 
+  // Normal follows the existing Auto fast/high-thinking routing. High Thinking
+  // pins every agent to the configured high-reasoning route. Clear legacy
+  // per-agent overrides so the command-bar choice applies globally.
+  const handleModelModeSelect = useCallback((mode: 'normal' | 'high') => {
+    if (mode === 'high' && !confirmFableSelection(autoHighThinkingModel)) return;
+    setAgentModelOverrides(prev => (Object.keys(prev).length > 0 ? {} : prev));
+    setActiveModel(mode === 'high' ? autoHighThinkingModel : AUTO_MODEL_OPTION);
+  }, [autoHighThinkingModel, confirmFableSelection, setActiveModel]);
+
   const handleGoBackToInitialScreen = useCallback(() => {
     setIsInitialScreen(true);
   }, []);
@@ -28821,6 +28866,66 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   };
 
   const chatHeaderControls = buildHeaderControls(true);
+  // Unified tool shelf catalog: every workspace panel opens as a tab in the
+  // same shelf instead of replacing the canvas or hiding in a dropdown.
+  const toolShelfPanelCatalog: ShelfPanelCatalogItem[] = [
+    {
+      id: 'command-help',
+      title: 'Command Reference',
+      group: 'Reference',
+      keywords: 'cad commands shortcuts keyboard draw modify',
+      icon: <CodeBracketIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('command-help', 'docked'),
+    },
+    {
+      id: 'annotate-manager',
+      title: 'Annotate Manager',
+      group: 'Drafting',
+      keywords: 'annotations labels notes callouts',
+      icon: <AnnotateManagerIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('annotate-manager', 'docked'),
+    },
+    {
+      id: 'drafting-style-library',
+      title: 'Drafting Style Library',
+      group: 'Drafting',
+      keywords: 'styles standards layers text dimensions',
+      icon: <StyleLibraryIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('drafting-style-library', 'docked'),
+    },
+    {
+      id: 'fieldbook-panel',
+      title: 'Field Book',
+      group: 'Field',
+      keywords: 'notes fieldbook survey log',
+      icon: <FieldBookToolIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('fieldbook-panel', 'docked'),
+    },
+    {
+      id: 'point-studio',
+      title: 'Point Studio',
+      group: 'Field',
+      keywords: 'points styles labels efficiency',
+      icon: <PlumbBobIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('point-studio', 'docked'),
+    },
+    {
+      id: 'cutsheet-panel',
+      title: 'Cut Sheet',
+      group: 'Field',
+      keywords: 'cut sheet stakes offsets',
+      icon: <CutSheetIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('cutsheet-panel', 'docked'),
+    },
+    {
+      id: 'closure-report',
+      title: 'Closure Reports',
+      group: 'Field',
+      keywords: 'closure traverse error reports',
+      icon: <ClosureReportIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('closure-report', 'docked'),
+    },
+  ];
   const toolShelfHeaderControls = buildHeaderControls(false);
 
   const activeBoundaryFile = boundaryFiles.find(f => f.id === activeBoundaryFileId) ?? (boundaryFiles.length > 0 ? boundaryFiles[boundaryFiles.length - 1] : undefined);
@@ -30287,55 +30392,25 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           <div className="flex flex-1 min-h-0 relative">
           <NotificationScopeMarker />
           {!isInitialScreen && <Sidebar 
-            isSessionActive={isSessionActive}
-            onNewProject={handleRequestNewProject}
-            onSaveSession={handleOpenSaveSessionModal}
-            onLoadSession={handleLoadSession}
-            hasPdfFiles={(planFiles && planFiles.length > 0) || !!deedFile?.fileData}
             isMobileMenuOpen={isMobileMenuOpen}
             setIsMobileMenuOpen={setIsMobileMenuOpen}
             isDesktop={isDesktop}
+            bottomInset={
+                // Clear the command bar, and while the quick thought is open, stop
+                // just above the card; expand back down when the card closes.
+                activeVisualPanel === 'canvas'
+                    ? commandBarHeight + (quickThoughtHeight > 0 ? quickThoughtHeight + 40 : 0)
+                    : 0
+            }
             canGoBack={canGoBack}
             onGoBack={handleNavigateBack}
             onGoHome={handleGoBackToInitialScreen}
             onCollapsedChange={setIsAgentSidebarCollapsed}
             onExperimentalAgentPrompt={handleExperimentalAgentPrompt}
-            jobInfo={jobInfo}
-            setJobInfo={setJobInfo}
             isLoading={isLoading}
-            onConnectC3D={() => setShowC3DConnectPanel(true)}
-            isC3DConnected={isC3DConnected}
-            c3dClientVersion={c3dClientVersion}
-            c3dSessionToken={c3dSessionToken}
-            onShowC3DDebug={() => setShowC3DDebugDialog(true)}
-            currentModelName={currentModelName}
-            isAutoRouting={!agentModelOverrides[activeAgent] && activeModel === AUTO_MODEL_OPTION}
-            onModelClick={openContextAwareModelSettings}
-            availableModels={visibleAvailableModels}
-            onModelSelect={(model) => {
-              if (model === AUTO_MODEL_OPTION) {
-                setAgentModelOverrides(prev => {
-                  const next = { ...prev };
-                  delete next[activeAgent];
-                  return next;
-                });
-                return;
-              }
-              const normalizedModel = normalizeSelectedModel(model);
-              if (!confirmFableSelection(normalizedModel)) return;
-              setAgentModelOverrides(prev => ({...prev, [activeAgent]: normalizedModel}));
-            }}
-            showQuickModelSelector={showQuickModelSelector}
-            setShowQuickModelSelector={setShowQuickModelSelector}
-            autoHighThinkingModel={autoHighThinkingModel}
-            autoHighThinkingOptions={visibleAutoHighThinkingOptions}
-            onAutoHighThinkingModelChange={(model) => {
-              if (!confirmFableSelection(model)) return;
-              setAutoHighThinkingModel(model);
-            }}
           />}
           
-          <main ref={mainContentRef} className={`flex-1 flex flex-col min-w-0 h-full ${isVisualPanelFullscreen ? 'absolute inset-0 z-20' : ''}`}>
+          <main ref={mainContentRef} className={`flex-1 flex flex-col min-w-0 h-full ${isVisualPanelFullscreen ? 'absolute inset-0 z-50' : ''}`}>
              {isCivil3DPageVisible ? (
               <div className="flex-grow min-h-0 bg-[#0a0f16]">
                 <Suspense fallback={<LoadingFallback />}><ConnectorDownloadPage onClose={() => setIsCivil3DPageVisible(false)} /></Suspense>
@@ -30502,12 +30577,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 >
                     <div
                         ref={visualPanelAndEditorContainerRef}
-                        // Above the tool shelf (z-30) so the command bar's Tools
-                        // tab straddles the shelf's bottom edge instead of being
-                        // clipped by it. Kept below the mobile menu (z-40).
+                        // Canvas content and the command bar share this stacking
+                        // context. The desktop tool shelf is a sibling that rises
+                        // above the portaled quick thought; mobile keeps the shelf
+                        // below the full-screen menu (z-60).
                         className="relative z-[35] flex flex-col min-w-0 flex-1"
                         style={{
-                            marginRight: activeVisualPanel === 'canvas' && isToolShelfVisible
+                            marginRight: showToolShelf
                                 ? 'var(--tool-shelf-width)'
                                 : 0,
                         }}
@@ -30517,7 +30593,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             above the tool shelf. The drawing area below stays inset. */}
                         <div
                             data-canvas-header
-                            style={activeVisualPanel === 'canvas' && isToolShelfVisible ? {
+                            style={showToolShelf ? {
                                 width: 'calc(100% + var(--tool-shelf-width))',
                                 marginRight: 'calc(-1 * var(--tool-shelf-width))',
                             } : undefined}
@@ -30528,36 +30604,36 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                 When the rail closes they slide out into this header bar so
                                 navigation never disappears with the menu. */}
                             <div
-                                className={`flex items-center gap-0.5 overflow-hidden transition-[max-width,opacity,transform] duration-500 ease-out ${
+                                className={`flex items-center gap-1.5 overflow-hidden transition-[max-width,opacity,transform] duration-500 ease-out ${
                                     headerWorkspaceNavVisible
                                         ? 'max-w-[84px] translate-x-0 opacity-100'
                                         : 'pointer-events-none max-w-0 -translate-x-2 opacity-0'
                                 }`}
                                 aria-hidden={!headerWorkspaceNavVisible}
                             >
+                                <button
+                                    onClick={handleGoBackToInitialScreen}
+                                    className="p-2 rounded-md hover:bg-gray-700 text-gray-300 transition-colors"
+                                    title="Go to Home Screen"
+                                    tabIndex={headerWorkspaceNavVisible ? 0 : -1}
+                                >
+                                    <HomeIcon className="h-[18px] w-[18px]"/>
+                                </button>
                                 {canGoBack && (
                                     <button
                                         onClick={handleNavigateBack}
-                                        className="p-2 rounded-full hover:bg-gray-700 text-cyan-400 transition-colors"
+                                        className="p-2 rounded-md hover:bg-gray-700 text-cyan-400 transition-colors"
                                         title="Go Back"
                                         tabIndex={headerWorkspaceNavVisible ? 0 : -1}
                                     >
                                         <ChevronLeftIcon className="h-[18px] w-[18px]"/>
                                     </button>
                                 )}
-                                <button
-                                    onClick={handleGoBackToInitialScreen}
-                                    className="p-2 rounded-full hover:bg-gray-700 text-gray-300 transition-colors"
-                                    title="Go to Home Screen"
-                                    tabIndex={headerWorkspaceNavVisible ? 0 : -1}
-                                >
-                                    <HomeIcon className="h-[18px] w-[18px]"/>
-                                </button>
                             </div>
                             {activeVisualPanel !== 'canvas' && (
                                 <button
                                     onClick={() => showView('canvas')}
-                                    className="p-2 rounded-full bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-500/40 hover:bg-cyan-500/20 transition-colors animate-pulse"
+                                    className="p-2 rounded-md bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-500/40 hover:bg-cyan-500/20 transition-colors animate-pulse"
                                     title="Return to Canvas Workspace"
                                     aria-label="Return to Canvas Workspace"
                                 >
@@ -30566,7 +30642,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             )}
                             <button
                                 onClick={() => showView(activeVisualPanel === 'sheetview' ? 'canvas' : 'sheetview')}
-                                className="p-2 rounded-full text-slate-300 hover:bg-gray-700 hover:text-cyan-300 transition-colors"
+                                className="p-2 rounded-md text-slate-300 hover:bg-gray-700 hover:text-cyan-300 transition-colors"
                                 title={activeVisualPanel === 'sheetview' ? "Return to Canvas Workspace" : "Open Sheet View"}
                             >
                                 <SheetViewIcon className="h-[18px] w-[18px]"/>
@@ -30574,8 +30650,88 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             
                             
                             
+                            {/* Open, save, and new project live together under File. */}
+                            <div className="relative" ref={headerFileRef}>
+                                <button
+                                    type="button"
+                                    data-testid="canvas-file-menu"
+                                    onClick={() => setIsHeaderFileOpen(open => !open)}
+                                    className={`flex items-center gap-1.5 rounded-md p-2 text-xs font-medium transition-colors ${
+                                        isHeaderFileOpen ? 'bg-cyan-600 text-white hover:bg-cyan-700' : 'text-gray-300 hover:bg-gray-700'
+                                    }`}
+                                    title="File — open, save, or start a new project"
+                                    aria-label="File menu"
+                                    aria-haspopup="menu"
+                                    aria-expanded={isHeaderFileOpen}
+                                >
+                                    <FolderIcon className="h-[18px] w-[18px]" />
+                                    <span className="hidden sm:inline">File</span>
+                                    <ChevronDownIcon className={`hidden h-3 w-3 transition-transform sm:block ${isHeaderFileOpen ? 'rotate-180' : ''}`} />
+                                </button>
+                                {isHeaderFileOpen && (
+                                    <div
+                                        role="menu"
+                                        data-testid="canvas-file-dropdown"
+                                        className="absolute left-0 top-full z-50 mt-1 w-60 overflow-hidden rounded-lg border border-gray-700 bg-gray-800 p-1.5 text-[12px] text-gray-300 shadow-xl light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-700"
+                                    >
+                                        <button
+                                            type="button"
+                                            role="menuitem"
+                                            data-testid="file-menu-open"
+                                            onClick={() => { setIsHeaderFileOpen(false); handleLoadSession(); }}
+                                            className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] light-theme:hover:bg-gray-200"
+                                        >
+                                            <ArrowUpTrayIcon className="h-[18px] w-[18px] shrink-0 text-sky-400" />
+                                            <span className="flex flex-col leading-tight">
+                                                <span>Open Session</span>
+                                                <span className="text-[10px] font-normal text-gray-400">Load a .lsvz project from this device</span>
+                                            </span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            role="menuitem"
+                                            data-testid="file-menu-save"
+                                            disabled={!isSessionActive}
+                                            onClick={() => { setIsHeaderFileOpen(false); handleOpenSaveSessionModal(); }}
+                                            className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40 light-theme:hover:bg-gray-200"
+                                        >
+                                            <DownloadIcon className="h-[18px] w-[18px] shrink-0 text-emerald-400" />
+                                            <span className="flex flex-col leading-tight">
+                                                <span>Save Session</span>
+                                                <span className="text-[10px] font-normal text-gray-400">Package the current project as .lsvz</span>
+                                            </span>
+                                        </button>
+                                        <hr className="my-1 border-white/[0.07]" />
+                                        <button
+                                            type="button"
+                                            role="menuitem"
+                                            data-testid="file-menu-new"
+                                            disabled={!isSessionActive}
+                                            onClick={() => { setIsHeaderFileOpen(false); handleRequestNewProject(); }}
+                                            className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40 light-theme:hover:bg-gray-200"
+                                        >
+                                            <PlusIcon className="h-[18px] w-[18px] shrink-0 text-cyan-400" />
+                                            <span className="flex flex-col leading-tight">
+                                                <span>New Project</span>
+                                                <span className="text-[10px] font-normal text-gray-400">Start a blank workspace</span>
+                                            </span>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
                             {activeVisualPanel === 'canvas' && (
                                 <>
+                                    <button onClick={() => undo()} disabled={!canUndo} className={`p-2 rounded-md transition-colors ${canUndo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canUndo && undoLabel ? `Undo: ${undoLabel} (Ctrl+Z or U)` : 'Nothing to undo'}><UndoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
+                                    <button onClick={() => redo()} disabled={!canRedo} className={`p-2 rounded-md transition-colors ${canRedo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canRedo && redoLabel ? `Redo: ${redoLabel} (Ctrl+Y)` : 'Nothing to redo'}><RedoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
+                                    <button
+                                        onClick={() => setIsHistoryPanelOpen(v => !v)}
+                                        className={`p-2 rounded-md transition-colors text-xs font-medium ${isHistoryPanelOpen ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
+                                        title="Edit history — jump to any earlier state"
+                                    >
+                                        Hist
+                                    </button>
+
                                     <CadLayerPicker
                                         layers={activeCadLayers}
                                         activeLayer={activeDrawingLayer}
@@ -30600,7 +30756,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                             setIsLayerPanelOpen(false);
                                             canvas2dRef.current?.toggleDrawingToolsMenu();
                                         }}
-                                        className={`p-2 rounded-full transition-colors text-xs font-medium ${canvasToolState.isDrawing ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
+                                        className={`p-2 rounded-md transition-colors text-xs font-medium ${canvasToolState.isDrawing ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
                                         title="Draw menu — linework, hatch, and edit tools (B for baseline)"
                                         aria-label="Open draw menu"
                                     >
@@ -30614,7 +30770,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 canvas2dRef.current?.closeDrawingToolsMenu();
                                                 setIsInsertMenuOpen(open => !open);
                                             }}
-                                            className={`p-2 rounded-full transition-colors text-xs font-medium ${isInsertMenuOpen ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
+                                            className={`p-2 rounded-md transition-colors text-xs font-medium ${isInsertMenuOpen ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
                                             title="Insert — place an image or PDF under the drawing"
                                             aria-label="Open Insert menu"
                                             aria-haspopup="menu"
@@ -30648,7 +30804,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                     </div>
                                     <button
                                         onClick={() => handleOpenSpreadsheetEditor()}
-                                        className="p-2 rounded-full transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
+                                        className="p-2 rounded-md transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
                                         title="Codes — open the CAD standards codes spreadsheet"
                                         aria-label="Open Codes spreadsheet"
                                         data-testid="toolbar-open-cad-spreadsheet"
@@ -30657,7 +30813,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                     </button>
                                     <button
                                         onClick={() => handleStartLivePointPlacement()}
-                                        className="p-2 rounded-full transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
+                                        className="p-2 rounded-md transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
                                         title="Point — start live point placement, then click the canvas to drop points (Esc to finish)"
                                         aria-label="Start live point placement"
                                     >
@@ -30665,14 +30821,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                     </button>
                                     <button
                                         onClick={handleOpenTextEditorFromToolbar}
-                                        className="p-2 rounded-full transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
+                                        className="p-2 rounded-md transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
                                         title="Txt — open the A2UI text editor for deeds, notes, and .md files"
                                         aria-label="Open Text Editor"
                                         data-testid="toolbar-open-text-editor"
                                     >
                                         Txt
                                     </button>
-                                    <button onClick={() => handleOpenDxfExportModal()} className="p-2 rounded-full hover:bg-gray-700 transition-colors flex items-center gap-1" title="Export DXF"><DownloadIcon className="h-[18px] w-[18px] text-gray-300"/><span className="text-xs font-medium text-gray-300">DXF</span></button>
+                                    <button onClick={() => handleOpenDxfExportModal()} className="p-2 rounded-md hover:bg-gray-700 transition-colors flex items-center gap-1" title="Export DXF"><DownloadIcon className="h-[18px] w-[18px] text-gray-300"/><span className="text-xs font-medium text-gray-300">DXF</span></button>
                                     <button
                                         onClick={() => {
                                             setSettings(prev => ({
@@ -30694,7 +30850,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                             setAddressLookupError(null);
                                             setIsAddressLookupOpen(true);
                                         }}
-                                        className="p-2 rounded-full transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
+                                        className="p-2 rounded-md transition-colors text-xs font-medium text-gray-300 hover:bg-gray-700"
                                         title="Address — zoom the canvas to a US street address or place"
                                         aria-label="Zoom to address"
                                         data-testid="toolbar-address-lookup"
@@ -30706,38 +30862,20 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                             setIsLayerPanelOpen(false);
                                             openAoiSurface();
                                         }}
-                                        className={`p-2 rounded-full transition-colors text-xs font-medium ${activeAoiBoundaryId ? 'bg-cyan-600 text-white hover:bg-cyan-700' : 'text-gray-300 hover:bg-gray-700'}`}
+                                        className={`p-2 rounded-md transition-colors text-xs font-medium ${activeAoiBoundaryId ? 'bg-cyan-600 text-white hover:bg-cyan-700' : 'text-gray-300 hover:bg-gray-700'}`}
                                         title={activeAoiBoundaryId ? 'AOI — an Area of Interest is held; open the AOI chips' : 'AOI — define and hold an Area of Interest for clipping and Surveyors Eye'}
                                         aria-label="Open Area of Interest menu"
                                         data-testid="toolbar-aoi"
                                     >
                                         AOI
                                     </button>
-                                    <button onClick={() => undo()} disabled={!canUndo} className={`p-2 rounded-full transition-colors ${canUndo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canUndo && undoLabel ? `Undo: ${undoLabel} (Ctrl+Z or U)` : 'Nothing to undo'}><UndoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
-                                    <button onClick={() => redo()} disabled={!canRedo} className={`p-2 rounded-full transition-colors ${canRedo ? 'hover:bg-gray-700' : 'opacity-30 cursor-not-allowed'}`} title={canRedo && redoLabel ? `Redo: ${redoLabel} (Ctrl+Y)` : 'Nothing to redo'}><RedoIcon className="h-[18px] w-[18px] text-gray-300"/></button>
-                                    <button
-                                        onClick={() => setIsHistoryPanelOpen(v => !v)}
-                                        className={`p-2 rounded-full transition-colors text-xs font-medium ${isHistoryPanelOpen ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
-                                        title="Edit history � jump to any earlier state"
-                                    >
-                                        Hist
-                                    </button>
-                                    <button
-                                        onClick={() => setIsTinShadingEnabled(v => !v)}
-                                        className={`p-2 rounded-full transition-colors ${isTinShadingEnabled ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
-                                        title={isTinShadingEnabled ? 'Default TIN display: Shaded (per-surface modes override)' : 'Default TIN display: Wireframe (per-surface modes override)'}
-                                        aria-label="Toggle TIN shading"
-                                    >
-                                        <ToolbarSurfaceIcon className="h-[18px] w-[18px]" />
-                                    </button>
-                                    <button
-                                        onClick={() => setIsLayerPanelOpen(v => !v)}
-                                        className={`p-2 rounded-full transition-colors ${isLayerPanelOpen ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
-                                        title="Data Visibility"
-                                        aria-label="Data Visibility"
-                                    >
-                                        <ToolbarLayersIcon className="h-[18px] w-[18px]" />
-                                    </button>
+
+                                    <div
+                                        ref={canvasToolbarDockRef}
+                                        data-canvas-toolbar-dock
+                                        data-testid="canvas-toolbar-dock"
+                                        className="relative flex shrink-0 items-center"
+                                    />
                                 </>
                             )}
                             
@@ -30798,10 +30936,109 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             )}
                             
                             <div className="flex-grow"></div>
-                            <button onClick={() => setIsGridVisible(v => !v)} className={`p-2 rounded-full transition-colors ${isGridVisible ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-700'}`} title={isGridVisible ? 'Hide background grid' : 'Show background grid'}><GridIcon className={`h-[18px] w-[18px] ${isGridVisible ? 'text-white' : 'text-gray-400'}`}/></button>
+                            {/* Civil 3D connector status: green connected, red disconnected. */}
+                            <button
+                                type="button"
+                                data-testid="canvas-c3d-status"
+                                onClick={() => isC3DConnected ? setShowC3DDebugDialog(true) : setShowC3DConnectPanel(true)}
+                                className={`flex items-center gap-1.5 rounded-md p-2 text-xs font-medium transition-colors ${
+                                    isC3DConnected ? 'text-emerald-300 hover:bg-emerald-500/10' : 'text-gray-300 hover:bg-gray-700'
+                                }`}
+                                title={
+                                    isC3DConnected
+                                        ? `Civil 3D connected${c3dClientVersion ? ` (v${c3dClientVersion})` : ''} — open connection diagnostics`
+                                        : 'Civil 3D not connected — click to connect'
+                                }
+                                aria-label={isC3DConnected ? 'Civil 3D connected' : 'Connect Civil 3D'}
+                            >
+                                <span className="relative flex h-[18px] w-[18px] items-center justify-center">
+                                    <C3DLinkIcon className="h-[18px] w-[18px]" />
+                                    <span
+                                        aria-hidden="true"
+                                        className={`absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-[#0a0f16] light-theme:ring-white ${
+                                            isC3DConnected ? 'bg-emerald-400 shadow-[0_0_7px_#34d399]' : 'bg-red-400 shadow-[0_0_7px_#f87171]'
+                                        }`}
+                                    />
+                                </span>
+                                <span className="hidden sm:inline">C3D</span>
+                            </button>
+
+                            <div className="relative" ref={headerHelpRef}>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsHeaderHelpOpen(open => !open)}
+                                    className={`flex items-center gap-1.5 rounded-md p-2 text-xs font-medium transition-colors ${
+                                        isHeaderHelpOpen ? 'bg-cyan-600 text-white hover:bg-cyan-700' : 'text-gray-300 hover:bg-gray-700'
+                                    }`}
+                                    title="Help & Info"
+                                    aria-label="Open Help and Info"
+                                    aria-haspopup="menu"
+                                    aria-expanded={isHeaderHelpOpen}
+                                    data-testid="canvas-help-menu"
+                                >
+                                    <QuestionMarkCircleIcon className="h-[18px] w-[18px]" />
+                                    <span className="hidden sm:inline">Help</span>
+                                    <ChevronDownIcon className={`hidden h-3 w-3 transition-transform sm:block ${isHeaderHelpOpen ? 'rotate-180' : ''}`} />
+                                </button>
+                                {isHeaderHelpOpen && headerHelpMenuPos && typeof document !== 'undefined' && createPortal(
+                                    <div
+                                        ref={headerHelpMenuRef}
+                                        role="menu"
+                                        data-testid="canvas-help-dropdown"
+                                        style={{
+                                            position: 'fixed',
+                                            top: headerHelpMenuPos.top,
+                                            right: headerHelpMenuPos.right,
+                                            zIndex: 10050,
+                                        }}
+                                        className="max-h-[70vh] w-64 overflow-y-auto rounded-lg border border-gray-700 bg-gray-800 p-1.5 text-[12px] text-gray-300 shadow-xl light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-700"
+                                    >
+                                        <div className="px-2 pb-1 pt-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-slate-500">Help &amp; Info</div>
+                                        <button role="menuitem" onClick={() => { setIsHeaderHelpOpen(false); setIsHelpModalVisible(true); }} className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] light-theme:hover:bg-gray-200">
+                                            <QuestionMarkCircleIcon className="h-[18px] w-[18px] text-cyan-400" /> Help &amp; Info
+                                        </button>
+                                        <button role="menuitem" onClick={() => { setIsHeaderHelpOpen(false); showAbout(); }} className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] light-theme:hover:bg-gray-200">
+                                            <BrainCircuitIcon className="h-[18px] w-[18px] text-purple-400" /> About
+                                        </button>
+                                        <button role="menuitem" onClick={() => { setIsHeaderHelpOpen(false); showDoc(); }} className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] light-theme:hover:bg-gray-200">
+                                            <DocumentDuplicateIcon className="h-[18px] w-[18px] text-cyan-400" /> .lsvz Format
+                                        </button>
+                                        <hr className="my-1 border-white/[0.07]" />
+                                        <button role="menuitem" onClick={() => { setIsHeaderHelpOpen(false); showReleaseLog(); }} className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] light-theme:hover:bg-gray-200">
+                                            <ClipboardDocumentListIcon className="h-[18px] w-[18px] text-blue-400" /> Release Log
+                                        </button>
+                                        <button role="menuitem" onClick={() => { setIsHeaderHelpOpen(false); showTech(); }} className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] light-theme:hover:bg-gray-200">
+                                            <CpuChipIcon className="h-[18px] w-[18px] text-gray-400" /> Technologies
+                                        </button>
+                                        <hr className="my-1 border-white/[0.07]" />
+                                        <a role="menuitem" href="https://civil3d.landsurv.ai" target="_blank" rel="noopener noreferrer" onClick={() => setIsHeaderHelpOpen(false)} className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] light-theme:hover:bg-gray-200">
+                                            <C3DLinkIcon className="h-[18px] w-[18px] text-blue-400" /> Civil 3D Plugin
+                                        </a>
+                                        <a role="menuitem" href="https://www.youtube.com/@LandSurvAI" target="_blank" rel="noopener noreferrer" onClick={() => setIsHeaderHelpOpen(false)} className="flex w-full items-start gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] light-theme:hover:bg-gray-200">
+                                            <svg className="mt-0.5 h-[18px] w-[18px] flex-shrink-0 text-red-500" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+                                            <span className="flex flex-col leading-tight">
+                                                <span>YouTube Tutorials</span>
+                                                <span className="text-[10px] font-normal text-gray-400">Learn the app — walkthroughs &amp; tips</span>
+                                            </span>
+                                        </a>
+                                        <hr className="my-1 border-white/[0.07]" />
+                                        <button role="menuitem" onClick={() => { setIsHeaderHelpOpen(false); showInvestorForm(); }} className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] light-theme:hover:bg-gray-200">
+                                            <CurrencyDollarIcon className="h-[18px] w-[18px] text-emerald-400" /> Investor Inquiry
+                                        </button>
+                                        <a role="menuitem" href="https://github.com/msersen/Landsurv.ai_Public-/issues" target="_blank" rel="noopener noreferrer" onClick={() => setIsHeaderHelpOpen(false)} className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] light-theme:hover:bg-gray-200">
+                                            <BugAntIcon className="h-[18px] w-[18px] text-yellow-400" /> Report a Bug
+                                        </a>
+                                        <a role="menuitem" href="https://github.com/LandSurvAi/landsurv-core" target="_blank" rel="noopener noreferrer" onClick={() => setIsHeaderHelpOpen(false)} className="flex w-full items-center gap-3 rounded-md p-2 text-left transition-colors hover:bg-white/[0.06] light-theme:hover:bg-gray-200">
+                                            <CpuChipIcon className="h-[18px] w-[18px] text-emerald-400" /> View Source (Open Source)
+                                        </a>
+                                    </div>,
+                                    document.body,
+                                )}
+                            </div>
+                            <button onClick={() => setIsGridVisible(v => !v)} className={`p-2 rounded-md transition-colors ${isGridVisible ? 'bg-cyan-600 hover:bg-cyan-700' : 'hover:bg-gray-700'}`} title={isGridVisible ? 'Hide background grid' : 'Show background grid'}><GridIcon className={`h-[18px] w-[18px] ${isGridVisible ? 'text-white' : 'text-gray-400'}`}/></button>
                             <button
                                 onClick={showSettings}
-                                className="p-2 rounded-full transition-colors hover:bg-gray-700 text-gray-300"
+                                className="p-2 rounded-md transition-colors hover:bg-gray-700 text-gray-300"
                                 title="Settings"
                                 aria-label="Open Settings"
                             >
@@ -30835,11 +31072,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         ref={canvas2dRef}
                                         isDesktop={isDesktop}
                                         onCommandBarHeightChange={setCommandBarHeight}
-                                        commandBarRightExtension={isToolShelfVisible ? toolShelfWidth : 0}
-                                        commandBarIntroPulse={toolShelfIntroPulse}
+                                        onQuickThoughtHeightChange={setQuickThoughtHeight}
+                                        quickThoughtHeight={quickThoughtHeight}
+                                        commandBarRightExtension={showToolShelf ? toolShelfWidth : 0}
                                         // The tool shelf owns the right edge; the left-docked
                                         // agent chat handles the conversation itself.
-                                        isChatPanelVisible={isToolShelfVisible}
+                                        isChatPanelVisible={showToolShelf}
                                         chatPanelWidth={toolShelfWidth}
                                         isChatResizing={isResizingToolShelf}
                                         dockedA2UIKey={dockedA2UIMessage ? dockedA2UIKey : null}
@@ -30904,6 +31142,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         setLineThickness={setLineThickness}
                                         contourLabelScale={contourSettings.labelScale}
                                         activeAgent={activeAgent}
+                                        modelMode={modelMode}
+                                        highThinkingModelName={getModelDisplayLabel(autoHighThinkingModel)}
+                                        onSelectModelMode={handleModelModeSelect}
                                         settings={settings}
                                         zoomTarget={zoomTarget}
                                         onZoomComplete={handleZoomComplete}
@@ -30969,6 +31210,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         pointLists={pointLists}
                                         orientationTuple={orientationTuple}
                                         onSetOrientationTuple={setOrientationTuple}
+                                        toolbarDockTargetRef={canvasToolbarDockRef}
                                         onTogglePointListVisibility={handleTogglePointListVisibility}
                                         onToolStateChange={setCanvasToolState}
                                         onShowSettings={showSettings}
@@ -30979,6 +31221,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onCycleAgentAnnotMode={cycleAgentAnnotMode}
                                         isGridVisible={isGridVisible}
                                         tinShading={isTinShadingEnabled}
+                                        onToggleTinShading={() => setIsTinShadingEnabled(v => !v)}
                                         onAddBoundaryCall={handleAddBoundaryCall}
                                         onConvertSelectionToBoundary={handleConvertSelectionToBoundary}
                                         onComputeCurrentClosure={handleComputeCurrentClosure}
@@ -31114,7 +31357,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                             : getToolDockMode(item.id)) === 'chat'
                                             )
                                         }
-                                        isToolDockOpen={isToolShelfVisible}
+                                        isToolDockOpen={showToolShelf}
                                         onToggleToolDock={toggleToolShelf}
                                         onOpenBoundaryEditor={() => {
                                             setIsBoundaryEditorButtonPulsing(false);
@@ -31138,7 +31381,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         isBoundaryEditorOpen={
                                             isBoundaryEditorVisible && (
                                                 isBoundaryDialogDocked
-                                                    ? (isToolShelfVisible && !isBoundaryDialogMinimized)
+                                                    ? (showToolShelf && !isBoundaryDialogMinimized)
                                                     : true
                                             )
                                         }
@@ -31741,9 +31984,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                            </div>
                         </div>
                     </div>
-                    {activeVisualPanel === 'canvas' && (
+                    {showToolShelf && (
                       <AgentToolShelf
-                        isOpen={isToolShelfVisible}
+                        isOpen={showToolShelf}
                         width={`var(--tool-shelf-width, ${toolShelfWidth}px)`}
                         onResizeStart={handleToolShelfResizeMouseDown}
                         bottomOffset={commandBarHeight}
@@ -31754,9 +31997,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                           items={dockableToolItems}
                           headerControls={toolShelfHeaderControls}
                           toolsRowAccessories={gisStreamsToolsRowAccessories ?? boundaryToolsRowAccessories}
+                          panelCatalog={toolShelfPanelCatalog}
+                          openPanelIds={openToolShelfPanelIds}
+                          onOpenPanelIdsChange={setOpenToolShelfPanelIds}
                           requestedTabId={toolShelfTabRequest?.tabId}
                           requestedTabToken={toolShelfTabRequest?.token}
-                          hideToolTabs={activeAgent === AgentType.DEED_READER}
                           onActiveTabChange={handleToolShelfActiveTabChange}
                           onClose={toggleToolShelf}
                         />
@@ -32321,11 +32566,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               title={A2UI_DOCK_TITLES[floatingA2UIMessage.a2ui.widgetType] || 'Tool'}
               dockMode="floating"
               onDockModeChange={next => handleSetA2UIDockMode(floatingA2UIMessage, next)}
-              onClose={
-                floatingA2UIMessage.a2ui.widgetType === 'area-of-interest'
-                  ? handleCloseAoiFloat
-                  : handleReturnA2UIToChat
-              }
+              onClose={handleDismissA2UIFloat}
               initialX={typeof window !== 'undefined' ? Math.max(24, window.innerWidth / 2 - 380) : 80}
               initialY={72}
               width={floatingA2UIMessage.a2ui.kind === 'cad-manager' ? 'min(1180px, 96vw)' : 'min(760px, 94vw)'}

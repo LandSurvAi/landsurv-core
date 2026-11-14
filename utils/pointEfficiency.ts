@@ -2,10 +2,11 @@
  * Point rendering efficiency mode.
  *
  * Above this zoom (screen pixels per drawing unit), point glyphs and labels are
- * legible enough to render individually. Below it, large point files are cheaper
- * to draw as screen-space primitives.
+ * legible enough to render individually. 1.5 keeps site-scale views in full
+ * detail instead of hiding annotations until roughly 3 px/unit; below it, large
+ * point files are cheaper to draw as screen-space primitives.
  */
-export const POINT_EFFICIENCY_DETAIL_SCALE = 3;
+export const POINT_EFFICIENCY_DETAIL_SCALE = 1.5;
 
 /**
  * Maximum number of on-screen points before labels stop being useful. This is

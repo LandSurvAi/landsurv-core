@@ -39,7 +39,7 @@ import {
   parsePointStylePack,
   SURVEY_STANDARD_STYLE_ID,
 } from '../services/pointStyles.ts';
-import { collectPointPrimitiveCells, getPointDotSize } from '../utils/pointEfficiency.ts';
+import { POINT_EFFICIENCY_DETAIL_SCALE, collectPointPrimitiveCells, getPointDotSize } from '../utils/pointEfficiency.ts';
 
 export interface PointStudioSurfaceProps {
   state: PointStudioState;
@@ -640,7 +640,7 @@ export const PointStudioSurface: React.FC<PointStudioSurfaceProps> = ({
     mutateActiveStyle(style => {
       const values: Record<string, Partial<PointEfficiencyStyle>> = {
         current: {
-          detailScaleCutoff: 3,
+          detailScaleCutoff: POINT_EFFICIENCY_DETAIL_SCALE,
           screenPointBudget: 240,
           cellSizePx: 4,
           dotShape: 'square',
@@ -676,7 +676,7 @@ export const PointStudioSurface: React.FC<PointStudioSurfaceProps> = ({
           opacity: 1,
         },
         detail: {
-          detailScaleCutoff: 2,
+          detailScaleCutoff: 1,
           screenPointBudget: 1500,
           cellSizePx: 3,
           dotShape: 'circle',

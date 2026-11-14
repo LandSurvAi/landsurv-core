@@ -47,6 +47,54 @@ const FORCE_AGENT_OPTIONS: AgentType[] = [
     AgentType.DIRT_VOLUME_AGENT,
 ].sort((a, b) => (agentConfig[a]?.label ?? a).localeCompare(agentConfig[b]?.label ?? b));
 
+const SETTINGS_SECTIONS: ReadonlyArray<{
+    label: string;
+    items: ReadonlyArray<{ id: string; label: string }>;
+}> = [
+    {
+        label: 'Intelligence',
+        items: [
+            { id: 'settings-ai-behavior', label: 'AI Behavior' },
+            { id: 'settings-experimental-agents', label: 'Experimental Agents' },
+            { id: 'settings-developer-testing', label: 'Developer & Testing' },
+        ],
+    },
+    {
+        label: 'Canvas & interface',
+        items: [
+            { id: 'settings-canvas-display', label: 'Canvas & Display' },
+            { id: 'settings-command-bar', label: 'Command Bar' },
+            { id: 'settings-graphics', label: 'Graphics & WebGPU' },
+            { id: 'settings-point-labeling', label: 'Point Labeling' },
+        ],
+    },
+    {
+        label: 'Location & data',
+        items: [
+            { id: 'settings-coordinate-system', label: 'Coordinate System' },
+            { id: 'settings-imagery', label: 'Map Imagery' },
+            { id: 'settings-geo-ai', label: 'Geo-AI Engine' },
+            { id: 'settings-ntrip', label: 'NTRIP RTK' },
+        ],
+    },
+    {
+        label: 'Integrations',
+        items: [
+            { id: 'settings-cutsheet', label: 'Cut Sheet' },
+            { id: 'settings-notion', label: 'Notion' },
+        ],
+    },
+    {
+        label: 'Advanced',
+        items: [
+            { id: 'settings-surfaces', label: 'Agent Surfaces' },
+            { id: 'settings-danger', label: 'Danger Zone' },
+            { id: 'settings-testing', label: 'Testing & Previews' },
+        ],
+    },
+];
+const SETTINGS_SECTION_ITEMS = SETTINGS_SECTIONS.flatMap(group => group.items);
+
 const AUTO_SELECTOR_OPTION = 'auto';
 const getSelectorModelValue = (modelName: string): string => modelName;
 const getSelectorModelLabel = (modelName: string): string => (
@@ -109,7 +157,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     const experimentalStormwaterEnabled = useExperimentalAgentEnabled(AgentType.STORMWATER_AGENT);
     const experimentalRedlineEnabled = useExperimentalAgentEnabled(AgentType.REDLINE_AGENT);
     const [isConfirmingReset, setIsConfirmingReset] = useState(false);
-    const [showScrollIndicator, setShowScrollIndicator] = useState(true);
+    const [activeSection, setActiveSection] = useState(SETTINGS_SECTION_ITEMS[0]?.id ?? 'settings-ai-behavior');
     const [inputApiKey, setInputApiKey] = useState(settings.userApiKey || '');
     const [providerKeyInputs, setProviderKeyInputs] = useState<Record<Exclude<ByokProvider, 'google'>, string>>({
         openai: settings.openaiApiKey || '',
@@ -119,6 +167,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     const [isProbingGeoAi, setIsProbingGeoAi] = useState(false);
     const [geoAiProbeResult, setGeoAiProbeResult] = useState<{ status: 'ok' | 'error'; message: string } | null>(null);
     const googleMapsSectionRef = useRef<HTMLDivElement | null>(null);
+    const settingsScrollRef = useRef<HTMLElement | null>(null);
     const [webgpuEnabled, setWebgpuEnabled] = useState(() => isWebGpuEnabled());
     const [gpuPower, setGpuPower] = useState<GpuPowerPreference>(() => getGpuPowerPreference());
     const webgpuSupported = WebGpuBasemap.isSupported();
@@ -259,6 +308,40 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             window.removeEventListener('landsurv-open-settings-google-maps', handleFocusGoogleMaps as EventListener);
         };
     }, []);
+
+    // Track the section nearest the top of the scroll area so the desktop rail
+    // and the phone selector stay in sync while the user scrolls.
+    useEffect(() => {
+        const root = settingsScrollRef.current;
+        if (!root) return;
+        let frame = 0;
+        const updateActiveSection = () => {
+            frame = 0;
+            const rootTop = root.getBoundingClientRect().top;
+            let next = SETTINGS_SECTION_ITEMS[0]?.id ?? 'settings-ai-behavior';
+            for (const item of SETTINGS_SECTION_ITEMS) {
+                const section = document.getElementById(item.id);
+                if (!section) continue;
+                if (section.getBoundingClientRect().top - rootTop <= 72) next = item.id;
+            }
+            setActiveSection(current => (current === next ? current : next));
+        };
+        const scheduleUpdate = () => {
+            if (frame) return;
+            frame = window.requestAnimationFrame(updateActiveSection);
+        };
+        root.addEventListener('scroll', scheduleUpdate, { passive: true });
+        updateActiveSection();
+        return () => {
+            root.removeEventListener('scroll', scheduleUpdate);
+            if (frame) window.cancelAnimationFrame(frame);
+        };
+    }, []);
+
+    const jumpToSection = (id: string) => {
+        document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        setActiveSection(id);
+    };
     
     const selectedModelValue = getSelectorModelValue(activeModel);
     
@@ -384,33 +467,116 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
   };
 
 
-  const themeColor = 'text-gray-400';
-  const themeShadow = 'shadow-gray-500/20';
   const themeFocusRing = 'focus:ring-gray-500';
   const themeAccent = 'accent-gray-500';
 
   return (
-    <div 
-      className="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-[9990] flex items-center justify-center p-4 animate-fade-in light-theme:bg-gray-500/80"
+    <div
+      className="fixed inset-0 z-[9990] flex items-stretch justify-center bg-slate-950/80 p-0 backdrop-blur-md animate-fade-in light-theme:bg-gray-500/80 sm:items-center sm:p-3 lg:p-5"
       style={{ zIndex: 9990 }}
       onClick={onClose}
     >
-      <div 
-        className={`bg-gray-800 border border-gray-700 rounded-lg shadow-2xl ${themeShadow} max-w-xl w-full max-h-[90vh] flex flex-col animate-modal-panel-fade-in-down light-theme:bg-white light-theme:border-gray-300`}
+      <div
+        className="flex h-[100dvh] w-full flex-col overflow-hidden bg-[#080d14] shadow-2xl animate-modal-panel-fade-in-down light-theme:bg-white sm:h-[calc(100dvh_-_1.5rem)] sm:max-w-[1500px] sm:rounded-2xl sm:border sm:border-white/10 light-theme:border-gray-300 lg:h-[calc(100dvh_-_2.5rem)]"
         onClick={e => e.stopPropagation()}
       >
-        <header className="flex items-center justify-between p-4 border-b border-gray-700 flex-shrink-0 light-theme:border-gray-300">
-          <h2 className={`text-2xl font-bold ${themeColor} flex items-center gap-3 light-theme:text-gray-600`}><AdjustmentsHorizontalIcon className="w-7 h-7"/> Settings</h2>
-          <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-700 transition-colors light-theme:hover:bg-gray-200" aria-label="Close">
-            <XMarkIcon className="w-6 h-6 text-gray-400 light-theme:text-gray-500" />
-          </button>
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/[0.07] bg-[#0a1018] px-4 pb-3 pt-[calc(0.75rem_+_env(safe-area-inset-top))] light-theme:border-gray-300 light-theme:bg-white sm:px-6 sm:pt-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-400/25 bg-cyan-400/10 text-cyan-300 light-theme:border-cyan-200 light-theme:bg-cyan-50 light-theme:text-cyan-600">
+              <AdjustmentsHorizontalIcon className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-cyan-300 light-theme:text-cyan-600">Workspace control panel</p>
+              <h2 className="truncate text-lg font-semibold text-slate-100 light-theme:text-gray-900 sm:text-xl">Settings</h2>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="hidden items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/[0.06] px-2 py-1 text-[9px] font-semibold text-emerald-300 light-theme:border-emerald-200 light-theme:bg-emerald-50 light-theme:text-emerald-700 sm:inline-flex">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              Auto-applied
+            </span>
+            <button
+              onClick={onClose}
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/[0.08] text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-white light-theme:border-gray-200 light-theme:text-gray-500 light-theme:hover:bg-gray-100 light-theme:hover:text-gray-800"
+              aria-label="Close settings"
+            >
+              <XMarkIcon className="h-5 w-5" />
+            </button>
+          </div>
         </header>
 
-        <main className="flex-grow p-6 text-gray-300 space-y-6 overflow-y-auto scrollbar-hide light-theme:text-gray-700 relative" onScroll={() => setShowScrollIndicator(false)}>
+        <div className="flex min-h-0 flex-1">
+          <aside data-testid="settings-section-rail" aria-label="Settings sections" className="hidden w-64 shrink-0 flex-col border-r border-white/[0.07] bg-[#070c13] light-theme:border-gray-300 light-theme:bg-gray-50 lg:flex">
+            <div className="min-h-0 flex-1 overflow-y-auto p-3 scrollbar-hide">
+              {SETTINGS_SECTIONS.map((group, groupIndex) => (
+                <div key={group.label} className={groupIndex === 0 ? '' : 'mt-4'}>
+                  <p className="px-2 pb-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-slate-500 light-theme:text-gray-500">{group.label}</p>
+                  <div className="space-y-0.5">
+                    {group.items.map(item => {
+                      const active = activeSection === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => jumpToSection(item.id)}
+                          aria-current={active ? 'location' : undefined}
+                          className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                            active
+                              ? 'bg-cyan-400/[0.08] text-cyan-100 ring-1 ring-inset ring-cyan-400/20 light-theme:bg-cyan-50 light-theme:text-cyan-800 light-theme:ring-cyan-200'
+                              : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200 light-theme:text-gray-600 light-theme:hover:bg-gray-100 light-theme:hover:text-gray-900'
+                          }`}
+                        >
+                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${active ? 'bg-cyan-300 light-theme:bg-cyan-500' : 'bg-slate-700 light-theme:bg-gray-300'}`} />
+                          <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold">{item.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="border-t border-white/[0.07] px-3 py-2.5 text-[9.5px] leading-relaxed text-slate-500 light-theme:border-gray-300 light-theme:text-gray-500">
+              Changes save automatically.
+            </div>
+          </aside>
+
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.07] bg-[#070c13] px-3 py-2 light-theme:border-gray-300 light-theme:bg-gray-50 lg:hidden">
+              <label htmlFor="settings-section-nav" className="shrink-0 text-[9px] font-bold uppercase tracking-[0.16em] text-slate-500">Section</label>
+              <select
+                id="settings-section-nav"
+                data-testid="settings-section-nav"
+                value={activeSection}
+                onChange={event => jumpToSection(event.target.value)}
+                className="min-w-0 flex-1 rounded-lg border border-white/[0.08] bg-[#0a1018] px-2.5 py-1.5 text-[12px] font-medium text-slate-200 outline-none transition-colors focus:border-cyan-400/50 light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-800"
+              >
+                {SETTINGS_SECTIONS.map(group => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.items.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+
+            <main ref={settingsScrollRef} className="relative min-h-0 flex-1 overflow-y-auto text-gray-300 scrollbar-hide light-theme:text-gray-700">
+              <div className="mx-auto w-full max-w-5xl space-y-6 p-4 pb-[calc(1.25rem_+_env(safe-area-inset-bottom))] sm:p-6 lg:p-8">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {[
+                    { label: 'Model', value: getSelectorModelLabel(activeModel) },
+                    { label: 'Units', value: `${getLinearUnitAbbreviation(settings.linearUnits)} · ${settings.coordinatePrecision ?? 2} dp` },
+                    { label: 'Projection', value: settings.projection.epsg ? `EPSG:${settings.projection.epsg}` : 'Not set' },
+                    { label: 'Theme', value: settings.theme === 'light' ? 'Light' : 'Dark' },
+                  ].map(item => (
+                    <div key={item.label} className="rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2.5 light-theme:border-gray-200 light-theme:bg-gray-50">
+                      <p className="text-[8px] font-bold uppercase tracking-[0.16em] text-slate-500 light-theme:text-gray-500">{item.label}</p>
+                      <p className="mt-1 truncate text-[12px] font-semibold text-slate-200 light-theme:text-gray-800">{item.value}</p>
+                    </div>
+                  ))}
+                </div>
 
             {/* AI Settings Section */}
             <div>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">AI Behavior</h3>
+                <h3 id="settings-ai-behavior" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">AI Behavior</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-3 light-theme:bg-gray-100 light-theme:border-gray-300">
                     <div>
                         <label htmlFor="modelSelector" className="flex items-center gap-2 text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">
@@ -473,7 +639,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             </div>
             {/* Experimental Agents */}
             <div>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Experimental Agents</h3>
+                <h3 id="settings-experimental-agents" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Experimental Agents</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-3 light-theme:bg-gray-100 light-theme:border-gray-300">
                     <label className="flex items-center gap-3 cursor-pointer select-none">
                         <input
@@ -520,7 +686,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
 
             {/* Developer & Testing Section */}
             <div>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Developer / Testing</h3>
+                <h3 id="settings-developer-testing" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Developer / Testing</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-3 light-theme:bg-gray-100 light-theme:border-gray-300">
                     <div>
                         <label className="flex items-center gap-3 cursor-pointer select-none">
@@ -642,7 +808,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             </div>
             {/* Canvas & Display Section */}
             <div>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Canvas & Display</h3>
+                <h3 id="settings-canvas-display" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Canvas & Display</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 grid grid-cols-1 sm:grid-cols-2 gap-4 light-theme:bg-gray-100 light-theme:border-gray-300">
                     <div>
                         <label htmlFor="linearUnits" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Linear Units</label>
@@ -785,7 +951,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             </div>
             {/* Command Bar Section */}
             <div>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Command Bar</h3>
+                <h3 id="settings-command-bar" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Command Bar</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 grid grid-cols-1 sm:grid-cols-2 gap-4 light-theme:bg-gray-100 light-theme:border-gray-300">
                     <div className="sm:col-span-2">
                         <label className="flex items-start gap-3 cursor-pointer">
@@ -865,7 +1031,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             </div>
             {/* Graphics & WebGPU Acceleration Section */}
             <div>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800 flex items-center gap-2">
+                <h3 id="settings-graphics" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800 flex items-center gap-2">
                     <span className="text-emerald-400 font-mono text-base font-bold">GPU</span>
                     <span>Graphics &amp; WebGPU Acceleration</span>
                 </h3>
@@ -920,7 +1086,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             </div>
             {/* Point Labeling Section */}
             <div>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Point Labeling</h3>
+                <h3 id="settings-point-labeling" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Point Labeling</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-4 light-theme:bg-gray-100 light-theme:border-gray-300">
                     <div>
                         <label htmlFor="point-label-style" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Numbering Style</label>
@@ -943,7 +1109,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             </div>
              {/* Coordinate Systems Section */}
             <div className={pulseProjection ? 'animate-pulse' : ''}>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Coordinate System</h3>
+                <h3 id="settings-coordinate-system" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Coordinate System</h3>
                 <div className={`bg-gray-700/50 p-4 rounded-lg border space-y-3 light-theme:bg-gray-100 ${pulseProjection ? 'border-cyan-500 shadow-lg shadow-cyan-500/50' : 'border-gray-600 light-theme:border-gray-300'}`}>
                     <div className="flex flex-wrap items-start justify-between gap-2">
                         <div className="min-w-0">
@@ -993,7 +1159,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             </div>
             {/* Map Imagery Overlay Section */}
             <div id="google-maps-overlay-section" ref={googleMapsSectionRef}>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Map Imagery Overlay</h3>
+                <h3 id="settings-imagery" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Map Imagery Overlay</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-3 light-theme:bg-gray-100 light-theme:border-gray-300">
                     <label htmlFor="gmEnabled" className="flex items-center gap-3 cursor-pointer">
                         <input type="checkbox" id="gmEnabled"
@@ -1107,7 +1273,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             {/* Geospatial AI Engine (SamGeo & SAM-Road) Section */}
             <div>
                 <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-lg font-semibold text-gray-100 light-theme:text-gray-800">Geospatial AI Engine (SamGeo &amp; SAM-Road)</h3>
+                    <h3 id="settings-geo-ai" className="scroll-mt-4 text-lg font-semibold text-gray-100 light-theme:text-gray-800">Geospatial AI Engine (SamGeo &amp; SAM-Road)</h3>
                     <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                         Dual-Mode
                     </span>
@@ -1210,7 +1376,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             </div>
             {/* NTRIP Settings Section */}
             <div>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">NTRIP Caster Settings</h3>
+                <h3 id="settings-ntrip" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">NTRIP Caster Settings</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-3 light-theme:bg-gray-100 light-theme:border-gray-300">
                     <label htmlFor="ntripEnabled" className="flex items-center gap-3 cursor-pointer">
                         <input type="checkbox" id="ntripEnabled"
@@ -1275,7 +1441,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             </div>
              {/* Cut Sheet Defaults Section */}
             <div>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Cut Sheet Defaults</h3>
+                <h3 id="settings-cutsheet" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Cut Sheet Defaults</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 grid grid-cols-2 gap-4 light-theme:bg-gray-100 light-theme:border-gray-300">
                     <div>
                         <label htmlFor="companyName" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Company Name</label>
@@ -1290,7 +1456,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             
             {/* Notion Integration Section */}
             <div>
-                <h3 className="text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Notion Integration</h3>
+                <h3 id="settings-notion" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Notion Integration</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-3 light-theme:bg-gray-100 light-theme:border-gray-300">
                     {!settings.notion?.enabled ? (
                         <div className="space-y-3">
@@ -1376,7 +1542,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             
             {/* A2UI behavior — surfaces are constructed on demand in chat. */}
             <div>
-                <h3 className="text-lg font-semibold text-cyan-400 mb-2">Agent Surfaces</h3>
+                <h3 id="settings-surfaces" className="scroll-mt-4 text-lg font-semibold text-cyan-400 mb-2">Agent Surfaces</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-3">
                     <p className="text-sm text-gray-400">
                         Surfaces are built by the agents when a request calls for one — there is no separate
@@ -1435,7 +1601,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
 
             {/* Session Reset Section */}
             <div>
-                <h3 className="text-lg font-semibold text-red-400 mb-2">Danger Zone</h3>
+                <h3 id="settings-danger" className="scroll-mt-4 text-lg font-semibold text-red-400 mb-2">Danger Zone</h3>
                 <div className="bg-red-900/20 p-4 rounded-lg border border-red-500/30 flex items-center justify-between">
                     <div>
                         <h4 className="font-semibold text-gray-200">Reset Session</h4>
@@ -1460,7 +1626,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
 
             {/* Developer / Testing Utilities */}
             <div>
-                <h3 className="text-lg font-semibold text-cyan-400 mb-2">Testing &amp; Previews</h3>
+                <h3 id="settings-testing" className="scroll-mt-4 text-lg font-semibold text-cyan-400 mb-2">Testing &amp; Previews</h3>
                 <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 flex items-center justify-between">
                     <div>
                         <h4 className="font-semibold text-gray-200">Hosting Cost Reminder Popup</h4>
@@ -1480,16 +1646,10 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                     </button>
                 </div>
             </div>
-            
-            {/* Scroll Indicator */}
-            {showScrollIndicator && (
-              <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-20 animate-bounce opacity-60 pointer-events-none">
-                <svg className="w-16 h-16 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
-                </svg>
               </div>
-            )}
-        </main>
+            </main>
+          </div>
+        </div>
       </div>
     </div>
   );

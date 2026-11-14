@@ -122,8 +122,8 @@ export const OrientationTupleControl: React.FC<OrientationTupleControlProps> = (
         onClick={() => setIsOpen(prev => !prev)}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
-        aria-label={`Orientation Tuple — ${angleLabel}. Open orientation and pivot controls.`}
-        title={`Orientation Tuple (OT / UCS) — ${angleLabel}. Click to adjust orientation and pivot origin.`}
+        aria-label={`Origin — ${angleLabel}. Open Origin Tools.`}
+        title={`Origin — ${angleLabel}. Click to adjust rotation and origin.`}
         className={`group flex h-9 items-center gap-1.5 rounded-md border px-2 transition-colors ${
           isOpen
             ? 'border-cyan-400/50 bg-cyan-400/[0.12] text-cyan-100'
@@ -156,29 +156,24 @@ export const OrientationTupleControl: React.FC<OrientationTupleControlProps> = (
           {angleLabel}
         </span>
         <span className="hidden font-mono text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500 sm:inline">
-          OT
+          Origin
         </span>
       </button>
 
       {isOpen && (
         <div
           role="dialog"
-          aria-label="Orientation Tuple settings"
+          aria-label="Origin Tools"
           className="absolute left-0 top-full z-50 mt-2 w-72 rounded-xl border border-white/[0.1] bg-[#0b1119]/98 p-3.5 text-xs text-slate-200 shadow-[0_24px_70px_-16px_rgba(0,0,0,0.9)] backdrop-blur-xl"
         >
           <div className="mb-2.5 flex items-center justify-between border-b border-white/[0.07] pb-2">
-            <div className="flex items-center gap-1.5">
-              <span className="font-bold text-cyan-400">Orientation Tuple (OT)</span>
-              <span className="rounded border border-cyan-700/50 bg-cyan-950 px-1.5 py-0.2 font-mono text-[10px] text-cyan-300">
-                UCS
-              </span>
-            </div>
+            <span className="font-bold text-cyan-400">Origin Tools</span>
             <button
               type="button"
               onClick={() => setIsOpen(false)}
               className="rounded p-0.5 text-slate-400 transition-colors hover:text-white"
-              title="Close orientation controls"
-              aria-label="Close orientation controls"
+              title="Close Origin Tools"
+              aria-label="Close Origin Tools"
             >
               ✕
             </button>
@@ -195,7 +190,7 @@ export const OrientationTupleControl: React.FC<OrientationTupleControlProps> = (
                       ? 'bg-cyan-600 text-white shadow-sm'
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
-                  title="Drafting: geometry and North stay put; new Ortho lines follow the OT angle"
+                  title="Drafting: geometry and North stay put; new Ortho lines follow the rotation angle"
                 >
                   Drafting
                 </button>
@@ -291,7 +286,7 @@ export const OrientationTupleControl: React.FC<OrientationTupleControlProps> = (
 
             <div className="border-t border-white/[0.07] pt-2">
               <div className="mb-1.5 flex items-center justify-between text-[11px] text-slate-400">
-                <span className="font-semibold text-slate-300">Origin / Pivot Point:</span>
+                <span className="font-semibold text-slate-300">Origin:</span>
                 <span className="font-mono text-[10px] text-slate-500">World Coords</span>
               </div>
               <div className="mb-2 grid grid-cols-2 gap-2">
@@ -339,7 +334,7 @@ export const OrientationTupleControl: React.FC<OrientationTupleControlProps> = (
                   }}
                   disabled={!onPickOrigin}
                   className="flex flex-1 items-center justify-center gap-1 rounded bg-emerald-700 py-1 text-xs font-medium text-white shadow-sm transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
-                  title="Click canvas or snap to a point/line to set the pivot origin"
+                  title="Click canvas or snap to a point/line to set the origin"
                 >
                   <span aria-hidden="true">🎯</span> Pick Origin
                 </button>

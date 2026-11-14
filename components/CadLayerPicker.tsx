@@ -60,7 +60,7 @@ export const CadLayerPicker: React.FC<CadLayerPickerProps> = ({
         ref={triggerRef}
         type="button"
         onClick={() => (isOpen ? close() : open())}
-        className={`p-2 rounded-full transition-colors text-xs font-medium ${isOpen ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
+        className={`p-2 rounded-md transition-colors text-xs font-medium ${isOpen ? 'bg-cyan-600 hover:bg-cyan-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
         title="Layers — active drawing layer, show/hide, color and linetype"
         aria-label="Layers"
         aria-haspopup="true"

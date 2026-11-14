@@ -136,6 +136,12 @@ interface CanvasTerminalProps {
   snapControls?: SnapControls;
   /** Unified Agent Mode props (ported from ChatInterface) */
   activeAgent?: AgentType | null;
+  /** Current global model route shown in the lower command bar. */
+  modelMode?: 'normal' | 'high' | 'custom';
+  /** Configured high-thinking model name shown in the model picker. */
+  highThinkingModelName?: string;
+  /** Switch between Normal Auto routing and the configured High Thinking route. */
+  onSelectModelMode?: (mode: 'normal' | 'high') => void;
   /** Force Agent test override; the only state where the line stops reading LSAI. */
   forcedAgent?: AgentType | null;
   /** True when no project geometry or files are loaded; drives first-run intake options. */
@@ -184,7 +190,9 @@ interface CanvasTerminalProps {
   agentChatOpenSignal?: number;
   /** Reports the command bar height so the tool drawer can rest on its top edge. */
   onHeightChange?: (height: number) => void;
-  /** Pixels to extend past the right edge, underneath the open agent tool shelf. */
+  /** Reports the open quick-thought card's height so the sidebar can clear it. */
+  onQuickThoughtHeightChange?: (height: number) => void;
+  /** Open tool-shelf width; re-anchors the dock when the shelf width changes. */
   rightExtension?: number;
   /** Flash the Tools tab after the first-run tool-shelf tour closes it. */
   introPulse?: boolean;
@@ -215,6 +223,9 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   statusBadges,
   snapControls,
   activeAgent,
+  modelMode = 'normal',
+  highThinkingModelName,
+  onSelectModelMode,
   forcedAgent = null,
   isWorkspaceEmpty = false,
   messages = [],
@@ -244,6 +255,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   chatToolDialogs = [],
   agentChatOpenSignal,
   onHeightChange,
+  onQuickThoughtHeightChange,
   rightExtension = 0,
   introPulse = false,
   textScale = 1.15,
@@ -272,6 +284,8 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const [isSnapMenuOpen, setIsSnapMenuOpen] = useState(false);
   const snapControlRef = useRef<HTMLDivElement | null>(null);
+  const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+  const modelPickerRef = useRef<HTMLDivElement | null>(null);
   /** The quick-thought body is measured so only overflowing copy drifts. */
   const thoughtTextRef = useRef<HTMLDivElement | null>(null);
   const [isThoughtOverflowing, setIsThoughtOverflowing] = useState(false);
@@ -292,6 +306,9 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const socketAnchorRef = useRef<HTMLDivElement | null>(null);
   // SVG paint servers reject React's raw useId colons, so strip them.
   const [agentDockPos, setAgentDockPos] = useState<{ left: number; top: number } | null>(null);
+  // Measured so the desktop sidebar can stop just above the quick-thought card
+  // while it is open, then expand back down to the command bar when it hides.
+  const quickThoughtRef = useRef<HTMLDivElement | null>(null);
   // A phone's software keyboard changes the visual viewport without resizing
   // the bar, so the bar can move (e.g. back down when the keyboard closes)
   // while no ResizeObserver fires. Coalesce viewport churn into a frame-aligned
@@ -422,7 +439,6 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       )}
     </span>
   );
-
   // Auto-dismiss collapse pulse after 15s if untouched
   useEffect(() => {
     if (!isCollapsePulsing) return;
@@ -587,6 +603,23 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isSnapMenuOpen]);
+
+  useEffect(() => {
+    if (!isModelPickerOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (modelPickerRef.current?.contains(event.target as Node)) return;
+      setIsModelPickerOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsModelPickerOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isModelPickerOpen]);
 
   // Pending questions and A2UI prompts surface as a quick thought; only an
   // explicit socket/tab click opens the full agent feed.
@@ -1721,6 +1754,33 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     return () => observer.disconnect();
   }, [onHeightChange]);
 
+  // Report the quick-thought card's height so the sidebar can stop just above
+  // it while it is open and expand back to the command bar once it closes.
+  useEffect(() => {
+    if (!onQuickThoughtHeightChange) return;
+    if (!isQuickThoughtVisible) {
+      onQuickThoughtHeightChange(0);
+      return;
+    }
+    const el = quickThoughtRef.current;
+    if (!el) return;
+    const report = () => onQuickThoughtHeightChange(el.getBoundingClientRect().height);
+    report();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', report);
+      return () => {
+        window.removeEventListener('resize', report);
+        onQuickThoughtHeightChange(0);
+      };
+    }
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      onQuickThoughtHeightChange(0);
+    };
+  }, [isQuickThoughtVisible, onQuickThoughtHeightChange]);
+
   const handleFloatPointerDown = (e: React.PointerEvent) => {
     if (typeof e.button === 'number' && e.button !== 0) return;
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return;
@@ -1838,21 +1898,18 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       ref={terminalRootRef}
       style={{
         touchAction: 'none',
-        right: rightExtension > 0
-          ? `calc(-1 * var(--tool-shelf-width, ${rightExtension}px))`
-          : 8,
         '--command-bar-text-scale': resolvedTextScale,
         backgroundImage: `radial-gradient(120% 180% at 8% 100%, rgba(255,255,255,0.055) 0%, transparent 44%), linear-gradient(180deg, #0a111a 0%, #080d14 52%, #070b11 100%)`,
       } as React.CSSProperties}
       onWheel={e => e.stopPropagation()}
-      className="absolute bottom-2 left-2 z-30 select-none overflow-visible rounded-xl border border-white/20 bg-[#080d14] shadow-[0_18px_50px_rgba(0,0,0,0.6)] backdrop-blur-md font-mono text-white flex flex-col transition-colors"
+      className="fixed inset-x-0 bottom-0 z-30 select-none overflow-visible border-t border-white/20 bg-[#080d14] shadow-[0_-18px_50px_rgba(0,0,0,0.6)] backdrop-blur-md font-mono text-white flex flex-col transition-colors"
       data-testid="canvas-command-bar"
       data-mode={inputMode}
     >
       <ScoutTrail />
 
       {/* Top rail — white chrome. The active agent color starts at its socket and tab. */}
-      <div className="relative h-px w-full overflow-hidden rounded-t-xl pointer-events-none">
+      <div className="relative h-px w-full overflow-hidden pointer-events-none">
         <div
           className="absolute inset-0"
           style={{ backgroundColor: 'rgba(255,255,255,0.85)', boxShadow: '0 0 9px rgba(255,255,255,0.28)' }}
@@ -2420,7 +2477,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       )}
 
       {/* Bottom Bar Wrapper: houses the docked Rounded-Square Agent Socket on the left and the two command rows on the right */}
-      <div className="relative flex items-stretch bg-transparent pl-16 pr-3">
+      <div className="relative flex items-stretch bg-transparent pl-[72px] pr-3">
         <div className="command-bar-rows flex min-w-0 flex-1 flex-col border-l border-white/[0.07] pl-1">
           {/* Line 1: Single History / Feedback / Instructional Row */}
           {/* Reserve room for the right-hand drawer tab so links and SNAP/ORTHO
@@ -2428,7 +2485,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
           <div
             data-testid="command-history-row"
             className={`flex items-center gap-2 py-1 pl-3 bg-transparent text-[10px] leading-none min-h-[22px] ${
-              isSnapMenuOpen ? 'overflow-visible' : 'overflow-hidden'
+              isSnapMenuOpen || isModelPickerOpen ? 'overflow-visible' : 'overflow-hidden'
             } ${onToggleToolDock && !(isCollapsePulsing && isExpanded) ? 'pr-24' : 'pr-14'}`}
           >
             <span
@@ -2504,6 +2561,98 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
 
             {/* Live Snaps / Ortho Badges in the history line */}
             <div className="ml-auto flex items-center gap-2 shrink-0 text-[10px] border-l border-white/15 pl-2">
+              {onSelectModelMode && (
+                <div ref={modelPickerRef} className="relative">
+                  <button
+                    type="button"
+                    data-no-drag
+                    data-testid="model-picker-trigger"
+                    aria-haspopup="menu"
+                    aria-expanded={isModelPickerOpen}
+                    aria-label="Choose model mode"
+                    onClick={() => setIsModelPickerOpen(open => !open)}
+                    className={`inline-flex h-5 items-center gap-1 rounded border px-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
+                      isModelPickerOpen
+                        ? 'border-white/40 bg-white/[0.10] text-white'
+                        : 'border-white/20 bg-white/[0.04] text-white/75 hover:border-white/40 hover:bg-white/[0.08] hover:text-white'
+                    }`}
+                    title={`Model — ${modelMode === 'high' ? 'High Thinking' : modelMode === 'normal' ? 'Normal' : 'Custom'}`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        modelMode === 'high'
+                          ? 'bg-fuchsia-400 shadow-[0_0_6px_#e879f9]'
+                          : modelMode === 'normal'
+                            ? 'bg-cyan-400 shadow-[0_0_6px_#22d3ee]'
+                            : 'bg-amber-400'
+                      }`}
+                    />
+                    <span>Model</span>
+                    <ChevronDownIcon className={`h-2.5 w-2.5 transition-transform ${isModelPickerOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {isModelPickerOpen && (
+                    <div
+                      data-testid="model-picker-menu"
+                      role="menu"
+                      className="absolute bottom-full right-0 z-[80] mb-2 w-[min(18rem,calc(100vw-1rem))] overflow-hidden rounded-lg border border-white/25 bg-[#080e15]/95 text-[11px] text-white/80 shadow-2xl backdrop-blur-md"
+                    >
+                      <div className="border-b border-white/10 px-2.5 py-1.5">
+                        <div className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/40">Model</div>
+                        <div className="mt-0.5 truncate text-[10px] font-medium text-white/70">
+                          {modelMode === 'high' ? 'High Thinking' : modelMode === 'normal' ? 'Normal' : 'Custom model'}
+                        </div>
+                      </div>
+                      <div className="p-1">
+                        <button
+                          type="button"
+                          data-testid="model-mode-normal"
+                          role="menuitemradio"
+                          aria-checked={modelMode === 'normal'}
+                          onClick={() => {
+                            setIsModelPickerOpen(false);
+                            onSelectModelMode('normal');
+                          }}
+                          className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
+                            modelMode === 'normal'
+                              ? 'bg-white/[0.08] text-white'
+                              : 'text-white/75 hover:bg-white/[0.06] hover:text-white'
+                          }`}
+                        >
+                          <SparklesIcon className="h-3.5 w-3.5 shrink-0 text-cyan-300" />
+                          <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                            <span className="font-semibold">Normal</span>
+                            <span className="text-[9px] font-normal text-white/45">Smart Auto routing — fast for simple tasks</span>
+                          </span>
+                          {modelMode === 'normal' && <span className="shrink-0 text-[8px] font-bold uppercase tracking-wider text-cyan-300">Active</span>}
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="model-mode-high"
+                          role="menuitemradio"
+                          aria-checked={modelMode === 'high'}
+                          onClick={() => {
+                            setIsModelPickerOpen(false);
+                            onSelectModelMode('high');
+                          }}
+                          className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
+                            modelMode === 'high'
+                              ? 'bg-white/[0.08] text-white'
+                              : 'text-white/75 hover:bg-white/[0.06] hover:text-white'
+                          }`}
+                        >
+                          <LightbulbIcon className="h-3.5 w-3.5 shrink-0 text-fuchsia-300" />
+                          <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                            <span className="font-semibold">High Thinking</span>
+                            <span className="truncate text-[9px] font-normal text-white/45">{highThinkingModelName || 'Configured high-reasoning model'}</span>
+                          </span>
+                          {modelMode === 'high' && <span className="shrink-0 text-[8px] font-bold uppercase tracking-wider text-fuchsia-300">Active</span>}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               {onOpenProperties && (
                 <button
                   type="button"
@@ -2853,16 +3002,16 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
         </div>
 
         {/* Hidden in-bar socket slot on the left. The visible dock is portaled to <body> so
-            the plug and quick-thought card stack above the tool shelf and floating
-            panels, but stay below full-screen dialogs (Settings and other modals sit
-            at z-9990+); this anchor keeps that dock at the exact spot the command bar
-            was designed around, with the plug's top rising above the bar for the accent
-            rail to wrap as a socket tab. */}
+            the plug and quick-thought card stay above floating panels and below the
+            agent tool shelf (which rises above the card on desktop) and full-screen
+            dialogs (Settings and other modals sit at z-9990+); this anchor keeps that
+            dock at the exact spot the command bar was designed around, with the plug's
+            top rising above the bar for the accent rail to wrap as a socket tab. */}
         <div
           ref={socketAnchorRef}
           aria-hidden="true"
           data-testid="agent-socket-anchor"
-          className="pointer-events-none absolute left-1 bottom-[3px] h-14 w-14"
+          className="pointer-events-none absolute left-3 bottom-[3px] h-14 w-14"
         />
         {typeof document !== 'undefined' && createPortal(
           <div
@@ -2870,7 +3019,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
             className="pointer-events-none fixed z-[9985] flex items-center"
             style={agentDockPos
               ? { left: agentDockPos.left, top: agentDockPos.top, width: 56, height: 56 }
-              : { left: 4, bottom: 3 }}
+              : { left: 12, bottom: 3 }}
           >
         {/* Agent Socket — a raised plug seated into the left of the command bar.
             The bar's accent rail climbs into a socket tab around its exposed top;
@@ -2879,6 +3028,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
           {/* The full feed already shows the prompt, so don't duplicate it above the socket. */}
           {isQuickThoughtVisible && (
             <div
+              ref={quickThoughtRef}
               data-testid="agent-thought-bubble"
               role="dialog"
               aria-label="Quick thought"

@@ -151,7 +151,7 @@ export const LegendPicker: React.FC<LegendPickerProps> = ({
         ref={triggerRef}
         type="button"
         onClick={() => (isOpen ? close() : open())}
-        className={`relative p-2 rounded-full transition-colors text-xs font-medium ${
+        className={`relative p-2 rounded-md transition-colors text-xs font-medium ${
           isOpen
             ? 'bg-teal-600 hover:bg-teal-700 text-white'
             : 'hover:bg-gray-700 text-gray-300'

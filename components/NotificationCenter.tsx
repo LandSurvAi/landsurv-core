@@ -93,7 +93,7 @@ const NotificationCenter: React.FC<NotificationCenterProps> = ({ notifications, 
             <button
                 ref={buttonRef}
                 onClick={() => setOpen(o => !o)}
-                className={`p-2 rounded-full hover:bg-gray-700 transition-colors relative ${hasAny ? 'animate-pulse' : ''}`}
+                className={`p-2 rounded-md hover:bg-gray-700 transition-colors relative ${hasAny ? 'animate-pulse' : ''}`}
                 title={hasAny ? `${badge} notification${badge === 1 ? '' : 's'}` : 'No notifications'}
             >
                 <ExclamationTriangleIcon className={`h-[18px] w-[18px] ${bellColor}`} />

@@ -48,12 +48,15 @@ export const AgentToolShelf: React.FC<AgentToolShelfProps> = ({
 
   if (!isMounted) return null;
 
+  // The quick-thought dock is portaled at z-9985. On desktop, sit above it so
+  // an open shelf is never hidden behind the card; mobile keeps z-30 so the
+  // full-screen sidebar menu (z-60) still wins.
   return (
     <div
       data-testid="agent-tool-shelf"
       data-chat-panel
       aria-hidden={!isVisible}
-      className="absolute right-0 z-30 overflow-hidden shadow-[-18px_0_50px_rgba(0,0,0,0.55)]"
+      className="absolute right-0 z-30 md:z-[9986] overflow-hidden shadow-[-18px_0_50px_rgba(0,0,0,0.55)]"
       style={{
         width: typeof width === 'number' ? `${width}px` : width,
         top: Math.max(0, topOffset),
