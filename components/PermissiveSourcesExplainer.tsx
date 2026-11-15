@@ -82,7 +82,7 @@ const PermissiveSourcesExplainer: React.FC = () => {
             </div>
             <p>
               When a Zoning, GIS, or Title agent needs a fact (a setback, a parcel ID, a flood zone) it consults the live web through
-              the <strong className="text-emerald-300">LandSurv Claw</strong>, our containerised headless-browser service. The Claw is a tool
+              the <strong className="text-emerald-300">LandSurv Scout</strong> browser runtime, our containerised headless-browser service. Scout is the tool
               the agent drives — it navigates, scrolls, scrapes, and reports back. Every call is logged in the floating status badge so
               you can see exactly which URL the agent visited and what it read.
             </p>
@@ -95,7 +95,7 @@ const PermissiveSourcesExplainer: React.FC = () => {
               <h3 className="font-semibold text-white">Permissive sources only</h3>
             </div>
             <p className="mb-3">
-              The Claw is only allowed to fetch from <strong className="text-white">permissive sources</strong> — websites whose terms of
+              Scout is only allowed to fetch from <strong className="text-white">permissive sources</strong> — websites whose terms of
               use either explicitly allow automated retrieval, or whose content sits in the public domain on platforms that don't
               contractually restrict access. In practice the agents prefer, in this order:
             </p>
@@ -121,7 +121,7 @@ const PermissiveSourcesExplainer: React.FC = () => {
             </div>
             <p className="mb-3">
               A handful of commercial codification platforms publish municipal codes under terms-of-service that explicitly prohibit
-              automated retrieval, even of underlying public-record text. The LandSurv Claw will <strong className="text-amber-300">never
+              automated retrieval, even of underlying public-record text. The LandSurv Scout browser will <strong className="text-amber-300">never
               fetch these hosts</strong>, no matter what an agent attempts. If an agent tries, the request is short-circuited before any
               network call is made and the agent receives an explicit{' '}
               <code className="text-amber-300 font-mono">[BLOCKED — TOS-RESTRICTED HOST]</code> response telling it to pivot.

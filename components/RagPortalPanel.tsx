@@ -8,11 +8,35 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
  * browser only ever sees a DevOps session.
  */
 
-type Section = 'live' | 'overview' | 'corpus' | 'ingest' | 'query';
+export type RagSection = 'live' | 'overview' | 'corpus' | 'ingest' | 'query';
+type Section = RagSection;
 
 interface RagPortalPanelProps {
   apiBase: string;
   sessionToken: string;
+  /** Set by the DevOps command palette to jump straight to a sub-section. */
+  focusSection?: { section: RagSection; token: number } | null;
+}
+
+interface RagCustomSource {
+  id: string;
+  agency: string;
+  label: string;
+  seeds: string[];
+  domains: string[];
+  link_keywords: string[];
+  category: string;
+  jurisdiction: string;
+  license: string;
+  enabled_by_default?: boolean;
+}
+
+interface RagDiscovery {
+  request: string;
+  directory_url: string;
+  discovered_at: string;
+  candidates: Array<{ url: string; host: string; title: string }>;
+  source: RagCustomSource;
 }
 
 interface RagBudget {
@@ -469,7 +493,7 @@ function DataHandlingPanel({ status }: { status: RagStatus | null }) {
 
       <ol className="mt-4 space-y-2.5 text-xs">
         {[
-          'Allowlist check: only allowlisted government hosts are queued; discovered links stay on the source\u2019s own domains, and commercial portals are denied before navigation.',
+          'Allowlist check: registry hosts plus the reviewed domains of any custom source are queued; discovered links stay on the source\u2019s own domains, and commercial portals are denied before navigation.',
           'In-memory fetch: Playwright extracts visible text or parses a PDF; raw bytes, browser cache and cookies are discarded.',
           'Normalize + chunk: paragraphs are packed to 4,000 characters with 400-character overlap; 400 chunks per document maximum.',
           'Dedupe: the URL fingerprint is checked in the ledger before navigation; content hash is checked before any embedding spend.',
@@ -572,7 +596,7 @@ function ConfigPanel({ config }: { config: RagConfig | null }) {
   );
 }
 
-export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
+export function RagPortalPanel({ apiBase, sessionToken, focusSection }: RagPortalPanelProps) {
   const [section, setSection] = useState<Section>('live');
   const [status, setStatus] = useState<RagStatus | null>(null);
   const [runs, setRuns] = useState<RagRun[]>([]);
@@ -597,6 +621,11 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
   const [confirming, setConfirming] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const [ingestError, setIngestError] = useState('');
+  const [scoutRequest, setScoutRequest] = useState('');
+  const [discovering, setDiscovering] = useState(false);
+  const [discovery, setDiscovery] = useState<RagDiscovery | null>(null);
+  const [discoveryError, setDiscoveryError] = useState('');
+  const [customSource, setCustomSource] = useState<RagCustomSource | null>(null);
   const [ingestResult, setIngestResult] = useState<RagRun | null>(null);
   const [elapsed, setElapsed] = useState(0);
 
@@ -755,8 +784,39 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
     }
   }, [api, docSource, docStatus, sessionToken]);
 
+  const discoverWithScout = useCallback(async () => {
+    const request = scoutRequest.trim();
+    if (request.length < 3 || discovering) return;
+    setDiscovering(true);
+    setDiscoveryError('');
+    try {
+      const data = await api<RagDiscovery>('/api/rag/discover', {
+        method: 'POST',
+        body: JSON.stringify({ request }),
+        timeoutMs: 60_000,
+      });
+      setDiscovery(data);
+      setCustomSource(data.source);
+      // A custom discovery is normally a focused crawl. Clear the registry
+      // defaults so "state DOT" does not silently also ingest all 16 defaults.
+      setIngestSources([]);
+    } catch (caught) {
+      setDiscoveryError(errorMessage(caught));
+      setDiscovery(null);
+      setCustomSource(null);
+    } finally {
+      setDiscovering(false);
+    }
+  }, [api, discovering, scoutRequest]);
+
+  const clearDiscovery = useCallback(() => {
+    setDiscovery(null);
+    setCustomSource(null);
+    setDiscoveryError('');
+  }, []);
+
   const startIngest = useCallback(async () => {
-    if (ingesting || ingestSources.length === 0) return;
+    if (ingesting || (ingestSources.length === 0 && !customSource)) return;
     setIngesting(true);
     setIngestError('');
     setIngestResult(null);
@@ -773,7 +833,8 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
       const report = await api<RagRun>('/api/rag/ingest', {
         method: 'POST',
         body: JSON.stringify({
-          sources: ingestSources,
+          ...(ingestSources.length ? { sources: ingestSources } : {}),
+          ...(customSource ? { custom_sources: [customSource] } : {}),
           max_pages_per_domain: maxPages,
         }),
         timeoutMs: 18 * 60 * 1000,
@@ -788,7 +849,7 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
       void loadActivity(true);
       void loadDocuments();
     }
-  }, [api, ingestSources, ingesting, loadActivity, loadDocuments, maxPages, refresh]);
+  }, [api, customSource, ingestSources, ingesting, loadActivity, loadDocuments, maxPages, refresh]);
 
   const runQuery = useCallback(async () => {
     const trimmed = queryText.trim();
@@ -812,6 +873,10 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
       setQuerying(false);
     }
   }, [api, queryLimit, querySource, queryText, querying]);
+
+  useEffect(() => {
+    if (focusSection?.section) setSection(focusSection.section);
+  }, [focusSection]);
 
   useEffect(() => {
     void refresh();
@@ -1190,6 +1255,121 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
                 </p>
               </div>
 
+              <section className="overflow-hidden border border-cyan-500/30 bg-gradient-to-br from-cyan-500/[0.08] via-slate-900 to-slate-900 p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-300">Scout source discovery</p>
+                    <h3 className="mt-1 text-lg font-semibold text-white">Ask Scout where to look</h3>
+                    <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">
+                      Describe the corpus you want. Scout browses a public directory, extracts the candidate
+                      government hosts, and turns them into a scoped custom source for SurveyBrain — no source
+                      registry edit or redeploy required. Try “ingest state DOT info for as many states as it can find”.
+                    </p>
+                  </div>
+                  <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-cyan-200">
+                    Scout → SurveyBrain
+                  </span>
+                </div>
+
+                <form
+                  className="mt-4 flex flex-col gap-2 sm:flex-row"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void discoverWithScout();
+                  }}
+                >
+                  <input
+                    value={scoutRequest}
+                    onChange={(event) => setScoutRequest(event.target.value)}
+                    placeholder="e.g. ingest state DOT info for as many states as it can find"
+                    aria-label="Describe the sources Scout should find"
+                    className="min-w-0 flex-1 border border-slate-600 bg-slate-950/70 px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:border-cyan-400/60 focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={discovering || scoutRequest.trim().length < 3}
+                    className="bg-cyan-400 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-cyan-300 disabled:opacity-50"
+                  >
+                    {discovering ? 'Scouting…' : 'Find sources'}
+                  </button>
+                </form>
+
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                  <span>Try:</span>
+                  {[
+                    'state DOT survey manuals',
+                    'state DOT info for as many states as it can find',
+                    'https://www.fhwa.dot.gov/about/webstate.cfm',
+                  ].map((example) => (
+                    <button
+                      key={example}
+                      type="button"
+                      onClick={() => setScoutRequest(example)}
+                      className="border border-slate-700 bg-slate-900/60 px-2 py-0.5 text-slate-400 hover:border-cyan-500/40 hover:text-cyan-200"
+                    >
+                      {example}
+                    </button>
+                  ))}
+                </div>
+
+                {discovering && (
+                  <div className="mt-4 flex items-center gap-2 border border-cyan-500/20 bg-cyan-500/[0.06] px-3 py-2 text-xs text-cyan-200">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-300" />
+                    Scout is loading the directory and extracting candidate hosts…
+                  </div>
+                )}
+
+                {discoveryError && (
+                  <div role="alert" className="mt-4 border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                    {discoveryError}
+                  </div>
+                )}
+
+                {discovery && customSource && (
+                  <div className="mt-4 space-y-3 border border-cyan-500/20 bg-slate-950/50 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-white">
+                          Scout found {discovery.candidates.length} candidate{discovery.candidates.length === 1 ? '' : 's'}
+                        </p>
+                        <p className="mt-0.5 break-all text-[11px] text-slate-500">
+                          Directory: {discovery.directory_url}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={clearDiscovery}
+                        className="border border-slate-600 px-2.5 py-1 text-[11px] font-semibold text-slate-300 hover:bg-slate-800"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {discovery.candidates.slice(0, 18).map((candidate) => (
+                        <span
+                          key={candidate.url}
+                          title={candidate.url}
+                          className="border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] text-emerald-200"
+                        >
+                          {candidate.host}
+                        </span>
+                      ))}
+                      {discovery.candidates.length > 18 && (
+                        <span className="px-1 py-0.5 text-[10px] text-slate-500">
+                          +{discovery.candidates.length - 18} more
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] leading-5 text-slate-400">
+                      <strong className="text-cyan-200">{customSource.label}</strong> will be ingested as a
+                      custom source ({customSource.domains.length} domains, {customSource.seeds.length} seeds).
+                      Registry selection was cleared — re-select any additional sources below.
+                      Licence: {customSource.license}
+                    </p>
+                  </div>
+                )}
+              </section>
+
               <div className="grid gap-5 lg:grid-cols-[1fr_0.9fr]">
                 <section className="border border-slate-700 bg-slate-800 p-5">
                   <h3 className="font-semibold text-white">Government sources</h3>
@@ -1266,7 +1446,7 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
                       <li>A run can take up to 15 minutes; this request stays open and the panel polls the ledger.</li>
                       <li>Leaving the page does not stop the run; the Cloud Run request continues server-side.</li>
                       <li>Embedding spend is capped by the rolling token budget shown here.</li>
-                      <li>Only allowlisted government survey pages are eligible; discovered links are scoped to the selected source, and robots-restricted portals are never fetched.</li>
+                      <li>Registry sources are allowlisted government pages; Scout-discovered custom sources are scoped to the hosts you review above and re-validated server-side before any navigation.</li>
                     </ul>
                   </section>
                 </div>
@@ -1282,14 +1462,19 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
                 <section className="border border-cyan-500/40 bg-cyan-500/10 p-5">
                   <h3 className="font-semibold text-cyan-100">Confirm this run</h3>
                   <p className="mt-1 text-sm text-cyan-100/80">
-                    {ingestSources.length} source{ingestSources.length === 1 ? '' : 's'} · up to{' '}
+                    {ingestSources.length + (customSource ? 1 : 0)} source{ingestSources.length + (customSource ? 1 : 0) === 1 ? '' : 's'} · up to{' '}
                     {maxPages} pages/domain · hard {formatNumber(budget?.limit)} token budget.
                   </p>
+                  {customSource && (
+                    <p className="mt-1 text-xs text-cyan-100/80">
+                      Includes Scout-discovered custom source: {customSource.label} ({customSource.domains.length} domains).
+                    </p>
+                  )}
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => void startIngest()}
-                      disabled={ingesting || ingestSources.length === 0}
+                      disabled={ingesting || (ingestSources.length === 0 && !customSource)}
                       className="bg-cyan-400 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-50"
                     >
                       Start ingestion
@@ -1308,7 +1493,7 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
                   <button
                     type="button"
                     onClick={() => setConfirming(true)}
-                    disabled={ingesting || ingestSources.length === 0}
+                    disabled={ingesting || (ingestSources.length === 0 && !customSource)}
                     className="bg-cyan-400 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-50"
                   >
                     Review run
@@ -1321,9 +1506,9 @@ export function RagPortalPanel({ apiBase, sessionToken }: RagPortalPanelProps) {
                     Open live view
                   </button>
                   <span className="text-xs text-slate-500">
-                    {ingestSources.length === 0
-                      ? 'Select at least one source.'
-                      : `${ingestSources.length} source${ingestSources.length === 1 ? '' : 's'} selected.`}
+                    {ingestSources.length === 0 && !customSource
+                      ? 'Select at least one source or discover one with Scout.'
+                      : `${ingestSources.length + (customSource ? 1 : 0)} source${ingestSources.length + (customSource ? 1 : 0) === 1 ? '' : 's'} selected${customSource ? ' (including Scout discovery)' : ''}.`}
                   </span>
                 </div>
               )}

@@ -133,7 +133,7 @@ export function LegalSubdomainPage() {
             security posture, and open-source specifications for LandSurv.ai.
           </p>
           <div className="mt-6 grid gap-4 md:grid-cols-2">
-            <PolicyLink href="https://tos.landsurv.ai" badge={`TOS v${TOS_VERSION} · ${TOS_EFFECTIVE_DATE}`} title="Terms of Service" description="The 24-section binding contract covering eligibility, AI verification, BYOK, billing, the Claw permissive-source policy, and dispute resolution." />
+            <PolicyLink href="https://tos.landsurv.ai" badge={`TOS v${TOS_VERSION} · ${TOS_EFFECTIVE_DATE}`} title="Terms of Service" description="The 24-section binding contract covering eligibility, AI verification, BYOK, billing, the Scout permissive-source policy (formerly Claw), and dispute resolution." />
             <PolicyLink href="https://privacy.landsurv.ai" badge="GDPR & CCPA" title="Privacy Policy" description="How personal information, browser local storage, telemetry, and data-subject rights are handled." />
             <PolicyLink href="https://compliance.landsurv.ai" badge="SOC 2 · SAIF · Model Armor" title="Security & Compliance Trust Center" description="Operational overview of security controls, Google Model Armor, Anthropic policy gates, and FedRAMP-readiness alignment." />
             <PolicyLink href="https://dpa.landsurv.ai" badge="Controller / Processor" title="Data Processing Addendum" description="Enterprise data-processing commitments, confidentiality, and incident-response obligations." />

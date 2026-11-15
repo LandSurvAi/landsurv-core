@@ -17,6 +17,7 @@ export const TIMELINE_ICON_LABELS: Record<TimelineIcon, string> = {
   aoi: 'Area of interest',
   surface: 'Surface',
   contour: 'Contours',
+  station: 'Stationing & centerline',
   export: 'Export',
   display: 'Display',
   generate: 'Generated',
@@ -37,15 +38,10 @@ export const TimelineGlyph: React.FC<{
       strokeWidth="1.35"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={`${className}${icon === 'sketch' ? ' text-white' : ''}`}
+      className={`${className}${icon === 'sketch' || icon === 'baseline' ? ' text-white' : ''}`}
     >
       {icon === 'baseline' && (
-        <>
-          <path d="M2 13 6 8.5l4 2L14 3.5" />
-          <path d="M2 11v4M14 1.5v4" />
-          <circle cx="6" cy="8.5" r="1.2" fill="currentColor" stroke="none" />
-          <circle cx="10" cy="10.5" r="1.2" fill="currentColor" stroke="none" />
-        </>
+        <rect x="3" y="3" width="10" height="10" rx="1" />
       )}
       {icon === 'sketch' && (
         <>
@@ -111,6 +107,31 @@ export const TimelineGlyph: React.FC<{
         <>
           <path d="M1.5 5.5c1.5-3 3.5 3 5 0s3.5 3 5 0 2 .8 3 .5" />
           <path d="M1.5 10.5c1.5-3 3.5 3 5 0s3.5 3 5 0 2 .8 3 .5" />
+        </>
+      )}
+      {icon === 'station' && (
+        <>
+          <path
+            d="M1.6 13.7 4.4 8.8c1.1-2 3-4 4.4-4.4l4.6-1.2"
+            strokeWidth="1.7"
+            strokeLinecap="square"
+          />
+          <path
+            d="M4.4 8.8 6.2 4.7 8.8 4.3"
+            strokeWidth="0.9"
+            strokeDasharray="1.3 1.1"
+            opacity="0.65"
+            strokeLinecap="square"
+          />
+          <polygon
+            points="6.2,2.1 7.5,4.7 4.9,4.7"
+            fill="currentColor"
+            fillOpacity="0.25"
+            strokeWidth="1.05"
+            strokeLinejoin="miter"
+          />
+          <circle cx="6.2" cy="4.7" r="0.5" fill="currentColor" stroke="none" />
+          <path d="M2.1 10.7l1.8 1.05M12.2 2.4l.55 2.05" strokeWidth="1.2" strokeLinecap="square" />
         </>
       )}
       {icon === 'export' && (

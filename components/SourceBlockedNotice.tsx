@@ -90,7 +90,7 @@ const SourceBlockedNotice: React.FC = () => {
 
           {/* Body */}
           <div className="px-4 pb-2 text-xs text-slate-400 leading-relaxed">
-            The research agent tried to fetch this host. Its terms-of-service prohibit automated retrieval, so the LandSurv Claw blocked
+            The research agent tried to fetch this host. Its terms-of-service prohibit automated retrieval, so the LandSurv Scout browser blocked
             the request. The agent has been told to pivot to a permissive source.
           </div>
 

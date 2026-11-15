@@ -2469,7 +2469,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                       if (behaviorAgent === AgentType.ZONING_AGENT && msg.role === MessageRole.MODEL) {
                         const cleaned = sanitizeZoningAnswer(raw);
                         if (!cleaned) {
-                          return '<span class="text-white/40 italic">Researching live ordinance… (see Claw status)</span>';
+                          return '<span class="text-white/40 italic">Researching live ordinance… (see Scout status)</span>';
                         }
                         return formatChatHtml(cleaned);
                       }

@@ -733,7 +733,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             />
                             <span className="text-sm font-medium text-gray-300 light-theme:text-gray-700">Show A2UI Decision 1 shadow inspector</span>
                         </label>
-                        <p className="text-xs text-gray-500 mt-1 ml-7">Developer only. A floating panel reports what Decision 1 would choose, its confidence, and whether it would differ from the regex router. Decision 1 never opens or changes a surface. For every-turn detail, set A2UI_DECISION_DEBUG_ENABLED=true on the backend.</p>
+                        <p className="text-xs text-gray-500 mt-1 ml-7">Developer only. A draggable panel reports what Decision 1 would choose, its confidence, and whether it would differ from the regex router; dock it to the tool shelf or chat from its header. Decision 1 never opens or changes a surface. For every-turn detail, set A2UI_DECISION_DEBUG_ENABLED=true on the backend.</p>
                     </div>
 
                     <div>

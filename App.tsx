@@ -1945,6 +1945,7 @@ const AppContent = () => {
     gpsStakeout: 'toolshelf',
     gnss: 'toolshelf',
     drone: 'toolshelf',
+    'a2ui-decision-inspector': 'floating',
   });
   const getToolDockMode = useCallback(
     (key: string): DockMode => toolDockModes[key] ?? 'toolshelf',
@@ -7175,6 +7176,10 @@ const AppContent = () => {
             return;
         }
         parsedCL.name = name.replace(/\.[^/.]+$/, "");
+        beginTimelineImport('Replaced centerline file', {
+          icon: 'station',
+          detail: `${parsedCL.name} · ${parsedCL.pis.length} PIs`,
+        });
         setCenterlines([parsedCL]);
         setClFile({ name, content });
         try {
@@ -7209,6 +7214,10 @@ const AppContent = () => {
         parsedCL.pis[4].curveRadius = 900;
     }
 
+    beginTimelineImport('Loaded centerline file', {
+      icon: 'station',
+      detail: `${parsedCL.name} · ${parsedCL.pis.length} PIs`,
+    });
     setCenterlines([parsedCL]);
     setClFile({ name, content });
 
@@ -7238,7 +7247,7 @@ const AppContent = () => {
       const errorMessage = err instanceof Error ? err.message : 'Failed to initialize AI chat.';
       setError(`Initialization Error: ${errorMessage}`);
     }
-  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, clFile, settings, startChatWithOverride, canvas2dRef]);
+  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, clFile, settings, startChatWithOverride, canvas2dRef, beginTimelineImport]);
 
   // Zoning Agent handlers
   const handleZoningSearch = useCallback(async (searchData: { state: string; county: string; municipality: string; zoningDistrict?: string; desiredUse?: string }) => {
@@ -7319,7 +7328,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           console.log('[Zoning] ?? bootstrap sending prompt to model');
           setBootstrapStatus({ stage: 'starting', message: 'Starting research�', detail: `${zMuni}, ${zCounty} County, ${zState}` });
           try {
-            const bootstrapPrompt = `[BACKGROUND BOOTSTRAP � do not narrate, do not chat. Return ONE \`\`\`json\`\`\` block as the entire answer.]\n\nFor the municipality below, run SEARCH-FIRST research using grounded Google Search. Claw is optional for follow-up extraction only.\n  1. Find the OFFICIAL zoning district map URL from municipal/county/state sources. Valid map URLs include PDF, ArcGIS, county GIS portals, and other interactive zoning viewers on official domains.\n  2. Provide a hostable preview image URL if available (thumbnail/export/screenshot URL). Optional.\n  3. Provide the COMPLETE zoning district list (code + short name).\n\nMunicipality: ${zMuni}\nCounty: ${zCounty} County\nState: ${zState}\n\n**MANDATORY ORDER**\n1) First use grounded Google Search queries such as:\n   - \`"${zMuni}" "${zState}" zoning map\`\n   - \`"${zMuni}" "${zCounty} County" zoning map\`\n   - \`"${zMuni}" GIS zoning map\`\n   - \`"${zMuni}" zoning ordinance district list\`\n2) Use the real URLs that appear in those results as candidates.\n3) Use Claw only when needed to drill into listing pages or follow links.\n\n**DRILLING RULE**\nIf you hit a listing page (Maps/Documents/Planning), extract and return the DIRECT map resource URL (PDF OR ArcGIS/GIS viewer), not just the listing page.\n\n**NO FABRICATION**\nEvery URL must be verbatim from grounded search results or Claw output from this session. Never guess URL paths. If no verifiable URL exists, set null.\n\n**OUTPUT RULE**\nAlways return the JSON shell, even when fields are null/empty. No prose, no THINKING, no extra text.\n\nOutput EXACTLY this JSON shape and NOTHING else:\n\`\`\`json\n{\n  "zoningMapUrl": "https://... or null",\n  "zoningMapImage": "https://... or null",\n  "zoningDistricts": [\n    { "code": "R-1", "name": "Single-Family Residential" }\n  ],\n  "sources": ["https://..."]\n}\n\`\`\``;
+            const bootstrapPrompt = `[BACKGROUND BOOTSTRAP � do not narrate, do not chat. Return ONE \`\`\`json\`\`\` block as the entire answer.]\n\nFor the municipality below, run SEARCH-FIRST research using grounded Google Search. Scout is optional for follow-up extraction only.\n  1. Find the OFFICIAL zoning district map URL from municipal/county/state sources. Valid map URLs include PDF, ArcGIS, county GIS portals, and other interactive zoning viewers on official domains.\n  2. Provide a hostable preview image URL if available (thumbnail/export/screenshot URL). Optional.\n  3. Provide the COMPLETE zoning district list (code + short name).\n\nMunicipality: ${zMuni}\nCounty: ${zCounty} County\nState: ${zState}\n\n**MANDATORY ORDER**\n1) First use grounded Google Search queries such as:\n   - \`"${zMuni}" "${zState}" zoning map\`\n   - \`"${zMuni}" "${zCounty} County" zoning map\`\n   - \`"${zMuni}" GIS zoning map\`\n   - \`"${zMuni}" zoning ordinance district list\`\n2) Use the real URLs that appear in those results as candidates.\n3) Use Scout only when needed to drill into listing pages or follow links.\n\n**DRILLING RULE**\nIf you hit a listing page (Maps/Documents/Planning), extract and return the DIRECT map resource URL (PDF OR ArcGIS/GIS viewer), not just the listing page.\n\n**NO FABRICATION**\nEvery URL must be verbatim from grounded search results or Scout output from this session. Never guess URL paths. If no verifiable URL exists, set null.\n\n**OUTPUT RULE**\nAlways return the JSON shell, even when fields are null/empty. No prose, no THINKING, no extra text.\n\nOutput EXACTLY this JSON shape and NOTHING else:\n\`\`\`json\n{\n  "zoningMapUrl": "https://... or null",\n  "zoningMapImage": "https://... or null",\n  "zoningDistricts": [\n    { "code": "R-1", "name": "Single-Family Residential" }\n  ],\n  "sources": ["https://..."]\n}\n\`\`\``;
             setBootstrapStatus({ stage: 'streaming', message: 'Searching for zoning map & districts�', detail: 'Talking to the model with Google Search grounding' });
             const stream = await newChat.sendMessageStream({ message: bootstrapPrompt });
             let resp = '';
@@ -7334,7 +7343,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             let transcript = resp;
 
             // Walk through any Claw directives the model emits (up to MAX_HOPS).
-            // Claw is optional: if it fails (401/unauthorized), pivot to
+            // Scout is optional: if it fails (401/unauthorized), pivot to
             // grounded-search-only synthesis instead of failing the bootstrap.
             const MAX_HOPS = 3;
             let clawHadAuthError = false;
@@ -7351,7 +7360,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 transcript += '\n' + toolBlock;
                 setBootstrapStatus({
                   stage: 'streaming-followup',
-                  message: 'Claw unavailable � continuing with grounded search only�',
+                  message: 'Scout unavailable � continuing with grounded search only�',
                   detail: `Hop ${hop + 1} authorization error`,
                   hop: hop + 1,
                 });
@@ -7380,8 +7389,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               setBootstrapStatus({ stage: 'streaming-followup', message: 'Asking model to restate the JSON�' });
               try {
                 const reminderPrompt = clawHadAuthError
-                  ? `Claw returned authorization errors, so continue with grounded Google Search evidence only. Output ONLY the final JSON block I asked for at the start: one \`\`\`json\`\`\` block with keys zoningMapUrl, zoningMapImage, zoningDistricts, sources. A URL is valid if it appeared in grounded search results this session (Claw confirmation is optional when Claw is unavailable). Use \`null\` only when no verifiable URL exists. Use an empty array \`[]\` for lists you could not verify. The JSON shell is REQUIRED even when every field is null/empty. No prose, no claw directives, no THINKING.`
-                  : `You have everything you need. Output ONLY the final JSON block I asked for at the start: one \`\`\`json\`\`\` block with keys zoningMapUrl, zoningMapImage, zoningDistricts, sources. A URL is valid when it is verifiable from grounded Google Search results and/or Claw outputs from this session. Use \`null\` only when no verifiable URL exists. Use an empty array \`[]\` for lists you have nothing for. The JSON shell is REQUIRED even when every field is null/empty. No prose, no claw directives, no THINKING.`;
+                  ? `Scout returned authorization errors, so continue with grounded Google Search evidence only. Output ONLY the final JSON block I asked for at the start: one \`\`\`json\`\`\` block with keys zoningMapUrl, zoningMapImage, zoningDistricts, sources. A URL is valid if it appeared in grounded search results this session (Scout confirmation is optional when Claw is unavailable). Use \`null\` only when no verifiable URL exists. Use an empty array \`[]\` for lists you could not verify. The JSON shell is REQUIRED even when every field is null/empty. No prose, no claw directives, no THINKING.`
+                  : `You have everything you need. Output ONLY the final JSON block I asked for at the start: one \`\`\`json\`\`\` block with keys zoningMapUrl, zoningMapImage, zoningDistricts, sources. A URL is valid when it is verifiable from grounded Google Search results and/or Scout outputs from this session. Use \`null\` only when no verifiable URL exists. Use an empty array \`[]\` for lists you have nothing for. The JSON shell is REQUIRED even when every field is null/empty. No prose, no claw directives, no THINKING.`;
                 const reStream = await newChat.sendMessageStream({ message: reminderPrompt });
                 let reResp = '';
                 for await (const chunk of reStream) {
@@ -7610,7 +7619,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               if (districts.length === 0) {
                 setBootstrapStatus({ stage: 'streaming-followup', message: 'Extracting the zoning district list�', detail: 'Reading the zoning ordinance' });
                 try {
-                  const distPrompt = `[BACKGROUND � no chat, no THINKING. Return ONE \`\`\`json\`\`\` block only.]\n\nUsing grounded Google Search (and Claw scrape_html if needed), find the COMPLETE list of zoning districts for:\nMunicipality: ${zMuni}\nCounty: ${zCounty} County\nState: ${zState}\n\nThe district schedule lives in the municipal ZONING ORDINANCE (often the Article/Part that "establishes districts") or the legend of the official zoning map. Issue searches like \`"${zMuni}" zoning districts "R-1"\` or \`"${zMuni}" "${zState}" zoning ordinance establishment of districts\`, open the ordinance, and read the district list. Include every base district AND overlay district.\n\nReturn EXACTLY this and nothing else (codes verbatim, e.g. R-1, RC, V-1; empty array only if truly none found):\n\`\`\`json\n{ "zoningDistricts": [ { "code": "R-1", "name": "Single-Family Residential" } ] }\n\`\`\``;
+                  const distPrompt = `[BACKGROUND � no chat, no THINKING. Return ONE \`\`\`json\`\`\` block only.]\n\nUsing grounded Google Search (and Scout scrape_html if needed), find the COMPLETE list of zoning districts for:\nMunicipality: ${zMuni}\nCounty: ${zCounty} County\nState: ${zState}\n\nThe district schedule lives in the municipal ZONING ORDINANCE (often the Article/Part that "establishes districts") or the legend of the official zoning map. Issue searches like \`"${zMuni}" zoning districts "R-1"\` or \`"${zMuni}" "${zState}" zoning ordinance establishment of districts\`, open the ordinance, and read the district list. Include every base district AND overlay district.\n\nReturn EXACTLY this and nothing else (codes verbatim, e.g. R-1, RC, V-1; empty array only if truly none found):\n\`\`\`json\n{ "zoningDistricts": [ { "code": "R-1", "name": "Single-Family Residential" } ] }\n\`\`\``;
                   let dResp = '';
                   const dStream = await newChat.sendMessageStream({ message: distPrompt });
                   for await (const chunk of dStream) { dResp += chunk.text; setBootstrapStatus({ stage: 'streaming-followup', message: 'Extracting the zoning district list�', bytes: dResp.length }); }
@@ -7726,13 +7735,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             const MAX_CLAW_HOPS = 3;
             for (let hop = 0; hop < MAX_CLAW_HOPS; hop++) {
               const directives = parseClawDirectives(resp);
-              console.log(`[Claw] (auto-query) hop ${hop}: detected ${directives.length} directive(s)`, directives.map(d => d.tool));
+              console.log(`[Scout] (auto-query) hop ${hop}: detected ${directives.length} directive(s)`, directives.map(d => d.tool));
               if (directives.length === 0) break;
               let toolBlock: string | null = null;
               try {
                 toolBlock = await runClawDirectives(resp);
               } catch (e: any) {
-                toolBlock = `Claw tool error: ${e?.message || e}`;
+                toolBlock = `Scout tool error: ${e?.message || e}`;
               }
               if (!toolBlock) break;
               // Reuse the active MODEL bubble � overwrite its text with the new
@@ -7749,7 +7758,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   });
                 }
               } catch (e) {
-                console.error('[Claw] (auto-query) follow-up stream failed:', e);
+                console.error('[Scout] (auto-query) follow-up stream failed:', e);
                 break;
               }
               resp = hopResp;
@@ -7761,7 +7770,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             // always sees an answer instead of the "Researching�" placeholder.
             if (!sanitizeZoningAnswer(resp)) {
               try {
-                const synthMsg = '[SYNTHESIS REQUIRED] You exhausted your Claw browser hops or some pages failed (e.g., 403 Cloudflare). Write the FINAL answer NOW from whatever data you have so far. Do NOT emit any more ```claw``` directives. If some numbers could not be verified, say so plainly and cite what you DID find. End with the ```json``` block per schema. Every section you cite MUST have a matching citations entry with the exact scraped URL.';
+                const synthMsg = '[SYNTHESIS REQUIRED] You exhausted your Scout browser hops or some pages failed (e.g., 403 Cloudflare). Write the FINAL answer NOW from whatever data you have so far. Do NOT emit any more ```claw``` directives. If some numbers could not be verified, say so plainly and cite what you DID find. End with the ```json``` block per schema. Every section you cite MUST have a matching citations entry with the exact scraped URL.';
                 let synthResp = '';
                 const synthStream = await newChat.sendMessageStream({ message: synthMsg });
                 for await (const chunk of synthStream) {
@@ -7774,7 +7783,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 }
                 resp = synthResp;
               } catch (e) {
-                console.error('[Claw] (auto-query) synthesis fallback failed:', e);
+                console.error('[Scout] (auto-query) synthesis fallback failed:', e);
               }
             }
 
@@ -18501,14 +18510,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         for (let hop = 0; hop < MAX_CLAW_HOPS; hop++) {
           if (stopGenerationRef.current) break;
           const directives = parseClawDirectives(fullResponse);
-          console.log(`[Claw] hop ${hop}: detected ${directives.length} directive(s)`, directives.map(d => d.tool));
+          console.log(`[Scout] hop ${hop}: detected ${directives.length} directive(s)`, directives.map(d => d.tool));
           if (directives.length === 0) break;
 
           let toolBlock: string | null = null;
           try {
             toolBlock = await runClawDirectives(fullResponse);
           } catch (e: any) {
-            toolBlock = `Claw tool error: ${e?.message || e}`;
+            toolBlock = `Scout tool error: ${e?.message || e}`;
           }
           if (!toolBlock) break;
 
@@ -18541,7 +18550,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         // sees an answer instead of the "Researching�" placeholder.
         if (!stopGenerationRef.current && !sanitizeZoningAnswer(fullResponse)) {
           try {
-            const synthMsg = '[SYNTHESIS REQUIRED] You exhausted your Claw browser hops or some pages failed (e.g., 403 Cloudflare). Write the FINAL answer NOW from whatever data you have so far. Do NOT emit any more ```claw``` directives. If some numbers could not be verified, say so plainly and cite what you DID find. End with the ```json``` block per schema. Every section you cite MUST have a matching citations entry with the exact scraped URL.';
+            const synthMsg = '[SYNTHESIS REQUIRED] You exhausted your Scout browser hops or some pages failed (e.g., 403 Cloudflare). Write the FINAL answer NOW from whatever data you have so far. Do NOT emit any more ```claw``` directives. If some numbers could not be verified, say so plainly and cite what you DID find. End with the ```json``` block per schema. Every section you cite MUST have a matching citations entry with the exact scraped URL.';
             let synthResp = '';
             const synthStream = await chat.sendMessageStream({ message: synthMsg });
             for await (const chunk of synthStream) {
@@ -18557,7 +18566,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             }
             fullResponse = synthResp;
           } catch (e) {
-            console.error('[Claw] synthesis fallback failed:', e);
+            console.error('[Scout] synthesis fallback failed:', e);
           }
         }
 
@@ -30627,6 +30636,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     </FloatingPanel>
   );
 
+  const decisionInspectorEnabled = settings.debugA2UIDecisionInspector === true;
+  const decisionInspectorDockMode = getToolDockMode('a2ui-decision-inspector');
+  const renderDecisionInspector = (mode: DockMode) => (
+    <A2UIDecisionInspector
+      enabled={decisionInspectorEnabled}
+      dockMode={mode}
+      onDockModeChange={next => setToolDockMode('a2ui-decision-inspector', next)}
+      onDisable={() => setSettings(prev => ({ ...prev, debugA2UIDecisionInspector: false }))}
+    />
+  );
+
   const cadManagerA2UIContent = (
     <CadManagerPage
       c3dSessionToken={c3dSessionToken}
@@ -30669,6 +30689,22 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
   const dockableToolItems: DockableToolItem[] = [
     ...dockedA2UIToolItem,
+    ...(decisionInspectorEnabled
+      ? [{
+          id: 'a2ui-decision-inspector',
+          title: 'Decision 1 Inspector',
+          icon: <SparklesIcon className="w-3.5 h-3.5 text-cyan-400" />,
+          content: renderDecisionInspector(decisionInspectorDockMode),
+          isDocked: decisionInspectorDockMode === 'toolshelf',
+          dockMode: decisionInspectorDockMode,
+          onDock: () => {
+            requestToolShelfTab('a2ui-decision-inspector');
+            setToolDockMode('a2ui-decision-inspector', 'toolshelf');
+            setIsToolShelfVisible(true);
+          },
+          onUndock: () => setToolDockMode('a2ui-decision-inspector', 'floating'),
+        }]
+      : []),
     ...(closureInvestigation
       ? [{
           id: 'closure-investigation',
@@ -33056,10 +33092,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             setAutoHighThinkingModel(model);
           }} onTriggerHostCostReminder={() => setShowHostCostReminder(true)} /></Suspense>}
 
-          <A2UIDecisionInspector
-            enabled={settings.debugA2UIDecisionInspector === true}
-            onDisable={() => setSettings(prev => ({ ...prev, debugA2UIDecisionInspector: false }))}
-          />
+          {decisionInspectorEnabled && decisionInspectorDockMode === 'floating' && renderDecisionInspector('floating')}
 
           {/* LandSurv Claw: live browser-tool status (Zoning Agent only; backend-dependent, hidden in OSS build) */}
           {!isOssBuild() && <ClawStatusBadge visible={activeAgent === AgentType.ZONING_AGENT} />}

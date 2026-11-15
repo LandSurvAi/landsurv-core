@@ -1,8 +1,9 @@
 /**
- * Frontend client for the LandSurv Claw browser-automation MCP server.
+ * Frontend transport for the consolidated Scout browser runtime.
  *
- * The agent never talks to the Claw service directly; the Node backend
- * proxies at /api/claw so that the shared CLAW_API_KEY stays server-side.
+ * The file and exports keep their historical Claw names for call-site
+ * compatibility, but every request now goes through /api/scout. The agent
+ * never talks to Scout directly; the Node backend keeps SCOUT_API_KEY private.
  */
 
 import { isBlocklisted, recordBlockedAttempt, buildBlockedToolResult } from './clawCompliance';
@@ -22,11 +23,11 @@ export interface ClawToolSchema {
   inputSchema: Record<string, unknown>;
 }
 
-const CLAW_BASE = '/api/claw';
+const CLAW_BASE = '/api/scout';
 
 // ---------------------------------------------------------------------------
 // Per-user browser isolation. Every browser tab gets its own opaque session
-// id, forwarded as x-claw-session through the Node proxy to the Claw service,
+// id, forwarded as x-scout-session through the Node proxy to the Scout service,
 // which maintains an isolated Chromium context (cookies, storage, current
 // page) per id — concurrent users can never see or clobber each other's
 // browsing session.
@@ -118,7 +119,7 @@ async function clearBrowserState(session: string = CLAW_SESSION): Promise<void> 
 
 export async function listClawTools(): Promise<ClawToolSchema[]> {
   const r = await fetch(`${CLAW_BASE}/tools`);
-  if (!r.ok) throw new Error(`Claw tools list failed: ${r.status}`);
+  if (!r.ok) throw new Error(`Scout tools list failed: ${r.status}`);
   const body = await r.json();
   return body.tools || [];
 }
@@ -131,12 +132,12 @@ export async function listClawTools(): Promise<ClawToolSchema[]> {
 async function fetchClawTool(name: string, args: Record<string, unknown>, session: string = CLAW_SESSION): Promise<ClawToolResponse> {
   const r = await fetch(`${CLAW_BASE}/tools/${encodeURIComponent(name)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-claw-session': session },
+    headers: { 'Content-Type': 'application/json', 'x-scout-session': session },
     body: JSON.stringify(args),
   });
   if (!r.ok) {
     const text = await r.text().catch(() => '');
-    throw new Error(`Claw tool ${name} failed: ${r.status} ${text}`);
+    throw new Error(`Scout tool ${name} failed: ${r.status} ${text}`);
   }
   return r.json() as Promise<ClawToolResponse>;
 }
@@ -308,7 +309,7 @@ export async function runClawDirectives(text: string, limit = 4): Promise<string
   const directives = parseClawDirectives(text).slice(0, limit);
   if (directives.length === 0) return null;
 
-  const blocks: string[] = ['Claw tool results:'];
+  const blocks: string[] = ['Scout tool results:'];
   for (const d of directives) {
     try {
       const resp = await callClawTool(d.tool, d.args || {});

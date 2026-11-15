@@ -18,7 +18,7 @@ const DEFAULT_POS = { left: 400, bottom: 16 };
 interface BadgePos { left: number; bottom: number; }
 
 /**
- * Floating status badge showing live LandSurv Claw browser-tool activity.
+ * Floating status badge showing live LandSurv Scout browser-tool activity.
  *
  * Subscribes to the clawClient event bus and renders:
  *   - a pulsing "Browsing…" pill while any call is in flight
@@ -139,7 +139,7 @@ const ClawStatusBadge: React.FC<ClawStatusBadgeProps> = ({ visible = true, histo
             <Globe className="w-4 h-4 text-cyan-400 flex-shrink-0" />
             <div className="flex-1 min-w-0">
               <div className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
-                LandSurv Claw {isActive ? '— browsing' : '— idle'}
+                LandSurv Scout {isActive ? '— browsing' : '— idle'}
               </div>
               <div className="text-xs text-gray-400 truncate">
                 <span className="text-gray-200 font-medium">{latest.tool}</span>

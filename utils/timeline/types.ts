@@ -66,6 +66,7 @@ export type TimelineIcon =
   | 'aoi'
   | 'surface'
   | 'contour'
+  | 'station'
   | 'export'
   | 'display'
   | 'generate'

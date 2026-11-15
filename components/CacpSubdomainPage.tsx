@@ -932,7 +932,7 @@ export function CacpSubdomainPage({ onClose }: { onClose?: () => void }) {
 
         <div className="mt-4 text-xs text-gray-500">
           Legal background and case-law references are summarised in the in-app <em>"How LandSurv sources external data"</em> modal
-          (open it from any blocked-source toast, from the Claw status badge, or in the JS console via
+          (open it from any blocked-source toast, from the Scout status badge, or in the JS console via
           <code className="text-emerald-300 font-mono mx-1">window.__landsurvLegal.open()</code>). This is engineering policy, not legal
           advice; production use in regulated contexts should be reviewed by counsel.
         </div>

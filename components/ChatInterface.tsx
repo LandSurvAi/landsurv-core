@@ -393,7 +393,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   if (!cleaned) {
                     // Bubble stripped to nothing (e.g. mid-hop while only claw
                     // directives have streamed). Show a subtle live hint.
-                    return '<span class="text-gray-500 italic">Researching live ordinance… (see Claw status)</span>';
+                    return '<span class="text-gray-500 italic">Researching live ordinance… (see Scout status)</span>';
                   }
                   return formatChatHtml(cleaned);
                 }

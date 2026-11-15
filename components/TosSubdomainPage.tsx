@@ -203,7 +203,7 @@ export function TosSubdomainPage() {
         </h1>
         <p className="relative text-base text-gray-300 max-w-3xl leading-relaxed">
           Clear, thorough commercial and professional-use terms governing the LandSurv.ai web application,
-          its 24 specialized AI surveying and civil CAD agents, the LandSurv Claw permissive-source engine,
+          its 24 specialized AI surveying and civil CAD agents, the LandSurv Scout permissive-source engine (formerly Claw),
           the Civil 3D &amp; IntelliCAD connectors, and all companion services published under{' '}
           <span className="font-mono text-cyan-300">landsurv.ai</span>.
         </p>

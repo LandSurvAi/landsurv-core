@@ -55,8 +55,19 @@ const STATUS_LABELS: Record<TimelineFeatureView['status'], string> = {
 
 const MAX_COLLAPSED_CHILDREN = 4;
 
+/** `TimelineAuthor.agent` value used by the Stationing & CL agent. */
+const STATIONING_AGENT = 'CENTERLINE_STATIONING';
+
 function iconForFeature(feature: TimelineFeatureView): TimelineIcon {
   if (feature.icon) return feature.icon;
+  // Alignment work reads as the Stationing & CL agent: an actual centerline
+  // delta, or an entry authored by that agent, beats the generic AI glyph.
+  if (
+    feature.author.agent === STATIONING_AGENT
+    || feature.deltas.some(delta => delta.kind === 'centerline')
+  ) {
+    return 'station';
+  }
   switch (feature.kind) {
     case 'baseline': return 'baseline';
     case 'sketch': return 'sketch';
@@ -234,6 +245,15 @@ const FEATURE_ACCENTS: Record<TimelineIcon, FeatureAccent> = {
     iconBox: 'border-cyan-400/40 bg-cyan-400/[0.13] text-cyan-200',
     title: 'text-cyan-100',
     ribbon: 'from-cyan-400 via-sky-300 to-blue-400',
+  },
+  station: {
+    chip: 'text-purple-300',
+    pulse: '#d8b4fe',
+    group: 'border-purple-400/45 bg-purple-950/45',
+    card: 'border-purple-300/45',
+    iconBox: 'border-purple-300/45 bg-purple-300/[0.14] text-purple-200',
+    title: 'text-purple-50',
+    ribbon: 'from-purple-300 via-violet-400 to-indigo-400',
   },
   export: {
     chip: 'text-rose-400',

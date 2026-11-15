@@ -1,7 +1,7 @@
 import { type SurveyPoint, type SurveyLine, type ContourLabel, type ProfilePoint, type IsoPath, type TinSurface, type ContourInclusionMode } from '../types.ts';
 
 // Types for Delaunay triangulation
-type DPoint = { x: number; y: number; z: number; };
+export type DPoint = { x: number; y: number; z: number; };
 type DTriangle = { p1: number; p2: number; p3: number; circumcenter: { x: number; y: number }; circumradiusSq: number; };
 
 function createTriangle(p1Idx: number, p2Idx: number, p3Idx: number, points: DPoint[]): DTriangle {
@@ -26,7 +26,7 @@ function createTriangle(p1Idx: number, p2Idx: number, p3Idx: number, points: DPo
     return { p1: p1Idx, p2: p2Idx, p3: p3Idx, circumcenter, circumradiusSq };
 }
 
-function delaunay(points: DPoint[]): { p1: number; p2: number; p3: number }[] {
+export function delaunay(points: DPoint[]): { p1: number; p2: number; p3: number }[] {
     const n = points.length;
     if (n < 3) return [];
 

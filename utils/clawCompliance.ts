@@ -120,7 +120,7 @@ export function stripBlocklistedUrls(urls: unknown[]): string[] {
 export function getBlocklistReason(url: string): string {
   try {
     const host = new URL(url).hostname.toLowerCase();
-    return `${host} publishes municipal codes under a Terms-of-Service that prohibits automated retrieval. The LandSurv Claw will not fetch this URL. You can open the link in your own browser to read it directly — that request leaves your machine under your own TOS, not the app's automation.`;
+    return `${host} publishes municipal codes under a Terms-of-Service that prohibits automated retrieval. The LandSurv Scout browser will not fetch this URL. You can open the link in your own browser to read it directly — that request leaves your machine under your own TOS, not the app's automation.`;
   } catch {
     return 'This source is on the permissive-source blocklist and cannot be auto-fetched.';
   }
@@ -133,7 +133,7 @@ export function buildBlockedToolResult(url: string, tool: string): string {
     `[BLOCKED — TOS-RESTRICTED HOST] ${host}`,
     `Tool: ${tool} — Target: ${url}`,
     '',
-    `${host} is on the LandSurv permissive-source blocklist. Its published Terms-of-Service prohibits automated retrieval, so the LandSurv Claw does not fetch this host. The user has been notified that this attempt was made.`,
+    `${host} is on the LandSurv permissive-source blocklist. Its published Terms-of-Service prohibits automated retrieval, so the LandSurv Scout browser does not fetch this host. The user has been notified that this attempt was made.`,
     '',
     'Pivot to a permissive source for this jurisdiction:',
     '  1. The municipality\'s own .gov site (search: "<municipality> zoning ordinance site:.gov")',

@@ -1,4 +1,5 @@
 import { SurveyPoint, TinSurface, TinVertex } from '../types.ts';
+import { delaunay } from '../utils/contouring.ts';
 
 /**
  * TinService (v26.05.17.15) — minimal MVP for Triangulated Irregular Networks.
@@ -16,76 +17,6 @@ import { SurveyPoint, TinSurface, TinVertex } from '../types.ts';
  * utils/contouring.ts but is exposed as a reusable surface object.
  */
 
-interface BWPoint { x: number; y: number; z: number; idx: number; }
-interface BWTriangle { a: number; b: number; c: number; }
-
-function circumcircleContains(t: BWTriangle, pts: BWPoint[], px: number, py: number): boolean {
-  const a = pts[t.a], b = pts[t.b], c = pts[t.c];
-  const ax = a.x - px, ay = a.y - py;
-  const bx = b.x - px, by = b.y - py;
-  const cx = c.x - px, cy = c.y - py;
-  const det =
-    (ax * ax + ay * ay) * (bx * cy - cx * by) -
-    (bx * bx + by * by) * (ax * cy - cx * ay) +
-    (cx * cx + cy * cy) * (ax * by - bx * ay);
-  return det > 1e-12;
-}
-
-function bowyerWatson(points: BWPoint[]): BWTriangle[] {
-  if (points.length < 3) return [];
-  // Super-triangle that encloses all points.
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of points) {
-    if (p.x < minX) minX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y > maxY) maxY = p.y;
-  }
-  const dx = (maxX - minX) || 1;
-  const dy = (maxY - minY) || 1;
-  const dmax = Math.max(dx, dy) * 20;
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-
-  const augmented: BWPoint[] = [
-    ...points,
-    { x: cx - dmax, y: cy - dmax, z: 0, idx: -1 },
-    { x: cx + dmax, y: cy - dmax, z: 0, idx: -2 },
-    { x: cx,       y: cy + dmax, z: 0, idx: -3 },
-  ];
-  const stIdx0 = points.length;
-  const stIdx1 = points.length + 1;
-  const stIdx2 = points.length + 2;
-
-  let triangles: BWTriangle[] = [{ a: stIdx0, b: stIdx1, c: stIdx2 }];
-
-  for (let i = 0; i < points.length; i++) {
-    const p = augmented[i];
-    const badTriangles: BWTriangle[] = [];
-    for (const t of triangles) {
-      if (circumcircleContains(t, augmented, p.x, p.y)) badTriangles.push(t);
-    }
-    // Find boundary edges (edges that belong to exactly one bad triangle).
-    const edgeCount = new Map<string, { a: number; b: number; count: number }>();
-    const key = (a: number, b: number) => (a < b ? `${a}|${b}` : `${b}|${a}`);
-    for (const t of badTriangles) {
-      for (const [u, v] of [[t.a, t.b], [t.b, t.c], [t.c, t.a]]) {
-        const k = key(u, v);
-        const existing = edgeCount.get(k);
-        if (existing) existing.count++;
-        else edgeCount.set(k, { a: u, b: v, count: 1 });
-      }
-    }
-    triangles = triangles.filter(t => !badTriangles.includes(t));
-    for (const { a, b, count } of edgeCount.values()) {
-      if (count === 1) triangles.push({ a, b, c: i });
-    }
-  }
-
-  // Strip any triangle that still touches the super-triangle vertices.
-  return triangles.filter(t => t.a < stIdx0 && t.b < stIdx0 && t.c < stIdx0);
-}
-
 export function buildTinFromPoints(
   points: SurveyPoint[],
   opts: { name?: string; color?: string } = {}
@@ -96,13 +27,14 @@ export function buildTinFromPoints(
   );
   if (usable.length < 3) return null;
 
-  const bw: BWPoint[] = usable.map((p, idx) => ({
+  // Use the normalized, circumcenter-precomputed triangulator shared with
+  // contour generation. The previous local Bowyer-Watson ballooned on rounded,
+  // co-circular contours (3.2k vertices -> 184k triangles and ~44s).
+  const tris = delaunay(usable.map(p => ({
     x: p.easting,
     y: p.northing,
     z: p.elevation as number,
-    idx,
-  }));
-  const tris = bowyerWatson(bw);
+  })));
   if (tris.length === 0) return null;
 
   const vertices: TinVertex[] = usable.map(p => ({
@@ -116,7 +48,7 @@ export function buildTinFromPoints(
     name: opts.name || `TIN ${new Date().toLocaleString()}`,
     createdAt: new Date().toISOString(),
     vertices,
-    triangles: tris.map(t => [t.a, t.b, t.c] as [number, number, number]),
+    triangles: tris.map(t => [t.p1, t.p2, t.p3] as [number, number, number]),
     sourcePointIds: usable.map(p => p.pointNumber),
     color: opts.color || '#06b6d4',
   };
@@ -186,20 +118,58 @@ export interface TinContourSource {
  * Build a TIN from contour lines by extracting elevation-tagged vertices.
  * Each vertex in each contour line becomes a sample point at that contour's elevation.
  * Returns null if fewer than 3 usable points are extracted.
+ *
+ * Smoothed contours can carry tens of thousands of nearly redundant vertices,
+ * so dense input is evenly decimated to a responsive budget before
+ * triangulation. Path endpoints are always kept.
  */
+export const MAX_TIN_CONTOUR_VERTICES = 8_000;
+
 export function buildTinFromContours(
   contourLines: TinContourSource[],
   opts: { name?: string; color?: string } = {}
 ): TinSurface | null {
-  const bw: BWPoint[] = [];
-  const pointMap = new Map<string, BWPoint>();
+  // Measure the contour network so decimation targets a total vertex budget
+  // instead of thinning every path by an arbitrary count.
+  let rawVertexCount = 0;
+  let totalLength = 0;
+  for (const line of contourLines) {
+    if (line.vertices && line.vertices.length > 0) {
+      rawVertexCount += line.vertices.length;
+      for (let i = 0; i < line.vertices.length - 1; i++) {
+        const a = line.vertices[i];
+        const b = line.vertices[i + 1];
+        totalLength += Math.hypot(b.x - a.x, b.y - a.y);
+      }
+      continue;
+    }
+    if (line.fromPt) rawVertexCount += 1;
+    if (line.toPt) rawVertexCount += 1;
+    if (line.fromPt && line.toPt) {
+      totalLength += Math.hypot(
+        line.toPt.x - line.fromPt.x,
+        line.toPt.y - line.fromPt.y,
+      );
+    }
+  }
 
+  const spacing =
+    rawVertexCount > MAX_TIN_CONTOUR_VERTICES && totalLength > 0
+      ? totalLength / MAX_TIN_CONTOUR_VERTICES
+      : 0;
+
+  const points: Array<{ x: number; y: number; z: number }> = [];
+  const pointMap = new Map<string, { x: number; y: number; z: number }>();
+
+  // Contour stitching and smoothing can leave nearly coincident endpoints
+  // (a closing ring differs from its start by ~1e-13). Exact-string dedupe
+  // misses those, and the duplicates then produce degenerate triangles.
   const addVertex = (x: number, y: number, z: number) => {
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
-    const key = `${x},${y}`;
+    const key = `${Math.round(x * 1e4)},${Math.round(y * 1e4)}`;
     if (pointMap.has(key)) return;
-    const pt: BWPoint = { x, y, z, idx: bw.length };
-    bw.push(pt);
+    const pt = { x, y, z };
+    points.push(pt);
     pointMap.set(key, pt);
   };
 
@@ -207,7 +177,24 @@ export function buildTinFromContours(
     const elev = line.elevation ?? line.fromPt?.z ?? line.toPt?.z ?? 0;
 
     if (line.vertices && line.vertices.length > 0) {
-      for (const v of line.vertices) addVertex(v.x, v.y, elev);
+      if (spacing <= 0) {
+        for (const v of line.vertices) addVertex(v.x, v.y, elev);
+        continue;
+      }
+      const lastIndex = line.vertices.length - 1;
+      let lastKept: { x: number; y: number } | null = null;
+      for (let i = 0; i < line.vertices.length; i++) {
+        const v = line.vertices[i];
+        if (
+          i === 0
+          || i === lastIndex
+          || !lastKept
+          || Math.hypot(v.x - lastKept.x, v.y - lastKept.y) >= spacing
+        ) {
+          addVertex(v.x, v.y, elev);
+          lastKept = v;
+        }
+      }
       continue;
     }
 
@@ -215,12 +202,12 @@ export function buildTinFromContours(
     if (line.toPt) addVertex(line.toPt.x, line.toPt.y, elev);
   }
 
-  if (bw.length < 3) return null;
+  if (points.length < 3) return null;
 
-  const tris = bowyerWatson(bw);
+  const tris = delaunay(points);
   if (tris.length === 0) return null;
 
-  const vertices: TinVertex[] = bw.map(p => ({
+  const vertices: TinVertex[] = points.map(p => ({
     easting: p.x,
     northing: p.y,
     elevation: p.z,
@@ -231,8 +218,8 @@ export function buildTinFromContours(
     name: opts.name || `TIN from Contours ${new Date().toLocaleString()}`,
     createdAt: new Date().toISOString(),
     vertices,
-    triangles: tris.map(t => [t.a, t.b, t.c] as [number, number, number]),
-    sourcePointIds: bw.map((_, i) => `contour-${i}`),
+    triangles: tris.map(t => [t.p1, t.p2, t.p3] as [number, number, number]),
+    sourcePointIds: points.map((_, i) => `contour-${i}`),
     color: opts.color || '#06b6d4',
   };
 }

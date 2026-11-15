@@ -95,6 +95,143 @@ interface ShelfTab {
 
 const TAB_SCROLL_STEP = 140;
 
+/** Splash palette for tool buttons, echoing the welcome screen's agent pills. */
+const TOOL_SPLASH_COLORS = [
+  '#22d3ee', '#34d399', '#fbbf24', '#38bdf8', '#a78bfa',
+  '#f472b6', '#fb7185', '#facc15', '#2dd4bf', '#fb923c',
+];
+
+/**
+ * Tool button grid under the command reference. Buttons magnify toward the
+ * cursor with the same proximity lens as the welcome screen's quick choices,
+ * and each carries a colored rail, tinted glyph and hover wash so a dense
+ * matrix of tools stays scannable.
+ */
+const ShelfToolGrid: React.FC<{
+  tools: ShelfDefaultTool[];
+  testIdPrefix: string;
+}> = ({ tools, testIdPrefix }) => {
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const lensPointRef = useRef<{ x: number; y: number } | null>(null);
+  const lensFrameRef = useRef<number | null>(null);
+
+  const resetLens = () => {
+    for (const button of buttonRefs.current) {
+      if (!button) continue;
+      button.style.removeProperty('--shelf-tool-scale');
+      button.style.removeProperty('--shelf-tool-lift');
+      button.style.zIndex = '';
+    }
+  };
+
+  const updateLens = () => {
+    const point = lensPointRef.current;
+    if (!point) return;
+
+    for (const button of buttonRefs.current) {
+      if (!button) continue;
+      const width = button.offsetWidth;
+      const height = button.offsetHeight;
+      if (!width || !height) continue;
+
+      // The rect centre is stable under a centre-origin scale, so reading it
+      // twice per animation frame cannot feed the magnification back on itself.
+      const rect = button.getBoundingClientRect();
+      const dx = point.x - (rect.left + width / 2);
+      const dy = point.y - (rect.top + height / 2);
+      const radiusX = Math.max(32, width * 0.9);
+      const radiusY = Math.max(12, height * 0.9);
+      const influence = Math.exp(-0.5 * ((dx / radiusX) ** 2 + (dy / radiusY) ** 2));
+
+      button.style.setProperty('--shelf-tool-scale', (1 + influence * 0.14).toFixed(3));
+      button.style.setProperty('--shelf-tool-lift', `${(-influence * 1.2).toFixed(2)}px`);
+      button.style.zIndex = influence > 0.02 ? String(10 + Math.round(influence * 100)) : '';
+    }
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'touch') return;
+    if (document.documentElement.getAttribute('data-reduced-motion') === 'true') {
+      if (lensFrameRef.current !== null) {
+        window.cancelAnimationFrame(lensFrameRef.current);
+        lensFrameRef.current = null;
+      }
+      resetLens();
+      return;
+    }
+
+    lensPointRef.current = { x: event.clientX, y: event.clientY };
+    if (lensFrameRef.current !== null) return;
+    lensFrameRef.current = window.requestAnimationFrame(() => {
+      lensFrameRef.current = null;
+      updateLens();
+    });
+  };
+
+  const handlePointerLeave = () => {
+    if (lensFrameRef.current !== null) {
+      window.cancelAnimationFrame(lensFrameRef.current);
+      lensFrameRef.current = null;
+    }
+    lensPointRef.current = null;
+    resetLens();
+  };
+
+  useEffect(() => () => {
+    if (lensFrameRef.current !== null) {
+      window.cancelAnimationFrame(lensFrameRef.current);
+    }
+  }, []);
+
+  return (
+    <div
+      role="group"
+      data-testid={`${testIdPrefix}-grid`}
+      className="isolate grid grid-cols-2 gap-1"
+      onPointerEnter={handlePointerMove}
+      onPointerMove={handlePointerMove}
+      onPointerLeave={handlePointerLeave}
+    >
+      {tools.map((tool, index) => {
+        const color = TOOL_SPLASH_COLORS[index % TOOL_SPLASH_COLORS.length];
+        return (
+          <button
+            key={tool.id}
+            ref={node => { buttonRefs.current[index] = node; }}
+            type="button"
+            data-testid={`${testIdPrefix}-${tool.id}`}
+            onClick={tool.onSelect}
+            title={tool.label}
+            style={{
+              borderColor: `${color}4d`,
+              transform: 'translateY(var(--shelf-tool-lift, 0px)) scale(var(--shelf-tool-scale, 1))',
+            }}
+            className="group relative flex min-w-0 items-center gap-1.5 overflow-hidden rounded-md border bg-white/[0.02] py-1 pl-2.5 pr-2 text-left text-[10px] font-medium text-slate-300 transition-all duration-150 will-change-transform hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-300/70 light-theme:bg-white light-theme:text-gray-700 light-theme:hover:bg-gray-100"
+          >
+            <span
+              aria-hidden="true"
+              className="absolute inset-y-0 left-0 w-0.5"
+              style={{ backgroundColor: color }}
+            />
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+              style={{ background: `linear-gradient(90deg, ${color}26, transparent 72%)` }}
+            />
+            <span
+              className="relative z-10 flex h-3.5 w-3.5 shrink-0 items-center justify-center transition-transform duration-150 group-hover:scale-110"
+              style={{ color }}
+            >
+              {tool.icon}
+            </span>
+            <span className="relative z-10 truncate">{tool.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
 export const AgentToolDock: React.FC<AgentToolDockProps> = ({
   activeAgent,
   items,
@@ -632,21 +769,7 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
                     </span>
                   </div>
                   <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto">
-                    <div className="grid grid-cols-2 gap-1">
-                      {defaultTools.map(tool => (
-                        <button
-                          key={tool.id}
-                          type="button"
-                          data-testid={`command-reference-tool-${tool.id}`}
-                          onClick={tool.onSelect}
-                          title={tool.label}
-                          className="flex min-w-0 items-center gap-1.5 rounded-md border border-white/[0.06] bg-white/[0.02] px-2 py-1 text-left text-[10px] font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:bg-cyan-400/[0.06] hover:text-cyan-100 light-theme:border-gray-200 light-theme:bg-white light-theme:text-gray-700 light-theme:hover:bg-gray-100"
-                        >
-                          {tool.icon}
-                          <span className="truncate">{tool.label}</span>
-                        </button>
-                      ))}
-                    </div>
+                    <ShelfToolGrid tools={defaultTools} testIdPrefix="command-reference-tool" />
                   </div>
                 </div>
               </>
@@ -695,21 +818,7 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
                         {defaultTools.length}
                       </span>
                     </div>
-                    <div className="grid grid-cols-2 gap-1">
-                      {defaultTools.map(tool => (
-                        <button
-                          key={tool.id}
-                          type="button"
-                          data-testid={`tool-shelf-default-${tool.id}`}
-                          onClick={tool.onSelect}
-                          title={tool.label}
-                          className="flex min-w-0 items-center gap-1.5 rounded-md border border-white/[0.06] bg-white/[0.02] px-2 py-1 text-left text-[10px] font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:bg-cyan-400/[0.06] hover:text-cyan-100 light-theme:border-gray-200 light-theme:bg-white light-theme:text-gray-700 light-theme:hover:bg-gray-100"
-                        >
-                          {tool.icon}
-                          <span className="truncate">{tool.label}</span>
-                        </button>
-                      ))}
-                    </div>
+                    <ShelfToolGrid tools={defaultTools} testIdPrefix="tool-shelf-default" />
                   </>
                 )}
               </div>

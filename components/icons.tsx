@@ -586,27 +586,21 @@ export const ZoomExtentsIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) 
     </svg>
 );
 
-// Stationing & Centerline Agent Glyph — Horizontal Highway Corridor Curve with Tangent PI Monument, PC/PT Nodes & Station/Offset Callouts
+// Stationing & Centerline Agent Glyph — Bold Plan-View Alignment Fillet Between
+// Dashed Back/Forward Tangents, PI Monument & Perpendicular Station Ticks
 export const ScaleIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        {/* Back & forward tangent lines intersecting at PI */}
-        <polyline points="3.5,20 6,5.2 20.5,4.2" strokeWidth="1.05" strokeDasharray="2 1.4" opacity="0.75" />
-        {/* Point of Intersection (PI) monument triangle with center dot */}
-        <polygon points="6,2.4 8.6,6.6 3.4,6.6" strokeWidth="1.3" fill="currentColor" fillOpacity="0.22" strokeLinejoin="miter" />
-        <circle cx="6" cy="5.2" r="0.7" fill="currentColor" stroke="none" />
-        {/* Parallel corridor right-of-way edges & primary centerline curve */}
-        <path strokeLinecap="square" strokeWidth="0.95" opacity="0.65" d="M2,19.5C3,9.8 10.5,3.2 20.2,2.6" />
-        <path strokeLinecap="square" strokeWidth="1.8" d="M4,20.2C5,11.5 11.5,5.5 20.5,4.8" />
-        <path strokeLinecap="square" strokeWidth="0.95" opacity="0.65" d="M6.2,21C7,13.4 12.8,7.8 20.8,7" />
-        {/* Perpendicular station tick marks along alignment */}
-        <line x1="2.2" y1="16.2" x2="6.8" y2="17" strokeWidth="1.3" strokeLinecap="square" />
-        <line x1="4.8" y1="10.5" x2="8.8" y2="13.2" strokeWidth="1.3" strokeLinecap="square" />
-        <line x1="9.6" y1="5.8" x2="12.4" y2="9.6" strokeWidth="1.3" strokeLinecap="square" />
-        <line x1="16" y1="3.1" x2="16.8" y2="7.6" strokeWidth="1.3" strokeLinecap="square" />
-        {/* Perpendicular offset callout vector & staked monument */}
-        <line x1="11" y1="7.7" x2="17.8" y2="17.2" strokeWidth="1.15" strokeDasharray="1.6 1.2" />
-        <rect x="16.4" y="15.8" width="3.8" height="3.8" strokeWidth="1.4" fill="currentColor" fillOpacity="0.18" />
-        <circle cx="18.3" cy="17.7" r="0.9" fill="currentColor" stroke="none" />
+        {/* Dashed back & forward tangents meeting at the PI */}
+        <polyline points="6.1,13.1 9.2,6.9 12.9,6.1" strokeWidth="1.1" strokeDasharray="1.9 1.5" opacity="0.6" strokeLinecap="square" />
+        {/* Bold plan-view alignment: tangent, fillet, tangent */}
+        <path strokeWidth="2" strokeLinecap="square" strokeLinejoin="round" d="M2.4 20.6L6.1 13.1C7.8 9.7 10.9 6.5 12.9 6.1L21.6 4.2" />
+        {/* PI monument triangle tied to the intersection point */}
+        <polygon points="9.2,2.4 11,5.9 7.4,5.9" strokeWidth="1.3" fill="currentColor" fillOpacity="0.2" strokeLinejoin="miter" />
+        <line x1="9.2" y1="5.9" x2="9.2" y2="6.9" strokeWidth="1" opacity="0.8" />
+        <circle cx="9.2" cy="6.9" r="0.85" fill="currentColor" stroke="none" />
+        {/* Perpendicular station ticks across the alignment */}
+        <line x1="2.9" y1="15.8" x2="5.9" y2="17.3" strokeWidth="1.5" strokeLinecap="square" />
+        <line x1="18.2" y1="3.2" x2="18.9" y2="6.5" strokeWidth="1.5" strokeLinecap="square" />
     </svg>
 );
 

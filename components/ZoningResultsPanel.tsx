@@ -420,7 +420,7 @@ const TurnCard: React.FC<{ turn: ResearchTurn; index: number }> = ({ turn, index
           {turn.loading && !turn.a ? (
             <div className="flex items-center gap-2 text-emerald-300/80 text-sm">
               <Loader2 className="w-4 h-4 animate-spin" />
-              <span>Live research in progress — see Claw status badge for current tool.</span>
+              <span>Live research in progress — see Scout status badge for current tool.</span>
             </div>
           ) : turn.a ? (
             <div>
@@ -558,7 +558,7 @@ const ZoningResultsPanel: React.FC<Props> = ({ chatHistory, place, county, state
                   <Search className="w-2.5 h-2.5" /> Google Search
                 </span>
                 <span className="px-2 py-0.5 rounded-md bg-purple-500/20 border border-purple-400/40 text-[10px] text-purple-200 font-bold uppercase tracking-wider flex items-center gap-1">
-                  <Sparkles className="w-2.5 h-2.5" /> Live Claw
+                  <Sparkles className="w-2.5 h-2.5" /> Live Scout
                 </span>
               </div>
               <div className="flex items-center gap-1.5 text-emerald-100/90 text-sm flex-wrap">
@@ -817,7 +817,7 @@ const ClawMapPreview: React.FC<{ url: string; place?: string }> = ({ url, place 
           <Loader2 className="relative w-10 h-10 text-cyan-300 animate-spin" />
         </div>
         <p className="text-xs font-medium text-cyan-100">Capturing the live GIS map…</p>
-        <p className="text-[10px] text-gray-500">The Claw is loading the viewer and taking a high-resolution snapshot.</p>
+        <p className="text-[10px] text-gray-500">Scout is loading the viewer and taking a high-resolution snapshot.</p>
       </div>
     );
   }
@@ -1037,7 +1037,7 @@ const ZoningMapDistrictsCard: React.FC<{
             </div>
           ) : (info.mapKind === 'gis' && info.mapFrameEmbeddable === false && info.mapUrl) ? (
             /* OPTION 2 — viewer blocks iframing and isn't MapServer-backed:
-               the Claw captures a retina-resolution snapshot of the live
+               Scout captures a retina-resolution snapshot of the live
                viewer, shown in-app with click-through to the real map. */
             <div className="rounded-xl overflow-hidden border border-cyan-700/40 bg-slate-900/40 aspect-[4/3] shadow-inner relative">
               <ClawMapPreview url={info.mapUrl} place={place} />
