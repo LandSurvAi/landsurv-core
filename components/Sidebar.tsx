@@ -632,6 +632,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
         return (
             <aside
                 ref={sidebarRef}
+                data-testid="agent-sidebar"
                 style={{
                     '--sidebar-width': `${sidebarWidth}px`,
                     // Stop above the command bar (and an open quick thought) so the

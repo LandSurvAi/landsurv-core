@@ -133,7 +133,7 @@ export const normalizeLoadedSession = (rawSession: Partial<SessionState>): Sessi
   const baseScale = rawUiState.attributeScale ?? 1;
   const mergedUiState: SessionState['uiState'] = {
     activeAgent: rawUiState.activeAgent || AgentType.LSVZ_AGENT,
-    activeModel: rawUiState.activeModel || 'gemini-3.7-flash',
+    activeModel: rawUiState.activeModel || 'gemini-4-hydrogen',
     activeVisualPanel: resolvedPanel,
     isPdfViewerFullscreen: rawUiState.isPdfViewerFullscreen ?? false,
     isVisualPanelFullscreen: rawUiState.isVisualPanelFullscreen ?? false,

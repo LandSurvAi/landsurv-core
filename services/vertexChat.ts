@@ -16,6 +16,10 @@ import type { Part } from '../types.ts';
 
 type HistoryEntry = { role: 'user' | 'model'; parts: Array<Part | { text: string }> };
 
+import { isFreeCadMode } from './freeCadPolicy.ts';
+import { getActiveTrialTurnId } from './freeCadTrial.ts';
+import { getDeviceFingerprint } from './deviceFingerprint.ts';
+
 interface VertexChatInit {
   model: string;
   systemInstruction?: string;
@@ -74,9 +78,19 @@ export class VertexChat {
 
     const historySnapshot = this.history.map(h => ({ ...h, parts: [...h.parts] }));
 
+    const freeMode = isFreeCadMode();
+    const trialTurn = freeMode ? getActiveTrialTurnId() : null;
+    const trialDevice = freeMode ? (await getDeviceFingerprint().catch(() => null)) : null;
+    const freeCadHeaders = freeMode
+      ? {
+        'x-landsurv-app-mode': 'free',
+        ...(trialTurn ? { 'x-landsurv-trial-turn': trialTurn } : {}),
+        ...(trialDevice?.id ? { 'x-landsurv-device': trialDevice.id } : {}),
+      }
+      : {};
     const resp = await fetch(this.endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...freeCadHeaders },
       body: JSON.stringify({
         model: this.model,
         systemInstruction: this.systemInstruction,

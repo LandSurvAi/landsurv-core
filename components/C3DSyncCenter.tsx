@@ -47,6 +47,7 @@ import {
 } from '../services/c3dSyncProtocol.ts';
 import { C3DSyncDiffGrid, resolveOverrideAction, type OverrideIntent } from './C3DSyncDiffGrid.tsx';
 import type { C3DSyncEvent } from '../hooks/useC3DStateSync.ts';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -262,6 +263,7 @@ export const C3DSyncCenter: React.FC<C3DSyncCenterProps> = ({
 
   // ── Apply ─────────────────────────────────────────────────────────────────
   const runApply = useCallback(async () => {
+    if (!freeCadGuard('c3d')) return;
     const plan = buildPlan();
     setStep('applying');
     setProgress({ current: 0, total: planSummary.creates + planSummary.updates + planSummary.deletes, phase: 'starting', message: 'Contacting Civil 3D…' });

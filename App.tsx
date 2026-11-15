@@ -25,7 +25,7 @@ import PermissiveSourcesExplainer from './components/PermissiveSourcesExplainer.
 import { TitleSearchPanel } from './components/TitleSearchPanel.tsx';
 // FIX: Changed default import to named import for ChatInterface.
 import { ChatInterface } from './components/ChatInterface.tsx';
-import { AgentToolDock, type DockableToolItem, type ShelfPanelCatalogItem } from './components/AgentToolDock.tsx';
+import { AgentToolDock, type DockableToolItem, type ShelfDefaultTool, type ShelfPanelCatalogItem } from './components/AgentToolDock.tsx';
 import { AgentToolShelf } from './components/AgentToolShelf.tsx';
 import StationingChat from './components/StationingChat.tsx';
 import { A2UICenterlineList } from './components/A2UICenterlineList.tsx';
@@ -42,6 +42,10 @@ import { ParcelPanel } from './components/ParcelPanel.tsx';
 import { CogoPanel } from './components/CogoPanel.tsx';
 // FIX: Changed the import for DrawingCanvas to a named import to match the updated export style of the component.
 import { DrawingCanvas } from './components/DrawingCanvas.tsx';
+import { TimelineDock } from './components/timeline/TimelineDock.tsx';
+import { useTimelineVisibility } from './components/timeline/timelineVisibility.ts';
+import { TimelineProvider, useTimeline } from './contexts/TimelineContext.tsx';
+import type { TimelineIcon } from './utils/timeline/types.ts';
 import { divideLinesIntoPoints, parseDivideSelectionIntent } from './utils/divideSelection.ts';
 import CutSheetPanel from './components/CutSheetPanel.tsx';
 import FieldbookPanel from './components/FieldbookPanel.tsx';
@@ -172,7 +176,6 @@ import { useParametricAssociations } from './hooks/useParametricAssociations.ts'
 import { getExperimentalAgentDetails, isExperimentalAgentEnabled, setExperimentalAgentEnabled } from './utils/experimentalAgents.ts';
 import { isAgentRetired } from './utils/retiredAgents.ts';
 import { A2UIDecisionInspector } from './components/A2UIDecisionInspector.tsx';
-import { HELP_GROUPS } from './utils/canvasCommands.ts';
 // Defer non-critical page components for faster initial load
 const TechnologiesPage = lazy(() => import('./components/TechnologiesPage.tsx'));
 const SettingsPage = lazy(() => import('./components/SettingsPage.tsx'));
@@ -263,6 +266,26 @@ import DisclaimerPage from './components/DisclaimerPage.tsx';
 import LegalPage from './components/LegalPage.tsx';
 import LegalAgreementGate from './components/LegalAgreementGate.tsx';
 import { hasSignedLegalAgreement, getSignatureRecord } from './components/SignatureForm.tsx';
+import FreeCadTrialBadge from './components/FreeCadTrialBadge.tsx';
+import FreeCadTrialUseNotice from './components/FreeCadTrialUseNotice.tsx';
+import FreeCadNoSignatureGate from './components/FreeCadNoSignatureGate.tsx';
+import FreeCadAgentExplainer from './components/FreeCadAgentExplainer.tsx';
+import type { WelcomeMode } from './components/WelcomeScreen.tsx';
+import {
+  readCadEntryMode,
+  writeCadEntryMode,
+  type CadEntryMode,
+} from './services/freeCadPolicy.ts';
+import {
+  acceptTrialTerms,
+  consumeTrialPrompt,
+  getCachedTrialSnapshot,
+  getTrialSnapshot,
+  hasAcceptedTrialTerms,
+  type FreeCadTrialSnapshot,
+  type TrialAcceptanceRecord,
+} from './services/freeCadTrial.ts';
+import { loadFreeCadDraft, scheduleFreeCadDraftSave } from './services/freeCadDraft.ts';
 import FloatingPanel from './components/FloatingPanel.tsx';
 import { DockModeControl, type DockMode } from './components/DockModeControl.tsx';
 import FloodPanel from './components/FloodPanel.tsx';
@@ -372,7 +395,7 @@ import { DEFAULT_CONTOUR_LINE_LAYERS, resolveContourLineLayersViaCacp, type Cont
 import { type ChatMessage, MessageRole, type SurveyPoint, type SurveyLine, type CutSheetRow, type CutSheetInfo, AgentType, type SessionFile, type SessionState, type Centerline, JobInfo, Settings, PdfHighlight, type PointList, WmsService, ActiveWmsLayer, DxfExportOptions, VisualPanel, type OfflineMapArea, type ChatMessageAction, SettingsContext, AgentContext, UIContext, HighlightContext, Chat, Modality, Part, ProjectionSetting, type CustomSymbol, type AnnotationRule, type ContourSettings, type ContourLabel, type StreetLabel, type ProfilePoint, type ProfileInfo, type ClosureReport, type GisFeature, type DeedMetadata, type TitleSearchData, type BoundaryFile, type BoundaryFileCall, type AnnotationDimension, type CanvasHatch, type RasterUnderlay, type RasterAsset, type ToolWorkflowId, type HatchBoundaryLoop, type EsriServiceInfo, type InclusionBoundary, type AoiBoundary, type DraftingStyleEntry, type ContourGeneration, type ContourBlendStats, type GenerationBlock, type IsoPath, type ParcelLabel, type MapAreaFeature, type MapAreaLabel, type SoilMapUnit, type AnnotationCategoryStyle, type AnnotationTextStyle, type CanvasTextAnnotation, DEFAULT_ANNOTATION_TEXT_STYLES, type DeedSummary, type AppNotification, type TinSurface, type SteepSlopeBand, type SteepSlopeRunResult, DEFAULT_ANNOTATION_CATEGORIES, type ParcelLabelFormatter, type ParcelCadTextStyle, DEFAULT_PARCEL_LABEL_FORMATTER, type StandardsComplianceCheckSelection, type StandardsComplianceReport, type ComplianceSourceMode, type SessionSaveOptions } from './types.ts';
 import { DEFAULT_PARCEL_CAD_TEXT_STYLES } from './utils/parcelLabelFormatter.ts';
 // FIX: Corrected import of startGeminiChat. Renamed import 'startChat' to 'startGeminiChat' to match export.
-import { startGeminiChat, selectContextSources, getModelForAgent, getAutoModelForAgent, summarizeDeed, investigateDeedClosure, isClaudeModel, isOpenAIModel, isGrokModel, extractZoningDistrictsFromMap, runVisualStandardsComplianceAudit, processAndCorrectCoordinates, AUTO_FAST_MODEL, type DeedClosureReview, type DeedClosureHypothesis } from './services/geminiService.ts';
+import { startGeminiChat, selectContextSources, getModelForAgent, getAutoModelForAgent, summarizeDeed, investigateDeedClosure, isClaudeModel, isOpenAIModel, isGrokModel, extractZoningDistrictsFromMap, runVisualStandardsComplianceAudit, processAndCorrectCoordinates, AUTO_FAST_MODEL, AUTO_HIGH_THINKING_MODELS, DEFAULT_GEMINI_MODEL, DEFAULT_HIGH_THINKING_GEMINI_MODEL, type DeedClosureReview, type DeedClosureHypothesis } from './services/geminiService.ts';
 import { GisService } from './services/gisService.ts';
 import { interAgentComm } from './services/InterAgentCommunication.ts';
 import type { AgentMessage } from './services/InterAgentCommunication.ts';
@@ -447,7 +470,7 @@ import { buildCacpReviewContext, isNotableCacpEntry, retryCacpReviewItem, startC
 import { resolveA2UISurfaceIntent } from './services/a2uiSurfaceIntent.ts';
 import { regexIntentToCatalogId } from './services/a2uiDecisionCatalog.ts';
 import { evaluateA2UIDecisionShadow } from './services/a2uiDecisionClient.ts';
-import { buildPointListSurfaceData, createBlankSpreadsheetSpec } from './utils/a2uiSpreadsheet.ts';
+import { buildPointListSurfaceData, buildSpreadsheetA2UIPayload, createBlankSpreadsheetSpec, spreadsheetToCsv } from './utils/a2uiSpreadsheet.ts';
 import { wgs84ToProjected } from './utils/projectLocation.ts';
 import { buildProjectLocationClusters, clusterSetSignature, describeProjectLocationClusters } from './utils/projectClusters.ts';
 import { buildAoiFromInclusionLines, buildAoiFromVertices, isAoiPolylineId } from './utils/aoiBoundary.ts';
@@ -538,8 +561,8 @@ import {
 import { DEFAULT_SETTINGS, COMPATIBLE_VERSIONS, isVersionCompatible } from './utils/sessionDefaults.ts';
 import { mergeSettingsWithDefaults, migrateMessage } from './utils/sessionMigration.ts';
 // FIX: Added ProfileIcon to the imports for the new Profile Agent.
-import { HomeIcon, SheetViewIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, FloodIcon, StructuresIcon, SoilsIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, CogIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon, CogoIcon, CivilDrafterIcon, FolderIcon, PlusIcon, CodeBracketIcon } from './components/icons.tsx';
-import { StyleLibraryIcon, C3DLinkIcon, AnnotateManagerIcon, FieldBookToolIcon, ClosureReportIcon } from './components/toolbarIcons.tsx';
+import { HomeIcon, SheetViewIcon, DownloadIcon, EraserIcon, CutSheetIcon, BrainCircuitIcon, CourthouseIcon, ChevronDownIcon, ChevronLeftIcon, FullscreenIcon, ExitFullscreenIcon, ChatBubbleIcon, LsvzIcon, CpuChipIcon, ArrowUpTrayIcon, RoadIcon, ChevronUpIcon, TableCellsIcon, BookOpenIcon, MapPinIcon, ClipboardDocumentListIcon, LogClockIcon, SparklesIcon, Bars3Icon, DocumentDuplicateIcon, CrosshairsIcon, CameraIcon, DroneIcon, InfoIcon, CurrencyDollarIcon, SunIcon, MoonIcon, GlobeAltIcon, BugAntIcon, QuestionMarkCircleIcon, DxfAnalyzerIcon, PlumbBobIcon, ScaleIcon, ChevronRightIcon, GisAgentIcon, ChevronDoubleRightIcon, PencilSquareIcon, ContourIcon, SlopeIcon, FloodIcon, StructuresIcon, SoilsIcon, ExclamationTriangleIcon, ProfileIcon, LayersIcon, EnvelopeIcon, MonitorIcon, SatelliteIcon, XMarkIcon, AdjustmentsHorizontalIcon, CogIcon, GridIcon, UndoIcon, RedoIcon, MapIcon, ZoomExtentsIcon, AttributeScaleIcon, ZoomToPointIcon, ListBulletIcon, CogoIcon, CivilDrafterIcon, FolderIcon, PlusIcon, CodeBracketIcon, ARIcon } from './components/icons.tsx';
+import { StyleLibraryIcon, C3DLinkIcon, AnnotateManagerIcon, FieldBookToolIcon, ClosureReportIcon, FileManagerIcon, HatchManagerIcon, LinetypeManagerIcon, PdfReviewerIcon, SymbolManagerIcon, TextEditorToolIcon, ToolbarLayersIcon, ToolbarStandardsIcon, WmsManagerIcon } from './components/toolbarIcons.tsx';
 import { suggestedQuestionsText } from './assets/suggested_questions.ts';
 import { userSuggestedQuestionsText } from './assets/user_suggested_questions.ts';
 import { deedSuggestedQuestionsText } from './assets/deed_suggested_questions.ts';
@@ -772,11 +795,13 @@ const useMediaQuery = (query: string): boolean => {
 };
 
 const AUTO_MODEL_OPTION = 'auto';
-const CURRENT_GEMINI_MODEL = 'gemini-3.7-flash';
+// Gemini 4 Hydrogen is the standard reasoning model; Gemini 4 Argon is the
+// explicit High Thinking tier.
+const CURRENT_GEMINI_MODEL = DEFAULT_GEMINI_MODEL;
 const AUTO_FAST_GEMINI_MODEL = AUTO_FAST_MODEL;
 const FABLE_5_MODEL_ID = 'claude-fable-5';
 const FABLE_5_PERMISSION = 'model:claude-fable-5';
-const DEFAULT_AUTO_HIGH_THINKING_MODEL = CURRENT_GEMINI_MODEL;
+const DEFAULT_AUTO_HIGH_THINKING_MODEL = DEFAULT_HIGH_THINKING_GEMINI_MODEL;
 const LEGACY_GEMINI_MODEL_IDS = new Set([
   'gemini-2.5-pro',
   'gemini-2.5-flash',
@@ -788,13 +813,9 @@ const LEGACY_GEMINI_MODEL_IDS = new Set([
   'gemini-3.7-flash-lite',
 ]);
 const REMOVED_MODEL_IDS = new Set(['glm-5.2-fp8', 'nvidia-nemotron-v3-ultra', ...LEGACY_GEMINI_MODEL_IDS]);
-const autoHighThinkingOptions = [
+const autoHighThinkingOptions: string[] = [
   DEFAULT_AUTO_HIGH_THINKING_MODEL,
-  'gemini-3.8-flash',
-  'gemini-4-argon',
-  'claude-sonnet-5',
-  'claude-opus-5',
-  FABLE_5_MODEL_ID,
+  ...AUTO_HIGH_THINKING_MODELS.filter(model => model !== DEFAULT_AUTO_HIGH_THINKING_MODEL),
 ];
 const RESTRICTED_MODEL_IDS = new Set(['claude-sonnet-5', 'claude-opus-5', FABLE_5_MODEL_ID]);
 
@@ -811,9 +832,10 @@ const getModelDisplayLabel = (modelName: string): string => (
   : modelName === 'claude-sonnet-5' ? 'Claude Sonnet 5'
   : modelName === 'claude-opus-5' ? 'Claude Opus 5'
   : modelName === FABLE_5_MODEL_ID ? 'Claude Fable 5'
-  : modelName === CURRENT_GEMINI_MODEL ? 'Gemini 3.7 Flash'
+  : modelName === CURRENT_GEMINI_MODEL ? 'Gemini 4 Hydrogen'
+  : modelName === 'gemini-3.7-flash' ? 'Gemini 3.7 Flash'
   : modelName === 'gemini-3.8-flash' ? 'Gemini 3.8 Flash'
-  : modelName === 'gemini-4-argon' ? 'Gemini 4 Argon'
+  : modelName === 'gemini-4-argon' ? 'Gemini 4 Argon (High Thinking)'
   : modelName === AUTO_FAST_GEMINI_MODEL ? 'Gemini 3.5 Flash Lite'
   : modelName === OPENAI_FLAGSHIP_MODEL ? 'GPT-5.6 Terra (your OpenAI key)'
   : modelName === OPENAI_FAST_MODEL ? 'GPT-5.4 Mini (your OpenAI key)'
@@ -824,11 +846,7 @@ const getModelDisplayLabel = (modelName: string): string => (
 const availableModels = [
   AUTO_MODEL_OPTION,
   CURRENT_GEMINI_MODEL,
-  'gemini-3.8-flash',
-  'gemini-4-argon',
-  'claude-sonnet-5',
-  'claude-opus-5',
-  FABLE_5_MODEL_ID,
+  ...AUTO_HIGH_THINKING_MODELS.filter(model => model !== CURRENT_GEMINI_MODEL),
   OPENAI_FLAGSHIP_MODEL,
   OPENAI_FAST_MODEL,
   GROK_FLAGSHIP_MODEL,
@@ -1287,6 +1305,7 @@ const AppContent = () => {
     profileData, setProfileData,
     profileInfo, setProfileInfo,
     centerlines, setCenterlines,
+    boundaryFiles, setBoundaryFiles,
     linesVisible, setLinesVisible,
     centerlinesVisible, setCenterlinesVisible,
     cadLayerVisibility, setCadLayerVisibility,
@@ -1331,6 +1350,80 @@ const AppContent = () => {
   } = useCanvasState();
 
   const canvasHistory = useCanvasHistory();
+  const timeline = useTimeline();
+  const timelineVisibility = useTimelineVisibility();
+  const isTimelineSketchFlowEnabled = timelineVisibility.enabled && timelineVisibility.visible;
+  // Point-file imports are one-shot async actions. Open the timeline import
+  // when the handler starts, then close it after React has committed the new
+  // point list so the feature captures the actual resulting geometry.
+  const pendingTimelineImportRef = useRef(false);
+  // Baseline drawing is a multi-click event. Open one timeline feature before
+  // the first centerline lands, then close it when baseline mode exits.
+  const pendingTimelineBaselineRef = useRef<string | null>(null);
+  const [pendingTimelineBaselineCommit, setPendingTimelineBaselineCommit] = useState<{ id: string; piCount: number } | null>(null);
+  const beginTimelineImport = useCallback((
+    label: string,
+    options?: { sketchGroup?: boolean; icon?: TimelineIcon; detail?: string },
+  ) => {
+    pendingTimelineImportRef.current = timeline.beginImport(label, options);
+  }, [timeline.beginImport]);
+
+  /** Record an inspectable, non-geometric step without opening a transaction. */
+  const recordTimelineEvent = useCallback((label: string, icon: TimelineIcon, detail?: string) => {
+    timeline.recordEvent({ kind: 'event', label, icon, detail });
+  }, [timeline.recordEvent]);
+  useEffect(() => {
+    if (!pendingTimelineImportRef.current) return;
+    const transaction = timeline.activeTransaction;
+    if (!transaction || transaction.kind !== 'import') {
+      pendingTimelineImportRef.current = false;
+      return;
+    }
+    const start = transaction.startSnapshot;
+    const changed = pointLists !== start.pointLists
+      || lines !== start.lines
+      || centerlines !== start.centerlines
+      || contourLabels !== start.contourLabels
+      || boundaryFiles !== start.boundaryFiles;
+    if (!changed) return;
+    pendingTimelineImportRef.current = false;
+    timeline.commitFeature();
+  }, [
+    pointLists,
+    lines,
+    centerlines,
+    contourLabels,
+    boundaryFiles,
+    timeline.activeTransaction,
+    timeline.commitFeature,
+  ]);
+  // Commit only after React has applied the final baseline geometry, so the
+  // timeline entry captures every PI rather than just the first segment.
+  useEffect(() => {
+    if (!pendingTimelineBaselineCommit) return;
+    const baseline = centerlines.find(centerline => centerline.id === pendingTimelineBaselineCommit.id);
+    if (!baseline) {
+      pendingTimelineBaselineRef.current = null;
+      setPendingTimelineBaselineCommit(null);
+      if (timeline.activeTransaction?.kind === 'manual-feature') timeline.cancelFeature();
+      return;
+    }
+    if (baseline.pis.length < pendingTimelineBaselineCommit.piCount) return;
+    if (!timeline.activeTransaction || timeline.activeTransaction.kind !== 'manual-feature') {
+      pendingTimelineBaselineRef.current = null;
+      setPendingTimelineBaselineCommit(null);
+      return;
+    }
+    pendingTimelineBaselineRef.current = null;
+    setPendingTimelineBaselineCommit(null);
+    timeline.commitFeature(baseline.name);
+  }, [
+    centerlines,
+    pendingTimelineBaselineCommit,
+    timeline.activeTransaction,
+    timeline.cancelFeature,
+    timeline.commitFeature,
+  ]);
   const { beginTransaction, commitTransaction, undoLabel, redoLabel } = canvasHistory;
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
   const [isQuickHistoryOpen, setIsQuickHistoryOpen] = useState(false);
@@ -1450,6 +1543,62 @@ const AppContent = () => {
   const [hasLegalSignature, setHasLegalSignature] = useState<boolean>(() => {
     try { return hasSignedLegalAgreement(); } catch { return false; }
   });
+
+  // --- FREE CAD TRIAL (v26.11.14.1) ---
+  // Free CAD is an unsigned, device-scoped trial. It never opens the legal gate;
+  // Business CAD still does. The server ledger is mirrored locally for the badge.
+  const [cadEntryMode, setCadEntryMode] = useState<CadEntryMode>(() => readCadEntryMode());
+  const [trialSnapshot, setTrialSnapshot] = useState<FreeCadTrialSnapshot | null>(() => getCachedTrialSnapshot());
+  const [freeCadBlockNotice, setFreeCadBlockNotice] = useState<string | null>(null);
+  const [freeCadExplainer, setFreeCadExplainer] = useState<{ title: string; message: string; actionLabel?: string } | null>(null);
+  const [trialUseNotice, setTrialUseNotice] = useState<{ key: number; remaining: number } | null>(null);
+  const [showFreeCadTrialGate, setShowFreeCadTrialGate] = useState(false);
+  const pendingFreeCadActionRef = useRef<{ kind: 'deed' } | { kind: 'agent'; agent: AgentType } | null>(null);
+  const isFreeCadActive = cadEntryMode === 'free' && !hasLegalSignature;
+
+  const openLegalGateForBusiness = useCallback(() => {
+    pendingLegalLaunchRef.current = 'blank';
+    setShowWelcome(false);
+    setShowLegalGate(true);
+  }, [setShowWelcome]);
+
+  // Signed devices never keep a stale free mode.
+  useEffect(() => {
+    if (hasLegalSignature && cadEntryMode === 'free') {
+      writeCadEntryMode('business');
+      setCadEntryMode('business');
+    }
+  }, [hasLegalSignature, cadEntryMode]);
+
+  // Drop a stale per-run warning when the user leaves the free workspace.
+  useEffect(() => {
+    if (!isFreeCadActive) setTrialUseNotice(null);
+  }, [isFreeCadActive]);
+
+  // Refresh the trial snapshot whenever a free session becomes active.
+  useEffect(() => {
+    if (!isFreeCadActive) return;
+    let cancelled = false;
+    void getTrialSnapshot().then(snapshot => {
+      if (!cancelled) setTrialSnapshot(snapshot);
+    });
+    return () => { cancelled = true; };
+  }, [isFreeCadActive]);
+
+  // Local autosave for the trial workspace. This is deliberately separate from
+  // the explicit .lsvz save, which remains available in free mode.
+  useEffect(() => {
+    if (!isFreeCadActive) return;
+    scheduleFreeCadDraftSave(() => ({
+      version: 1,
+      savedAt: new Date().toISOString(),
+      pointLists,
+      lines,
+      centerlines,
+      settings,
+      jobInfo,
+    }));
+  }, [isFreeCadActive, pointLists, lines, centerlines, settings, jobInfo]);
 
   // --- FLOOD AGENT (v26.05.17.16) ---
   // Pilot floating-dialog UX. The panel is visible whenever activeAgent ===
@@ -1742,12 +1891,8 @@ const AppContent = () => {
   // first point is stored, so a GPS-applied projection is not forgotten.
   const [projectionGpsFix, setProjectionGpsFix] = useState<{ latitude: number; longitude: number } | null>(null);
 
-  // Boundary files � created when the Boundary Agent generates a traverse; linked to canvas editor
-  const [boundaryFiles, setBoundaryFiles] = useState<BoundaryFile[]>([]);
-  // Boundary files live in App state rather than CanvasStateContext, so they opt
-  // into undo/redo explicitly. Without this, editing a deed traverse would not be
-  // undoable even though the points and lines it produces are.
-  useHistorySlice('boundaryFiles', boundaryFiles, setBoundaryFiles);
+  // Boundary files live in CanvasStateContext so they participate in both
+  // undo/redo and the feature timeline without a second registration path.
   const [isBoundaryEditorVisible, setIsBoundaryEditorVisible] = useState(false);
   /** Tri-state placement for the Boundary Dialog. Defaults to the tool shelf. */
   const [boundaryDockMode, setBoundaryDockMode] = useState<DockMode>('toolshelf');
@@ -1758,6 +1903,14 @@ const AppContent = () => {
   }, []);
   /** Open tabs in the unified tool shelf. Command Reference is the default tab. */
   const [openToolShelfPanelIds, setOpenToolShelfPanelIds] = useState<string[]>(['command-help']);
+  /** Open a workspace panel as a tool-shelf tab, adding it to the strip if needed. */
+  const openToolShelfPanel = useCallback((panelId: string) => {
+    setOpenToolShelfPanelIds(previous => (
+      previous.includes(panelId) ? previous : [...previous, panelId]
+    ));
+    requestToolShelfTab(panelId);
+    setIsToolShelfVisible(true);
+  }, [requestToolShelfTab, setIsToolShelfVisible]);
   /** The shelf owns the canvas right edge only while the canvas workspace is visible. */
   const showToolShelf =
     activeVisualPanel === 'canvas' && isToolShelfVisible && !isInitialScreen && !showWelcome;
@@ -2904,7 +3057,8 @@ const AppContent = () => {
   );
 
   // Free-tier time lock: only pauses free users who do not have an active LSAI enabling key.
-  const isFreeTierTimeLocked = Boolean(isLocked && !hasLsaiEnablingKey);
+  // Free CAD is a drawing trial, so the 4hr on/off cycle never pauses it.
+  const isFreeTierTimeLocked = Boolean(isLocked && !hasLsaiEnablingKey && !isFreeCadActive);
 
   const isServiceEnabled = hasLsaiEnablingKey;
   const isInferenceEnabled = Boolean(
@@ -2957,10 +3111,10 @@ const AppContent = () => {
 
   const resolveModelForAgent = useCallback((agentType: AgentType, baseModel: string): string => {
     if (baseModel === AUTO_MODEL_OPTION) {
-      return getAutoModelForAgent(agentType, autoHighThinkingModel);
+      return getAutoModelForAgent(agentType);
     }
     return getModelForAgent(agentType, baseModel);
-  }, [autoHighThinkingModel]);
+  }, []);
 
   // Get current model name for the active agent
   const currentModelName = useMemo(() => {
@@ -3147,8 +3301,8 @@ const AppContent = () => {
     const styleEntries = (agentType === AgentType.CIVIL_DRAFTER || agentType === AgentType.ROADING_AGENT) && draftingStyleLibrary.length > 0
       ? draftingStyleLibrary
       : undefined;
-    return startGeminiChat(agentType, fileContext, activeModel, settings, trainingContext, override, cadLayerContext, styleEntries, autoHighThinkingModel);
-  }, [activeModel, settings, agentModelOverrides, cadManagerContext, draftingStyleLibrary, autoHighThinkingModel]);
+    return startGeminiChat(agentType, fileContext, activeModel, settings, trainingContext, override, cadLayerContext, styleEntries);
+  }, [activeModel, settings, agentModelOverrides, cadManagerContext, draftingStyleLibrary]);
 
   // Force Agent is a test switch: when it changes, drop the in-memory chat
   // session for the affected agent(s) so the next turn rebuilds with the
@@ -3831,6 +3985,7 @@ const AppContent = () => {
     const success = unlockWithApiKey(apiKey);
     if (success) {
       setShowApiKeyModal(false);
+      if (isFreeCadActive) openLegalGateForBusiness();
 
       const isSuperUserPassword = apiKey.trim() === 's3cur3s3cur3';
       const isLandSurvKey = isDemoApiKey(apiKey);
@@ -3915,6 +4070,7 @@ const AppContent = () => {
           setHasConfirmedApiKey(true); // Allow bypass access
         }
       }
+      if (success && isFreeCadActive) openLegalGateForBusiness();
       return success;
     };
 
@@ -3953,6 +4109,7 @@ const AppContent = () => {
         setHasConfirmedApiKey(false);
         setShowApiKeyConfirmation(true);
       }
+      if (isFreeCadActive) openLegalGateForBusiness();
       return true;
     };
 
@@ -4558,7 +4715,7 @@ const AppContent = () => {
     setIsHelpModalVisible(false);
     setIsSettingsVisible(false);
     setIsChatPanelVisible(false);
-    setIsToolShelfVisible(true);
+    setIsToolShelfVisible(isDesktop);
     setPointWorkflowStarted(false);
     setPointWorkflowPanelSeen(false);
     setDismissedPointWorkflowKey(null);
@@ -4658,6 +4815,13 @@ const AppContent = () => {
     setContourLabelTool(null);
     setLineLabelScale(1);
     setCenterlines([]);
+    timeline.resetTimeline({
+      pointLists: [{ id: 'working', name: 'Unsaved Points', points: [], isVisible: true }],
+      lines: [],
+      centerlines: [],
+      contourLabels: [],
+      boundaryFiles: [],
+    });
     setLinesVisible(true);
     setCenterlinesVisible(true);
      setCutSheetInfo({
@@ -4672,7 +4836,7 @@ const AppContent = () => {
     setIsPdfViewerFullscreen(false);
     setIsStationingPanelExpanded(false);
     if(!isDesktop) setIsMobileMenuOpen(false);
-  }, [isDesktop, settings.defaultCutSheetInfo, clearHighlights]);
+  }, [isDesktop, settings.defaultCutSheetInfo, clearHighlights, timeline.resetTimeline]);
 
   const handleSuperUserReset = useCallback(() => {
     if (!isSuperUser) return;
@@ -5096,6 +5260,128 @@ const AppContent = () => {
     setLines,
     setContourLabels,
   ]);
+
+  const startFreeCadWorkspace = useCallback(() => {
+    if (hasLegalSignature) return;
+    writeCadEntryMode('free');
+    setCadEntryMode('free');
+    setFreeCadBlockNotice(null);
+    clearSoilLimitationsChartCache();
+    setSoilLimitationsReport(null);
+    setSoilLimitationsSheetNotes(null);
+    setPendingSheetNotes(null);
+
+    // Restore the local trial draft before the first paint of the workspace.
+    const draft = loadFreeCadDraft();
+    if (draft) {
+      setPointLists(draft.pointLists);
+      setLines(draft.lines);
+      setCenterlines(draft.centerlines);
+      setSettings(draft.settings);
+      setJobInfo(draft.jobInfo);
+    }
+
+    try {
+      startSession();
+      logActionToFieldbook('Opened Free CAD. Trial workspace with 20 AI prompts on this device.');
+      setActiveAgent(AgentType.LSVZ_AGENT);
+      setActiveVisualPanel('canvas');
+      setIsChatPanelVisible(false);
+      setIsInitialScreen(false);
+      showView('canvas');
+      pushNavigation(AgentType.LSVZ_AGENT, 'canvas');
+      setShowWelcome(false);
+      void getTrialSnapshot().then(snapshot => setTrialSnapshot(snapshot));
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to open the Free CAD workspace.';
+      setError(`Initialization Error: ${errorMessage}`);
+    }
+  }, [
+    hasLegalSignature,
+    startSession,
+    logActionToFieldbook,
+    setActiveAgent,
+    setActiveVisualPanel,
+    setIsChatPanelVisible,
+    setIsInitialScreen,
+    showView,
+    pushNavigation,
+    setShowWelcome,
+    setError,
+    setPointLists,
+    setLines,
+    setCenterlines,
+    setSettings,
+    setJobInfo,
+  ]);
+
+  const handleStartFreeCad = useCallback(() => {
+    if (hasLegalSignature) {
+      handleLaunchAgenticCad('blank');
+      return;
+    }
+    startFreeCadWorkspace();
+  }, [hasLegalSignature, handleLaunchAgenticCad, startFreeCadWorkspace]);
+
+  const handleStartBusinessCad = useCallback(() => {
+    setFreeCadExplainer(null);
+    setFreeCadBlockNotice(null);
+    // The mode flips only after the signature gate succeeds (see onSigned).
+    // Cancelling the gate must leave the device in its existing free mode.
+    if (hasLegalSignature) {
+      writeCadEntryMode('business');
+      setCadEntryMode('business');
+    }
+    handleLaunchAgenticCad('blank');
+  }, [hasLegalSignature, handleLaunchAgenticCad]);
+
+  const handleFreeCadTrialAccepted = useCallback(async (record: TrialAcceptanceRecord) => {
+    await acceptTrialTerms(record);
+    writeCadEntryMode('free');
+    setCadEntryMode('free');
+    setTrialSnapshot(await getTrialSnapshot());
+    setShowFreeCadTrialGate(false);
+    pendingFreeCadActionRef.current = null;
+    startFreeCadWorkspace();
+  }, [startFreeCadWorkspace]);
+
+  const openFreeCadPlan = useCallback(() => {
+    setFreeCadExplainer(null);
+    setFreeCadBlockNotice(null);
+    setUpgradeModalNotice({
+      title: 'Keep the assistant running',
+      message: 'Free CAD drawing, editing, and saving stay free. Choose a plan or add your own AI key to keep using inference.',
+    });
+    setShowUpgradeModal(true);
+  }, []);
+
+  const handleFreeCadBlocked = useCallback((_feature: string, notice: string) => {
+    setFreeCadExplainer(null);
+    setFreeCadBlockNotice(notice);
+    setWelcomeInitialMode('main');
+    setShowWelcome(true);
+  }, [setShowWelcome]);
+
+  const handleCloseWelcome = useCallback(() => {
+    setShowWelcome(false);
+    setWelcomeInitialMode('main');
+    setFreeCadBlockNotice(null);
+    setFreeCadExplainer(null);
+  }, [setShowWelcome]);
+
+  // Components that do not receive App callbacks (Sheet View, C3D, clipboard)
+  // dispatch this event; it funnels into the same Business CAD redirect.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ feature?: string; notice?: string }>).detail;
+      handleFreeCadBlocked(
+        detail?.feature ?? 'blocked',
+        detail?.notice ?? 'That capability is part of Business CAD. Sign the Terms of Service once to unlock it.',
+      );
+    };
+    window.addEventListener('landsurv:free-cad-blocked', handler as EventListener);
+    return () => window.removeEventListener('landsurv:free-cad-blocked', handler as EventListener);
+  }, [handleFreeCadBlocked]);
 
   const handleGoHome = useCallback(() => {
     setShowWelcome(false);
@@ -6312,6 +6598,7 @@ const AppContent = () => {
         if (parsedDxf.lines.length > 0) {
             setLines(prev => [...prev, ...parsedDxf.lines]);
         }
+        recordTimelineEvent('Imported DXF', 'upload', `${name} · ${drawnSummary}`);
 
         if (dxfFile) {
             setGeneratedFiles(prev => [...prev, { ...dxfFile, name: `(Archived) ${dxfFile.name}` }]);
@@ -6371,7 +6658,7 @@ const AppContent = () => {
       const errorMessage = err instanceof Error ? err.message : 'Failed to initialize AI chat.';
       setError(`Initialization Error: ${errorMessage}`);
     }
-  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, dxfFile, settings, startChatWithOverride, setPointLists, setLines, canvas2dRef]);
+  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, dxfFile, settings, startChatWithOverride, setPointLists, setLines, canvas2dRef, recordTimelineEvent]);
 
 
 
@@ -6406,6 +6693,11 @@ const AppContent = () => {
             return prev.map(l => l.id === 'working' ? updatedWorkingList : l);
         });
         setLines(prev => [...prev, ...newLines]);
+        recordTimelineEvent(
+          'Plotted GeoJSON',
+          'boundary',
+          `${file.name} · ${newPoints.length} points · ${newLines.length} lines`,
+        );
         showView('canvas');
         // Auto-zoom after the state update has had a chance to render.
         setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
@@ -6417,7 +6709,7 @@ const AppContent = () => {
       setError(`Failed to plot GeoJSON: ${(e as Error).message}`);
       setTimeout(() => setError(null), 5000);
     }
-  }, [logActionToFieldbook, showView, pointLists, setGisFeatures]);
+  }, [logActionToFieldbook, showView, pointLists, setGisFeatures, recordTimelineEvent]);
 
   const processGisFile = useCallback((file: SessionFile, currentSettings: Settings, source: 'file' | 'url' = 'file') => {
     const { name, content } = file;
@@ -6449,6 +6741,11 @@ const AppContent = () => {
                 return prev.map(l => l.id === 'working' ? updatedWorkingList : l);
             });
             setLines(prev => [...prev, ...newLines]);
+            recordTimelineEvent(
+              source === 'url' ? 'Loaded GIS URL' : 'Imported GIS file',
+              'boundary',
+              `${file.name} · ${newPoints.length} points · ${newLines.length} lines`,
+            );
             showView('canvas');
             // Auto-zoom after the state update has had a chance to render.
             setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
@@ -6515,7 +6812,7 @@ const AppContent = () => {
       const errorMessage = err instanceof Error ? err.message : 'Failed to initialize AI chat.';
       setError(`Initialization Error: ${errorMessage}`);
     }
-}, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, gisFile, pointLists, setGisFeatures, setPointLists, setLines, startChatWithOverride, canvas2dRef]);
+}, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, gisFile, pointLists, setGisFeatures, setPointLists, setLines, startChatWithOverride, canvas2dRef, recordTimelineEvent]);
 
   const handleGisUploaded = useCallback((content: string, name: string, source: 'file' | 'url' = 'file') => {
     const newFile: SessionFile = { name, content };
@@ -6684,8 +6981,9 @@ const AppContent = () => {
     closeA2UISurface('aoi-surface');
     showView('canvas');
     canvas2dRef.current?.startAoiDrawing?.();
+    recordTimelineEvent('AOI drawing armed', 'aoi', 'Draw and close a boundary to hold the area of interest.');
     logActionToFieldbook('AOI draw armed from the A2UI AOI menu.');
-  }, [logActionToFieldbook, showView]);
+  }, [logActionToFieldbook, recordTimelineEvent, showView]);
 
   const handleCreateAoiFromInclusion = useCallback((sourceId: string): { ok: boolean; message?: string } => {
     const source = inclusionBoundaries.find(boundary => boundary.id === sourceId);
@@ -6764,8 +7062,9 @@ const AppContent = () => {
     setLines(prev => prev.filter(line => line.polylineId !== target.polylineId));
     setAoiBoundaries(prev => prev.filter(boundary => boundary.id !== id));
     if (activeAoiBoundaryId === id) setActiveAoiBoundaryId(null);
+    recordTimelineEvent('AOI released', 'aoi', `Removed ${target.name} from the canvas.`);
     logActionToFieldbook(`Removed AOI "${target.name}".`);
-  }, [activeAoiBoundaryId, aoiBoundaries, logActionToFieldbook]);
+  }, [activeAoiBoundaryId, aoiBoundaries, logActionToFieldbook, recordTimelineEvent]);
 
   const handleImagesSubmitted = useCallback((files: SessionFile[]) => {
     try {
@@ -9724,8 +10023,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setIsShrinkwrapPanelMinimized(false);
     setIsShrinkwrapFreehandActive(false);
     setToolDockMode('shrinkwrap', 'floating');
+    recordTimelineEvent(
+      'Shrinkwrap preview',
+      'shrinkwrap',
+      `${usable.length} source point${usable.length === 1 ? '' : 's'} · ${hull.length} hull vertices · ${layer}`,
+    );
     logActionToFieldbook(`Shrinkwrap preview opened from canvas with ${usable.length} visible source points.`);
-  }, [logActionToFieldbook, pointLists, setToolDockMode]);
+  }, [logActionToFieldbook, pointLists, recordTimelineEvent, setToolDockMode]);
 
   // CACP � COGO Agent skills. Owns `cogo_inverse` (bearing/distance between two
   // points) and `cogo_shrinkwrap` (2D convex hull around a point set, drawn as
@@ -9834,6 +10138,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setIsShrinkwrapPanelMinimized(false);
       setIsShrinkwrapFreehandActive(false);
       setToolDockMode('shrinkwrap', 'floating');
+      recordTimelineEvent(
+        reuseExisting ? 'Shrinkwrap refreshed' : 'Shrinkwrap preview',
+        'shrinkwrap',
+        `${sourcePns.length} source points · ${hull.length} hull vertices · ${layer}`,
+      );
 
       const hullPns = hull.map(h => h.pointNumber);
       hullPns.push(hullPns[0]);
@@ -9854,7 +10163,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     });
 
     return () => { unsubInverse(); unsubShrinkwrap(); };
-  }, [logActionToFieldbook, setToolDockMode]);
+  }, [logActionToFieldbook, recordTimelineEvent, setToolDockMode]);
 
   // CACP — Geospatial AI skills (SamGeo feature extraction & SAM-Road road centerlines).
   const handleGeoRoadReview = useCallback((report: RoadTakeReport) => {
@@ -10119,6 +10428,31 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }
   }, [aoiBoundaries, activeAoiBoundaryId]);
 
+  // Catch every new held AOI, including the freehand canvas path that never
+  // passes through the A2UI AOI panel. A document-id guard prevents a loaded
+  // session from replaying all of its AOIs into the fresh timeline.
+  const knownAoiIdsRef = useRef<{ documentId: string; ids: Set<string> } | null>(null);
+  useEffect(() => {
+    const currentIds = new Set(aoiBoundaries.map(boundary => boundary.id));
+    const previous = knownAoiIdsRef.current;
+    knownAoiIdsRef.current = { documentId: timeline.document.id, ids: currentIds };
+    if (!previous || previous.documentId !== timeline.document.id) return;
+    for (const boundary of aoiBoundaries) {
+      if (previous.ids.has(boundary.id)) continue;
+      recordTimelineEvent(
+        `AOI held · ${boundary.name}`,
+        'aoi',
+        boundary.source === 'address'
+          ? 'Held from a geocoded address envelope.'
+          : boundary.source === 'boundary'
+            ? 'Held from a deed boundary.'
+            : boundary.source === 'inclusion'
+              ? 'Held from an inclusion boundary.'
+              : 'Drawn on the canvas as the active clipping area.',
+      );
+    }
+  }, [aoiBoundaries, recordTimelineEvent, timeline.document.id]);
+
   // CACP � Project Knowledge Base skill. Any agent can ask the KB for facts
   // via askPeer('kb_query', {category?, subject?, predicate?, query?}).
   // This is the central "super brain" lookup that ties together everything
@@ -10305,6 +10639,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             ...taggedLabels,
         ]);
         setContourGenerations(prev => [...prev, newGeneration]);
+        recordTimelineEvent(
+          'Generated contours',
+          'contour',
+          `${genName} · ${contourLines.length} segments · ${contourSettings.contourInterval}' interval`,
+        );
         setContourFocusRequest({ id: genId, token: Date.now() });
         setIsContourManagementVisible(true);
         logActionToFieldbook(`CACP contour layers: ${contourLayers.minorLayer} (minor) / ${contourLayers.majorLayer} (major).`);
@@ -10317,7 +10656,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     } finally {
         setIsGeneratingContours(false);
     }
-  }, [points, lines, contourSettings, tinSurfaces, logActionToFieldbook, showView]);
+  }, [points, lines, contourSettings, tinSurfaces, logActionToFieldbook, showView, recordTimelineEvent]);
 
   /** Bring the contour controls into view, docked in the tool shelf. */
   const openContourGenerationPanel = useCallback(() => {
@@ -10357,6 +10696,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         : built;
       const surface: TinSurface = { ...trimmed, hidden: false };
       setTinSurfaces(prev => [...prev, surface]);
+      recordTimelineEvent(
+        'Created surface',
+        'surface',
+        `${surface.name} · ${surface.vertices.length} vertices · ${surface.triangles.length} triangles`,
+      );
       setContourSettings(prev => ({ ...prev, sourceType: 'tin', sourceTinId: surface.id }));
       const fileName = uniqueTinExportName(surface, 'native');
       addGeneratedFile({ name: fileName, content: tinSurfaceToNativeTin(surface) });
@@ -10383,7 +10727,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     } finally {
       if (generationId) setCreatingTinGenerationId(null);
     }
-  }, [contourGenerations, lines, inclusionBoundaries, addGeneratedFile, addNotification, logActionToFieldbook]);
+  }, [contourGenerations, lines, inclusionBoundaries, addGeneratedFile, addNotification, logActionToFieldbook, recordTimelineEvent]);
 
   const handleExportTinSurface = useCallback((sourceTinId?: string, format: 'landxml' | 'native' = 'landxml'): SessionFile | null => {
     const tin = (sourceTinId ? tinSurfaces.find(t => t.id === sourceTinId) : undefined) ?? tinSurfaces[tinSurfaces.length - 1];
@@ -13093,6 +13437,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           widgetType: 'spreadsheet',
           status: 'expanded',
           spreadsheet: spec,
+          textEditor: {
+            fileName: spec.fileName?.trim() || `${title}.csv`,
+            content: spreadsheetToCsv(spec),
+            mode: 'edit',
+          },
         },
       },
       'floating',
@@ -15012,7 +15361,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, [openStandaloneA2UISurface]);
 
   /** Dock the formatted HELP reference as a compact A2UI surface. */
-  const openCommandHelpSurface = useCallback((reference: CommandReference) => {
+  const openCommandHelpSurface = useCallback(() => {
     openStandaloneA2UISurface({
       role: MessageRole.MODEL,
       text: 'Command help — click a command to run it on the canvas.',
@@ -15022,11 +15371,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         widgetType: 'command-help',
         workspaceTool: 'command-help',
         status: 'expanded',
-        commandHelp: {
-          groups: reference.groups,
-          notes: reference.notes,
-          text: reference.text,
-        },
       },
     }, 'toolshelf');
   }, [openStandaloneA2UISurface]);
@@ -15336,6 +15680,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       askPeerDepth > 0 ||
       query.startsWith('[CACP ') ||
       query.startsWith('[KB RECALL');
+
+    // Every external user utterance belongs on the timeline. If a sketch is
+    // open the provider holds it with that sketch so the strip stays compact.
+    if (!isInternalFollowUp && askPeerDepth === 0 && query.trim()) {
+      const askedAgent = agentOverride ?? activeAgent;
+      timeline.recordEvent({
+        kind: 'utterance',
+        label: query.trim(),
+        icon: 'question',
+        detail: `Asked ${agentConfig[askedAgent]?.label ?? askedAgent}`,
+      });
+    }
     // Developer / Testing: a forced agent pins interactive requests to one
     // specialist. Explicit agent overrides (CACP peer calls, C3D hand-offs,
     // delegated follow-ups) keep their original target.
@@ -16603,6 +16959,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
         let surfacePayload: A2UIPayload;
         let surfaceReplyText = surfaceIntent.replyText;
+        let surfaceDockMode: 'floating' | null = null;
         if (surfaceIntent.surface === 'centerline-picker') {
           const form = {
             title: 'Which centerline?',
@@ -16678,6 +17035,24 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             },
           };
         } else if (surfaceIntent.surface === 'point-list') {
+          if (surfaceIntent.view === 'choice') {
+            const question = 'How would you like to view the points?';
+            surfaceSetHistory(prev => [
+              ...markPendingA2UICompleted(prev),
+              { role: MessageRole.USER, text: query },
+              {
+                role: MessageRole.MODEL,
+                text: question,
+                result: question,
+                quickThoughtLabel: 'Point list',
+                quickThoughtText: 'Choose a text file or a spreadsheet.',
+                questionOptions: [...surfaceIntent.suggestedQuestions],
+              },
+            ]);
+            setSuggestedQuestions(surfaceIntent.suggestedQuestions);
+            return;
+          }
+          surfaceDockMode = 'floating';
           const pointData = buildPointListSurfaceData(pointLists);
           const textEditorSpec = {
             fileName: pointData.fileName,
@@ -16825,15 +17200,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           }
           setIsSpreadsheetEditorOpen(true);
         }
+        const surfaceMessage: ChatMessage = {
+          role: MessageRole.MODEL,
+          text: surfaceReplyText,
+          a2ui: surfacePayload,
+        };
         surfaceSetHistory(prev => [
           ...markPendingA2UICompleted(prev),
           { role: MessageRole.USER, text: query },
-          {
-            role: MessageRole.MODEL,
-            text: surfaceReplyText,
-            a2ui: surfacePayload,
-          },
+          surfaceMessage,
         ]);
+        if (surfaceDockMode) handleSetA2UIDockMode(surfaceMessage, surfaceDockMode);
         setSuggestedQuestions(surfaceIntent.suggestedQuestions);
         return;
       }
@@ -16953,6 +17330,46 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // service access or superuser is present. Boundary Agent turns are exempt: free
     // users get 5 fingerprinted free deeds that are metered separately, so a deed can
     // be drafted at any time until the allowance runs out.
+    // Free CAD trial: capability-blocked agents never reach a provider, and
+    // metered agents spend one of the 20 lifetime prompts (one per user prompt).
+    if (isFreeCadActive) {
+      const trialAgent = agentOverride ?? forcedAgent ?? activeAgent;
+      if (!isInternalFollowUp) {
+        const trialIsDeed = trialAgent === AgentType.DEED_READER;
+        const consumed = await consumeTrialPrompt({ kind: trialIsDeed ? 'deed' : 'general' });
+        setTrialSnapshot(consumed.snapshot);
+        if (!consumed.allowed) {
+          if (consumed.reason === 'deed-limit') {
+            setFreeCadExplainer({
+              title: 'Free CAD deed prompts used',
+              message: 'Your 5 free deed prompts are used. You can still draw, edit, save, and export your work. Deed processing needs a key or Business CAD.',
+              actionLabel: 'Unlock deed processing',
+            });
+            return;
+          }
+          if (consumed.reason === 'terms-stale') {
+            handleFreeCadBlocked(
+              'prompt-limit',
+              'Please review the updated Free CAD Trial Terms before using the assistant.',
+            );
+            return;
+          }
+          setFreeCadExplainer({
+            title: consumed.reason === 'exhausted' ? 'CAD remains free — inference paused' : 'Inference is paused',
+            message: consumed.reason === 'exhausted'
+              ? 'Your 20 free assistant questions are used. Keep drawing, editing, saving, and exporting — CAD remains free. Only inference is paused. Add a key or move to Business CAD when you want the assistant back.'
+              : 'We could not verify your free prompt count. Keep drawing, editing, saving, and exporting — CAD remains free. Inference is paused until the trial counter is reachable.',
+            actionLabel: 'Unlock inference',
+          });
+          return;
+        }
+        setTrialUseNotice(prev => ({
+          key: (prev?.key ?? 0) + 1,
+          remaining: consumed.snapshot.remaining,
+        }));
+      }
+    }
+
     const requestedAgent = agentOverride ?? forcedAgent ?? activeAgent;
     if (isFreeTierTimeLocked && requestedAgent !== AgentType.DEED_READER) {
       setIsLockDismissed(false);
@@ -16976,7 +17393,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // deed turn must never be stopped by the BYOK gate. /api/deeds meters the
     // allowance; free-tier exhaustion is handled by the deed-credit checks.
     const deedFreeTierEligible = requestedAgent === AgentType.DEED_READER && !isOssBuild();
-    if (!hasAnyInferenceKey && !deedFreeTierEligible) {
+    if (!hasAnyInferenceKey && !deedFreeTierEligible && !isFreeCadActive) {
       setShowApiKeyModal(true);
       return;
     }
@@ -18421,7 +18838,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           'stationingSettings', 'contourParameters', 'profileParameters',
           'cutSheet', 'newFile', 'modifiedContent', 'plotGisFeature',
           'plotGeoJson', 'closureParameters', 'deedMetadata', 'boundaries',
-          'descriptionsFound', 'recallFact',
+          'descriptionsFound', 'recallFact', 'open_spreadsheet',
         ]);
         const thoughtText = thinking;
         let searchFrom = 0;
@@ -18608,6 +19025,44 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           console.log('[JSON PARSING] Successfully parsed JSON. Keys:', Object.keys(parsedJson));
           if (parsedJson.lines) {
             console.log('[JSON PARSING] Found lines array, length:', parsedJson.lines.length);
+          }
+
+          // A2UI spreadsheet action. Models sometimes put this object inside
+          // the thought trace instead of calling CACP, which used to leave raw
+          // JSON in chat and never open the surface. Render the same data with
+          // both Text and Sheet views, and strip the payload from the bubble.
+          if (parsedJson.open_spreadsheet) {
+            const spreadsheetPayload = buildSpreadsheetA2UIPayload(agent, parsedJson.open_spreadsheet);
+            if (spreadsheetPayload?.spreadsheet) {
+              const surfaceTitle = spreadsheetPayload.spreadsheet.title?.trim() || 'Spreadsheet';
+              const surfaceText = `Here is **${surfaceTitle}** as a live A2UI surface. Use the **Text** and **Sheet** tabs to switch views.`;
+              setHistory(prev => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last && last.role === MessageRole.MODEL) {
+                  const cleanedText = (last.result || last.text || '')
+                    .replace(/```json[\s\S]*?```/gi, '')
+                    .replace(jsonContentToParse ?? '', '')
+                    .replace(/\*Disclaimer: Your requested data is ready for professional review\.\*/gi, '')
+                    .trim();
+                  next[next.length - 1] = {
+                    ...last,
+                    text: cleanedText || surfaceText,
+                    result: cleanedText || surfaceText,
+                    a2ui: spreadsheetPayload,
+                  };
+                } else {
+                  next.push({
+                    role: MessageRole.MODEL,
+                    text: surfaceText,
+                    result: surfaceText,
+                    a2ui: spreadsheetPayload,
+                  });
+                }
+                return next;
+              });
+              logActionToFieldbook(`Opened A2UI spreadsheet "${surfaceTitle}" from the model response.`);
+            }
           }
 
           // CACP � recallFact tool call: agent is asking us to look up a fact
@@ -20929,6 +21384,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
                 console.log('[DEED_PARSE_BF] About to setBoundaryFiles. newFiles:', newFiles.length,
                   'tractCallGroups sizes:', tractCallGroups.map(g => g.length));
+                const deedFeatureName = newFiles[0]?.sourceDeedName ?? newFiles[0]?.name ?? 'Deed';
+                beginTimelineImport(`Import deed ${deedFeatureName}`, {
+                  icon: 'deed',
+                  detail: `Deed boundary ${deedFeatureName}`,
+                });
                 setBoundaryFiles(prev => [...prev, ...newFiles]);
                 if (pendingDeedDrawRef.current) {
                   pendingDeedDrawIdsRef.current = newFiles.map(file => file.id);
@@ -21691,7 +22151,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     closePointEntrySurface, openCivilDrafterContextSurface,
     ensureProjectClusterLocations, ensureParcelGroundingForRoadDraw, openProjectLocationPanel, resolveProjectLocationAction,
     buildProjectLocationPayload, applyProjectProjection, buildProjectionSurfacePayload,
-    openProjectionControls
+    openProjectionControls, timeline.recordEvent
   ]);
 
   // CACP hand-offs from the Civil 3D connector arrive on the sync socket, which
@@ -22347,12 +22807,23 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   // FUTURE GEMINI: This function is the primary mechanism for switching between agents.
   // The logic to manage `activeAgent`, `isInitialScreen`, and `isAddingData` is crucial. Do not change it.
   const handleAgentChange = useCallback((agent: AgentType) => {
-    // FIRST-TIME LEGAL GATE (v26.05.17.15) � block the user on the very first
-    // agent click until they sign the agreement. Once signed (localStorage flag),
-    // this short-circuit never fires again on this device.
-    if (!hasLegalSignature && !hasSignedLegalAgreement()) {
-      setShowLegalGate(true);
-      return;
+    const freeEntry = readCadEntryMode() === 'free' && !hasLegalSignature;
+    // Free CAD accepts its trial terms in the welcome card or the lightweight
+    // no-signature gate. Agent selection from Home must not reopen the full TOS
+    // signature gate; it should only ask for the trial terms when needed.
+    if (!freeEntry && !hasLegalSignature && !hasSignedLegalAgreement()) {
+      if (isInitialScreen) {
+        if (!hasAcceptedTrialTerms()) {
+          pendingFreeCadActionRef.current = { kind: 'agent', agent };
+          setShowFreeCadTrialGate(true);
+          return;
+        }
+        writeCadEntryMode('free');
+        setCadEntryMode('free');
+      } else {
+        setShowLegalGate(true);
+        return;
+      }
     }
 
     // Experimental Roading is opt-in. A stale session, CACP focus, force-agent
@@ -22371,6 +22842,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setError('Redline Agent is experimental and disabled. Enable it in Settings > Experimental Agents to use it.');
       return;
     }
+
+    setShowWelcome(false);
 
     // Push current state to navigation history before changing
     if (isSessionActive && !isInitialScreen) {
@@ -22457,7 +22930,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               }
         }
     }
-  }, [isDesktop, isSessionActive, showView, activeVisualPanel, activeAgent, handleStartGpsStakeoutSession, pushNavigation, isInitialScreen, initializedAgents, pointLists, settings, dxfFile, startChatWithOverride, setCivilDrafterChat, setCivilDrafterChatHistory, setRawFile, logActionToFieldbook, cadStandardsLoaded, handleCadManagerSessionStart, initializeDroneAgent]);
+  }, [isDesktop, isSessionActive, setShowWelcome, showView, activeVisualPanel, activeAgent, handleStartGpsStakeoutSession, pushNavigation, isInitialScreen, initializedAgents, pointLists, settings, dxfFile, startChatWithOverride, setCivilDrafterChat, setCivilDrafterChatHistory, setRawFile, logActionToFieldbook, cadStandardsLoaded, handleCadManagerSessionStart, initializeDroneAgent]);
 
   /**
    * Experimental agent click: instead of bouncing into App Settings, raise an
@@ -22630,8 +23103,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     handleReset();
   }, [activeModel, confirmFableSelection, handleReset]);
 
-  // Normal follows the existing Auto fast/high-thinking routing. High Thinking
-  // pins every agent to the configured high-reasoning route. Clear legacy
+  // Normal uses the Auto fast/Hydrogen routing. High Thinking pins every agent
+  // to the configured high-reasoning model (Argon by default). Clear legacy
   // per-agent overrides so the command-bar choice applies globally.
   const handleModelModeSelect = useCallback((mode: 'normal' | 'high') => {
     if (mode === 'high' && !confirmFableSelection(autoHighThinkingModel)) return;
@@ -22683,19 +23156,54 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
   // Welcome screen "Draft Deed" shortcut: dismiss the welcome modal and land the
   // user straight on the deed upload screen (Boundary Agent input).
-  const handleOpenDeedUpload = useCallback(() => {
-    // First-time legal gate: remember the intent so signing continues to the upload screen.
-    if (!hasLegalSignature && !hasSignedLegalAgreement()) {
-      pendingLegalLaunchRef.current = 'deed';
-      setShowWelcome(false);
-      setShowLegalGate(true);
-      return;
-    }
+  const openFreeDeedUpload = useCallback(() => {
     setShowWelcome(false);
     setWelcomeInitialMode('main');
     setAutoOpenDeedUpload(true);
     handleAgentChange(AgentType.DEED_READER);
-  }, [hasLegalSignature, handleAgentChange, setShowWelcome, setWelcomeInitialMode]);
+  }, [handleAgentChange, setShowWelcome, setWelcomeInitialMode]);
+
+  const handleOpenDeedUpload = useCallback(() => {
+    if (isFreeCadActive) {
+      openFreeDeedUpload();
+      return;
+    }
+    // Unsigned deed drafting uses the no-signature trial gate. The old full TOS
+    // signature gate is only for Business CAD.
+    if (!hasLegalSignature && !hasSignedLegalAgreement()) {
+      if (hasAcceptedTrialTerms()) {
+        writeCadEntryMode('free');
+        setCadEntryMode('free');
+        openFreeDeedUpload();
+        return;
+      }
+      pendingFreeCadActionRef.current = { kind: 'deed' };
+      setShowFreeCadTrialGate(true);
+      return;
+    }
+    openFreeDeedUpload();
+  }, [hasLegalSignature, isFreeCadActive, openFreeDeedUpload, setShowWelcome, setWelcomeInitialMode]);
+
+  const handleFreeCadTrialGateAccepted = useCallback(async (record: TrialAcceptanceRecord) => {
+    await acceptTrialTerms(record);
+    writeCadEntryMode('free');
+    setCadEntryMode('free');
+    setTrialSnapshot(await getTrialSnapshot());
+    setShowFreeCadTrialGate(false);
+
+    const pending = pendingFreeCadActionRef.current;
+    pendingFreeCadActionRef.current = null;
+
+    if (pending?.kind === 'deed') {
+      openFreeDeedUpload();
+      return;
+    }
+
+    startFreeCadWorkspace();
+    if (pending?.kind === 'agent') {
+      handleAgentChange(pending.agent);
+    }
+  }, [handleAgentChange, openFreeDeedUpload, startFreeCadWorkspace]);
 
   const handleClearCanvas = useCallback(() => {
     logActionToFieldbook('Cleared canvas view by hiding all elements.');
@@ -22731,6 +23239,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, []);
 
   const handleUpsertCenterline = useCallback((centerline: Centerline) => {
+    // A new id means BASELINE draw mode created an object, not merely edited an
+    // existing alignment. Start its feature before the centerline state lands so
+    // the transaction's start snapshot is the pre-baseline canvas.
+    const isNewBaseline = !centerlinesRef.current.some(existing => existing.id === centerline.id);
+    if (isNewBaseline && !timeline.activeTransaction && !pendingTimelineBaselineRef.current) {
+      timeline.beginFeature(centerline.name || 'Baseline', {
+        icon: 'baseline',
+        detail: 'Baseline created on canvas',
+      });
+      pendingTimelineBaselineRef.current = centerline.id;
+    }
     setCenterlines(prev => {
       const index = prev.findIndex(cl => cl.id === centerline.id);
       if (index === -1) return [centerline, ...prev];
@@ -22738,6 +23257,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       next[index] = centerline;
       return next;
     });
+  }, [timeline.activeTransaction, timeline.beginFeature]);
+
+  const handleBaselineFinish = useCallback((centerline: Centerline) => {
+    if (pendingTimelineBaselineRef.current !== centerline.id) return;
+    setPendingTimelineBaselineCommit({ id: centerline.id, piCount: centerline.pis.length });
   }, []);
 
   /** Selecting a chip reorders that alignment to the front, the active slot. */
@@ -22795,6 +23319,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setPointWorkflowStarted(true);
     setDismissedPointWorkflowKey(null);
     setActiveTrackedWorkflow('points');
+    beginTimelineImport(`Upload ${fileName} (${accepted.length} pts)`, {
+      sketchGroup: true,
+      icon: 'upload',
+      detail: `${accepted.length} point${accepted.length === 1 ? '' : 's'} from ${fileName}`,
+    });
     logActionToFieldbook(`Uploaded and added ${accepted.length} points from file: ${fileName}${skipped.length > 0 ? ` (${skipped.length} duplicates skipped)` : ''}`);
     setPointLists(prevLists => {
         const workingListIndex = prevLists.findIndex(l => l.id === 'working');
@@ -22825,7 +23354,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       message: `${accepted.length.toLocaleString()} point${accepted.length === 1 ? '' : 's'} from "${fileName}" are now on the canvas.`,
     });
     setTimeout(() => canvas2dRef.current?.zoomExtents(), 100);
-  }, [logActionToFieldbook, showView, activeAgent, getSetHistoryForAgent, setPointEditorChatHistory, canvas2dRef, addNotification, pointLists]);
+  }, [logActionToFieldbook, showView, activeAgent, getSetHistoryForAgent, setPointEditorChatHistory, canvas2dRef, addNotification, pointLists, beginTimelineImport]);
 
   // Handler to start Point Editor with an empty session (no file upload)
   const handlePointEditorSessionStart = useCallback(() => {
@@ -22887,6 +23416,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setTimeout(() => setError(null), 4000);
     }
 
+    beginTimelineImport(`Import list ${fileName} (${accepted.length} pts)`, {
+      sketchGroup: true,
+      icon: 'upload',
+      detail: `${accepted.length} point list${accepted.length === 1 ? '' : 's'} from ${fileName}`,
+    });
     logActionToFieldbook(`Imported ${accepted.length} points as new list from file: ${fileName}${skipped.length > 0 ? ` (${skipped.length} duplicates skipped)` : ''}`);
     
     setPointLists(prevLists => {
@@ -22909,7 +23443,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       title: 'Point list imported',
       message: `${accepted.length.toLocaleString()} point${accepted.length === 1 ? '' : 's'} from "${fileName}" were added as a new point list.`,
     });
-  }, [logActionToFieldbook, showView, addNotification, pointLists]);
+  }, [logActionToFieldbook, showView, addNotification, pointLists, beginTimelineImport]);
 
   // Handler for importing points from Civil 3D
   const handleImportPointsFromC3D = useCallback((importedPoints: SurveyPoint[], sourceListName: string) => {
@@ -22930,6 +23464,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setTimeout(() => setError(null), 4000);
     }
 
+    beginTimelineImport(`Import C3D ${sourceListName} (${accepted.length} pts)`, {
+      sketchGroup: true,
+      icon: 'c3d',
+      detail: `${accepted.length} point${accepted.length === 1 ? '' : 's'} from Civil 3D · ${sourceListName}`,
+    });
     logActionToFieldbook(`Imported ${accepted.length} points from Civil 3D: ${sourceListName}${skipped.length > 0 ? ` (${skipped.length} duplicates skipped)` : ''}`);
     
     setPointLists(prevLists => {
@@ -22945,9 +23484,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     });
     
     showView('canvas');
-  }, [logActionToFieldbook, showView, pointLists]);
+  }, [logActionToFieldbook, showView, pointLists, beginTimelineImport]);
+
+  // Direct drawing is normally unmanaged, but the first entity in an empty
+  // drawing should still get a timeline home. Open a sketch before the line is
+  // added and leave it open until the user explicitly closes it.
+  const beginAutoSketchForFirstLine = useCallback(() => {
+    if (!isTimelineSketchFlowEnabled) return;
+    if (linesRef.current.length > 0 || timeline.activeTransaction) return;
+    timeline.beginSketch();
+  }, [isTimelineSketchFlowEnabled, timeline.activeTransaction, timeline.beginSketch]);
 
   const handleAddLine = useCallback((newLine: SurveyLine) => {
+    beginAutoSketchForFirstLine();
     pushHistory(`Drew line ${newLine.from}�${newLine.to}`);
     // Guess the layer from the field codes / CAD layers of the points being
     // joined when the line has no explicit layer. A segment drawn onto an
@@ -22989,11 +23538,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       ),
     ]);
     logActionToFieldbook(`Drew line from ${newLine.from} to ${newLine.to}.`);
-  }, [pushHistory, logActionToFieldbook, cadManagerContext]);
+  }, [pushHistory, logActionToFieldbook, cadManagerContext, beginAutoSketchForFirstLine]);
 
   /** Apply a multi-entity CAD edit as one history entry and one state update. */
   const handleBatchLines = useCallback((removeIds: string[], newLines: SurveyLine[]) => {
     if (removeIds.length === 0 && newLines.length === 0) return;
+    if (newLines.length > 0) beginAutoSketchForFirstLine();
     pushHistory(removeIds.length > 0 ? 'Modified line geometry' : 'Added line geometry');
     setLines(prev => {
       let working = prev;
@@ -23006,7 +23556,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         ? `CAD edit: replaced ${removeIds.length} line(s) with ${newLines.length}.`
         : `CAD edit: added ${newLines.length} line(s).`,
     );
-  }, [pushHistory, logActionToFieldbook]);
+  }, [pushHistory, logActionToFieldbook, beginAutoSketchForFirstLine]);
 
   // Forward-propagate COGO from a given index through the rest of a traverse.
   // Returns updated calls (with derived chord fields filled in) plus a working
@@ -23870,7 +24420,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     }));
     setShrinkwrap(null);
     setIsShrinkwrapPanelVisible(false);
-  }, [shrinkwrap, lines, handleConvertSelectionToBoundary]);
+    recordTimelineEvent(
+      'Shrinkwrap → boundary',
+      'shrinkwrap',
+      `Reviewed hull converted to a boundary file · ${hull.length} segments`,
+    );
+  }, [shrinkwrap, lines, handleConvertSelectionToBoundary, recordTimelineEvent]);
 
   useEffect(() => {
     convertShrinkwrapToBoundaryRef.current = handleConvertShrinkwrapToBoundary;
@@ -23898,8 +24453,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         : line
     )));
     setIsInclusionBoundariesPanelVisible(true);
+    recordTimelineEvent(
+      'Shrinkwrap → inclusion',
+      'shrinkwrap',
+      `Reviewed hull held as the inclusion boundary · ${shrinkwrap.layer}`,
+    );
     logActionToFieldbook(`Shrinkwrap committed as an inclusion boundary on ${shrinkwrap.layer}.`);
-  }, [shrinkwrap, logActionToFieldbook]);
+  }, [shrinkwrap, logActionToFieldbook, recordTimelineEvent]);
 
   const handleToggleShrinkwrapFreehand = useCallback(() => {
     setIsShrinkwrapFreehandActive(prev => {
@@ -23928,10 +24488,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       cutMode: false,
       cutStartPn: null,
     } : prev);
+    recordTimelineEvent(
+      'Shrinkwrap lasso',
+      'shrinkwrap',
+      `Kept ${pool.size - outsidePns.length} of ${pool.size} points inside the lasso`,
+    );
     logActionToFieldbook(
       `Freehand shrinkwrap lasso kept ${pool.size - outsidePns.length} of ${pool.size} point(s).`,
     );
-  }, [shrinkwrap, pointLists, logActionToFieldbook]);
+  }, [shrinkwrap, pointLists, logActionToFieldbook, recordTimelineEvent]);
 
   const handleRenameBoundaryFile = useCallback((id: string, name: string) => {
     setBoundaryFiles(prev => prev.map(f => f.id === id ? { ...f, name } : f));
@@ -24783,6 +25348,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     const newLineIds = newLines.map(l => l.id!).filter(Boolean);
     const oldPointIds = new Set(file.drawnPointIds ?? []);
     const oldLineIds = new Set(file.drawnLineIds ?? []);
+    if ((oldPointIds.size === 0 && oldLineIds.size === 0) || !opts?.silent) {
+      beginTimelineImport(`Draft ${file.name}`, {
+        icon: 'boundary',
+        detail: `Draw boundary linework for ${file.name}`,
+      });
+    }
 
     // Replace any previously-drawn geometry for this boundary, then push the
     // new geometry into a per-tract point list via the PointAgent CACP skill.
@@ -24874,7 +25445,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setTimeout(() => setError(null), 5000);
       }
     }
-  }, [boundaryFiles, pointMap, points, cadManagerContext, setPointLists, setLines, setBoundaryFiles, logActionToFieldbook, setError, showView]);
+  }, [boundaryFiles, pointMap, points, cadManagerContext, setPointLists, setLines, setBoundaryFiles, logActionToFieldbook, setError, showView, beginTimelineImport]);
 
   // Keep the ref in sync with the latest captured-state handler so the
   // debounced transform redraw (declared earlier) never fires with stale
@@ -25999,6 +26570,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         lines,
         contourLabels,
         centerlines,
+        timeline: timeline.getSerializableDocument(),
         gisFeatures, // Added gisFeatures
         wmsServices,
         activeWmsLayers,
@@ -26098,7 +26670,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     cadManagerContext.state, deedBatchJob, activeTrackedWorkflow, pointWorkflowStarted, pointWorkflowPanelSeen,
     dismissedPointWorkflowKey, rasterUnderlayWorkflowStarted, rasterUnderlayWorkflowPanelSeen,
     dismissedRasterUnderlayWorkflowKey,
-    setIsSessionSaveModalOpen
+    setIsSessionSaveModalOpen,
+    timeline.getSerializableDocument
   ]);
 
   const startNewProject = useCallback(() => {
@@ -26186,13 +26759,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
                 const needsMigration = !sessionState.version || parseFloat(sessionState.version) < 1.8;
                 
-                if (sessionState.pointLists) {
-                    setPointLists(sessionState.pointLists);
-                } else if ((sessionState as any).points) { // Migration for older versions
-                    setPointLists([{ id: 'working', name: 'Loaded Points', points: (sessionState as any).points, isVisible: true }]);
-                } else {
-                    setPointLists([{ id: 'working', name: 'Unsaved Points', points: [], isVisible: true }]);
-                }
+                const loadedPointLists = sessionState.pointLists
+                    ? sessionState.pointLists
+                    : (sessionState as any).points
+                        ? [{ id: 'working', name: 'Loaded Points', points: (sessionState as any).points, isVisible: true }]
+                        : [{ id: 'working', name: 'Unsaved Points', points: [], isVisible: true }];
+                setPointLists(loadedPointLists);
                 
                 setRawFile(sessionState.rawFile);
                 setDeedFile(sessionState.deedFile);
@@ -26345,6 +26917,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 setProfileData(sessionState.profileData || []);
                 setProfileInfo(sessionState.profileInfo || null);
                 setCenterlines(sessionState.centerlines || []);
+                timeline.loadTimeline(sessionState.timeline, {
+                  pointLists: loadedPointLists,
+                  lines: sessionState.lines ?? [],
+                  centerlines: sessionState.centerlines ?? [],
+                  contourLabels: sessionState.contourLabels ?? [],
+                  boundaryFiles: sessionState.boundaryFiles ?? [],
+                });
                 setCutSheetData(sessionState.cutSheetData);
                 setCutSheetInfo(sessionState.cutSheetInfo);
                 // Restore Drafting Style Library
@@ -26512,7 +27091,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         reader.readAsArrayBuffer(file);
     };
     input.click();
-  }, [handleReset, isDesktop]);
+  }, [handleReset, isDesktop, timeline.loadTimeline]);
 
   useEffect(() => {
     if (activeAgent === AgentType.CENTERLINE_STATIONING && centerlines.length > 0 && isSessionActive) {
@@ -27155,7 +27734,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   
   const showDoc = useCallback(() => setIsDocVisible(true), []);
   const showTech = useCallback(() => setIsTechPageVisible(true), []);
-  const showCivil3D = useCallback(() => setIsCivil3DPageVisible(true), []);
+  const showCivil3D = useCallback(() => {
+    setIsCivil3DPageVisible(true);
+  }, []);
   const showInvestorForm = useCallback(() => setIsInvestorFormVisible(true), []);
   const showReleaseLog = useCallback(() => setIsReleaseLogVisible(true), []);
   const showSettings = useCallback(() => {
@@ -28014,10 +28595,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           );
         case 'command-help':
           return (
-            <A2UICommandHelp
-              groups={a2uiPayload?.commandHelp?.groups ?? HELP_GROUPS}
-              onRunCommand={runCanvasCommand}
-            />
+            <A2UICommandHelp onRunCommand={runCanvasCommand} />
           );
         default:
           return null;
@@ -28886,6 +29464,62 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       render: () => renderWorkspaceTool('annotate-manager', 'docked'),
     },
     {
+      id: 'linetype-manager',
+      title: 'Linetype Manager',
+      group: 'Drafting',
+      keywords: 'linetype line types dashed center hidden',
+      icon: <LinetypeManagerIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('linetype-manager', 'docked'),
+    },
+    {
+      id: 'hatch-manager',
+      title: 'Hatch Manager',
+      group: 'Drafting',
+      keywords: 'hatch patterns fills materials',
+      icon: <HatchManagerIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('hatch-manager', 'docked'),
+    },
+    {
+      id: 'sheet-view',
+      title: 'Sheet View',
+      group: 'Workspace',
+      keywords: 'sheets paper space layout titleblock',
+      icon: <SheetViewIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('sheet-view', 'docked'),
+    },
+    {
+      id: 'file-manager',
+      title: 'File Manager',
+      group: 'Workspace',
+      keywords: 'files uploads documents project',
+      icon: <FileManagerIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('file-manager', 'docked'),
+    },
+    {
+      id: 'symbol-manager',
+      title: 'Symbol Manager',
+      group: 'Drafting',
+      keywords: 'symbols blocks library points',
+      icon: <SymbolManagerIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('symbol-manager', 'docked'),
+    },
+    {
+      id: 'layer-manager',
+      title: 'Data Visibility',
+      group: 'Workspace',
+      keywords: 'layers visibility points lines maps',
+      icon: <ToolbarLayersIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('layer-manager', 'docked'),
+    },
+    {
+      id: 'wms-manager',
+      title: 'WMS Manager',
+      group: 'Maps',
+      keywords: 'wms maps raster imagery offline tiles',
+      icon: <WmsManagerIcon className="h-3.5 w-3.5" />,
+      render: () => renderWorkspaceTool('wms-manager', 'docked'),
+    },
+    {
       id: 'drafting-style-library',
       title: 'Drafting Style Library',
       group: 'Drafting',
@@ -28925,6 +29559,68 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       icon: <ClosureReportIcon className="h-3.5 w-3.5" />,
       render: () => renderWorkspaceTool('closure-report', 'docked'),
     },
+  ];
+  const toolShelfPanelTool = (panelId: string): ShelfDefaultTool[] => {
+    const panel = toolShelfPanelCatalog.find(item => item.id === panelId);
+    return panel
+      ? [{
+          id: panel.id,
+          label: panel.title,
+          icon: panel.icon,
+          onSelect: () => openToolShelfPanel(panel.id),
+        }]
+      : [];
+  };
+  // The old sidebar's Tools & Panels tab lives directly below the command
+  // reference in the shelf. Full-canvas views keep their existing actions.
+  const toolShelfDefaultTools: ShelfDefaultTool[] = [
+    {
+      id: 'cad-standards',
+      label: 'CAD Standards',
+      icon: <ToolbarStandardsIcon className="h-3.5 w-3.5" />,
+      onSelect: () => showView('cadstandards'),
+    },
+    ...toolShelfPanelTool('drafting-style-library'),
+    ...toolShelfPanelTool('linetype-manager'),
+    ...toolShelfPanelTool('hatch-manager'),
+    ...toolShelfPanelTool('point-studio'),
+    ...toolShelfPanelTool('sheet-view'),
+    {
+      id: 'ar-view',
+      label: 'AR View',
+      icon: <ARIcon className="h-3.5 w-3.5" />,
+      onSelect: () => showView('ar'),
+    },
+    ...toolShelfPanelTool('file-manager'),
+    ...toolShelfPanelTool('symbol-manager'),
+    ...toolShelfPanelTool('annotate-manager'),
+    ...toolShelfPanelTool('layer-manager'),
+    {
+      id: 'text-editor',
+      label: 'Text Editor',
+      icon: <TextEditorToolIcon className="h-3.5 w-3.5" />,
+      onSelect: handleOpenTextEditorFromToolbar,
+    },
+    ...toolShelfPanelTool('wms-manager'),
+    ...toolShelfPanelTool('fieldbook-panel'),
+    ...toolShelfPanelTool('cutsheet-panel'),
+    ...toolShelfPanelTool('closure-report'),
+    ...((planFiles && planFiles.length > 0) || deedFile?.fileData
+      ? [{
+          id: 'pdf-reviewer',
+          label: 'PDF Reviewer',
+          icon: <PdfReviewerIcon className="h-3.5 w-3.5" />,
+          onSelect: () => {
+            const allSearchablePDFFiles: SessionFile[] = [
+              ...(deedFile ? [deedFile] : []),
+              ...(planFiles || []),
+            ].filter(file => Boolean(file.fileData));
+            if (allSearchablePDFFiles.length === 0) return;
+            setPdfViewerFiles(allSearchablePDFFiles);
+            showView('pdfviewer');
+          },
+        }]
+      : []),
   ];
   const toolShelfHeaderControls = buildHeaderControls(false);
 
@@ -29502,6 +30198,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       title="Shrinkwrap"
       accentBorder="border-violet-500/40"
       dockMode={mode}
+      zIndex={9990}
       onDockModeChange={next => setToolDockMode('shrinkwrap', next)}
       onClose={() => setIsShrinkwrapPanelVisible(false)}
       initialX={typeof window !== 'undefined' ? Math.max(120, window.innerWidth - 460) : 120}
@@ -30436,7 +31133,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         onShowInvestor={showInvestorForm}
                         onShowAbout={showAbout}
                         onShowCivil3D={showCivil3D}
-                        onShowC3DConnect={() => isC3DConnected ? setShowC3DDebugDialog(true) : setShowC3DConnectPanel(true)}
+                        onShowC3DConnect={() => {
+                          isC3DConnected ? setShowC3DDebugDialog(true) : setShowC3DConnectPanel(true);
+                        }}
                         onShowReleaseStages={showReleaseStages}
                         isC3DConnected={isC3DConnected}
                         hasApiKey={Boolean(hasApiKey || hasLandSurvKey || hasServiceAccess || hasLsaiEnablingKey)}
@@ -30940,7 +31639,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             <button
                                 type="button"
                                 data-testid="canvas-c3d-status"
-                                onClick={() => isC3DConnected ? setShowC3DDebugDialog(true) : setShowC3DConnectPanel(true)}
+                                onClick={() => {
+                                  isC3DConnected ? setShowC3DDebugDialog(true) : setShowC3DConnectPanel(true);
+                                }}
                                 className={`flex items-center gap-1.5 rounded-md p-2 text-xs font-medium transition-colors ${
                                     isC3DConnected ? 'text-emerald-300 hover:bg-emerald-500/10' : 'text-gray-300 hover:bg-gray-700'
                                 }`}
@@ -31160,6 +31861,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         deedMetadataOffset={deedFile?.deedMetadataOffset}
                                         ownerNameOffset={deedFile?.ownerNameOffset}
                                         onAddLine={handleAddLine}
+                                        isSketchActive={timeline.activeTransaction !== null}
+                                        isSketchGatingEnabled={isTimelineSketchFlowEnabled}
+                                        onBeginSketch={timeline.beginSketch}
                                         onDeleteLine={handleDeleteLine}
                                         onDeletePoints={(pointNumbers) => pointNumbers.forEach(pn => handleDeletePoint(pn))}
                                         onDeleteCenterline={(centerlineId) => {
@@ -31181,6 +31885,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                           setCenterlines(prev => prev.filter(cl => cl.id !== centerlineId));
                                         }}
                                         onUpsertCenterline={handleUpsertCenterline}
+                                        onBaselineFinish={handleBaselineFinish}
                                         onOpenStationingSettings={openStationingControlsSurface}
                                         onDockDrawingMenu={openDrawMenuSurface}
                                         onDockCommandHelp={openCommandHelpSurface}
@@ -31970,10 +32675,20 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                 ) : (
                                     <WelcomeScreen 
                                       version={APP_VERSION} 
-                                      onClose={() => setShowWelcome(false)}
+                                      onClose={handleCloseWelcome}
                                       onLaunchAgenticCad={handleLaunchAgenticCad}
                                       onGoHome={handleGoHome}
                                       onOpenDeedUpload={handleOpenDeedUpload}
+                                      onSelectAgent={handleAgentChange}
+                                      cadEntryMode={cadEntryMode}
+                                      hasLegalSignature={hasLegalSignature}
+                                      trialAccepted={hasAcceptedTrialTerms()}
+                                      trialSnapshot={trialSnapshot}
+                                      onStartFreeCad={handleStartFreeCad}
+                                      onStartBusinessCad={handleStartBusinessCad}
+                                      onTrialTermsAccepted={handleFreeCadTrialAccepted}
+                                      onRequestBusiness={handleFreeCadBlocked}
+                                      blockNotice={freeCadBlockNotice}
                                       freeDeedsRemaining={deedCreditSnapshot?.remaining ?? null}
                                       freeDeedsLimit={deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT}
                                       freeDeedsUnlimited={Boolean(deedCreditSnapshot?.unlimited || isDeedMeterExempt)}
@@ -31997,6 +32712,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                           items={dockableToolItems}
                           headerControls={toolShelfHeaderControls}
                           toolsRowAccessories={gisStreamsToolsRowAccessories ?? boundaryToolsRowAccessories}
+                          defaultTools={toolShelfDefaultTools}
                           panelCatalog={toolShelfPanelCatalog}
                           openPanelIds={openToolShelfPanelIds}
                           onOpenPanelIdsChange={setOpenToolShelfPanelIds}
@@ -32458,14 +33174,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                           <p className="mt-1 text-xs text-gray-400">Used automatically for lighter, lower-reasoning tasks.</p>
                         </div>
                         <div className="rounded-lg border border-gray-600 bg-gray-700/40 p-3">
-                          <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">High-thinking route</div>
-                          <div className="mt-1 font-semibold text-purple-300">{getModelDisplayLabel(autoHighThinkingModel)}</div>
-                          <p className="mt-1 text-xs text-gray-400">Used automatically for complex agents and reasoning-heavy work.</p>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">Standard reasoning route</div>
+                          <div className="mt-1 font-semibold text-purple-300">{getModelDisplayLabel(CURRENT_GEMINI_MODEL)}</div>
+                          <p className="mt-1 text-xs text-gray-400">Used automatically for complex agents and reasoning-heavy work in Normal mode.</p>
                         </div>
                       </div>
                       <div>
                         <label htmlFor="modelPopupHighThinking" className="mb-1 block text-sm font-medium text-gray-300">
-                          High-thinking model
+                          High-Thinking model
                         </label>
                         <select
                           id="modelPopupHighThinking"
@@ -32481,6 +33197,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             <option key={model} value={model}>{getModelDisplayLabel(model)}</option>
                           ))}
                         </select>
+                        <p className="mt-1 text-xs text-gray-400">Used when High Thinking is selected in the command bar.</p>
                       </div>
                       <button
                         type="button"
@@ -32533,10 +33250,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 setShowLegalGate(false);
                 const pendingLaunch = pendingLegalLaunchRef.current;
                 pendingLegalLaunchRef.current = null;
+                writeCadEntryMode('business');
+                setCadEntryMode('business');
+                setFreeCadBlockNotice(null);
                 if (pendingLaunch === 'deed') {
                   handleOpenDeedUpload();
-                } else if (pendingLaunch) {
-                  handleLaunchAgenticCad(pendingLaunch);
+                } else {
+                  handleLaunchAgenticCad(pendingLaunch ?? 'blank');
                 }
               }}
             />
@@ -32786,6 +33506,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               title="Shrinkwrap"
               accentBorder="border-violet-500/40"
               dockMode="floating"
+              zIndex={9990}
               onDockModeChange={next => setToolDockMode('shrinkwrap', next)}
               onClose={() => {
                 setIsShrinkwrapPanelVisible(false);
@@ -33070,17 +33791,56 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               />
             </FloatingPanel>
           )}
+          {!showWelcome && isFreeCadActive && trialUseNotice && (
+            <FreeCadTrialUseNotice
+              key={trialUseNotice.key}
+              remaining={trialUseNotice.remaining}
+            />
+          )}
+          {!showWelcome && isFreeCadActive && trialSnapshot && (
+            <FreeCadTrialBadge
+              snapshot={trialSnapshot}
+              onUpgrade={openFreeCadPlan}
+            />
+          )}
+          {!showWelcome && isFreeCadActive && freeCadExplainer && (
+            <FreeCadAgentExplainer
+              title={freeCadExplainer.title}
+              message={freeCadExplainer.message}
+              actionLabel={freeCadExplainer.actionLabel}
+              onClose={() => setFreeCadExplainer(null)}
+              onOpenIntake={() => {
+                setFreeCadExplainer(null);
+                openFreeCadPlan();
+              }}
+            />
+          )}
+          <FreeCadNoSignatureGate
+            isOpen={showFreeCadTrialGate}
+            onClose={() => {
+              setShowFreeCadTrialGate(false);
+              pendingFreeCadActionRef.current = null;
+            }}
+            onAccepted={handleFreeCadTrialGateAccepted}
+          />
           {showWelcome && (
             <WelcomeScreen 
               version={APP_VERSION} 
               initialMode={welcomeInitialMode}
-              onClose={() => {
-                setShowWelcome(false);
-                setWelcomeInitialMode('main');
-              }}
+              onClose={handleCloseWelcome}
               onLaunchAgenticCad={handleLaunchAgenticCad}
               onGoHome={handleGoHome}
               onOpenDeedUpload={handleOpenDeedUpload}
+              onSelectAgent={handleAgentChange}
+              cadEntryMode={cadEntryMode}
+              hasLegalSignature={hasLegalSignature}
+              trialAccepted={hasAcceptedTrialTerms()}
+              trialSnapshot={trialSnapshot}
+              onStartFreeCad={handleStartFreeCad}
+              onStartBusinessCad={handleStartBusinessCad}
+              onTrialTermsAccepted={handleFreeCadTrialAccepted}
+              onRequestBusiness={handleFreeCadBlocked}
+              blockNotice={freeCadBlockNotice}
               freeDeedsRemaining={deedCreditSnapshot?.remaining ?? null}
               freeDeedsLimit={deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT}
               freeDeedsUnlimited={Boolean(deedCreditSnapshot?.unlimited || isDeedMeterExempt)}
@@ -33091,7 +33851,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
           {/* Periodic 15-minute Host Cost Reminder Popup */}
           <HostCostReminderModal
-            isOpen={!showWelcome && showHostCostReminder && !hasLsaiEnablingKey && !hasServiceAccess && !hasLandSurvKey && !isSuperUser}
+            isOpen={!showWelcome && showHostCostReminder && !hasLsaiEnablingKey && !hasServiceAccess && !hasLandSurvKey && !isSuperUser && !isFreeCadActive}
             onClose={() => setShowHostCostReminder(false)}
             onOpenUpgrade={() => {
               setShowHostCostReminder(false);
@@ -33516,13 +34276,16 @@ export const App = () => {
         <ChatStateProvider>
           <UIStateProvider>
             <CanvasStateProvider defaultCutSheetInfo={{ companyName: 'Your Company', crewChief: 'Crew Chief' }}>
-              <AppStateProvider availableModels={availableModels}>
-                <CadManagerProvider>
-                  <AppContent />
-                  <ConciergeOverlay />
-                  <GlobalErrorDialog />
-                </CadManagerProvider>
-              </AppStateProvider>
+              <TimelineProvider>
+                <AppStateProvider availableModels={availableModels}>
+                  <CadManagerProvider>
+                    <AppContent />
+                    <TimelineDock />
+                    <ConciergeOverlay />
+                    <GlobalErrorDialog />
+                  </CadManagerProvider>
+                </AppStateProvider>
+              </TimelineProvider>
             </CanvasStateProvider>
           </UIStateProvider>
         </ChatStateProvider>

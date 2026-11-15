@@ -100,6 +100,7 @@ import { findNearestPointInWorld, getPointSpatialIndex } from '../utils/pointSpa
 import { getStaticMap, type StaticMapRequest } from '../services/staticMapsService.ts';
 import { useCadManager } from '../contexts/CadManagerContext.tsx';
 import { useAppState, useErrorReporter } from '../contexts/AppStateContext.tsx';
+import { useOptionalTimeline } from '../contexts/TimelineContext.tsx';
 import { useDocumentScrollLock } from '../hooks/useDocumentScrollLock.ts';
 import { useDoubleTapShortcuts } from '../hooks/useDoubleTapShortcuts.ts';
 import { StandardsEditor } from './CadManager/StandardsEditor.tsx';
@@ -357,11 +358,12 @@ import { PolygonInputHud } from './PolygonInputHud';
 import { CommandPromptHud } from './CommandPromptHud';
 import { PropertiesDialog } from './PropertiesDialog';
 import { HatchPropertiesDialog } from './HatchPropertiesDialog.tsx';
+import { SelectionStyleToolbar } from './SelectionStyleToolbar.tsx';
 import { findHatchAtWorldPoint } from '../utils/hatchHitTest.ts';
 import { collectGenerationEntityIds } from '../utils/generationBlocks.ts';
 import { getHatchesBounds, getHatchWorldPoints, transformHatch } from '../utils/hatchGeometry.ts';
 import { explodeHatchToLines } from '../utils/hatchExplode.ts';
-import { parseCanvasCommand, executeCanvasCommand, parseCoordinateToken, MAX_RECTANGULAR_ARRAY_ITEMS, type CommandContext, type CommandPromptSpec } from '../utils/canvasCommands';
+import { parseCanvasCommand, executeCanvasCommand, parseCoordinateToken, measureDistanceBetweenPoints, MAX_RECTANGULAR_ARRAY_ITEMS, type CommandContext, type CommandPromptSpec } from '../utils/canvasCommands';
 import {
     buildClosedSegments,
     polygonVertices,
@@ -525,6 +527,12 @@ interface DrawingCanvasProps {
     deedMetadataOffset?: { x: number; y: number }; // Offset for deed metadata box in world coordinates
     ownerNameOffset?: { x: number; y: number }; // Offset for owner name label in world coordinates
     onAddLine: (newLine: SurveyLine) => void;
+    /** True when linework already has a sketch or another timeline transaction. */
+    isSketchActive?: boolean;
+    /** False when the timeline is disabled or hidden, so drawing stays unmanaged. */
+    isSketchGatingEnabled?: boolean;
+    /** Open a new sketch before resuming a gated linework tool. */
+    onBeginSketch?: () => void;
     onDeleteLine: (lineId: string) => void;
     /** Select-mode point picks — delete one or more project points by number. */
     onDeletePoints?: (pointNumbers: string[]) => void;
@@ -532,6 +540,8 @@ interface DrawingCanvasProps {
     onDeleteCenterline?: (centerlineId: string) => void;
     /** Add or replace a centerline alignment (baseline drawing / stationing edits). */
     onUpsertCenterline?: (centerline: Centerline) => void;
+    /** Called when a live baseline leaves draw mode, so the host can close its timeline feature. */
+    onBaselineFinish?: (centerline: Centerline) => void;
     /** Open the shared A2UI Stationing Controls surface. */
     onOpenStationingSettings?: () => void;
     /** Dock the lightweight Draw & Edit menu as an A2UI toolshelf surface. */
@@ -1417,7 +1427,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         initialTransform,
         onTransformChange,
         points, lines, contourLabels, contourGenerations = [], contourBlendPreview = null, onMoveContourLabel, centerlines, customSymbols, enabledBuiltinSymbolIds, pointLayers, attributeScale, setAttributeScale, lineLabelScale, setLineLabelScale, lineThickness, setLineThickness, contourLabelScale, onLayerColorChange, activeAgent, settings, zoomTarget, onZoomComplete,
-        onUpdatePointLabelOffset, onAddLine, onDeleteLine, onDeletePoints, onDeleteCenterline, onUpsertCenterline, onOpenStationingSettings, onOpenCenterlineTools, canUndo, canRedo, onUndo, onRedo, wmsServices, activeWmsLayers, offlineMapAreas, onRedrawAndShowAll, onOpenDxfExportModal, forcedAgent = null,
+        onUpdatePointLabelOffset, onAddLine, onDeleteLine, onDeletePoints, onDeleteCenterline, onUpsertCenterline, onBaselineFinish, onOpenStationingSettings, onOpenCenterlineTools, canUndo, canRedo, onUndo, onRedo, wmsServices, activeWmsLayers, offlineMapAreas, onRedrawAndShowAll, onOpenDxfExportModal, forcedAgent = null,
         onUpdatePointAnnotationOffset,
         isLayerPanelOpen, setIsLayerPanelOpen, onLayerToggle, activeAccent, currentPosition, projectedPosition, onZoomToPoint,
         linesVisible, onSetLinesVisible, centerlinesVisible, onSetCenterlinesVisible, pointLists, onTogglePointListVisibility, deedMetadata, onToolStateChange, onShowSettings,
@@ -1462,6 +1472,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const isChatResizing = propIsChatResizing ?? false;
     const { addNotification, setSettings } = useAppState();
     const { reportError } = useErrorReporter();
+    const timeline = useOptionalTimeline();
 
     // Helper to notify boundary errors to the notification bar instead of displaying inline
     const notifyBoundaryError = useCallback((message: string, isClosure: boolean = false) => {
@@ -1661,6 +1672,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         | 'exclusion'
         | 'circle'
         | 'polygon'
+        | 'rectangle'
         | 'boundary-line'
         | 'aligned-dim'
         | 'horiz-dim'
@@ -1703,6 +1715,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [polygonCenter, setPolygonCenter] = useState<{ easting: number; northing: number } | null>(null);
     const [polygonSides, setPolygonSides] = useState(6);
     const [typedPolygonDiameter, setTypedPolygonDiameter] = useState('');
+    // Rectangle drawing state (REC command): first corner and live opposite-corner preview.
+    const [rectangleFirstCorner, setRectangleFirstCorner] = useState<{ easting: number; northing: number } | null>(null);
     const [polylinePoints, setPolylinePoints] = useState<SurveyPoint[]>([]);
     /** The live baseline is a real Centerline shared with Stationing & CL. */
     const baselineDraftRef = useRef<Centerline | null>(null);
@@ -2170,6 +2184,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     /** Interactive MIRROR: two snapped axis points, with a live reflected ghost. */
     const [isMirroringSelection, setIsMirroringSelection] = useState(false);
     const [mirrorAxisStart, setMirrorAxisStart] = useState<{ easting: number; northing: number } | null>(null);
+    /** Interactive DIST: two snapped canvas picks, reported inline. */
+    const [isPickingDistance, setIsPickingDistance] = useState(false);
+    const [distancePickStart, setDistancePickStart] = useState<{ easting: number; northing: number } | null>(null);
     /** MIRROR [L] sub-mode: the next line pick becomes the mirror axis. */
     const [isPickingMirrorLine, setIsPickingMirrorLine] = useState(false);
     /** Interactive MOVE: snapped base point, then snapped destination. */
@@ -2542,8 +2559,37 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
     const isLinearDrawingMode = useCallback((mode: typeof drawingMode) => isChainLineMode(mode), []);
 
+    const [pendingSketchStart, setPendingSketchStart] = useState<(() => void) | null>(null);
+
+    const requestSketchForDrawing = useCallback((start: () => void): boolean => {
+        if (props.isSketchGatingEnabled === false || props.isSketchActive !== false || lines.length === 0) {
+            start();
+            return true;
+        }
+        setPendingSketchStart(() => start);
+        return false;
+    }, [lines.length, props.isSketchActive, props.isSketchGatingEnabled]);
+
+    const confirmStartSketch = useCallback(() => {
+        const start = pendingSketchStart;
+        setPendingSketchStart(null);
+        if (!start) return;
+        props.onBeginSketch?.();
+        requestAnimationFrame(() => start());
+    }, [pendingSketchStart, props.onBeginSketch]);
+
+    const cancelStartSketch = useCallback(() => {
+        setPendingSketchStart(null);
+        setTerminalIncoming({
+            text: 'DRAWING BLOCKED — a sketch must be open before drawing.',
+            tone: 'error',
+        });
+        setCommandFocusRequest(n => n + 1);
+    }, []);
+
     /** The single entry point for L, boundary, breakline, inclusion, and exclusion. */
     const startChainLineMode = useCallback((mode: Exclude<ChainLineMode, 'baseline'>) => {
+        requestSketchForDrawing(() => {
         boundaryLinePolylineIdRef.current = mode === 'boundary-line'
             ? createManualBoundaryPolylineId()
             : null;
@@ -2584,7 +2630,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setCommandFocusRequest(n => n + 1);
         setTerminalIncoming({ text: `Command: ${label} — pick start point or type length [A for Arc · C close · M mend${mode === 'polylines' ? ' · R resume from an existing line/curve' : ''}]`, tone: 'ok' });
         requestAnimationFrame(() => drawRef.current?.());
-    }, []);
+        });
+    }, [requestSketchForDrawing]);
 
     const isDimensionDrawingMode = useCallback((mode: typeof drawingMode) => (
         mode === 'aligned-dim' ||
@@ -3175,6 +3222,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         requestAnimationFrame(() => drawRef.current?.());
     }, [props.onUpdateLine]);
 
+    const handleUpdateSelectedHatches = useCallback((ids: string[], changes: Partial<CanvasHatch>) => {
+        if (ids.length === 0) return;
+        ids.forEach(id => onUpdateHatch?.(id, changes));
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [onUpdateHatch]);
+
     const selectAllEntitiesCommand = useCallback((): number => {
         const ids = new Set(
             lines.filter(line => !line.hidden).map(line => line.id || `${line.from}-${line.to}`),
@@ -3207,9 +3260,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             polylineId: `REC_${stamp}`,
             layer: activeDrawingLayer || undefined,
         });
-        commitLineBatch([], segments);
+        if (!requestSketchForDrawing(() => commitLineBatch([], segments))) return 0;
         return segments.length;
-    }, [activeDrawingLayer, commitLineBatch]);
+    }, [activeDrawingLayer, commitLineBatch, requestSketchForDrawing]);
 
     const drawPolygonCommand = useCallback((sides: number, center: { easting: number; northing: number }, radius: number): number => {
         const worldRadius = convertLinearUnits(radius, settings.linearUnits || 'usSurveyFoot', 'foot');
@@ -3221,9 +3274,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             polylineId: `POL_${stamp}`,
             layer: activeDrawingLayer || undefined,
         });
-        commitLineBatch([], segments);
+        if (!requestSketchForDrawing(() => commitLineBatch([], segments))) return 0;
         return segments.length;
-    }, [activeDrawingLayer, commitLineBatch, settings.linearUnits]);
+    }, [activeDrawingLayer, commitLineBatch, settings.linearUnits, requestSketchForDrawing]);
 
     const commitPolygonFromRadius = useCallback((radiusInput: number): boolean => {
         if (!polygonCenter) return false;
@@ -3248,6 +3301,36 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         requestAnimationFrame(() => drawRef.current?.());
         return true;
     }, [drawPolygonCommand, polygonCenter, polygonSides, settings.linearUnits]);
+
+    const commitRectangleFromCorner = useCallback((corner: { easting: number; northing: number }): boolean => {
+        const start = rectangleFirstCorner;
+        if (!start) return false;
+        if (Math.abs(corner.easting - start.easting) < 1e-9 || Math.abs(corner.northing - start.northing) < 1e-9) {
+            setTerminalIncoming({
+                text: 'RECTANGLE: The opposite corner must differ in both X and Y.',
+                tone: 'error',
+            });
+            return false;
+        }
+        const segments = drawRectangleCommand(start, corner);
+        if (segments <= 0) {
+            setTerminalIncoming({ text: 'RECTANGLE: Could not create the rectangle', tone: 'error' });
+            return false;
+        }
+        const width = Math.abs(corner.easting - start.easting);
+        const height = Math.abs(corner.northing - start.northing);
+        const unit = settings.linearUnits || 'usSurveyFoot';
+        setTerminalIncoming({
+            text: `RECTANGLE: Created ${segments} segments — ${convertLinearUnits(width, 'foot', unit).toFixed(2)} × ${convertLinearUnits(height, 'foot', unit).toFixed(2)} ${getLinearUnitAbbreviation(settings.linearUnits)}.`,
+            tone: 'ok',
+        });
+        setRectangleFirstCorner(null);
+        setDrawingMode('none');
+        setActiveOsnapPoint(null);
+        setCommandFocusRequest(n => n + 1);
+        requestAnimationFrame(() => drawRef.current?.());
+        return true;
+    }, [drawRectangleCommand, rectangleFirstCorner, settings.linearUnits]);
 
     /**
      * OFFSET: compute the offset geometry for the picked line/polyline/arc/circle
@@ -3744,6 +3827,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setScaleBasePoint(null);
         setTypedScaleFactor('');
         scaleReferenceRadiusRef.current = null;
+        setIsPickingDistance(false);
+        setDistancePickStart(null);
         clearRotatePreview();
     }, [clearRotatePreview]);
 
@@ -9464,6 +9549,34 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
         }
 
+        // Draw rubber band rectangle preview from the first picked corner.
+        if (drawingMode === 'rectangle' && rectangleFirstCorner) {
+            const cursorPos = cursorWorldPosRef.current;
+            const vertices = cursorPos
+                ? rectangleVertices(
+                    { x: rectangleFirstCorner.easting, y: rectangleFirstCorner.northing },
+                    { x: cursorPos.x, y: cursorPos.y },
+                )
+                : null;
+            if (vertices) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(vertices[0].x, vertices[0].y);
+                for (let i = 1; i < vertices.length; i++) ctx.lineTo(vertices[i].x, vertices[i].y);
+                ctx.closePath();
+                ctx.fillStyle = 'rgba(34, 211, 238, 0.07)';
+                ctx.fill();
+                ctx.strokeStyle = '#22D3EE';
+                ctx.lineWidth = Math.max(1.5 * inverseScale, minScreenPixelWidth);
+                const dashSize = 5 * inverseScale;
+                const gapSize = 3 * inverseScale;
+                ctx.setLineDash([dashSize, gapSize]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
+            }
+        }
+
         // Draw rubber band circle preview
         if (drawingMode === 'circle' && circleSubMode === 'center-radius' && circleCenter && cursorWorldPosRef.current) {
             const cursorPos = cursorWorldPosRef.current;
@@ -10494,7 +10607,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             ctx.restore();
         }
 
-        if (activeOsnapPoint && (activeGrip || isPickingOtOrigin || isPickingPolarCenter || drawingMode === 'circle' || drawingMode === 'polygon' || isDimensionDrawingMode(drawingMode) || drawingMode === 'add-point' || isLinearDrawingMode(drawingMode))) {
+        if (activeOsnapPoint && (activeGrip || isPickingOtOrigin || isPickingPolarCenter || drawingMode === 'circle' || drawingMode === 'polygon' || drawingMode === 'rectangle' || isDimensionDrawingMode(drawingMode) || drawingMode === 'add-point' || isLinearDrawingMode(drawingMode))) {
             const sr = 5 * inverseScale;
             ctx.save();
             ctx.strokeStyle = '#FFD700';
@@ -11398,11 +11511,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             );
             const bucketCellSize = primitiveBuckets.cellSize;
             if (primitiveBuckets.length > 0) {
-                if (gpuPointBatch) {
+                const dotShape = activeEfficiencyProfile?.dotShape ?? 'square';
+                const efficiencyColor = isLightTheme
+                    ? (activeEfficiencyProfile?.lightThemeColor ?? '#DB2777')
+                    : (activeEfficiencyProfile?.color ?? '#F472B6');
+                if (gpuPointBatch && dotShape !== 'x') {
                     // WebGPU path: one instanced draw call for the whole cloud.
-                    const rgba = parseCssColor(isLightTheme
-                        ? (activeEfficiencyProfile?.lightThemeColor ?? '#111827')
-                        : (activeEfficiencyProfile?.color ?? '#FFD700'));
+                    const rgba = parseCssColor(efficiencyColor);
                     const dotOpacity = activeEfficiencyProfile?.opacity ?? 1;
                     if (dotOpacity < 1) rgba[3] *= dotOpacity;
                     for (let bucketIndex = 0; bucketIndex < primitiveBuckets.length; bucketIndex++) {
@@ -11414,13 +11529,34 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             rgba,
                         );
                     }
+                } else if (dotShape === 'x') {
+                    // X markers are two short strokes per cell. They stay in one
+                    // batched stroke, so compressed point clouds remain cheap.
+                    ctx.save();
+                    ctx.beginPath();
+                    for (let bucketIndex = 0; bucketIndex < primitiveBuckets.length; bucketIndex++) {
+                        const dotSize = getPointDotSize(activeEfficiencyProfile, primitiveBuckets.counts[bucketIndex]);
+                        const centerX = primitiveBuckets.cellsX[bucketIndex] * bucketCellSize + dotSize / 2;
+                        const centerY = primitiveBuckets.cellsY[bucketIndex] * bucketCellSize + dotSize / 2;
+                        const half = dotSize / 2;
+                        ctx.moveTo(centerX - half, centerY - half);
+                        ctx.lineTo(centerX + half, centerY + half);
+                        ctx.moveTo(centerX + half, centerY - half);
+                        ctx.lineTo(centerX - half, centerY + half);
+                    }
+                    ctx.strokeStyle = efficiencyColor;
+                    ctx.lineWidth = 1;
+                    ctx.lineCap = 'round';
+                    ctx.globalAlpha = activeEfficiencyProfile?.opacity ?? 1;
+                    ctx.stroke();
+                    ctx.restore();
                 } else {
                     ctx.beginPath();
                     for (let bucketIndex = 0; bucketIndex < primitiveBuckets.length; bucketIndex++) {
                         const dotSize = getPointDotSize(activeEfficiencyProfile, primitiveBuckets.counts[bucketIndex]);
                         const cellX = primitiveBuckets.cellsX[bucketIndex] * bucketCellSize;
                         const cellY = primitiveBuckets.cellsY[bucketIndex] * bucketCellSize;
-                        if (activeEfficiencyProfile?.dotShape === 'circle') {
+                        if (dotShape === 'circle') {
                             const centerX = cellX + dotSize / 2;
                             const centerY = cellY + dotSize / 2;
                             ctx.moveTo(centerX + dotSize / 2, centerY);
@@ -11429,9 +11565,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             ctx.rect(cellX, cellY, dotSize, dotSize);
                         }
                     }
-                    ctx.fillStyle = isLightTheme
-                        ? (activeEfficiencyProfile?.lightThemeColor ?? '#111827')
-                        : (activeEfficiencyProfile?.color ?? '#FFD700');
+                    ctx.fillStyle = efficiencyColor;
                     ctx.globalAlpha = activeEfficiencyProfile?.opacity ?? 1;
                     ctx.fill();
                     ctx.globalAlpha = 1;
@@ -12218,7 +12352,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
 
         ctx.restore(); // --- End screen-space pass ---
-    }, [transform, renderRevision, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, pointStyleResolver, pointListIdByPointNumber, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, contourLabelSlide, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, isOffsetMode, offsetTargetId, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, trimFence, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.shrinkwrapAddPns, props.shrinkwrapExcludedPns, props.pendingDeletePointNumbers, freehandStroke, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id, rasterUnderlays, selectedRasterUnderlayId, rasterUnderlayImages, offsetSelectionIds, mendPickActive, mendPickPreview]);
+    }, [transform, renderRevision, points, lines, centerlines, customSymbols, pointLayers, attributeScale, lineLabelScale, lineThickness, contourLabelScale, settings, pointStyleResolver, pointListIdByPointNumber, getSymbolForPoint, getAnnotationForPoint, customAnnotations, annotationScale, offlineMapAreas, contourLabels, contourLabelSlide, props.streetLabels, parcelLabels, mapAreaLabels, props.parcelLabelFormatter, props.parcelCadTextStyles, annotationCategories, pointMap, drawingMode, rectangleFirstCorner, isOffsetMode, offsetTargetId, polylinePoints, polylineArcMode, polylineFixedRadius, polylineTangentExit, projectedPosition, googleOverlayImage, wmsImages, offlineImages, isDeletingLines, isTrimmingLines, trimHoverPreview, trimFence, deedMetadata, activeAgent, props.ownerNameOffset, props.deedMetadataOffset, dimensions, dimensionScale, symbolScale, dimP1, dimP2, dimPreviewMouse, dimSnapPoint, activeOsnapPoint, selectedLineIds, selectedHatchIds, selectedCenterlineIds, selectedPointNumbers, tinSurfaces, isTinShadingEnabled, boundaryFiles, activeBoundaryFileId, showRotatedBearings, agentAnnotMode, hoveredShrinkwrapPn, props.shrinkwrapSourcePns, props.shrinkwrapAddPns, props.shrinkwrapExcludedPns, props.pendingDeletePointNumbers, freehandStroke, floodRings, boundaryAlignMovable, boundaryAlignTarget, isGridVisible, worldToScreen, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, solveTtrCircle, activeGrip, hoveredGrip, getGripsForSelectedLines, isPickingPolarCenter, layerColors, layerLinetypeMap, hatches, selectedHatchId, hatchHoverRegion, hatchPatternName, hatchScale, hatchAngleDeg, hatchColor, hatchOpacity, cadStandard, textAnnotations, annotationTextStyles, activeTextStyleName, selectedTextAnnotationId, editingText?.id, rasterUnderlays, selectedRasterUnderlayId, rasterUnderlayImages, offsetSelectionIds, mendPickActive, mendPickPreview]);
 
     // Throttled draw using requestAnimationFrame to prevent flickering during rapid updates
     const scheduleDraw = useCallback(() => {
@@ -12915,6 +13049,39 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedEntityCount, stopInteractiveTransforms]);
 
+    /** Interactive DIST: two snapped canvas picks, no prompt widget. */
+    const startDistanceMode = useCallback(() => {
+        stopInteractiveTransforms();
+        setPendingSelectionCommand(null);
+        setDrawingMode('none');
+        setPolylinePoints([]);
+        setTypedSegmentLength('');
+        setCircleCenter(null);
+        setTypedCircleValue('');
+        setIsTrimmingLines(false);
+        setIsExtendingLines(false);
+        setIsDeletingLines(false);
+        setTrimPoint(null);
+        setExtendFromLine(null);
+        setIsCopyingSelection(false);
+        setCopyBasePoint(null);
+        setIsOffsetMode(false);
+        setOffsetDistance(null);
+        setOffsetTargetId(null);
+        setOffsetPickStart(null);
+        clearOffsetPreview();
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        setIsPickingDistance(true);
+        setDistancePickStart(null);
+        setTerminalIncoming({
+            text: 'DIST: Pick the first point, then the second [Esc to cancel]',
+            tone: 'info',
+        });
+    // clearOffsetPreview may be declared later in the body.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [stopInteractiveTransforms]);
+
     /** Interactive MOVE: snapped base point, then snapped destination. */
     const startMoveMode = useCallback(() => {
         if (selectedEntityCount === 0) {
@@ -12992,6 +13159,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     }, [selectedEntityCount, stopInteractiveTransforms]);
 
     const startBaselineMode = useCallback(() => {
+        // Re-arming BASELINE abandons the current draft; close its timeline
+        // transaction before replacing it with a fresh alignment.
+        const previousBaseline = baselineDraftRef.current;
         setDrawingMode('baseline');
         setPolylinePoints([]);
         polylineFirstSegmentRef.current = null;
@@ -13019,12 +13189,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         baselinePiCounterRef.current = 0;
         setActiveOsnapPoint(null);
         setInlineOsnapOverride(null);
+        if (previousBaseline) onBaselineFinish?.(previousBaseline);
         const interval = Math.max(1, Number(settings.stationing?.pointInterval) || 100);
         const autoOn = agentDrawMode !== 'lines';
         setTerminalIncoming({ text: `Command: B (BASELINE) — pick start point, then chain line/arc segments [A arc · L line · U undo · Enter finish · Esc cancel] · Auto stations ${autoOn ? `every ${interval}'` : 'OFF (P/L = L)'}`, tone: 'ok' });
         setCommandFocusRequest(n => n + 1);
         requestAnimationFrame(() => drawRef.current?.());
-    }, [agentDrawMode, settings.stationing?.pointInterval]);
+    }, [agentDrawMode, onBaselineFinish, settings.stationing?.pointInterval]);
 
     /**
      * U inside a live LINE/ARC (and the other chain tools) steps back one
@@ -13471,6 +13642,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         if (e.key === 'Enter' && !isTextInput && pendingSelectionCommand) {
             e.preventDefault();
             runPendingSelectionCommandRef.current();
+            return;
+        }
+        if (e.key === 'Escape' && !isTextInput && isPickingDistance) {
+            e.preventDefault();
+            stopInteractiveTransforms();
+            setCommandFocusRequest(n => n + 1);
+            setTerminalIncoming({ text: 'DIST: Cancelled', tone: 'info' });
             return;
         }
         if (e.key === 'Escape' && activeCommandPrompt) {
@@ -14072,23 +14250,39 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             startBoxZoom();
             return;
         }
-        if (e.key === 's' || e.key === 'S') {
-                e.preventDefault();
-                setTerminalIncoming({ text: 'Command: S (SELECT) — click lines or chain [Esc to clear]', tone: 'ok' });
-                if (isSelectionMode) {
-                    setIsSelectionMode(false);
-                    setIsBoxSelectMode(false);
-                    setIsFreehandSelectMode(false);
-                    setSelectedLineIds(new Set());
-                    setSelectedHatchIds(new Set());
-                    setSelectedHatchId(null);
-                } else {
-                    finishDrawing();
-                    setIsSelectionMode(true);
-                    setIsBoxSelectMode(false);
-                }
+        if ((e.key === 's' || e.key === 'S') && !isTextInput && drawingMode !== 'hatch' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            if (timeline && props.isSketchGatingEnabled !== false) {
+                (props.onBeginSketch ?? timeline.beginSketch)();
+                setTerminalIncoming({
+                    text: 'SKETCH: Draw normally. Finish sketch to add one timeline entry [S]',
+                    tone: 'ok',
+                });
                 return;
             }
+            setTerminalIncoming({
+                text: 'SKETCH: Timeline is off — enable it to start a sketch [Q selects]',
+                tone: 'info',
+            });
+            return;
+        }
+        if ((e.key === 'q' || e.key === 'Q') && !isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            setTerminalIncoming({ text: 'Command: Q (SELECT) — click lines or chain [Esc to clear]', tone: 'ok' });
+            if (isSelectionMode) {
+                setIsSelectionMode(false);
+                setIsBoxSelectMode(false);
+                setIsFreehandSelectMode(false);
+                setSelectedLineIds(new Set());
+                setSelectedHatchIds(new Set());
+                setSelectedHatchId(null);
+            } else {
+                finishDrawing();
+                setIsSelectionMode(true);
+                setIsBoxSelectMode(false);
+            }
+            return;
+        }
             if ((e.key === 'b' || e.key === 'B') && !isTextInput) {
                 // Action is owned by useDoubleTapShortcuts below so `bb` can be
                 // distinguished from a single B; keep the browser default off.
@@ -14169,10 +14363,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
             if (e.key === 'c' || e.key === 'C') {
                 e.preventDefault();
-                setTerminalIncoming({ text: 'Command: C (CIRCLE) — pick center point, or type TTR for tangent-tangent-radius', tone: 'ok' });
                 if (drawingMode === 'circle') {
+                    setTerminalIncoming({ text: 'Command: C (CIRCLE) exited', tone: 'info' });
                     finishDrawing();
                 } else {
+                    requestSketchForDrawing(() => {
+                    setTerminalIncoming({ text: 'Command: C (CIRCLE) — pick center point, or type TTR for tangent-tangent-radius', tone: 'ok' });
                     setDrawingMode('circle');
                     setCircleCenter(null);
                     setCircleSizeParam('radius');
@@ -14191,6 +14387,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     setSelectedLineIds(new Set());
                     setPolylinePoints([]);
                     setTypedSegmentLength('');
+                    });
                 }
                 return;
             }
@@ -14492,7 +14689,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTtrEntity2(null);
             setTtrHoverEntity(null);
         }
-    }, [startBoxZoom, isResumePickMode, lines, findSegmentEndingAt, beginResumeFromSegment, isZoomBoxMode, startBaselineMode, selectedTextAnnotationId, props, selectedLineIds, selectedHatchIds, selectedEntityCount, selectedPointNumbers, selectedCenterlineIds, isPickingMirrorLine, onDeletePoints, onDeleteCenterline, onDeleteHatch, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, activeDrawingLayer, onAddLine, isTrimmingLines, isTrimFenceMode, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, polylineArcMode, polylineFixedRadius, polylineRadiusInput, polylineRadiusPrompt, polylineTangentExit, polylineArcExitToLine, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, buildLineEndpoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, isFreehandSelectMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, filletSelectionCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
+    }, [startBoxZoom, isResumePickMode, lines, findSegmentEndingAt, beginResumeFromSegment, isZoomBoxMode, startBaselineMode, selectedTextAnnotationId, props, selectedLineIds, selectedHatchIds, selectedEntityCount, selectedPointNumbers, selectedCenterlineIds, isPickingMirrorLine, onDeletePoints, onDeleteCenterline, onDeleteHatch, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, activeDrawingLayer, onAddLine, isTrimmingLines, isTrimFenceMode, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, polylineArcMode, polylineFixedRadius, polylineRadiusInput, polylineRadiusPrompt, polylineTangentExit, polylineArcExitToLine, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, buildLineEndpoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, isFreehandSelectMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isPickingDistance, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, filletSelectionCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
 
     const handleKeyUp = useCallback((e: KeyboardEvent) => {
         if (e.key === 'Control' || e.key === 'Meta') {
@@ -14862,6 +15059,19 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
 
+        if (drawingMode === 'rectangle') {
+            const mouseWorld = screenToWorld(mouseX, mouseY);
+            const activeModes = inlineOsnapOverride ? new Set<OsnapMode>([inlineOsnapOverride]) : (runningOsnaps.size > 0 ? runningOsnaps : new Set<OsnapMode>(['endpoint', 'midpoint', 'intersection', 'nearest']));
+            const snapped = resolveOsnapAtScreen(mouseX, mouseY, activeModes, 20, rectangleFirstCorner);
+            setActiveOsnapPoint(snapped);
+            const previewPoint = snapped
+                ? { easting: snapped.easting, northing: snapped.northing }
+                : { easting: mouseWorld.easting, northing: mouseWorld.northing };
+            cursorWorldPosRef.current = { x: previewPoint.easting, y: previewPoint.northing };
+            if (drawRef.current) requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
+
         if (drawingMode === 'circle') {
             const mouseWorld = screenToWorld(mouseX, mouseY);
             if (circleSubMode === 'ttr') {
@@ -14957,7 +15167,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }
     }, [
         isCtrlPressed, isLabelDragging, points, isOverLabel, isOverLabelArea,
-        drawingMode, polylinePoints.length, transform,
+        rectangleFirstCorner, drawingMode, polylinePoints.length, transform,
         isSelectionMode, isDeletingLines, isTrimmingLines, isTrimFenceMode, isExtendingLines, findLineNearClick, isOverLine,
         inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, dimPhase, dimP1, boundaryLineFrom, activeCommandPrompt, isPickingPolarCenter,
         isOrthoEnabled, applyOrthoConstraint, screenToWorld, isPickingOtOrigin,
@@ -15618,7 +15828,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const count = duplicateSelectedLines(dx, dy);
             setTerminalIncoming(count > 0
                 ? { text: `COPY: Placed ${count} ${count === 1 ? 'entity' : 'entities'} (ΔE ${dx.toFixed(2)}, ΔN ${dy.toFixed(2)}) — click another destination or Esc`, tone: 'ok' }
-                : { text: 'COPY: Nothing copied — select entities first (S), then run COPY', tone: 'error' });
+                : { text: 'COPY: Nothing copied — select entities first (Q), then run COPY', tone: 'error' });
             return;
         }
 
@@ -15790,6 +16000,32 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 text: `ROTATE: Rotated ${turned} ${turned === 1 ? 'entity' : 'entities'} ${degrees.toFixed(2)}° about ${pivotLabel}.`,
                 tone: 'ok',
             });
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
+
+        // DIST — two snapped canvas picks; the result stays in the command readout.
+        if (isPickingDistance) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const world = resolveSnappedWorld(e.clientX - rect.left, e.clientY - rect.top, currentSnap);
+
+            if (!distancePickStart) {
+                setDistancePickStart({ easting: world.easting, northing: world.northing });
+                setCommandFocusRequest(n => n + 1);
+                setTerminalIncoming({
+                    text: `DIST: First point E ${world.easting.toFixed(3)}, N ${world.northing.toFixed(3)} — pick the second point [Esc to cancel]`,
+                    tone: 'ok',
+                });
+                return;
+            }
+
+            const result = measureDistanceBetweenPoints(distancePickStart, world);
+            setIsPickingDistance(false);
+            setDistancePickStart(null);
+            setCommandFocusRequest(n => n + 1);
+            setTerminalIncoming({ text: result.message, tone: result.status === 'error' ? 'error' : 'info' });
             requestAnimationFrame(() => drawRef.current?.());
             return;
         }
@@ -17001,6 +17237,28 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
 
+        if (drawingMode === 'rectangle') {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const world = resolveSnappedWorld(clickX, clickY, currentSnap);
+            if (inlineOsnapOverride) setInlineOsnapOverride(null);
+            if (!rectangleFirstCorner) {
+                setRectangleFirstCorner({ easting: world.easting, northing: world.northing });
+                setActiveOsnapPoint(null);
+                setTerminalIncoming({
+                    text: `RECTANGLE: First corner E ${world.easting.toFixed(2)}, N ${world.northing.toFixed(2)} — pick the opposite corner [Esc cancels]`,
+                    tone: 'ok',
+                });
+                requestAnimationFrame(() => drawRef.current?.());
+                return;
+            }
+            commitRectangleFromCorner(world);
+            return;
+        }
+
         if (drawingMode === 'polygon') {
             const canvas = canvasRef.current;
             if (!canvas) return;
@@ -17515,7 +17773,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         document.body.classList.add('panning');
         setIsPanning(true);
         lastMousePos.current = { x: e.clientX, y: e.clientY };
-    }, [isResumePickMode, beginResumeFromSegment, contourLabelSlide, findStationLabelAtScreenPoint, isZoomBoxMode, drawingMode, isDeletingLines, isTrimmingLines, isTrimFenceMode, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, isFreehandSelectMode, selectedLineIds, hatches, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, polylineTangentExit, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter, rasterUnderlays, selectedRasterUnderlayId, beginRasterUnderlayDrag]);
+    }, [rectangleFirstCorner, commitRectangleFromCorner, resolveSnappedWorld, isResumePickMode, beginResumeFromSegment, contourLabelSlide, findStationLabelAtScreenPoint, isZoomBoxMode, drawingMode, isDeletingLines, isTrimmingLines, isTrimFenceMode, isExtendingLines, extendFromLine, boundaryLineFrom, points, lines, pointMap, transform, attributeScale, isOverLabelArea, isOverLineLabelArea, isOverDeedMetadataArea, isOverOwnerNameArea, isOverAnnotationArea, getAnnotationForPoint, onUpdatePointAnnotationOffset, findLineNearClick, onDeleteLine, onAddLine, props, dimPhase, dimP1, dimP2, onAddDimension, isSelectionMode, isFreehandSelectMode, isPickingDistance, distancePickStart, selectedLineIds, hatches, boundaryAlignMovable, boundaryAlignTarget, boundaryAlignSliding, hitTestBoundaryCall, computeBoundaryAlignSnap, cornerAlignBfId, cornerAlignPendingCorner, cornerAlignPicker, hitTestBoundaryCorner, commitCornerAlignPoint, symbolExclusionMode, inlineOsnapMenuPos, inlineOsnapOverride, runningOsnaps, resolveOsnapAtScreen, findNearestSurveyPoint, activeOsnapPoint, makeTempWorldPoint, makeTempSnapPoint, isOrthoEnabled, applyOrthoConstraint, typedSegmentLength, polylineTangentExit, screenToWorld, worldToScreen, isPickingOtOrigin, isPickingOtLineAlign, onSetOrientationTuple, boundaryFiles, getBoundaryCallWorldEndpoints, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, ttrHoverEntity, findTtrEntityNearClick, solveTtrCircle, computeTrimAction, addCircleGeometry, settings.linearUnits, isDimensionDrawingMode, resolveCurveTargetFromClick, addPointNumber, nextAvailablePointNumber, addPointElevation, addPointDescription, onAddPoint, dimSelectedCurve, resetDimMode, isCopyingSelection, copyBasePoint, duplicateSelectedLines, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, offsetPickStart, clearOffsetPreview, applyOffsetAtPoint, isCircleLine, pendingSelectionCommand, isRotatingSelection, rotatePivot, rotateSelectionCommand, clearRotatePreview, isMirroringSelection, mirrorAxisStart, isMovingSelection, moveBasePoint, resolveSnappedWorld, moveSelectionByWorld, mirrorSelectionCommand, isScalingSelection, scaleBasePoint, selectionRadiusFrom, scaleSelectionCommand, activeCommandPrompt, isPickingPolarCenter, rasterUnderlays, selectedRasterUnderlayId, beginRasterUnderlayDrag]);
 
     const handleMouseMove = useCallback((e: React.MouseEvent) => {
         if (mendPickActiveRef.current) {
@@ -18621,12 +18879,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     // Leaving the active tool (Escape, toolbar switch, …) resets the arc
     // submode and the chained tangent so the next polyline starts fresh.
     useEffect(() => {
-        if (drawingMode !== 'baseline') baselineDraftRef.current = null;
+        if (drawingMode !== 'baseline') {
+            const completedBaseline = baselineDraftRef.current;
+            baselineDraftRef.current = null;
+            if (completedBaseline) onBaselineFinish?.(completedBaseline);
+        }
         setPolylineArcMode(false);
         setPolylineArcExitToLine(false);
         polylineArcJustCommittedRef.current = false;
         lastSegmentTangentRef.current = null;
-    }, [drawingMode]);
+    }, [drawingMode, onBaselineFinish]);
 
     /**
      * Append one straight or tangent-arc segment to the live baseline. A
@@ -18834,6 +19096,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     }, [polylinePoints, onAddLine, drawingMode, draw, buildLineEndpoint, activeDrawingLayer, polylineArcMode, polylineFixedRadius, polylineTangentExit, polylineArcExitToLine, appendBaselineSegment, makeTempWorldPoint]);
     
     const finishDrawing = () => {
+        const completedBaseline = drawingMode === 'baseline' ? baselineDraftRef.current : null;
         setDrawingMode('none');
         setPolylinePoints([]);
         baselineDraftRef.current = null;
@@ -18849,6 +19112,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setTypedCircleValue('');
         setPolygonCenter(null);
         setTypedPolygonDiameter('');
+        setRectangleFirstCorner(null);
         setCircleSubMode('center-radius');
         setTtrStep(1);
         setTtrEntity1(null);
@@ -18878,6 +19142,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             resetCornerAlign(true);
             props.onBoundaryCornerAlignRequestHandled?.();
         }
+        if (completedBaseline) onBaselineFinish?.(completedBaseline);
     };
 
     finishDrawingRef.current = finishDrawing;
@@ -18942,6 +19207,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     );
 
     const startPolygonMode = useCallback((sides?: number, center?: { easting: number; northing: number }) => {
+        requestSketchForDrawing(() => {
         finishDrawing();
         const nextSides = sides !== undefined && Number.isInteger(sides)
             ? Math.min(256, Math.max(3, sides))
@@ -18960,7 +19226,26 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         });
         setCommandFocusRequest(n => n + 1);
         requestAnimationFrame(() => drawRef.current?.());
-    }, [finishDrawing, polygonSides]);
+        });
+    }, [finishDrawing, polygonSides, requestSketchForDrawing]);
+
+    const startRectangleMode = useCallback((firstCorner?: { easting: number; northing: number }) => {
+        requestSketchForDrawing(() => {
+        finishDrawing();
+        setRectangleFirstCorner(firstCorner ? { ...firstCorner } : null);
+        setDrawingMode('rectangle');
+        setActiveOsnapPoint(null);
+        setInlineOsnapOverride(null);
+        setTerminalIncoming({
+            text: firstCorner
+                ? `RECTANGLE: First corner E ${firstCorner.easting.toFixed(2)}, N ${firstCorner.northing.toFixed(2)} — pick the opposite corner [Esc cancels]`
+                : 'RECTANGLE: Pick the first corner (top-left or lower-right), then the opposite corner [Esc cancels]',
+            tone: 'ok',
+        });
+        setCommandFocusRequest(n => n + 1);
+        requestAnimationFrame(() => drawRef.current?.());
+        });
+    }, [finishDrawing, requestSketchForDrawing]);
 
     // Shared entry points for the command line and the drawing-tools toolbar.
     const startCopyMode = () => {
@@ -19110,6 +19395,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             onStartRotate: startRotateMode,
             onStartScale: startScaleMode,
             onStartMirror: startMirrorMode,
+            onStartDistance: startDistanceMode,
             onStartMove: startMoveMode,
             onEraseSelection: eraseSelectionCommand,
             onMoveSelection: moveSelectionCommand,
@@ -19136,7 +19422,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setCommandFocusRequest(n => n + 1);
         }
         requestAnimationFrame(() => drawRef.current?.());
-    }, [pendingSelectionCommand, selectedEntityCount, startCopyMode, eraseSelectionCommand, moveSelectionCommand, rotateSelectionCommand, scaleSelectionCommand, mirrorSelectionCommand, joinSelectionCommand, filletSelectionCommand, explodeSelectionCommand, arraySelectionCommand, polarArraySelectionCommand, openCommandPrompt, beginSelectionForCommand, startRotateMode, startMirrorMode, startMoveMode, startScaleMode, settings.linearUnits]);
+    }, [pendingSelectionCommand, selectedEntityCount, startCopyMode, eraseSelectionCommand, moveSelectionCommand, rotateSelectionCommand, scaleSelectionCommand, mirrorSelectionCommand, joinSelectionCommand, filletSelectionCommand, explodeSelectionCommand, arraySelectionCommand, polarArraySelectionCommand, openCommandPrompt, beginSelectionForCommand, startRotateMode, startMirrorMode, startDistanceMode, startMoveMode, startScaleMode, settings.linearUnits]);
 
     useEffect(() => {
         runPendingSelectionCommandRef.current = runPendingSelectionCommand;
@@ -19466,6 +19752,22 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         ? hatches.find(hatch => hatch.id === selectedHatchId) ?? null
         : null;
 
+    const selectionStyleLines = useMemo(
+        () => lines.filter(line => selectedLineIds.has(line.id || `${line.from}-${line.to}`)),
+        [lines, selectedLineIds],
+    );
+    const selectionStyleHatches = useMemo(
+        () => hatches.filter(hatch => selectedHatchIds.has(hatch.id)),
+        [hatches, selectedHatchIds],
+    );
+    const selectionStyleCount =
+        selectedLineIds.size +
+        selectedHatchIds.size +
+        selectedPointNumbers.size +
+        selectedCenterlineIds.size +
+        (selectedTextAnnotationId ? 1 : 0) +
+        (selectedDimensionId ? 1 : 0);
+
     return (
         <div 
             ref={containerRef} 
@@ -19493,7 +19795,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     shiftHoverAnchorRef.current = null;
                 }
             }}
-            style={{ cursor: isPickingBaselineStart ? 'crosshair' : isDraggingUnderlay ? 'move' : isStationLabelDragging ? 'grabbing' : isPanning ? 'grabbing' : (contourLabelSlide || hoveredContourLabelIndex !== null ? 'move' : (isPickingCoordinate || isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && (isOverLabel || hoveredStationLabelKey !== null) ? 'grab' : (isZoomBoxMode || drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))))), overflow: 'visible', isolation: 'isolate' }}
+            style={{ cursor: isPickingBaselineStart ? 'crosshair' : isDraggingUnderlay ? 'move' : isStationLabelDragging ? 'grabbing' : isPanning ? 'grabbing' : (contourLabelSlide || hoveredContourLabelIndex !== null ? 'move' : (isPickingDistance || isPickingCoordinate || isCopyingSelection || isOffsetMode || isPickingOtOrigin || isPickingPolarCenter ? 'crosshair' : (shiftBoxSelect ? 'crosshair' : (isCtrlPressed && (isOverLabel || hoveredStationLabelKey !== null) ? 'grab' : (isZoomBoxMode || drawingMode !== 'none' || isDeletingLines || isTrimmingLines || isExtendingLines ? 'crosshair' : (activeDimGrip ? 'grabbing' : (hoveredDimGrip || hoveredShrinkwrapPn || isOverDim ? 'pointer' : ((isSelectionMode || pendingSelectionCommand || isRotatingSelection || isScalingSelection || isMirroringSelection || isMovingSelection) ? (isOverLine ? 'pointer' : 'crosshair') : 'default')))))))), overflow: 'visible', isolation: 'isolate' }}
         >
             <CanvasFlashLayer />
             <canvas
@@ -19515,10 +19817,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 onTouchEnd={handleTouchEnd}
             />
 
-            {/* Origin HUD in the quick-thought corner. Its position is fixed to
-                the viewport, but its axes follow the current rotation so it still
-                reads as the same UCS widget. It lifts above the quick-thought card
-                whenever that card is open. */}
+            {/* Origin HUD. Until an origin is placed it stays in the
+                quick-thought corner; after picking, it sits on that world point
+                and its axes follow the current rotation. */}
             {(() => {
                 const originMode = orientationTuple?.mode ?? 'drafting';
                 const originAngle = originMode === 'drafting'
@@ -19531,6 +19832,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     ? (orientationTuple?.draftingOriginY ?? orientationTuple?.originY ?? 0)
                     : (orientationTuple?.viewOriginY ?? orientationTuple?.originY ?? 0);
                 const localTheta = originMode === 'drafting' ? originAngle : 0;
+                const isPlacedOrigin = orientationTuple?.placed === true
+                    && (originX !== 0 || originY !== 0);
                 const p0 = worldToScreen(originX, originY);
                 const p1 = worldToScreen(originX + Math.cos(localTheta), originY + Math.sin(localTheta));
                 const widgetAngleDeg = Math.round(Math.atan2(p1.y - p0.y, p1.x - p0.x) * (180 / Math.PI) * 100) / 100;
@@ -19566,7 +19869,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         className={`absolute z-30 flex h-16 w-16 cursor-pointer items-start justify-start rounded-md border border-transparent transition-colors hover:border-cyan-400/35 hover:bg-cyan-400/[0.06] focus-visible:border-cyan-400/60 focus-visible:outline-none ${
                             isPickingOrigin ? 'pointer-events-none' : ''
                         }`}
-                        style={{ left: 12, bottom: widgetBottom }}
+                        style={isPlacedOrigin
+                            ? { left: p0.x - 14, top: p0.y - 50 }
+                            : { left: 12, bottom: widgetBottom }}
                     >
                         <svg className="h-16 w-16 overflow-visible" viewBox="0 0 64 64" fill="none" aria-hidden="true">
                             <g transform={`rotate(${widgetAngleDeg} 14 50)`}>
@@ -20519,6 +20824,58 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
             {/* Selection hints live in the command line — no floating banner. */}
 
+            {isSelectionMode && !pendingSelectionCommand && (
+                <SelectionStyleToolbar
+                    selectedLines={selectionStyleLines}
+                    selectedHatches={selectionStyleHatches}
+                    selectionCount={selectionStyleCount}
+                    availableLayers={props.availableLayers}
+                    availableLinetypes={standardLinetypes?.map(linetype => linetype.name) ?? []}
+                    layerColors={layerColors}
+                    layerLinetypes={layerLinetypeMap}
+                    onUpdateLines={handleUpdateSelectedLines}
+                    onUpdateHatches={handleUpdateSelectedHatches}
+                />
+            )}
+
+            {pendingSketchStart && (
+                <div
+                    className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4"
+                    onMouseDown={event => event.stopPropagation()}
+                >
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="sketch-required-title"
+                        aria-describedby="sketch-required-description"
+                        data-testid="sketch-required-dialog"
+                        className="w-full max-w-md rounded-xl border border-slate-600 bg-slate-900 p-5 text-slate-100 shadow-2xl"
+                    >
+                        <h2 id="sketch-required-title" className="text-lg font-semibold">Start a new sketch?</h2>
+                        <p id="sketch-required-description" className="mt-2 text-sm text-slate-300">
+                            Drawing must happen inside a sketch. Start a new sketch to continue with this tool.
+                        </p>
+                        <div className="mt-5 flex justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={cancelStartSketch}
+                                className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                autoFocus
+                                onClick={confirmStartSketch}
+                                className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+                            >
+                                Start new sketch
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Selection Properties dialog (opened from the canvas header) */}
             <PropertiesDialog
                 isOpen={isPropertiesOpen}
@@ -21277,6 +21634,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                             if (drawingMode === 'circle') {
                                                 finishDrawing();
                                             } else {
+                                                requestSketchForDrawing(() => {
                                                 setDrawingMode('circle');
                                                 setCircleCenter(null);
                                                 setCircleSizeParam('radius');
@@ -21291,6 +21649,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                                 setIsDeletingLines(false);
                                                 setTrimPoint(null);
                                                 setExtendFromLine(null);
+                                                });
                                             }
                                             setIsDrawingToolsMenuOpen(false);
                                         }} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-300 transition-colors ${drawingMode === 'circle' ? 'bg-sky-600 text-white' : 'hover:bg-white/[0.06] hover:text-white'}`} title="Draw Circle (C: Center/Radius, T: Tangent-Tangent-Radius)"><CircleIcon className="w-5 h-5"/> Draw Circle (C)</button>
@@ -22044,7 +22403,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                                         });
                                     }}
                                     className={`p-2.5 rounded-lg transition-colors ${isSelectionMode ? 'bg-cyan-600' : 'hover:bg-gray-800'}`}
-                                    title="Selection Mode (S) — click lines, press X to delete, then Convert to Boundary"
+                                    title="Selection Mode (Q) — click lines, press X to delete, then Convert to Boundary"
                                 >
                                     <ToolbarSelectIcon className="w-5 h-5"/>
                                 </button>
@@ -22330,6 +22689,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         ? !polygonCenter
                             ? `POLYGON: Pick center — ${polygonSides} sides; scroll or [ ] changes sides [Esc to cancel]`
                             : `POLYGON: Diameter = ${typedPolygonDiameter || (cursorWorldPosRef.current ? convertLinearUnits(Math.hypot(cursorWorldPosRef.current.x - polygonCenter.easting, cursorWorldPosRef.current.y - polygonCenter.northing) * 2, 'foot', settings.linearUnits || 'usSurveyFoot').toFixed(2) : '_')} ${getLinearUnitAbbreviation(settings.linearUnits)} · ${polygonSides} sides [scroll/[ ] sides, Enter]`
+                        : drawingMode === 'rectangle'
+                        ? rectangleFirstCorner
+                            ? `RECTANGLE: First corner E ${rectangleFirstCorner.easting.toFixed(2)}, N ${rectangleFirstCorner.northing.toFixed(2)} — click the opposite corner [Esc cancels]`
+                            : 'RECTANGLE: Pick the first corner (top-left or lower-right), then the opposite corner [Esc cancels]'
                         : drawingMode === 'circle'
                         ? circleSubMode === 'ttr'
                             ? ttrStep === 1
@@ -22369,7 +22732,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         : isDeletingLines
                         ? 'DELETE: Click line to remove [Esc to exit]'
                         : isSelectionMode
-                        ? `SELECTION: ${selectedLineIds.size} lines, ${selectedHatchIds.size} hatches, ${selectedDimensionId ? '1 dim' : '0 dims'} selected [S to exit, B for box select, X to delete]`
+                        ? `SELECTION: ${selectedLineIds.size} lines, ${selectedHatchIds.size} hatches, ${selectedDimensionId ? '1 dim' : '0 dims'} selected [Q to exit, B for box select, X to delete]`
                         : drawingMode === 'boundary-align'
                         ? 'ALIGN: Click matching lines between deeds to align'
                         : undefined
@@ -22391,6 +22754,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     onStartExclusion: () => startChainLineMode('exclusion'),
                     onStartBoundaryLine: () => startChainLineMode('boundary-line'),
                     onStartCircle: (options?: { ttr?: boolean }) => {
+                        requestSketchForDrawing(() => {
                         setDrawingMode('circle');
                         setCircleCenter(null);
                         setCircleSizeParam('radius');
@@ -22410,6 +22774,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         setSelectedHatchIds(new Set());
                         setSelectedHatchId(null);
                         setPolylinePoints([]);
+                        });
                     },
                     onStartAlignedDimension: () => startDimensionMode('aligned-dim'),
                     onStartText: () => startTextPlacement(),
@@ -22448,6 +22813,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     onStartRotate: startRotateMode,
                     onStartScale: startScaleMode,
                     onStartMirror: startMirrorMode,
+                    onStartDistance: startDistanceMode,
                     onStartMove: startMoveMode,
                     onStartOffset: startOffsetMode,
                     onSelectAll: selectAllEntitiesCommand,
@@ -22515,6 +22881,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     onArraySelection: arraySelectionCommand,
                     onPolarArraySelection: polarArraySelectionCommand,
                     onCreateRectangle: drawRectangleCommand,
+                    onStartRectangle: startRectangleMode,
                     onStartPolygon: startPolygonMode,
                     onCreatePolygon: drawPolygonCommand,
                     onStartHatch: (opts) => {

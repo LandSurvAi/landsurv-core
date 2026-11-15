@@ -1,4 +1,5 @@
 import type {
+  A2UIPayload,
   A2UISpreadsheetColumn,
   A2UISpreadsheetRow,
   A2UISpreadsheetSpec,
@@ -14,6 +15,123 @@ export const POINT_LIST_COLUMNS: A2UISpreadsheetColumn[] = [
   { key: 'elevation', label: 'Elevation', width: 100, align: 'right' },
   { key: 'description', label: 'Description', width: 240 },
 ];
+
+/** Normalize the loose column shapes agents send in `open_spreadsheet`. */
+export function normalizeSpreadsheetColumns(raw: unknown): A2UISpreadsheetColumn[] {
+  if (!Array.isArray(raw)) return [];
+  const usedKeys = new Set<string>();
+  const columns: A2UISpreadsheetColumn[] = [];
+  raw.forEach((entry, index) => {
+    if (typeof entry === 'string') {
+      const label = entry.trim() || `Column ${index + 1}`;
+      let key = label;
+      while (usedKeys.has(key)) key = `${key}_${index + 1}`;
+      usedKeys.add(key);
+      columns.push({ key, label });
+      return;
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+    const value = entry as Record<string, unknown>;
+    const label =
+      typeof value.label === 'string' && value.label.trim()
+        ? value.label.trim()
+        : typeof value.key === 'string' && value.key.trim()
+          ? value.key.trim()
+          : `Column ${index + 1}`;
+    let key = typeof value.key === 'string' && value.key.trim() ? value.key.trim() : label;
+    while (usedKeys.has(key)) key = `${key}_${index + 1}`;
+    usedKeys.add(key);
+    const align =
+      value.align === 'right' || value.align === 'center' || value.align === 'left'
+        ? value.align
+        : undefined;
+    const width = typeof value.width === 'number' && Number.isFinite(value.width)
+      ? Math.min(600, Math.max(48, value.width))
+      : undefined;
+    columns.push({ key, label, align, width });
+  });
+  return columns;
+}
+
+/** Normalize row arrays or row objects against the final column keys. */
+export function normalizeSpreadsheetRows(
+  raw: unknown,
+  columns: A2UISpreadsheetColumn[],
+): A2UISpreadsheetRow[] {
+  if (!Array.isArray(raw)) return [];
+  const rows: A2UISpreadsheetRow[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const source = entry as Record<string, unknown>;
+    const row: A2UISpreadsheetRow = {};
+    columns.forEach((column, index) => {
+      const value = source[column.key] ?? source[column.label] ?? (Array.isArray(entry) ? entry[index] : undefined);
+      if (
+        value === null ||
+        typeof value === 'string' ||
+        typeof value === 'number' ||
+        typeof value === 'boolean'
+      ) {
+        row[column.key] = value;
+      }
+    });
+    rows.push(row);
+  }
+  return rows;
+}
+
+/** Build the data model shared by a model-emitted `open_spreadsheet` payload. */
+export function buildAgentSpreadsheetSpec(raw: unknown): A2UISpreadsheetSpec | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const input = raw as Record<string, unknown>;
+  const columns = normalizeSpreadsheetColumns(input.columns);
+  if (columns.length === 0) return null;
+  const rows = normalizeSpreadsheetRows(input.rows, columns);
+  const title = typeof input.title === 'string' && input.title.trim()
+    ? input.title.trim()
+    : 'Agent Spreadsheet';
+  const fallbackFileName = `${title.replace(/[^a-z0-9]+/gi, ' ').trim() || 'spreadsheet'}.csv`;
+  const rawPageSize = typeof input.pageSize === 'number' && Number.isFinite(input.pageSize)
+    ? Math.min(1000, Math.max(10, input.pageSize))
+    : undefined;
+  return {
+    title,
+    description: typeof input.description === 'string' ? input.description : undefined,
+    fileName:
+      typeof input.fileName === 'string' && input.fileName.trim()
+        ? input.fileName.trim()
+        : fallbackFileName,
+    columns,
+    rows,
+    editable: input.editable !== false,
+    pageSize: rawPageSize,
+  };
+}
+
+/**
+ * Build an inline A2UI spreadsheet payload with both the editable text view and
+ * searchable sheet view. Model responses that emit `open_spreadsheet` as JSON
+ * use this so the payload never leaks into the chat as raw text.
+ */
+export function buildSpreadsheetA2UIPayload(
+  agent: A2UIPayload['agent'],
+  raw: unknown,
+): A2UIPayload | null {
+  const spreadsheet = buildAgentSpreadsheetSpec(raw);
+  if (!spreadsheet) return null;
+  return {
+    kind: 'spreadsheet',
+    agent,
+    widgetType: 'spreadsheet',
+    status: 'expanded',
+    spreadsheet,
+    textEditor: {
+      fileName: spreadsheet.fileName,
+      content: spreadsheetToCsv(spreadsheet),
+      mode: 'edit',
+    },
+  };
+}
 
 function escapeCsvValue(value: A2UISpreadsheetValue | undefined): string {
   const text = value === null || value === undefined ? '' : String(value);

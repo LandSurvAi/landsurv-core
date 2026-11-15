@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 import { agentRegistry, AgentManifest, SkillSchema } from '../services/AgentRegistry';
 import { AgentType } from '../types';
 import { openA2UISurface } from '../services/a2uiSurfaces.ts';
@@ -193,6 +194,7 @@ const CacpManifestModal: React.FC<CacpManifestModalProps> = ({ agent, onClose })
           <button
             type="button"
             onClick={() => {
+              if (!freeCadGuard('clipboard-project-data')) return;
               if (manifest) {
                 navigator.clipboard?.writeText(JSON.stringify(manifest, null, 2)).catch(() => {});
               }

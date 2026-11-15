@@ -1,5 +1,5 @@
 import React from 'react';
-import type { HelpAccent, HelpGroup } from '../utils/canvasCommands';
+import { HELP_GROUPS, type HelpAccent, type HelpGroup } from '../utils/canvasCommands';
 
 const ACCENTS: Record<HelpAccent, { text: string; dot: string; border: string }> = {
   cyan: { text: 'text-cyan-300', dot: 'bg-cyan-300', border: 'border-cyan-500/25' },
@@ -11,7 +11,8 @@ const ACCENTS: Record<HelpAccent, { text: string; dot: string; border: string }>
 };
 
 interface A2UICommandHelpProps {
-  groups: HelpGroup[];
+  /** Defaults to the same HELP_GROUPS used by the CAD command line. */
+  groups?: HelpGroup[];
   /** Run a deterministic command from the docked reference. */
   onRunCommand: (command: string) => void;
 }
@@ -21,7 +22,7 @@ interface A2UICommandHelpProps {
  * full descriptions used by the terminal: groups stay stacked, while each
  * runnable command becomes a compact link that executes immediately.
  */
-export const A2UICommandHelp: React.FC<A2UICommandHelpProps> = ({ groups, onRunCommand }) => {
+export const A2UICommandHelp: React.FC<A2UICommandHelpProps> = ({ groups = HELP_GROUPS, onRunCommand }) => {
   const commandCount = groups.reduce((total, group) => total + group.entries.length, 0);
 
   return (
@@ -58,8 +59,15 @@ export const A2UICommandHelp: React.FC<A2UICommandHelpProps> = ({ groups, onRunC
                     title={entry.description}
                     className="group flex w-full items-center justify-between gap-2 px-2 py-[3px] text-left font-mono text-[10.5px] leading-snug text-slate-300 transition-colors hover:bg-cyan-400/[0.08] hover:text-cyan-100"
                   >
-                    <span className="min-w-0 truncate underline decoration-slate-600 decoration-dotted underline-offset-2 group-hover:decoration-cyan-300">
-                      {entry.command}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate underline decoration-slate-600 decoration-dotted underline-offset-2 group-hover:decoration-cyan-300">
+                        {entry.command}
+                      </span>
+                      {entry.note ? (
+                        <span className="mt-0.5 block truncate text-[8.5px] font-normal italic text-slate-500 group-hover:text-cyan-200/70">
+                          {entry.note}
+                        </span>
+                      ) : null}
                     </span>
                     <span className="shrink-0 text-[8px] font-bold uppercase tracking-wider text-cyan-300 opacity-0 transition-opacity group-hover:opacity-100">
                       Run
@@ -71,7 +79,12 @@ export const A2UICommandHelp: React.FC<A2UICommandHelpProps> = ({ groups, onRunC
                     title={entry.description}
                     className="px-2 py-[3px] font-mono text-[10.5px] leading-snug text-slate-500"
                   >
-                    {entry.command}
+                    <span className="block truncate">{entry.command}</span>
+                    {entry.note ? (
+                      <span className="mt-0.5 block truncate text-[8.5px] font-normal italic text-slate-600">
+                        {entry.note}
+                      </span>
+                    ) : null}
                   </div>
                 ))}
               </div>

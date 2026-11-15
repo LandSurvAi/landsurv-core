@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import type { LegalWriterStylePrefs } from '../types.ts';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 
 interface LegalWriterPanelProps {
     /** Initial legal text generated from the boundary file. */
@@ -60,6 +61,7 @@ const LegalWriterPanel: React.FC<LegalWriterPanelProps> = ({
     }, [onRegenerate, prefs]);
 
     const handleCopy = useCallback(async () => {
+        if (!freeCadGuard('clipboard-project-data')) return;
         try {
             await navigator.clipboard.writeText(text);
             setCopyStatus('copied');

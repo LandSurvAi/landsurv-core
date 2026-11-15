@@ -27,6 +27,7 @@ import type {
     RoadObject, RoadCrossSectionStation,
 } from '../types.ts';
 import { roadLinkRegistry } from '../services/roadLinkRegistry.ts';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 import { buildSheetAnnotations, type SheetPointLayers } from '../utils/sheetAnnotations.ts';
 import { explodeHatchToLines } from '../utils/hatchExplode.ts';
 import { getHatchByName, type HatchDefinition } from '../services/hatchLibrary.ts';
@@ -2667,6 +2668,7 @@ const SheetView: React.FC<SheetViewProps> = ({
     });
 
     const handleExportCurrentPdf = useCallback(async () => {
+        if (!freeCadGuard('pdf-export')) return;
         const pdfPpi = 100;
         // Guarantee background imagery is loaded for all active viewports before plotting
         for (const vp of activeSheet.viewports) {
@@ -2690,6 +2692,7 @@ const SheetView: React.FC<SheetViewProps> = ({
     }, [activeSheet, effW, effH, buildSheetSvg, reportError, fetchBasemapForVp]);
 
     const handleExportSetPdf = useCallback(async () => {
+        if (!freeCadGuard('pdf-export')) return;
         const pdfPpi = 100;
         let pdf: jsPDF | null = null;
         try {

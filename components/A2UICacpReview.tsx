@@ -11,6 +11,7 @@ import {
   Network,
 } from 'lucide-react';
 import { AgentType, type A2UICacpReviewContext, type A2UICacpReviewItem } from '../types.ts';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 
 interface A2UICacpReviewProps {
   context: A2UICacpReviewContext;
@@ -110,6 +111,7 @@ export const A2UICacpReview: React.FC<A2UICacpReviewProps> = ({
   };
 
   const copy = async (item: A2UICacpReviewItem) => {
+    if (!freeCadGuard('clipboard-project-data')) return;
     try {
       await navigator.clipboard?.writeText(JSON.stringify(item, null, 2));
       setDispositions(previous => ({ ...previous, [item.id]: 'copied' }));

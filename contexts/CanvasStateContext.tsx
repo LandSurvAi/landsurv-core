@@ -17,7 +17,8 @@ import {
   CutSheetInfo,
   SurveyPoint,
   PdfHighlight,
-  ContourSettings
+  ContourSettings,
+  BoundaryFile
 } from '../types.ts';
 import { CanvasHistoryProvider, useCanvasHistory } from './CanvasHistoryContext.tsx';
 
@@ -47,6 +48,9 @@ interface CanvasState {
   setProfileInfo: React.Dispatch<React.SetStateAction<ProfileInfo | null>>;
   centerlines: Centerline[];
   setCenterlines: React.Dispatch<React.SetStateAction<Centerline[]>>;
+  /** Deed/boundary traverses and their drawn-geometry links. */
+  boundaryFiles: BoundaryFile[];
+  setBoundaryFiles: React.Dispatch<React.SetStateAction<BoundaryFile[]>>;
   
   // Undo/Redo — backed by the history engine (utils/historyEngine.ts).
   // Capture is automatic; every tracked change is undoable without the caller
@@ -203,6 +207,7 @@ export function CanvasStateProvider({ children, defaultCutSheetInfo }: { childre
   const [profileData, setProfileData] = useState<ProfilePoint[]>([]);
   const [profileInfo, setProfileInfo] = useState<ProfileInfo | null>(null);
   const [centerlines, setCenterlines] = useState<Centerline[]>([]);
+  const [boundaryFiles, setBoundaryFiles] = useState<BoundaryFile[]>([]);
   
   // Undo/Redo is provided by the history engine (utils/historyEngine.ts) via
   // CanvasHistoryProvider, which observes the tracked slices below and captures
@@ -213,13 +218,15 @@ export function CanvasStateProvider({ children, defaultCutSheetInfo }: { childre
     lines,
     centerlines,
     contourLabels,
-  }), [pointLists, lines, centerlines, contourLabels]);
+    boundaryFiles,
+  }), [pointLists, lines, centerlines, contourLabels, boundaryFiles]);
 
   const historySetters = useMemo(() => ({
     pointLists: setPointLists as (v: never) => void,
     lines: setLines as (v: never) => void,
     centerlines: setCenterlines as (v: never) => void,
     contourLabels: setContourLabels as (v: never) => void,
+    boundaryFiles: setBoundaryFiles as (v: never) => void,
   }), []);
   
   // Visibility Toggles
@@ -363,6 +370,8 @@ export function CanvasStateProvider({ children, defaultCutSheetInfo }: { childre
     setProfileInfo,
     centerlines,
     setCenterlines,
+    boundaryFiles,
+    setBoundaryFiles,
     
     // Visibility Toggles
     linesVisible,

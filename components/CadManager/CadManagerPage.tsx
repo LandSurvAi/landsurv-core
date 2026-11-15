@@ -20,6 +20,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { freeCadGuard } from '../../services/freeCadPolicy.ts';
 import {
   Activity,
   AlertTriangle,
@@ -313,6 +314,7 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
    * This creates the Description Key Set and layers in Civil 3D
    */
   const handleExportToC3D = async () => {
+    if (!freeCadGuard('c3d')) return;
     if (!currentStandard) return;
     
     setIsExporting(true);
@@ -365,6 +367,7 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
    * If connected to C3D, pushes directly; otherwise downloads JSON
    */
   const handleExportLayers = async () => {
+    if (!freeCadGuard('c3d')) return;
     if (!currentStandard) return;
     
     setIsExporting(true);
@@ -553,6 +556,7 @@ export const CadManagerPage: React.FC<CadManagerPageProps> = ({
    * Creates the keys that map codes to layers/styles in Settings > Point > Description Key Sets
    */
   const handleExportDescriptionKeys = async () => {
+    if (!freeCadGuard('c3d')) return;
     if (!currentStandard) return;
     
     setIsExporting(true);

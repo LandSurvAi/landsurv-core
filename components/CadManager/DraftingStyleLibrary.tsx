@@ -26,6 +26,7 @@
  */
 
 import React, { useState, useCallback, useRef } from 'react';
+import { freeCadGuard } from '../../services/freeCadPolicy.ts';
 import type {
   DraftingStyleEntry,
   DraftingStyleAnnotation,
@@ -750,6 +751,7 @@ export const DraftingStyleLibrary: React.FC<DraftingStyleLibraryProps> = ({
               </span>
               <button
                 onClick={() => {
+                  if (!freeCadGuard('clipboard-project-data')) return;
                   navigator.clipboard?.writeText(compiledContext);
                 }}
                 className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"

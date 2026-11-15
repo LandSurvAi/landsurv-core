@@ -20,6 +20,7 @@ import { parseDxfForSymbol } from '../../utils/dxfParser';
 import { BrainCircuitIcon, UploadIcon, EraserIcon, EyeIcon, SparklesIcon, DownloadIcon, BookOpenIcon } from '../icons';
 import { SURVEY_SYMBOL_LIBRARY, findMatchingSymbol, libraryToSymbolDefinition, LibrarySymbol } from '../../data/surveySymbolLibrary';
 import { SymbolSvg } from '../common/SymbolSvg';
+import { freeCadGuard } from '../../services/freeCadPolicy.ts';
 
 interface SymbolCellProps {
   /** Current symbol - can be string (legacy) or SymbolDefinition */
@@ -538,6 +539,7 @@ export const SymbolPreviewModal: React.FC<SymbolPreviewModalProps> = ({
 
   // Copy SVG path to clipboard
   const handleCopyPath = useCallback(() => {
+    if (!freeCadGuard('clipboard-project-data')) return;
     const pathData = {
       svgPath: symbol.svgPath,
       fillPath: symbol.fillPath,

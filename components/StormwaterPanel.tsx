@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 import { buildStormwaterReportPdf } from '../services/stormwaterReportPdf.ts';
 import { fetchNoaaAtlas14Rainfall } from '../services/stormwaterRainfall.ts';
 import {
@@ -587,6 +588,7 @@ export const StormwaterPanel: React.FC<StormwaterPanelProps> = ({
   }, []);
 
   const handleCopyReport = useCallback(async () => {
+    if (!freeCadGuard('clipboard-project-data')) return;
     if (!result) return;
     try {
       await navigator.clipboard.writeText(

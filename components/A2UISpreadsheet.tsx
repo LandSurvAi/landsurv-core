@@ -14,6 +14,7 @@ import type {
   A2UISpreadsheetSpec,
 } from '../types.ts';
 import { spreadsheetToCsv, spreadsheetToTsv } from '../utils/a2uiSpreadsheet.ts';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 
 export interface A2UISpreadsheetProps {
   spec: A2UISpreadsheetSpec;
@@ -90,6 +91,7 @@ export const A2UISpreadsheet: React.FC<A2UISpreadsheetProps> = ({ spec, onChange
   };
 
   const copyTsv = async () => {
+    if (!freeCadGuard('clipboard-project-data')) return;
     const text = spreadsheetToTsv({ ...spec, rows });
     try {
       await navigator.clipboard?.writeText(text);

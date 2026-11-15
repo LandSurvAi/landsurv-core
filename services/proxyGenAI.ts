@@ -17,6 +17,8 @@
 
 import type { Part } from '../types.ts';
 import { getDeviceFingerprint } from './deviceFingerprint.ts';
+import { isFreeCadMode } from './freeCadPolicy.ts';
+import { getActiveTrialTurnId } from './freeCadTrial.ts';
 
 type HistoryEntry = { role: 'user' | 'model'; parts: Array<Part | { text: string }> };
 type MessageInput = string | Array<Part | { text: string }>;
@@ -39,8 +41,14 @@ const STREAM_ENDPOINT = '/api/demo/gemini/stream';
  */
 async function proxyHeaders(apiKey: string): Promise<Record<string, string>> {
   const key = apiKey.trim();
+  const trialHeaders: Record<string, string> = {};
+  if (isFreeCadMode()) {
+    trialHeaders['x-landsurv-app-mode'] = 'free';
+    const turn = getActiveTrialTurnId();
+    if (turn) trialHeaders['x-landsurv-trial-turn'] = turn;
+  }
   if (key) {
-    return { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` };
+    return { 'Content-Type': 'application/json', ...trialHeaders, Authorization: `Bearer ${key}` };
   }
   let deviceId = '';
   try {
@@ -50,6 +58,7 @@ async function proxyHeaders(apiKey: string): Promise<Record<string, string>> {
   }
   return {
     'Content-Type': 'application/json',
+    ...trialHeaders,
     'x-landsurv-free-tier': '1',
     ...(deviceId ? { 'x-landsurv-device': deviceId } : {}),
   };

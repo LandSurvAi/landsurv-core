@@ -2062,7 +2062,7 @@ export interface PointEfficiencyStyle {
     detailScaleCutoff: number;
     screenPointBudget: number;
     cellSizePx: number;
-    dotShape: 'square' | 'circle';
+    dotShape: 'square' | 'circle' | 'x';
     minDotSizePx: number;
     maxDotSizePx: number;
     densityGrowth: number;
@@ -3715,6 +3715,9 @@ export interface SessionState {
     lines: SurveyLine[];
     contourLabels: ContourLabel[];
     centerlines: Centerline[];
+    /** Feature timeline + sketch grouping. Live snapshots are stripped; the
+     *  archive stores one baseline snapshot and per-feature entity deltas. */
+    timeline?: import('./utils/timeline/types').SerializedTimelineDocument;
     
     // FIX: Added gisFeatures to SessionState
     gisFeatures?: GisFeature[];

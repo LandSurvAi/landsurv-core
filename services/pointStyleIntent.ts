@@ -185,8 +185,8 @@ export function resolvePointStyleIntent(query: string): PointStyleIntentResult |
       tab = 'labels';
     } else if (efficiencyTarget) {
       tab = 'efficiency';
-      if (shape === 'circle' || shape === 'square' || shape === 'dot') {
-        efficiency.dotShape = shape === 'circle' ? 'circle' : 'square';
+      if (shape === 'circle' || shape === 'square' || shape === 'dot' || shape === 'x') {
+        efficiency.dotShape = shape === 'circle' ? 'circle' : shape === 'x' ? 'x' : 'square';
       }
       focus = 'efficiency-shape';
       summary.push(`efficiency shape ${shape}`);

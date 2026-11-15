@@ -13,6 +13,7 @@ import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnable
 import { A2UIExperimentalAgentDialog } from './A2UIExperimentalAgentDialog.tsx';
 import { EXPERIMENTAL_REDLINE_WARNING, EXPERIMENTAL_ROADING_WARNING, EXPERIMENTAL_STORMWATER_WARNING, setExperimentalAgentEnabled } from '../utils/experimentalAgents.ts';
 import { isScoutAnimationEnabled, setScoutAnimationEnabled } from '../utils/scoutSettings.ts';
+import { useTimelineVisibility } from './timeline/timelineVisibility.ts';
 import { detectProjectionFromBrowser } from '../utils/autoProjection.ts';
 
 const FORCE_AGENT_OPTIONS: AgentType[] = [
@@ -64,6 +65,7 @@ const SETTINGS_SECTIONS: ReadonlyArray<{
         items: [
             { id: 'settings-canvas-display', label: 'Canvas & Display' },
             { id: 'settings-command-bar', label: 'Command Bar' },
+            { id: 'settings-timeline', label: 'Feature Timeline' },
             { id: 'settings-graphics', label: 'Graphics & WebGPU' },
             { id: 'settings-point-labeling', label: 'Point Labeling' },
         ],
@@ -104,7 +106,8 @@ const getSelectorModelLabel = (modelName: string): string => (
     : modelName === 'claude-fable-5' ? 'Claude Fable 5'
     : modelName === 'gemini-3.7-flash' ? 'Gemini 3.7 Flash'
     : modelName === 'gemini-3.8-flash' ? 'Gemini 3.8 Flash'
-    : modelName === 'gemini-4-argon' ? 'Gemini 4 Argon'
+    : modelName === 'gemini-4-hydrogen' ? 'Gemini 4 Hydrogen'
+    : modelName === 'gemini-4-argon' ? 'Gemini 4 Argon (High Thinking)'
     : modelName === 'gemini-3.5-flash-lite' ? 'Gemini 3.5 Flash Lite'
     : modelName === 'gpt-5.6-terra' ? 'GPT-5.6 Terra (your OpenAI key)'
     : modelName === 'gpt-5.4-mini' ? 'GPT-5.4 Mini (your OpenAI key)'
@@ -156,6 +159,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     const experimentalRoadingEnabled = useExperimentalAgentEnabled(AgentType.ROADING_AGENT);
     const experimentalStormwaterEnabled = useExperimentalAgentEnabled(AgentType.STORMWATER_AGENT);
     const experimentalRedlineEnabled = useExperimentalAgentEnabled(AgentType.REDLINE_AGENT);
+    const {
+        enabled: timelineEnabled,
+        enable: enableTimeline,
+        disable: disableTimeline,
+    } = useTimelineVisibility();
     const [isConfirmingReset, setIsConfirmingReset] = useState(false);
     const [activeSection, setActiveSection] = useState(SETTINGS_SECTION_ITEMS[0]?.id ?? 'settings-ai-behavior');
     const [inputApiKey, setInputApiKey] = useState(settings.userApiKey || '');
@@ -594,9 +602,10 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             ))}
                         </select>
                         <p className="text-xs text-gray-500 mt-1">
-                            {activeModel === AUTO_SELECTOR_OPTION && `Auto mode uses Gemini 3.5 Flash Lite for quick tasks and ${getSelectorModelLabel(autoHighThinkingModel || 'gemini-3.7-flash')} for high-thinking agents.`}
+                            {activeModel === AUTO_SELECTOR_OPTION && `Normal mode uses Gemini 3.5 Flash Lite for quick tasks and Gemini 4 Hydrogen for complex agents. High Thinking uses ${getSelectorModelLabel(autoHighThinkingModel || 'gemini-4-argon')}.`}
                             {activeModel === 'gemini-3.7-flash' && 'Gemini 3.7 Flash via Vertex AI backend'}
                             {activeModel === 'gemini-3.8-flash' && 'Gemini 3.8 Flash via Vertex AI backend'}
+                            {activeModel === 'gemini-4-hydrogen' && 'Gemini 4 Hydrogen (standard reasoning) via Vertex AI backend'}
                             {activeModel === 'gemini-4-argon' && 'Gemini 4 Argon (High Thinking) via Vertex AI backend'}
                             {activeModel.startsWith('claude-') && (settings.anthropicApiKey?.trim() ? 'Anthropic Claude via your own Anthropic key (browser-direct)' : 'Anthropic Claude via Vertex AI backend')}
                             {/^(gpt-|o\d|chatgpt-)/i.test(activeModel) && 'OpenAI via your own OpenAI key (browser-direct)'}
@@ -605,20 +614,20 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                     </div>
                     <div>
                         <label htmlFor="autoThinkingSelector" className="flex items-center gap-2 text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">
-                            Auto High-Thinking Model
+                            High Thinking Model
                             <CogIcon className="w-4 h-4 text-gray-500" />
                         </label>
                         <select
                             id="autoThinkingSelector"
-                            value={autoHighThinkingModel || 'gemini-3.7-flash'}
+                            value={autoHighThinkingModel || 'gemini-4-argon'}
                             onChange={e => onAutoHighThinkingModelChange?.(e.target.value)}
                             className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
                         >
-                            {(autoHighThinkingOptions || ['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4-argon', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']).map(model => (
+                            {(autoHighThinkingOptions || ['gemini-4-argon', 'gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']).map(model => (
                                 <option key={model} value={model}>{getSelectorModelLabel(model)}</option>
                             ))}
                         </select>
-                        <p className="text-xs text-gray-500 mt-1">This controls Auto mode for complex agents. You can keep Gemini 3.7 Flash, or choose an entitled Claude model.</p>
+                        <p className="text-xs text-gray-500 mt-1">Used when High Thinking is selected in the command bar. Gemini 4 Argon is the default.</p>
                     </div>
                     <div>
                         <label htmlFor="uncertaintySensitivity" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Uncertainty Sensitivity</label>
@@ -1027,6 +1036,33 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             <span className="ml-3 text-emerald-400">AI</span> &gt; Shift+Space
                         </div>
                     </div>
+                </div>
+            </div>
+            {/* Feature Timeline Section */}
+            <div>
+                <h3 id="settings-timeline" className="scroll-mt-4 text-lg font-semibold text-gray-100 mb-2 light-theme:text-gray-800">Feature Timeline</h3>
+                <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600 space-y-3 light-theme:bg-gray-100 light-theme:border-gray-300">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                        <input
+                            type="checkbox"
+                            data-testid="timeline-setting-toggle"
+                            checked={timelineEnabled}
+                            onChange={event => {
+                                if (event.target.checked) enableTimeline();
+                                else disableTimeline();
+                            }}
+                            className={`mt-0.5 h-4 w-4 rounded border-gray-500 bg-gray-700 ${themeAccent} focus:ring-2 ${themeFocusRing}`}
+                        />
+                        <span>
+                            <span className="block text-sm font-medium text-gray-300 light-theme:text-gray-700">Enable Feature Timeline</span>
+                            <span className="block text-xs text-gray-500 mt-0.5 light-theme:text-gray-600">
+                                Off by default for rollout. Adds the timeline above the command bar and groups point imports under their sketch. Turn this off to hide the timeline without deleting its history.
+                            </span>
+                        </span>
+                    </label>
+                    <p className="text-xs text-gray-500 light-theme:text-gray-600">
+                        Once enabled, the Timeline button in the command bar shows or hides the dock. Its options menu contains the disable switch.
+                    </p>
                 </div>
             </div>
             {/* Graphics & WebGPU Acceleration Section */}

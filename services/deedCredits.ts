@@ -211,6 +211,18 @@ export function clearLocalDeedCreditCounter(): void {
   }
 }
 
+/** Clears the cached status and offline fallback counter for a fresh dev run. */
+export function clearDeedCreditState(): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.removeItem(CACHE_KEY);
+    storage.removeItem(LOCAL_COUNTER_KEY);
+  } catch {
+    /* non-fatal */
+  }
+}
+
 function readStoredJson<T>(storage: Storage, key: string): T | null {
   try {
     const raw = storage.getItem(key);

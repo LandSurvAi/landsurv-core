@@ -196,7 +196,11 @@ export function UIStateProvider({ children }: { children: ReactNode }) {
   const [isPointEditorExpanded, setIsPointEditorExpanded] = useState(true);
   const [isChatPanelVisible, setIsChatPanelVisible] = useState(false);
   const toggleChatPanel = useCallback(() => setIsChatPanelVisible(prev => !prev), []);
-  const [isToolShelfVisible, setIsToolShelfVisible] = useState(true);
+  // Keep the canvas unobstructed on phones. The shelf remains one tap away from
+  // the header and opens normally whenever the user requests a docked tool.
+  const [isToolShelfVisible, setIsToolShelfVisible] = useState<boolean>(
+    () => typeof window === 'undefined' || window.innerWidth >= 768,
+  );
   const toggleToolShelf = useCallback(() => setIsToolShelfVisible(prev => !prev), []);
   const [isToolsDrawerOpen, setIsToolsDrawerOpen] = useState(false);
   const toggleToolsDrawer = useCallback(() => setIsToolsDrawerOpen(prev => !prev), []);
@@ -352,4 +356,9 @@ export function useUIState() {
     throw new Error('useUIState must be used within a UIStateProvider');
   }
   return context;
+}
+
+/** Optional variant for overlays that can render outside the app shell. */
+export function useOptionalUIState() {
+  return useContext(UIStateContext) ?? null;
 }

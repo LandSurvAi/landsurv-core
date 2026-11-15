@@ -70,12 +70,12 @@ const DEFAULT_EFFICIENCY: PointEfficiencyStyle = {
     detailScaleCutoff: POINT_EFFICIENCY_DETAIL_SCALE,
     screenPointBudget: 240,
     cellSizePx: 4,
-    dotShape: 'square',
+    dotShape: 'x',
     minDotSizePx: 2,
     maxDotSizePx: 4,
     densityGrowth: 1,
-    color: '#FFD700',
-    lightThemeColor: '#111827',
+    color: '#F472B6',
+    lightThemeColor: '#DB2777',
     opacity: 1,
     suppressLabels: true,
     suppressSymbols: true,
@@ -577,9 +577,27 @@ function normalizeEfficiency(efficiency: PointEfficiencyStyle): PointEfficiencyS
     const isLegacyCurrentDefault =
         efficiency.preset === 'current'
         && Math.abs(normalizedCutoff - 3) < 0.001;
+    // The original "current" efficiency profile was a yellow square. Migrate
+    // only untouched profiles; any explicit edit has already changed the preset
+    // to "custom" and must keep the user's chosen color/shape.
+    const isLegacyCurrentLook =
+        efficiency.preset === 'current'
+        && efficiency.dotShape === 'square'
+        && String(efficiency.color ?? '').toUpperCase() === '#FFD700'
+        && String(efficiency.lightThemeColor ?? '').toUpperCase() === '#111827';
+    const dotShape = efficiency.dotShape === 'square'
+        || efficiency.dotShape === 'circle'
+        || efficiency.dotShape === 'x'
+        ? efficiency.dotShape
+        : DEFAULT_EFFICIENCY.dotShape;
     return {
         ...DEFAULT_EFFICIENCY,
         ...efficiency,
+        dotShape: isLegacyCurrentLook ? DEFAULT_EFFICIENCY.dotShape : dotShape,
+        color: isLegacyCurrentLook ? DEFAULT_EFFICIENCY.color : (efficiency.color || DEFAULT_EFFICIENCY.color),
+        lightThemeColor: isLegacyCurrentLook
+            ? DEFAULT_EFFICIENCY.lightThemeColor
+            : (efficiency.lightThemeColor || DEFAULT_EFFICIENCY.lightThemeColor),
         detailScaleCutoff: isLegacyCurrentDefault ? POINT_EFFICIENCY_DETAIL_SCALE : normalizedCutoff,
         screenPointBudget: clampNumber(efficiency.screenPointBudget, 1, 1_000_000, 240),
         cellSizePx: clampNumber(efficiency.cellSizePx, 2, 16, 4),

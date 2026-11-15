@@ -747,6 +747,49 @@
   .custom-scroll::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.3); border-radius: 3px; }
   .custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(139, 92, 246, 0.5); }
 
+  /* Welcome copy drifts automatically; hide the scrollbar indicator. */
+  .welcome-copy-scroll {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .welcome-copy-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Free CAD welcome path: one-pass color chase around the outside edge. */
+  .free-cad-chase {
+    position: absolute;
+    inset: -1px;
+    z-index: 20;
+    padding: 1px;
+    border-radius: inherit;
+    overflow: hidden;
+    pointer-events: none;
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+  .free-cad-chase::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 260%;
+    aspect-ratio: 1;
+    background: conic-gradient(from 0deg, transparent 0 248deg, #22d3ee 276deg, #34d399 302deg, #fbbf24 328deg, #f87171 350deg, transparent 360deg);
+    animation: free-cad-border-chase 2.4s cubic-bezier(0.2, 0.8, 0.25, 1) 1 both;
+  }
+  @keyframes free-cad-border-chase {
+    0% { transform: translate(-50%, -50%) rotate(0deg); opacity: 0; }
+    10% { opacity: 1; }
+    78% { opacity: 1; }
+    100% { transform: translate(-50%, -50%) rotate(360deg); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .free-cad-chase::before { animation: none; opacity: 0; }
+  }
+
   /* Faint futuristic background grid — matches DrawingCanvas style */
   .aesthetic-grid {
     background-image:
@@ -842,3 +885,23 @@
 .command-bar-rows .text-\[11px\] { font-size: calc(0.6875rem * var(--command-bar-text-scale, 1.15)); }
 .command-bar-rows .text-\[9px\]  { font-size: calc(0.5625rem * var(--command-bar-text-scale, 1.15)); }
 .command-bar-rows .text-\[8px\]  { font-size: calc(0.5rem * var(--command-bar-text-scale, 1.15)); }
+
+/* Group tabs slowly cycle through the colors of their child entries. */
+@keyframes timeline-group-tab-pulse {
+  0%, 100% { background-color: var(--timeline-group-pulse-1); }
+  16.666% { background-color: var(--timeline-group-pulse-2); }
+  33.333% { background-color: var(--timeline-group-pulse-3); }
+  50% { background-color: var(--timeline-group-pulse-4); }
+  66.666% { background-color: var(--timeline-group-pulse-5); }
+  83.333% { background-color: var(--timeline-group-pulse-6); }
+}
+
+.timeline-group-tab-pulse {
+  animation: timeline-group-tab-pulse 36s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-group-tab-pulse {
+    animation: none;
+  }
+}

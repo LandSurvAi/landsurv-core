@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { agentRegistry, type AgentManifest, type SkillSchema } from '../services/AgentRegistry.ts';
 import { AgentType } from '../types.ts';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 
 interface A2UICacpManifestExplorerProps {
   initialAgent?: AgentType;
@@ -149,6 +150,7 @@ export const A2UICacpManifestExplorer: React.FC<A2UICacpManifestExplorerProps> =
   );
 
   const copyManifest = async () => {
+    if (!freeCadGuard('clipboard-project-data')) return;
     if (!selected) return;
     try {
       await navigator.clipboard?.writeText(JSON.stringify(selected, null, 2));

@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
+import { freeCadGuard } from '../../services/freeCadPolicy.ts';
 import {
   FieldToFinishSettings as F2FSettings,
   LineDraftingControls,
@@ -203,6 +204,7 @@ export const FieldToFinishSettings: React.FC<FieldToFinishSettingsProps> = ({
                   settings: localSettings,
                   availableCodesCount: availableCodes.length,
                 };
+                if (!freeCadGuard('clipboard-project-data')) return;
                 const debugStr = JSON.stringify(debugInfo, null, 2);
                 navigator.clipboard.writeText(debugStr).then(() => {
                   f2fDebug('EXPORT', 'Settings copied to clipboard');

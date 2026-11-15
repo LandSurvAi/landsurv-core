@@ -14,6 +14,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { freeCadGuard } from '../../services/freeCadPolicy.ts';
 import { StandardDefinition, CodeDefinition } from '../../contexts/types/CadManager.types';
 import { StandardsEditor } from './StandardsEditor';
 import { startGeminiChat } from '../../services/geminiService';
@@ -985,6 +986,7 @@ I've loaded ${finalStandard.codes.length} codes into CAD Manager. You can now:
    * Copy markdown to clipboard
    */
   const handleCopyMarkdown = () => {
+    if (!freeCadGuard('clipboard-project-data')) return;
     if (generatedMarkdown) {
       navigator.clipboard.writeText(generatedMarkdown);
     }

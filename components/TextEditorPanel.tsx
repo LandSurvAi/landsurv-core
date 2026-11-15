@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 import {
   AlertCircle,
   Check,
@@ -214,6 +215,7 @@ const TextEditorPanel: React.FC<TextEditorPanelProps> = ({
   };
 
   const copyAll = async () => {
+    if (!freeCadGuard('clipboard-project-data')) return;
     try {
       await navigator.clipboard.writeText(content);
       setCopied(true);

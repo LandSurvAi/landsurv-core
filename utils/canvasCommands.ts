@@ -23,6 +23,8 @@ export interface CommandContext {
   onStartCircle?: (options?: { ttr?: boolean }) => void;
   /** Start the interactive aligned-dimension tool (D / DIMALIGNED). */
   onStartAlignedDimension?: () => void;
+  /** Start interactive DIST: two canvas picks, reported in the command readout. */
+  onStartDistance?: () => void;
   onStartInclusion?: () => void;
   onToggleOrtho?: () => void;
   /** Open the selection Properties dialog. */
@@ -105,6 +107,8 @@ export interface CommandContext {
     p1: { easting: number; northing: number },
     p2: { easting: number; northing: number },
   ) => number;
+  /** Start the interactive two-corner rectangle picker. */
+  onStartRectangle?: (firstCorner?: { easting: number; northing: number }) => void;
   onCreatePolygon?: (
     sides: number,
     center: { easting: number; northing: number },
@@ -198,7 +202,7 @@ const COMMAND_ALIASES: Record<string, string> = {
   hatch: 'hatch',
   bh: 'hatch',
   bhatch: 'hatch',
-  s: 'select',
+  q: 'select',
   sel: 'select',
   select: 'select',
   b: 'box',
@@ -361,44 +365,48 @@ export const HELP_GROUPS: HelpGroup[] = [
     title: 'Draw',
     accent: 'cyan',
     entries: [
-      { command: 'L / PLINE', description: 'Chained line and tangent-arc segments', note: 'A arc · L line' },
-      { command: 'B (BASELINE)', description: 'Centerline alignment with the same chained line / tangent-arc flow', note: 'shared with Stationing & CL' },
-      { command: 'C / CIRCLE', description: 'Center + radius, or tangent-tangent-radius (TTR)', note: 'C TTR · T toggles' },
-      { command: 'H / HATCH', description: 'Hatch by clicking inside an enclosed area or selecting a closed object', note: 'S object · A area' },
-      { command: 'D / DIMALIGNED', description: 'Aligned dimension — pick two points, then the offset line', note: 'annotation' },
-      { command: 'TEXT / MTEXT', description: 'Place annotation text — click the insertion point, type in place', note: 'double-tap T to start · double-click text to edit' },
-      { command: 'REC / RECTANGLE', description: 'Rectangle from two opposite corners', note: 'arrow pad' },
-      { command: 'POL / POLYGON', description: 'Regular polygon from a snapped center and drag radius', note: 'scroll / [ ] sides' },
-      { command: 'P', description: 'Place a survey point' },
-      { command: 'I / INCLUSION', description: 'Draw an inclusion boundary' },
+      { command: 'L / PLINE', description: 'Chained line and tangent-arc segments', note: 'A arc · L line · C close · M mend · R resume/radius · T tangent · U undo' },
+      { command: 'BASELINE / BL', description: 'Centerline alignment with the same chained line / tangent-arc flow', note: 'B key starts · A arc · L line · R radius · T tangent · U undo · Enter finish' },
+      { command: 'BK / BREAKLINE', description: 'Draw surface breakline chains', note: 'A arc · L line · Enter finish · Esc cancel' },
+      { command: 'EXCL / EXCLUSION', description: 'Draw an exclusion boundary', note: 'A arc · L line · Enter finish · Esc cancel' },
+      { command: 'BOUNDARY / BOUNDARYLINE', description: 'Draw a manual boundary line', note: 'A arc · L line · C close · M mend · BB double-tap · Enter finish' },
+      { command: 'I / INCLUSION', description: 'Draw an inclusion boundary', note: 'A arc · L line · C close · Enter close · Esc cancel' },
+      { command: 'C / CIRCLE', description: 'Center + radius, or tangent-tangent-radius', note: 'TTR / T toggles · D diameter/radius · R radius · Enter place' },
+      { command: 'TTR', description: 'Start tangent-tangent-radius circle directly', note: '2 tangent entities · radius' },
+      { command: 'H / HATCH', description: 'Hatch inside an enclosed area or a selected object', note: 'A area · S object · Esc exit' },
+      { command: 'D / DIMALIGNED', description: 'Aligned dimension', note: '2 points · offset line' },
+      { command: 'TEXT / MTEXT', description: 'Place annotation text with the in-canvas editor', note: 'TT double-tap · Ctrl+Enter finish · double-click edit' },
+      { command: 'REC / RECTANGLE', description: 'Rectangle from two opposite corners', note: 'first corner → opposite corner (either diagonal) · Esc cancel' },
+      { command: 'POL / POLYGON', description: 'Regular polygon from a snapped center and drag radius', note: '[ / ] sides · scroll · diameter · Enter' },
+      { command: 'P / POINT', description: 'Place a survey point', note: 'click canvas · Esc finish' },
     ],
   },
   {
     title: 'Modify',
     accent: 'emerald',
     entries: [
-      { command: 'S / SELECT', description: 'Pick entities on the canvas' },
-      { command: 'B / BOX', description: 'Window or crossing box selection while a selection command is active', note: 'SELECT + B' },
-      { command: 'T / TRIM', description: 'Trim to a cutting edge' },
-      { command: 'F / FILLET', description: 'Round a corner between two selected lines', note: 'radius' },
-      { command: 'EX / EXTEND', description: 'Extend to a boundary' },
-      { command: 'CP / CC / COPY', description: 'Copy point to point with a snapped base point' },
-      { command: 'OS / OFFSET', description: 'Offset a line, arc, circle or polyline', note: 'distance' },
-      { command: 'M / MOVE', description: 'Move with a live ghost preview', note: 'bare M = picks' },
-      { command: 'RO / R', description: 'Rotate with snaps and ghost preview', note: 'Shift = 15°' },
-      { command: 'SC / SCALE', description: 'Scale with snaps and a live ghost preview', note: 'click or type factor' },
-      { command: 'MI / MIRROR', description: 'Mirror across two snapped points' },
-      { command: 'J / JOIN', description: 'Join segments into one polyline' },
-      { command: 'EXPLODE', description: 'Explode polylines and hatches into linework' },
-      { command: 'X / E / DEL', description: 'Delete the selection' },
+      { command: 'Q / SELECT', description: 'Pick entities on the canvas', note: 'S starts a sketch when timeline is on · B box' },
+      { command: 'B / BOX', description: 'Window or crossing box selection while SELECT is active', note: 'B key in SELECT · Q selects' },
+      { command: 'T / TRIM', description: 'Trim to a cutting edge', note: 'F fence' },
+      { command: 'F / FILLET', description: 'Round a corner between two selected lines', note: 'select 2 lines · radius pad' },
+      { command: 'EX / EXTEND', description: 'Extend to a boundary', note: 'click a line' },
+      { command: 'CP / CC / COPY', description: 'Copy point to point with a snapped base point', note: 'repeat destinations · Esc exit' },
+      { command: 'OS / OFFSET', description: 'Offset a line, arc, circle or polyline', note: 'distance · click side' },
+      { command: 'M / MOVE', description: 'Move with a live ghost preview', note: 'bare M = snapped base + destination' },
+      { command: 'RO / R', description: 'Rotate with snaps and ghost preview', note: 'bare RO or R = base · Shift 15°' },
+      { command: 'SC / SCALE', description: 'Scale with snaps and a live ghost preview', note: 'bare SC = reference · click or type factor' },
+      { command: 'MI / MIRROR', description: 'Mirror across two snapped points', note: 'bare MI = axis points · L line' },
+      { command: 'J / JOIN', description: 'Join segments into one polyline', note: 'selection' },
+      { command: 'EXPLODE', description: 'Explode polylines and hatches into linework', note: 'selection' },
+      { command: 'X / E / DEL', description: 'Delete the selection', note: 'Delete or Backspace' },
     ],
   },
   {
     title: 'Arrays',
     accent: 'violet',
     entries: [
-      { command: 'AR', description: 'Rectangular array', note: 'rows cols spacing [angle]' },
-      { command: 'PA', description: 'Polar array about a center', note: 'bare PA = ring widget · PICK center on canvas' },
+      { command: 'AR', description: 'Rectangular array', note: 'rows cols spacing [angle] · drag X/Y handles' },
+      { command: 'PA', description: 'Polar array about a center', note: 'ring widget · PICK center' },
     ],
   },
   {
@@ -416,30 +424,43 @@ export const HELP_GROUPS: HelpGroup[] = [
     title: 'Shortcuts',
     accent: 'rose',
     entries: [
-      { command: 'B', description: 'Start a baseline alignment', note: 'with SELECT off' },
-      { command: 'B (in SELECT)', description: 'Toggle window / crossing box selection', note: 'with SELECT on' },
+      { command: 'TT', description: 'Start TEXT with a double tap', note: 'double-tap T · single T = TRIM' },
+      { command: 'BB', description: 'Start BOUNDARY LINE with a double tap', note: 'double-tap B · single B = BASELINE / BOX' },
+      { command: 'Z', description: 'Box zoom', note: 'drag a window · ZOOM / ZE fit extents' },
+      { command: 'Q', description: 'Toggle SELECT mode', note: 'B box · F freehand lasso' },
+      { command: 'S', description: 'Start a timeline sketch', note: 'timeline must be enabled · Q selects' },
+      { command: 'B', description: 'Start a baseline outside SELECT', note: 'B key · BOX in SELECT · BB boundary line' },
+      { command: 'T', description: 'Toggle TRIM', note: 'TT text · F fence' },
+      { command: 'F', description: 'FILLET, TRIM fence, or freehand lasso', note: 'depends on active mode' },
+      { command: 'D', description: 'Aligned dimension', note: '2 points + offset' },
+      { command: 'O', description: 'Toggle ORTHO', note: 'F8 equivalent' },
+      { command: 'L', description: 'Start LINE', note: 'A arc · C close · M mend · R resume/radius · T tangent · U undo' },
+      { command: 'C', description: 'Start CIRCLE', note: 'TTR / T toggles · D diameter/radius · R radius' },
+      { command: 'H', description: 'Toggle HATCH', note: 'A area · S object' },
+      { command: 'I', description: 'Start INCLUSION', note: 'A arc · L line' },
+      { command: 'P', description: 'Start POINT placement', note: 'Esc finish' },
       { command: 'A / L', description: 'Arc / line submode for a live baseline or PLINE', note: 'after first point' },
       { command: 'Space', description: 'Activate the CAD command line' },
       { command: 'Shift + Space', description: 'Jump to the AI agent prompt' },
       { command: 'Enter', description: 'Commit or finish the live command' },
       { command: 'Esc', description: 'Cancel the live command' },
-      { command: 'Delete', description: 'Delete the selected entities', note: 'or Backspace' },
+      { command: 'Delete / Backspace', description: 'Delete selected entities or text', note: 'X also deletes' },
       { command: 'Shift', description: 'Snap the rotation angle to 15°' },
-      { command: 'F / D / X', description: 'Bare-key FILLET, DIMALIGNED, and delete', note: 'no prefix needed' },
     ],
   },
   {
     title: 'Utility',
     accent: 'amber',
     entries: [
-      { command: 'ZE', description: 'Zoom extents' },
+      { command: 'ZOOM / ZE', description: 'Zoom extents', note: 'typed ZOOM / ZE · Z key = box zoom' },
       { command: 'U / REDO', description: 'Undo and redo the last change' },
-      { command: 'ALL / DS', description: 'Select all / deselect' },
-      { command: 'DI', description: 'Distance and azimuth between two points', note: 'arrow pad' },
-      { command: 'ORTHO', description: 'Toggle orthogonal drawing', note: 'O in draw mode' },
-      { command: 'PROP', description: 'Open the selection properties panel' },
-      { command: 'KEY', description: 'Access key status' },
-      { command: 'CLEAR', description: 'Clear this history' },
+      { command: 'ALL / SA / DS', description: 'Select all / deselect' },
+      { command: 'DI', description: 'Distance and azimuth between two points', note: 'two canvas picks · or type E,N pairs' },
+      { command: 'ORTHO / F8', description: 'Toggle orthogonal drawing', note: 'O in draw mode' },
+      { command: 'PROP / PROPERTIES', description: 'Open the selection properties panel' },
+      { command: 'KEY / APIKEY', description: 'Access key status' },
+      { command: 'CLEAR / CLS', description: 'Clear this history' },
+      { command: 'CANCEL / ESC', description: 'Cancel the current command' },
       { command: 'HELP / ?', description: 'Open this command reference' },
     ],
   },
@@ -459,16 +480,20 @@ export const HELP_GROUPS: HelpGroup[] = [
  */
 const HELP_RUNS: Record<string, string> = {
   'L / PLINE': 'line',
-  'B (BASELINE)': 'baseline',
+  'BASELINE / BL': 'baseline',
+  'BK / BREAKLINE': 'breakline',
+  'EXCL / EXCLUSION': 'exclusion',
+  'BOUNDARY / BOUNDARYLINE': 'boundaryline',
+  'I / INCLUSION': 'i',
   'C / CIRCLE': 'circle',
+  'TTR': 'ttr',
   'H / HATCH': 'hatch',
   'D / DIMALIGNED': 'd',
   'TEXT / MTEXT': 'text',
   'REC / RECTANGLE': 'rec',
   'POL / POLYGON': 'pol',
-  'P': 'p',
-  'I / INCLUSION': 'i',
-  'S / SELECT': 's',
+  'P / POINT': 'p',
+  'Q / SELECT': 'q',
   'B / BOX': 'b',
   'T / TRIM': 't',
   'F / FILLET': 'f',
@@ -484,14 +509,14 @@ const HELP_RUNS: Record<string, string> = {
   'X / E / DEL': 'x',
   'AR': 'ar',
   'PA': 'pa',
-  'ZE': 'ze',
+  'ZOOM / ZE': 'ze',
   'U / REDO': 'u',
-  'ALL / DS': 'all',
+  'ALL / SA / DS': 'all',
   'DI': 'di',
-  'ORTHO': 'ortho',
-  'PROP': 'prop',
-  'KEY': 'key',
-  'CLEAR': 'clear',
+  'ORTHO / F8': 'ortho',
+  'PROP / PROPERTIES': 'prop',
+  'KEY / APIKEY': 'key',
+  'CLEAR / CLS': 'clear',
   'HELP / ?': 'help',
 };
 for (const group of HELP_GROUPS) {
@@ -502,8 +527,12 @@ for (const group of HELP_GROUPS) {
 }
 
 export const HELP_NOTES: string[] = [
-  'B starts the baseline chain when no selection is active; inside SELECT, B toggles box selection. Baselines are Centerline objects shared with Stationing & CL and use the same A arc / L line chain as PLINE.',
+  'Q toggles SELECT. S starts a timeline sketch; when the timeline is off, S reports that sketch mode is unavailable instead of selecting.',
+  'The B key starts the baseline chain when no selection is active; inside SELECT, B toggles box selection. Typed B runs BOX. Use BASELINE or BL to start a baseline from the command line. Baselines are Centerline objects shared with Stationing & CL.',
   'Bare-key shortcuts: F starts FILLET, D starts an aligned dimension, and X deletes the selection. Delete or Backspace also delete; EXPLODE is the full command for exploding polylines and hatches.',
+  'TT starts TEXT and BB starts BOUNDARY LINE by double-tapping T or B. Single-tap B is BASELINE outside SELECT and BOX inside SELECT. Single-tap T remains TRIM.',
+  'DI takes two canvas picks. Typed DI x1,y1 x2,y2 still reports immediately.',
+  'REC is interactive: pick the first corner, then the opposite corner in either diagonal order. REC x1,y1 x2,y2 remains available for typed placement.',
   'Coordinates are E,N in feet. Typed distances, radii and spacings use the current linear unit.',
   'Angles are degrees, counter-clockwise positive. Hold Shift to snap to 15° increments.',
   'Use the buttons after a result to open it in the Text Editor, open Properties, or copy it.',
@@ -540,7 +569,7 @@ const selectionRequired = (cmd: ParsedCommand, ctx: CommandContext, command: str
   }
   return {
     status: 'error',
-    message: `${command}: Nothing selected. Use S, B, or ALL to select entities first.`,
+    message: `${command}: Nothing selected. Use Q, B, or ALL to select entities first.`,
   };
 };
 
@@ -641,13 +670,11 @@ const applyPolygon = (args: string[], ctx: CommandContext): CommandResult => {
   };
 };
 
-/** Validate and measure between two coordinate pairs. */
-const applyDistance = (args: string[]): CommandResult => {
-  const p1 = parseCoordinateToken(args[0]);
-  const p2 = parseCoordinateToken(args[1]);
-  if (!p1 || !p2) {
-    return { status: 'error', message: 'DIST: Both points must be coordinate pairs (e.g. 0,0 and 100,50).' };
-  }
+/** Format the distance and azimuth between two resolved canvas points. */
+export const measureDistanceBetweenPoints = (
+  p1: { easting: number; northing: number },
+  p2: { easting: number; northing: number },
+): CommandResult => {
   const dE = p2.easting - p1.easting;
   const dN = p2.northing - p1.northing;
   const distance = Math.hypot(dE, dN);
@@ -657,6 +684,16 @@ const applyDistance = (args: string[]): CommandResult => {
     message: `DIST: ΔE ${dE.toFixed(3)}, ΔN ${dN.toFixed(3)}, distance ${distance.toFixed(3)}, azimuth ${azimuth.toFixed(4)}°.`,
     links: [{ action: 'open-text-editor', label: 'Open in Text Editor' }],
   };
+};
+
+/** Validate and measure between two typed coordinate pairs. */
+const applyDistance = (args: string[]): CommandResult => {
+  const p1 = parseCoordinateToken(args[0]);
+  const p2 = parseCoordinateToken(args[1]);
+  if (!p1 || !p2) {
+    return { status: 'error', message: 'DIST: Both points must be coordinate pairs (e.g. 0,0 and 100,50).' };
+  }
+  return measureDistanceBetweenPoints(p1, p2);
 };
 
 const applyFillet = (radius: number, ctx: CommandContext): CommandResult => {
@@ -904,26 +941,25 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
         };
       }
       if (args.length < 2) {
-        if (ctx.onPrompt) {
-          ctx.onPrompt({
-            id: 'rectangle',
-            title: 'Rectangle',
-            hint: 'Opposite corners — type here or on the command line.',
-            fields: [
-              { key: 'p1', shortLabel: 'CORNER 1', label: 'Corner 1', kind: 'point', unit: 'E,N', placeholder: '0,0' },
-              { key: 'p2', shortLabel: 'CORNER 2', label: 'Corner 2', kind: 'point', unit: 'E,N', placeholder: '100,60' },
-            ],
-            initialValues: { p1: args[0] ?? '', p2: args[1] ?? '' },
-            submit: values => applyRectangle([values.p1 ?? '', values.p2 ?? ''], ctx),
-          });
+        if (!ctx.onStartRectangle) {
           return {
-            status: 'info',
-            message: 'RECTANG: Set both opposite corners in the arrow pad or on the command line, then press Enter.',
+            status: 'error',
+            message: 'RECTANG: Interactive rectangle mode is unavailable.',
           };
         }
+        const firstCorner = args.length === 1 ? parseCoordinateToken(args[0]) : undefined;
+        if (args.length === 1 && !firstCorner) {
+          return {
+            status: 'error',
+            message: 'RECTANG: The first corner must be a coordinate pair (e.g. REC 0,0).',
+          };
+        }
+        ctx.onStartRectangle(firstCorner ?? undefined);
         return {
-          status: 'error',
-          message: 'RECTANG: Type REC x1,y1 x2,y2 — opposite corners (e.g. REC 0,0 100,60).',
+          status: 'ok',
+          message: firstCorner
+            ? `RECTANG: First corner ${args[0]} set — click the opposite corner on the canvas [Esc cancels].`
+            : 'RECTANG: Pick the first corner, then the opposite corner (top-left/lower-right in either order) [Esc cancels].',
         };
       }
       return applyRectangle(args, ctx);
@@ -1210,29 +1246,20 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
 
     case 'distance': {
       if (args.length > 2) {
-        return { status: 'error', message: 'DIST: Type DI x1,y1 x2,y2 — e.g. DI 0,0 100,50.' };
+        return { status: 'error', message: 'DIST: Pick two points, or type DI x1,y1 x2,y2 — e.g. DI 0,0 100,50.' };
       }
-      if (args.length < 2) {
-        if (ctx.onPrompt) {
-          ctx.onPrompt({
-            id: 'distance',
-            title: 'Distance',
-            hint: 'Two E,N points — the result opens in the readout.',
-            fields: [
-              { key: 'p1', shortLabel: 'POINT 1', label: 'Point 1', kind: 'point', unit: 'E,N', placeholder: '0,0' },
-              { key: 'p2', shortLabel: 'POINT 2', label: 'Point 2', kind: 'point', unit: 'E,N', placeholder: '100,50' },
-            ],
-            initialValues: { p1: args[0] ?? '', p2: args[1] ?? '' },
-            submit: values => applyDistance([values.p1 ?? '', values.p2 ?? '']),
-          });
-          return {
-            status: 'info',
-            message: 'DIST: Set both points in the arrow pad or on the command line, then press Enter.',
-          };
-        }
-        return { status: 'error', message: 'DIST: Type DI x1,y1 x2,y2 — e.g. DI 0,0 100,50.' };
+      if (args.length === 2) return applyDistance(args);
+      if (args.length === 1) {
+        return { status: 'error', message: 'DIST: Pick two points, or type both coordinate pairs — e.g. DI 0,0 100,50.' };
       }
-      return applyDistance(args);
+      if (ctx.onStartDistance) {
+        ctx.onStartDistance();
+        return {
+          status: 'ok',
+          message: 'DIST: Pick the first point, then the second [Esc to cancel]',
+        };
+      }
+      return { status: 'error', message: 'DIST: Pick two points, or type DI x1,y1 x2,y2 — e.g. DI 0,0 100,50.' };
     }
 
     case 'properties':
@@ -1305,12 +1332,12 @@ export function executeCanvasCommand(cmd: ParsedCommand, ctx: CommandContext): C
         status: 'info',
         message: [
           'Commands:',
-          'DRAW — L/PLINE (chained line and tangent-arc segments), B (baseline: a Centerline alignment shared with Stationing & CL; with SELECT active, B toggles box select), C (circle), D (aligned dimension — pick two points, then the offset line), REC (rectangle), POL (polygon: click center, drag/type radius, scroll or [ ] sides), P (point), I (inclusion).',
-          'MODIFY — S (select), B (box), T (trim), F (fillet — select exactly two straight lines, then type the radius; bare F opens the radius pad), EX (extend), CP / CC (copy — pick a base point then as many destinations as needed), OS (offset [distance]), M (move — bare M picks a snapped base point and destination with a live ghost preview, M dx,dy moves immediately), RO / R (rotate — bare RO or the R key picks a base point with snaps and a live ghost preview, then takes a clicked point or typed angle (Shift snaps to 15°); RO angle [pivot] rotates immediately), SC (scale — bare SC picks a snapped reference point with a live ghost preview, then takes a clicked point or typed factor; SC factor [pivot] scales immediately), MI (mirror — bare MI picks two snapped axis points with a live ghost preview, MI x1,y1 x2,y2 mirrors immediately), J (join), EXPLODE (explode), X / E / DEL (delete).',
+          'DRAW — L/PLINE (chained line and tangent-arc segments), BASELINE / BL (Centerline alignment; the B key starts it outside SELECT and toggles box select inside SELECT), BK (breakline), EXCL (exclusion), BOUNDARY / BOUNDARYLINE (boundary line; BB double-tap), C (circle; TTR tangent flow), D (aligned dimension), TEXT (annotation; TT double-tap), REC (rectangle: click two opposite corners in either order, or REC x1,y1 x2,y2), POL (polygon), P (point), I (inclusion).',
+          'MODIFY — Q (select), B (box), T (trim), F (fillet — select exactly two straight lines, then type the radius; bare F opens the radius pad), EX (extend), CP / CC (copy — pick a base point then as many destinations as needed), OS (offset [distance]), M (move — bare M picks a snapped base point and destination with a live ghost preview, M dx,dy moves immediately), RO / R (rotate — bare RO or the R key picks a base point with snaps and a live ghost preview, then takes a clicked point or typed angle (Shift snaps to 15°); RO angle [pivot] rotates immediately), SC (scale — bare SC picks a snapped reference point with a live ghost preview, then takes a clicked point or typed factor; SC factor [pivot] scales immediately), MI (mirror — bare MI picks two snapped axis points with a live ghost preview, MI x1,y1 x2,y2 mirrors immediately), J (join), EXPLODE (explode), X / E / DEL (delete).',
           'ARRAYS — AR rows cols rowSpacing colSpacing (rectangular), PA count fillAngle [center] (polar; default selection center). Typing bare AR opens a UCS-style X/Y manipulator: drag a handle for spacing, Shift-drag for quantity, Alt-drag for span, or type any value. The direction ring sets the array angle. The unused axis keeps its preloaded 1 quantity / 0 spacing, so you only enter the axis you need. Typing bare PA opens the compact ring manipulator.',
           'SELECTION — run a modify/array command with nothing selected and it waits for picks: left-click entities, drag a window to box select, MMB pans, Enter applies, Esc cancels.',
-          'SHORTCUTS — Z box zoom · B baseline · A/L arc or line submode · Space CAD line · Shift+Space AI agent · Enter finish · Esc cancel · Shift 15° snap · F FILLET · D DIMALIGNED · X delete.',
-          'UTILITY — Z (box zoom), ZE (zoom extents), U (undo), REDO, ALL (select all), DS (deselect), DI x1,y1 x2,y2 (distance), ORTHO, KEY, CLEAR, HELP / ?, PROP / PROPERTIES (selection properties panel).',
+          'SHORTCUTS — Z box zoom · Q select · S timeline sketch · B baseline (box in SELECT) · BB boundary line · T trim · TT text · A/L arc or line submode · O ortho · Space CAD line · Shift+Space AI agent · Enter finish · Esc cancel · Shift 15° snap · F FILLET · D DIMALIGNED · X delete.',
+          'UTILITY — Z (box zoom), ZE (zoom extents), U (undo), REDO, ALL (select all), DS (deselect), DI (pick two points for distance), ORTHO, KEY, CLEAR, HELP / ?, PROP / PROPERTIES (selection properties panel).',
           'Coords are E,N (feet). Typed distances/radii/spacings use the current linear unit; angles are degrees, counter-clockwise positive.',
           'LINKS — use the buttons after a result to open it in the Text Editor, open the Properties panel, or copy it.',
         ].join('\n'),

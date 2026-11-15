@@ -5,15 +5,17 @@ import { CommandHelpView, type CommandReference } from './CommandHelpView';
 import { AgentType, MessageRole, type ChatMessage } from '../types';
 import { agentConfig, agentThemeColors } from '../constants/agents';
 import { formatRelayTag } from '../services/conversationIdentity';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 import { sanitizeZoningAnswer } from '../utils/zoningRender';
 import { formatChatHtml } from '../utils/chatHtml';
 import SuggestedQuestions from './SuggestedQuestions';
 import { A2UISurface, A2UIHostContext } from './A2UISurface';
 import { A2UIQuickThoughtSurface } from './A2UIQuickThoughtSurface';
 import { useA2UIFileDrop } from './a2uiFileDrop.tsx';
-import { AGENT_SIDEBAR_LAYOUT_EVENT } from '../utils/layoutEvents.ts';
+import { AGENT_SIDEBAR_LAYOUT_EVENT, COMMAND_DOCK_LAYOUT_EVENT, QUICK_THOUGHT_LAYOUT_EVENT } from '../utils/layoutEvents.ts';
 import { ScoutQuickThought } from './ScoutQuickThought';
 import { ScoutTrail } from './ScoutTrail';
+import { TimelineControl } from './timeline/TimelineControl.tsx';
 import { WorkflowQuickThought, type WorkflowQuickThoughtNotice } from './WorkflowQuickThought';
 import { DockModeControl, type DockMode } from './DockModeControl';
 import {
@@ -77,7 +79,8 @@ export interface SnapControls {
 const MODEL_LABELS: Record<string, string> = {
   'gemini-3.7-flash': 'Gemini 3.7 Flash',
   'gemini-3.8-flash': 'Gemini 3.8 Flash',
-  'gemini-4-argon': 'Gemini 4 Argon',
+  'gemini-4-hydrogen': 'Gemini 4 Hydrogen',
+  'gemini-4-argon': 'Gemini 4 Argon (High Thinking)',
   'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
   'claude-sonnet-5': 'Claude Sonnet 5',
   'claude-opus-5': 'Claude Opus 5',
@@ -286,6 +289,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const snapControlRef = useRef<HTMLDivElement | null>(null);
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const modelPickerRef = useRef<HTMLDivElement | null>(null);
+  const [isTimelineControlOpen, setIsTimelineControlOpen] = useState(false);
   /** The quick-thought body is measured so only overflowing copy drifts. */
   const thoughtTextRef = useRef<HTMLDivElement | null>(null);
   const [isThoughtOverflowing, setIsThoughtOverflowing] = useState(false);
@@ -439,6 +443,100 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       )}
     </span>
   );
+  // Moved into the expanded chat header: the command bar now reserves this slot
+  // for the timeline control. The menu opens downward from the chat drawer.
+  const modelPicker = onSelectModelMode ? (
+    <div ref={modelPickerRef} className="relative">
+      <button
+        type="button"
+        data-no-drag
+        data-testid="model-picker-trigger"
+        aria-haspopup="menu"
+        aria-expanded={isModelPickerOpen}
+        aria-label="Choose model mode"
+        onClick={() => setIsModelPickerOpen(open => !open)}
+        className={`inline-flex h-5 items-center gap-1 rounded border px-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
+          isModelPickerOpen
+            ? 'border-white/40 bg-white/[0.10] text-white'
+            : 'border-white/20 bg-white/[0.04] text-white/75 hover:border-white/40 hover:bg-white/[0.08] hover:text-white'
+        }`}
+        title={`Model — ${modelMode === 'high' ? 'High Thinking' : modelMode === 'normal' ? 'Normal' : 'Custom'}`}
+      >
+        <span
+          aria-hidden="true"
+          className={`h-1.5 w-1.5 rounded-full ${
+            modelMode === 'high'
+              ? 'bg-fuchsia-400 shadow-[0_0_6px_#e879f9]'
+              : modelMode === 'normal'
+                ? 'bg-cyan-400 shadow-[0_0_6px_#22d3ee]'
+                : 'bg-amber-400'
+          }`}
+        />
+        <span>Model</span>
+        <ChevronDownIcon className={`h-2.5 w-2.5 transition-transform ${isModelPickerOpen ? 'rotate-180' : ''}`} />
+      </button>
+      {isModelPickerOpen && (
+        <div
+          data-testid="model-picker-menu"
+          role="menu"
+          className="absolute left-0 top-full z-[90] mt-2 w-[min(18rem,calc(100vw-1rem))] overflow-hidden rounded-lg border border-white/25 bg-[#080e15]/95 text-[11px] text-white/80 shadow-2xl backdrop-blur-md"
+        >
+          <div className="border-b border-white/10 px-2.5 py-1.5">
+            <div className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/40">Model</div>
+            <div className="mt-0.5 truncate text-[10px] font-medium text-white/70">
+              {modelMode === 'high' ? 'High Thinking' : modelMode === 'normal' ? 'Normal' : 'Custom model'}
+            </div>
+          </div>
+          <div className="p-1">
+            <button
+              type="button"
+              data-testid="model-mode-normal"
+              role="menuitemradio"
+              aria-checked={modelMode === 'normal'}
+              onClick={() => {
+                setIsModelPickerOpen(false);
+                onSelectModelMode?.('normal');
+              }}
+              className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
+                modelMode === 'normal'
+                  ? 'bg-white/[0.08] text-white'
+                  : 'text-white/75 hover:bg-white/[0.06] hover:text-white'
+              }`}
+            >
+              <SparklesIcon className="h-3.5 w-3.5 shrink-0 text-cyan-300" />
+              <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                <span className="font-semibold">Normal</span>
+                <span className="text-[9px] font-normal text-white/45">Smart Auto routing — fast for simple tasks</span>
+              </span>
+              {modelMode === 'normal' && <span className="shrink-0 text-[8px] font-bold uppercase tracking-wider text-cyan-300">Active</span>}
+            </button>
+            <button
+              type="button"
+              data-testid="model-mode-high"
+              role="menuitemradio"
+              aria-checked={modelMode === 'high'}
+              onClick={() => {
+                setIsModelPickerOpen(false);
+                onSelectModelMode?.('high');
+              }}
+              className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
+                modelMode === 'high'
+                  ? 'bg-white/[0.08] text-white'
+                  : 'text-white/75 hover:bg-white/[0.06] hover:text-white'
+              }`}
+            >
+              <LightbulbIcon className="h-3.5 w-3.5 shrink-0 text-fuchsia-300" />
+              <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                <span className="font-semibold">High Thinking</span>
+                <span className="truncate text-[9px] font-normal text-white/45">{highThinkingModelName || 'Configured high-reasoning model'}</span>
+              </span>
+              {modelMode === 'high' && <span className="shrink-0 text-[8px] font-bold uppercase tracking-wider text-fuchsia-300">Active</span>}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  ) : null;
   // Auto-dismiss collapse pulse after 15s if untouched
   useEffect(() => {
     if (!isCollapsePulsing) return;
@@ -1162,6 +1260,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   }, [incomingMessage]);
 
   const copyText = (text: string) => {
+    if (!freeCadGuard('clipboard-project-data')) return;
     try {
       void navigator.clipboard?.writeText(text);
     } catch {
@@ -1754,6 +1853,23 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     return () => observer.disconnect();
   }, [onHeightChange]);
 
+  // Let the timeline re-measure the card's live bounds when it opens/closes.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent(QUICK_THOUGHT_LAYOUT_EVENT, {
+      detail: { open: isQuickThoughtVisible },
+    }));
+  }, [isQuickThoughtVisible]);
+
+  // The timeline sits above the canvas layer normally, but must yield to the
+  // command drawer when the drawer expands over the lower part of the canvas.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent(COMMAND_DOCK_LAYOUT_EVENT, {
+      detail: { expanded: isExpanded },
+    }));
+  }, [isExpanded]);
+
   // Report the quick-thought card's height so the sidebar can stop just above
   // it while it is open and expand back to the command bar once it closes.
   useEffect(() => {
@@ -1902,7 +2018,9 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
         backgroundImage: `radial-gradient(120% 180% at 8% 100%, rgba(255,255,255,0.055) 0%, transparent 44%), linear-gradient(180deg, #0a111a 0%, #080d14 52%, #070b11 100%)`,
       } as React.CSSProperties}
       onWheel={e => e.stopPropagation()}
-      className="fixed inset-x-0 bottom-0 z-30 select-none overflow-visible border-t border-white/20 bg-[#080d14] shadow-[0_-18px_50px_rgba(0,0,0,0.6)] backdrop-blur-md font-mono text-white flex flex-col transition-colors"
+      className={`fixed inset-x-0 bottom-0 ${
+        isTimelineControlOpen || isSnapMenuOpen || isModelPickerOpen ? 'z-50' : 'z-30'
+      } select-none overflow-visible border-t border-white/20 bg-[#080d14] shadow-[0_-18px_50px_rgba(0,0,0,0.6)] backdrop-blur-md font-mono text-white flex flex-col transition-colors`}
       data-testid="canvas-command-bar"
       data-mode={inputMode}
     >
@@ -2040,10 +2158,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                     Working ({(thinkingTime / 1000).toFixed(1)}s)
                   </span>
                 )}
-                <span className="hidden md:inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-white/45">
-                  <span>Model:</span>
-                  <span className="text-white/80">{modelLabel || 'Auto'}</span>
-                </span>
+                {onSelectModelMode && modelPicker}
               </>
             )}
           </div>
@@ -2485,7 +2600,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
           <div
             data-testid="command-history-row"
             className={`flex items-center gap-2 py-1 pl-3 bg-transparent text-[10px] leading-none min-h-[22px] ${
-              isSnapMenuOpen || isModelPickerOpen ? 'overflow-visible' : 'overflow-hidden'
+              isSnapMenuOpen || isTimelineControlOpen ? 'overflow-visible' : 'overflow-hidden'
             } ${onToggleToolDock && !(isCollapsePulsing && isExpanded) ? 'pr-24' : 'pr-14'}`}
           >
             <span
@@ -2561,98 +2676,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
 
             {/* Live Snaps / Ortho Badges in the history line */}
             <div className="ml-auto flex items-center gap-2 shrink-0 text-[10px] border-l border-white/15 pl-2">
-              {onSelectModelMode && (
-                <div ref={modelPickerRef} className="relative">
-                  <button
-                    type="button"
-                    data-no-drag
-                    data-testid="model-picker-trigger"
-                    aria-haspopup="menu"
-                    aria-expanded={isModelPickerOpen}
-                    aria-label="Choose model mode"
-                    onClick={() => setIsModelPickerOpen(open => !open)}
-                    className={`inline-flex h-5 items-center gap-1 rounded border px-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
-                      isModelPickerOpen
-                        ? 'border-white/40 bg-white/[0.10] text-white'
-                        : 'border-white/20 bg-white/[0.04] text-white/75 hover:border-white/40 hover:bg-white/[0.08] hover:text-white'
-                    }`}
-                    title={`Model — ${modelMode === 'high' ? 'High Thinking' : modelMode === 'normal' ? 'Normal' : 'Custom'}`}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={`h-1.5 w-1.5 rounded-full ${
-                        modelMode === 'high'
-                          ? 'bg-fuchsia-400 shadow-[0_0_6px_#e879f9]'
-                          : modelMode === 'normal'
-                            ? 'bg-cyan-400 shadow-[0_0_6px_#22d3ee]'
-                            : 'bg-amber-400'
-                      }`}
-                    />
-                    <span>Model</span>
-                    <ChevronDownIcon className={`h-2.5 w-2.5 transition-transform ${isModelPickerOpen ? 'rotate-180' : ''}`} />
-                  </button>
-                  {isModelPickerOpen && (
-                    <div
-                      data-testid="model-picker-menu"
-                      role="menu"
-                      className="absolute bottom-full right-0 z-[80] mb-2 w-[min(18rem,calc(100vw-1rem))] overflow-hidden rounded-lg border border-white/25 bg-[#080e15]/95 text-[11px] text-white/80 shadow-2xl backdrop-blur-md"
-                    >
-                      <div className="border-b border-white/10 px-2.5 py-1.5">
-                        <div className="text-[9px] font-bold uppercase tracking-[0.18em] text-white/40">Model</div>
-                        <div className="mt-0.5 truncate text-[10px] font-medium text-white/70">
-                          {modelMode === 'high' ? 'High Thinking' : modelMode === 'normal' ? 'Normal' : 'Custom model'}
-                        </div>
-                      </div>
-                      <div className="p-1">
-                        <button
-                          type="button"
-                          data-testid="model-mode-normal"
-                          role="menuitemradio"
-                          aria-checked={modelMode === 'normal'}
-                          onClick={() => {
-                            setIsModelPickerOpen(false);
-                            onSelectModelMode('normal');
-                          }}
-                          className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
-                            modelMode === 'normal'
-                              ? 'bg-white/[0.08] text-white'
-                              : 'text-white/75 hover:bg-white/[0.06] hover:text-white'
-                          }`}
-                        >
-                          <SparklesIcon className="h-3.5 w-3.5 shrink-0 text-cyan-300" />
-                          <span className="flex min-w-0 flex-1 flex-col leading-tight">
-                            <span className="font-semibold">Normal</span>
-                            <span className="text-[9px] font-normal text-white/45">Smart Auto routing — fast for simple tasks</span>
-                          </span>
-                          {modelMode === 'normal' && <span className="shrink-0 text-[8px] font-bold uppercase tracking-wider text-cyan-300">Active</span>}
-                        </button>
-                        <button
-                          type="button"
-                          data-testid="model-mode-high"
-                          role="menuitemradio"
-                          aria-checked={modelMode === 'high'}
-                          onClick={() => {
-                            setIsModelPickerOpen(false);
-                            onSelectModelMode('high');
-                          }}
-                          className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
-                            modelMode === 'high'
-                              ? 'bg-white/[0.08] text-white'
-                              : 'text-white/75 hover:bg-white/[0.06] hover:text-white'
-                          }`}
-                        >
-                          <LightbulbIcon className="h-3.5 w-3.5 shrink-0 text-fuchsia-300" />
-                          <span className="flex min-w-0 flex-1 flex-col leading-tight">
-                            <span className="font-semibold">High Thinking</span>
-                            <span className="truncate text-[9px] font-normal text-white/45">{highThinkingModelName || 'Configured high-reasoning model'}</span>
-                          </span>
-                          {modelMode === 'high' && <span className="shrink-0 text-[8px] font-bold uppercase tracking-wider text-fuchsia-300">Active</span>}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+              <TimelineControl onOpenChange={setIsTimelineControlOpen} />
               {onOpenProperties && (
                 <button
                   type="button"

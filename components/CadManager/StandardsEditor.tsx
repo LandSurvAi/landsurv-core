@@ -20,6 +20,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom';
 import { CodeDefinition, StandardDefinition, FieldToFinishSettings as F2FSettings, DEFAULT_F2F_SETTINGS, SymbolDefinition, SurveyorCodeSession, SurveyorCodeMatch, normalizeSurveyorAliases, type CadTextStyleDefinition } from '../../contexts/types/CadManager.types';
 import { checkAliasConflict, type AliasConflict } from '../../utils/codeDomainClassifier';
+import { freeCadGuard } from '../../services/freeCadPolicy.ts';
 import { FieldToFinishSettings } from './FieldToFinishSettings';
 import { SymbolCell, SymbolPreviewModal } from './SymbolCell';
 import { HatchCell } from './HatchCell';
@@ -489,6 +490,7 @@ export const StandardsEditor: React.FC<StandardsEditorProps> = ({
 
   // Copy selected rows
   const handleCopy = useCallback(() => {
+    if (!freeCadGuard('clipboard-project-data')) return;
     if (selectedRows.size === 0) return;
     const rowsToCopy = codes.filter((_, index) => selectedRows.has(index));
     setCopiedRows(rowsToCopy);

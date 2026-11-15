@@ -6,6 +6,7 @@
  * localStorage) and renders a filterable, exportable table.
  */
 import React, { useEffect, useMemo, useState } from 'react';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 import { interAgentComm, type CacpLogEntry, type CacpLogPhase } from '../services/InterAgentCommunication';
 import { useErrorReporter } from '../contexts/AppStateContext';
 
@@ -39,6 +40,7 @@ const downloadJson = (reportError: ReturnType<typeof useErrorReporter>['reportEr
 };
 
 const copyJson = async () => {
+  if (!freeCadGuard('clipboard-project-data')) return false;
   try {
     await navigator.clipboard.writeText(interAgentComm.exportLogJson());
     return true;

@@ -384,7 +384,7 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <div className="max-h-[330px] overflow-y-auto p-1.5">
+            <div className="scrollbar-hide max-h-[330px] overflow-y-auto p-1.5">
               {matches.length === 0 ? (
                 <p className="px-2 py-6 text-center text-[11px] text-slate-500">
                   No panels match “{panelQuery.trim()}”.
@@ -480,7 +480,7 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
                 <div
                   role="menu"
                   data-testid="tool-shelf-panels-dropdown"
-                  className="absolute right-0 top-full z-50 mt-1 max-h-[60vh] w-60 overflow-y-auto rounded-lg border border-white/10 bg-[#0b1119]/95 p-1.5 text-slate-300 shadow-2xl backdrop-blur-md light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-700"
+                  className="scrollbar-hide absolute right-0 top-full z-50 mt-1 max-h-[60vh] w-60 overflow-y-auto rounded-lg border border-white/10 bg-[#0b1119]/95 p-1.5 text-slate-300 shadow-2xl backdrop-blur-md light-theme:border-gray-300 light-theme:bg-white light-theme:text-gray-700"
                 >
                   <div className="px-2 pb-1 pt-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-slate-500">
                     Panels
@@ -607,27 +607,65 @@ export const AgentToolDock: React.FC<AgentToolDockProps> = ({
       </header>
 
       {/* Docked Tool Workspace Area */}
-      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col pl-px">
+      <div className="scrollbar-hide flex-1 min-h-0 overflow-y-auto flex flex-col pl-px">
         {activeTab ? (
           <div
             role="tabpanel"
             aria-label={activeTab.title}
             className="flex-1 min-h-0 flex flex-col"
           >
-            {activeTab.renderBody()}
+            {activeTab.id === 'command-help' && defaultTools.length > 0 ? (
+              <>
+                <div className="scrollbar-hide min-h-0 flex-[4] overflow-y-auto">
+                  {activeTab.renderBody()}
+                </div>
+                <div
+                  data-testid="command-reference-tools"
+                  className="flex min-h-0 flex-[1] flex-col border-t border-white/[0.07] bg-black/20 p-2 light-theme:border-gray-200 light-theme:bg-gray-50"
+                >
+                  <div className="mb-1 flex items-center justify-between px-0.5">
+                    <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                      Tools &amp; Panels
+                    </p>
+                    <span className="font-mono text-[8.5px] tabular-nums text-slate-600">
+                      {defaultTools.length}
+                    </span>
+                  </div>
+                  <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto">
+                    <div className="grid grid-cols-2 gap-1">
+                      {defaultTools.map(tool => (
+                        <button
+                          key={tool.id}
+                          type="button"
+                          data-testid={`command-reference-tool-${tool.id}`}
+                          onClick={tool.onSelect}
+                          title={tool.label}
+                          className="flex min-w-0 items-center gap-1.5 rounded-md border border-white/[0.06] bg-white/[0.02] px-2 py-1 text-left text-[10px] font-medium text-slate-300 transition-colors hover:border-cyan-400/30 hover:bg-cyan-400/[0.06] hover:text-cyan-100 light-theme:border-gray-200 light-theme:bg-white light-theme:text-gray-700 light-theme:hover:bg-gray-100"
+                        >
+                          {tool.icon}
+                          <span className="truncate">{tool.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              activeTab.renderBody()
+            )}
           </div>
         ) : defaultCadCommands ? (
           <div data-testid="tool-shelf-default-hybrid" className="flex min-h-0 flex-1 flex-col">
             <div
               data-testid="tool-shelf-default-cad-commands"
-              className="min-h-0 flex-[4] overflow-y-auto border-b border-white/[0.07] light-theme:border-gray-200"
+              className="scrollbar-hide min-h-0 flex-[4] overflow-y-auto border-b border-white/[0.07] light-theme:border-gray-200"
             >
               {defaultCadCommands}
             </div>
             {(defaultTools.length > 0 || floatingItems.length > 0) && (
               <div
                 data-testid="tool-shelf-default-other-tools"
-                className="flex min-h-0 flex-[1] flex-col overflow-y-auto p-2"
+                className="scrollbar-hide flex min-h-0 flex-[1] flex-col overflow-y-auto p-2"
               >
                 {floatingItems.length > 0 && (
                   <div className="mb-1.5 flex flex-wrap gap-1">

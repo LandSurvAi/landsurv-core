@@ -65,6 +65,12 @@ export interface CanvasHistoryApi {
   setCoalesceKey: (key: string | null) => void;
   /** Discards all history and re-seeds from current state (project load). */
   resetHistory: () => void;
+  /**
+   * Applies a canvas snapshot without creating an undo entry, then re-seeds
+   * history at that state. Used by the feature timeline, whose cursor owns
+   * navigation: a normal undo entry here would desync Ctrl+Z from the cursor.
+   */
+  applyExternalSnapshot: (snapshot: object, label?: string) => void;
   /** Internal: lets external state register itself as a tracked slice. */
   __registerSlice: (
     key: string,
@@ -247,6 +253,27 @@ export function CanvasHistoryProvider({
     engine.reset(composed);
   }, [engine, composed]);
 
+  const applyExternalSnapshot = useCallback((snapshot: object, label?: string) => {
+    const patch = snapshot as Slices;
+    const entries = Object.entries(patch).filter(([key]) => Boolean(setterFor(key)));
+    if (entries.length === 0) return;
+
+    const applied = { ...composed, ...Object.fromEntries(entries) } as Slices;
+    // Make the applied state the new history baseline so undo can never walk
+    // behind the timeline cursor.
+    engine.reset(applied, label ?? 'Timeline state');
+
+    const changed = entries.some(([key, value]) => !Object.is(composed[key], value));
+    if (!changed) return;
+
+    // Suppress the observer so this apply is not re-recorded as a user edit.
+    applyingRef.current = applied;
+    entries.forEach(([key, value]) => {
+      const setter = setterFor(key);
+      if (setter) setter(value as never);
+    });
+  }, [composed, engine, setterFor]);
+
   const __registerSlice = useCallback((
     key: string,
     value: unknown,
@@ -293,11 +320,12 @@ export function CanvasHistoryProvider({
     hintNextLabel,
     setCoalesceKey,
     resetHistory,
+    applyExternalSnapshot,
     __registerSlice,
   }), [
     status, undo, redo, entries, jumpTo, withLabel,
     beginTransaction, commitTransaction, hintNextLabel,
-    setCoalesceKey, resetHistory, __registerSlice,
+    setCoalesceKey, resetHistory, applyExternalSnapshot, __registerSlice,
   ]);
 
   return (

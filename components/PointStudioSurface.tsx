@@ -26,6 +26,7 @@ import type {
   PointStyleAssignment,
   PointStyleTarget,
 } from '../types.ts';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 import {
   clonePointStudioState,
   createPointStyle,
@@ -253,19 +254,40 @@ const StylePreview: React.FC<{
 
     if (compressed) {
       const cells = collectPointPrimitiveCells(projected, style.efficiency.cellSizePx);
-      ctx.globalAlpha = style.efficiency.opacity;
-      ctx.fillStyle = style.efficiency.color;
-      for (const cell of cells.values()) {
-        const size = getPointDotSize(style.efficiency, cell.count);
-        if (style.efficiency.dotShape === 'circle') {
-          ctx.beginPath();
-          ctx.arc(cell.x + size / 2, cell.y + size / 2, size / 2, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          ctx.fillRect(cell.x, cell.y, size, size);
+      if (style.efficiency.dotShape === 'x') {
+        ctx.save();
+        ctx.globalAlpha = style.efficiency.opacity;
+        ctx.strokeStyle = style.efficiency.color;
+        ctx.lineWidth = 1;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        for (const cell of cells.values()) {
+          const size = getPointDotSize(style.efficiency, cell.count);
+          const centerX = cell.x + size / 2;
+          const centerY = cell.y + size / 2;
+          const half = size / 2;
+          ctx.moveTo(centerX - half, centerY - half);
+          ctx.lineTo(centerX + half, centerY + half);
+          ctx.moveTo(centerX + half, centerY - half);
+          ctx.lineTo(centerX - half, centerY + half);
         }
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        ctx.globalAlpha = style.efficiency.opacity;
+        ctx.fillStyle = style.efficiency.color;
+        for (const cell of cells.values()) {
+          const size = getPointDotSize(style.efficiency, cell.count);
+          if (style.efficiency.dotShape === 'circle') {
+            ctx.beginPath();
+            ctx.arc(cell.x + size / 2, cell.y + size / 2, size / 2, 0, Math.PI * 2);
+            ctx.fill();
+          } else {
+            ctx.fillRect(cell.x, cell.y, size, size);
+          }
+        }
+        ctx.globalAlpha = 1;
       }
-      ctx.globalAlpha = 1;
     } else {
       const marker = style.marker;
       ctx.globalAlpha = marker.opacity;
@@ -643,12 +665,12 @@ export const PointStudioSurface: React.FC<PointStudioSurfaceProps> = ({
           detailScaleCutoff: POINT_EFFICIENCY_DETAIL_SCALE,
           screenPointBudget: 240,
           cellSizePx: 4,
-          dotShape: 'square',
+          dotShape: 'x',
           minDotSizePx: 2,
           maxDotSizePx: 4,
           densityGrowth: 1,
-          color: '#FFD700',
-          lightThemeColor: '#111827',
+          color: '#F472B6',
+          lightThemeColor: '#DB2777',
           opacity: 1,
         },
         performance: {
@@ -781,6 +803,7 @@ export const PointStudioSurface: React.FC<PointStudioSurfaceProps> = ({
   };
 
   const copyPack = async () => {
+    if (!freeCadGuard('clipboard-project-data')) return;
     try {
       await navigator.clipboard.writeText(JSON.stringify(exportPointStylePack(draft, true), null, 2));
       notify('Style pack JSON copied.');
@@ -1201,18 +1224,19 @@ export const PointStudioSurface: React.FC<PointStudioSurfaceProps> = ({
                       <NumberField label="Screen point budget" value={efficiency.screenPointBudget} min={1} max={1000000} suffix="pts" onChange={value => mutateActiveStyle(style => { style.efficiency.screenPointBudget = value; style.efficiency.preset = 'custom'; }, 'efficiency-budget')} />
                     </div>
                   </Section>
-                  <Section title="Dot geometry">
+                  <Section title="Efficiency geometry">
                     <div className="grid grid-cols-2 gap-2">
                       <NumberField label="Cell size" value={efficiency.cellSizePx} min={2} max={16} suffix="px" onChange={value => mutateActiveStyle(style => { style.efficiency.cellSizePx = value; style.efficiency.preset = 'custom'; }, 'efficiency-cell')} />
                       <label data-point-setting="efficiency-shape" className={focusedSetting === 'efficiency-shape' ? 'block rounded-md bg-fuchsia-500/[0.07] p-1 ring-1 ring-fuchsia-400/40' : 'block'}>
                         <span className={labelClass}>Shape</span>
                         <select
                           value={efficiency.dotShape}
-                          onChange={event => mutateActiveStyle(style => { style.efficiency.dotShape = event.target.value as 'square' | 'circle'; style.efficiency.preset = 'custom'; }, 'efficiency-shape')}
+                          onChange={event => mutateActiveStyle(style => { style.efficiency.dotShape = event.target.value as 'square' | 'circle' | 'x'; style.efficiency.preset = 'custom'; }, 'efficiency-shape')}
                           className={inputClass}
                         >
                           <option value="square">Square</option>
                           <option value="circle">Circle</option>
+                          <option value="x">X (cross)</option>
                         </select>
                       </label>
                       <NumberField label="Min dot size" value={efficiency.minDotSizePx} min={1} max={32} step={0.5} suffix="px" settingId="efficiency-size" highlight={focusedSetting === 'efficiency-size'} onChange={value => mutateActiveStyle(style => { style.efficiency.minDotSizePx = value; style.efficiency.preset = 'custom'; }, 'efficiency-min-dot')} />
@@ -1220,7 +1244,7 @@ export const PointStudioSurface: React.FC<PointStudioSurfaceProps> = ({
                       <NumberField label="Density growth" value={efficiency.densityGrowth} min={0} max={4} step={0.25} suffix="px" onChange={value => mutateActiveStyle(style => { style.efficiency.densityGrowth = value; style.efficiency.preset = 'custom'; }, 'efficiency-growth')} />
                     </div>
                   </Section>
-                  <Section title="Dot appearance">
+                  <Section title="Efficiency appearance">
                     <div className="grid grid-cols-2 gap-2">
                       <ColorField label="Dark theme" value={efficiency.color} settingId="efficiency-color" highlight={focusedSetting === 'efficiency-color'} onChange={value => mutateActiveStyle(style => { style.efficiency.color = value; style.efficiency.preset = 'custom'; }, 'efficiency-color')} />
                       <ColorField label="Light theme" value={efficiency.lightThemeColor} settingId="efficiency-light-color" highlight={focusedSetting === 'efficiency-light-color'} onChange={value => mutateActiveStyle(style => { style.efficiency.lightThemeColor = value; style.efficiency.preset = 'custom'; }, 'efficiency-light-color')} />

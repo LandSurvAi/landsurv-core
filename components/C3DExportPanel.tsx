@@ -9,6 +9,7 @@ import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { SessionState, SurveyLine } from '../types.ts';
 import { useAppState } from '../contexts/AppStateContext.tsx';
 import { createPointStyleResolver } from '../services/pointStyles.ts';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 
 // Icons
 const CheckIcon = () => (
@@ -140,6 +141,7 @@ export const C3DExportPanel: React.FC<C3DExportPanelProps> = ({
   }, [isOpen, checkConnectionStatus]);
 
   const handleExport = useCallback(async () => {
+    if (!freeCadGuard('c3d')) return;
     if (!sessionToken) {
       notifyError('No Civil 3D session token found. Please click "Connect Civil 3D" first to establish a connection.');
       return;

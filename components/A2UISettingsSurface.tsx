@@ -141,10 +141,10 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
   settingsSummary,
   onOpenFullscreen,
   activeModel,
-  availableModels = ['auto', 'gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4-argon', 'claude-sonnet-5', 'claude-opus-5'],
+  availableModels = ['auto', 'gemini-4-hydrogen', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5'],
   onModelChange,
   autoHighThinkingModel,
-  autoHighThinkingOptions = ['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4-argon', 'claude-sonnet-5', 'claude-opus-5'],
+  autoHighThinkingOptions = ['gemini-4-argon', 'gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5'],
   onAutoHighThinkingModelChange,
   onApplyClusterProjection,
   projectBboxWgs84,
@@ -550,7 +550,7 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
               className="h-4 w-4 accent-cyan-400"
             />
             <span className="text-[11px] font-medium text-slate-200">
-              Point Efficiency Mode — on by default; compress crowded points into dots and skip labels until zoomed in
+              Point Efficiency Mode — on by default; compress crowded points into tiny pink X markers and skip labels until zoomed in
             </span>
           </label>
         </div>
@@ -835,11 +835,11 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
           {onAutoHighThinkingModelChange && (
             <div>
               <label htmlFor="a2ui-high-thinking" className="mb-1 block text-[9.5px] font-semibold uppercase tracking-wider text-slate-400">
-                Auto High-Thinking Model
+                High Thinking Model
               </label>
               <select
                 id="a2ui-high-thinking"
-                value={autoHighThinkingModel || 'gemini-3.7-flash'}
+                value={autoHighThinkingModel || 'gemini-4-argon'}
                 onChange={e => onAutoHighThinkingModelChange(e.target.value)}
                 className={inputClass}
               >

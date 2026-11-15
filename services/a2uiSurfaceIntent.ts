@@ -61,7 +61,7 @@ export type A2UISurfaceIntent =
     }
   | {
       surface: 'point-list';
-      view: 'text' | 'spreadsheet';
+      view: 'text' | 'spreadsheet' | 'choice';
       replyText: string;
       suggestedQuestions: string[];
     }
@@ -598,7 +598,13 @@ const CAD_SPREADSHEET_EDITOR_RE =
   /\b(?:(?:edit|open|launch|modify|change|update)\s+(?:the\s+|my\s+)?(?:cad\s+)?(?:standards?\s+)?(?:spreadsheet|standards?\s+editor|full\s+editor)|(?:standards?\s+)?spreadsheet\s+editor)\b/i;
 
 const POINT_LIST_RE =
-  /\b(?:point\s+(?:list|table|grid|spreadsheet)|(?:all|my|the|project|survey|current|loaded)\s+points\b|(?:list|show|view|display|open)\s+(?:all\s+|my\s+|the\s+|project\s+)?points\b)/i;
+  /\b(?:point\s+(?:list|table|grid|spreadsheet)|(?:all|my|the|project|survey|current|loaded|property|corner|boundary|parcel)\s+points?\b|(?:list|show|view|display|open|pull\s+up|bring\s+up)\s+(?:me\s+)?(?:all\s+|my\s+|the\s+|project\s+|survey\s+|current\s+|loaded\s+)*(?:property\s+)?(?:corner\s+)?(?:boundary\s+)?(?:parcel\s+)?points?\b)/i;
+
+const POINT_LIST_VIEW_OPTIONS = [
+  'Open points in a text file',
+  'Open points in a spreadsheet',
+] as const;
+const POINT_LIST_TEXT_VIEW_RE = /\b(?:text(?:\s+file)?|txt|text\s+editor)\b/i;
 
 // Contour tools are split into independently addressable A2UI chips. Each rule
 // is intentionally contour-specific so ordinary drawing/label phrasing keeps
@@ -862,26 +868,32 @@ export function resolveA2UISurfaceIntent(
   const contourChipIntent = resolveContourChipIntent(trimmed);
   if (contourChipIntent) return contourChipIntent;
 
-  // 3a. Point database views: the default is the in-chat text editor; explicit
-  // sheet/grid/table wording opens the same data directly in the spreadsheet.
+  // 3a. Point database views ask which format to open first. Explicit text or
+  // sheet/grid/table wording skips the choice and opens the requested view.
   if (
     POINT_LIST_RE.test(trimmed) &&
     !/\b(?:settings?|label(?:ing|s)?|numbering|symbols?|entry|upload|manager)\b/i.test(trimmed)
   ) {
     const view = /\b(?:spreadsheet|sheet|grid|table)\b/i.test(trimmed)
       ? 'spreadsheet'
-      : 'text';
+      : POINT_LIST_TEXT_VIEW_RE.test(trimmed)
+        ? 'text'
+        : 'choice';
     return {
       surface: 'point-list',
       view,
       replyText:
-        view === 'spreadsheet'
-          ? 'Here is the live <strong>point list</strong> in the A2UI spreadsheet. Search the grid, copy it as TSV, or download CSV; switch back to Text any time.'
-          : 'Here is the live <strong>point list</strong> in the A2UI text editor. Switch to <strong>Sheet</strong> for a searchable grid with CSV/TSV export.',
+        view === 'choice'
+          ? 'How would you like to view the points? Choose a text file or a spreadsheet.'
+          : view === 'spreadsheet'
+            ? 'Here is the live <strong>point list</strong> in the A2UI spreadsheet. Search the grid, copy it as TSV, or download CSV; switch back to Text any time.'
+            : 'Here is the live <strong>point list</strong> in the A2UI text editor. Switch to <strong>Sheet</strong> for a searchable grid with CSV/TSV export.',
       suggestedQuestions:
-        view === 'spreadsheet'
-          ? ['Open the point list as text', 'Open Point Tools', 'Show only working points']
-          : ['Open point list as spreadsheet', 'Open Point Tools', 'Show only working points'],
+        view === 'choice'
+          ? [...POINT_LIST_VIEW_OPTIONS]
+          : view === 'spreadsheet'
+            ? ['Open the point list as text', 'Open Point Tools', 'Show only working points']
+            : ['Open point list as spreadsheet', 'Open Point Tools', 'Show only working points'],
     };
   }
 

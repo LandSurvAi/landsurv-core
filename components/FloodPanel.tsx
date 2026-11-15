@@ -5,6 +5,7 @@ import { AreaHatchControls } from './AreaHatchControls.tsx';
 import { GenerationBlockSummary } from './GenerationBlockSummary.tsx';
 import { buildFloodSheetNotes, buildFloodZoneReport } from '../services/floodReport.ts';
 import type { FemaNfhlSummary } from '../services/floodService.ts';
+import { freeCadGuard } from '../services/freeCadPolicy.ts';
 
 /**
  * FloodPanel — controls for the Flood Zone Agent.
@@ -160,6 +161,7 @@ export const FloodPanel: React.FC<FloodPanelProps> = ({
   );
 
   const copyReport = () => {
+    if (!freeCadGuard('clipboard-project-data')) return;
     if (typeof navigator === 'undefined' || !navigator.clipboard) return;
     void navigator.clipboard.writeText(reportText).then(() => {
       setCopied(true);

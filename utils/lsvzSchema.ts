@@ -23,8 +23,8 @@ import type { SessionState } from '../types';
 // Additive fields under existing groups DO NOT require a bump because the
 // schema is compile-time-checked against SessionState and rendered live. A new
 // top-level group or a semantic contract change is a minor-version release.
-export const LSVZ_SPEC_VERSION = '1.3';
-export const LSVZ_SPEC_RELEASE = '2026-11-12';
+export const LSVZ_SPEC_VERSION = '1.4';
+export const LSVZ_SPEC_RELEASE = '2026-11-14';
 
 // Fields that are saved for restore-on-load but aren't part of the publicly
 // documented .lsvz schema (chat histories listed separately to keep the
@@ -119,6 +119,7 @@ export const LSVZ_SCHEMA = [
       { key: 'pointLists',        description: 'All point lists, one per source (uploaded, deed-derived, generated, etc.).',  example: '[ ... ]' },
       { key: 'lines',             description: 'SurveyLines — boundary, contour, flood, parcel, road, etc.',                  example: '[ ... ]' },
       { key: 'centerlines',       description: 'Horizontal alignments with PIs and curves.',                                  example: '[ ... ]' },
+      { key: 'timeline',          description: 'Feature timeline and sketch groups. Stores one baseline canvas snapshot plus per-feature entity deltas; in-memory per-step snapshots are not written. Optional for older files.', example: '{ "schemaVersion":1, "baselineSnapshot":{ ... }, "features":[ { "id":"tl-...", "kind":"sketch", "label":"Sketch 1", "deltas":[ ... ] } ], "cursorFeatureId":"tl-...", "sketchCounter":1 }' },
       { key: 'boundaryFiles',     description: 'Saved deed parcels with bearings/distances, POB info, parcel/owner metadata, drawn point/line ids, and post-Draft transform snapshot (`bakedTransform`) so amber-overlay edits round-trip correctly across saves.', example: '[ ... ]' },
       { key: 'deedBatchJob',      description: 'Multi-deed batch-processing job: per-file status pipeline (queued → extracting → summarizing → summarized → parsed → matched → aligned → completed), deed summaries, top parcel-match results, alignment decisions, and pre-align transform snapshots so batch workflows resume across save/load.',
         example: '{ "id":"batch-1", "label":"...", "status":"running", "files":[ ... ], "totalFiles":4, "processedFiles":2, "failedFiles":0 }' },

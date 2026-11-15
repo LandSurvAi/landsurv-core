@@ -38,10 +38,13 @@ export const isOpenAIModel = (model: string): boolean => /^(gpt-|o\d|chatgpt-)/i
 export const isGrokModel = (model: string): boolean => /^grok-/i.test(model);
 
 export const AUTO_FAST_MODEL = 'gemini-3.5-flash-lite';
+/** Standard reasoning model for normal Auto routing and Gemini fallbacks. */
+export const DEFAULT_GEMINI_MODEL = 'gemini-4-hydrogen';
+/** Model pinned when the user selects the High Thinking command-bar mode. */
+export const DEFAULT_HIGH_THINKING_GEMINI_MODEL = 'gemini-4-argon';
 export const DIRECT_FALLBACK_MODEL = 'gemini-2.5-flash';
-export const AUTO_HIGH_THINKING_MODELS = ['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4-argon', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5'] as const;
-export type AutoHighThinkingModel = typeof AUTO_HIGH_THINKING_MODELS[number];
-export const STANDARDS_COMPLIANCE_MODEL = 'gemini-3.7-flash';
+export const AUTO_HIGH_THINKING_MODELS = [DEFAULT_HIGH_THINKING_GEMINI_MODEL, DEFAULT_GEMINI_MODEL, 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5'] as const;
+export const STANDARDS_COMPLIANCE_MODEL = DEFAULT_GEMINI_MODEL;
 
 type ChatStreamArgs = { message: string | Array<Part | { text: string }> };
 type BasicChatLike = {
@@ -119,11 +122,12 @@ class LocalVertexFallbackChat {
 }
 
 const AUTO_COMPLEX_AGENTS = new Set<AgentType>([
-  // Civil Drafter routes to the high-thinking model so users can steer it with
-  // the Gemini 3 controls and the UI reflects the selected model. To avoid the
-  // large-drawing truncation bug (native thinking tokens eating the output
-  // budget), startGeminiChat caps the Civil Drafter's thinking budget/level and
-  // lifts maxOutputTokens on both the direct and Vertex paths (see below).
+  // Civil Drafter routes to the standard reasoning model (Hydrogen) so users
+  // can steer it with the Gemini controls and the UI reflects the selected
+  // model. To avoid the large-drawing truncation bug (native thinking tokens
+  // eating the output budget), startGeminiChat caps the Civil Drafter's thinking
+  // budget/level and lifts maxOutputTokens on both the direct and Vertex paths
+  // (see below).
   AgentType.CIVIL_DRAFTER,
   AgentType.DEED_READER,
   AgentType.CIVIL_PLAN_EXPERT,
@@ -134,10 +138,6 @@ const AUTO_COMPLEX_AGENTS = new Set<AgentType>([
   AgentType.CAD_MANAGER,
   AgentType.ROADING_AGENT,
 ]);
-
-const isAutoHighThinkingModel = (model: string): model is AutoHighThinkingModel => (
-  (AUTO_HIGH_THINKING_MODELS as readonly string[]).includes(model)
-);
 
 // FIX: Adhere to guidelines by using process.env.API_KEY and removing apiKey parameter.
 // FIX: Corrected return type and constructor to use 'GoogleGenAI'.
@@ -2424,26 +2424,23 @@ You obtain, compare, and report earthwork volumes. You compute cut and fill from
 
 /**
  * Get the actual model name used for a given agent type.
- * All agents now default to the user-selected model (gemini-2.5-flash by default).
- * Users can override per-agent using the quick model selector in the sidebar.
+ * Explicit selections pass through; Auto resolves to Hydrogen for complex
+ * agents and Flash-Lite for lighter work. Users can override per agent.
  */
 export const getModelForAgent = (agentType: AgentType, defaultModel: string): string => {
   if (agentType === AgentType.STANDARDS_COMPLIANCE) return STANDARDS_COMPLIANCE_MODEL;
-  if (defaultModel === 'auto') {
-    return AUTO_COMPLEX_AGENTS.has(agentType) ? 'gemini-3.7-flash' : AUTO_FAST_MODEL;
-  }
+  if (defaultModel === 'auto') return getAutoModelForAgent(agentType);
   return defaultModel;
 };
 
-export const getAutoModelForAgent = (
-  agentType: AgentType,
-  autoHighThinkingModel: string,
-): string => {
-  const highModel = isAutoHighThinkingModel(autoHighThinkingModel)
-    ? autoHighThinkingModel
-    : 'gemini-3.7-flash';
-  return AUTO_COMPLEX_AGENTS.has(agentType) ? highModel : AUTO_FAST_MODEL;
-};
+/**
+ * Normal Auto routing: Flash-Lite for light work and Gemini 4 Hydrogen for
+ * complex reasoning. High Thinking is a separate global mode that pins the
+ * configured high-thinking model (Gemini 4 Argon by default).
+ */
+export const getAutoModelForAgent = (agentType: AgentType): string => (
+  AUTO_COMPLEX_AGENTS.has(agentType) ? DEFAULT_GEMINI_MODEL : AUTO_FAST_MODEL
+);
 
 /**
  * The B/D control is a next-draw instruction, not a visibility toggle. Inject
@@ -2468,9 +2465,9 @@ const withBearingDistancePreference = (chat: Chat): Chat => new Proxy(chat, {
 
 // FIX: Renamed 'startChat' to 'startGeminiChat' to match usage in App.tsx.
 // The optional modelOverride parameter allows users to override the model per-agent from the UI.
-export const startGeminiChat = (agentType: AgentType, fileContext: string | SessionFile | SessionFile[], model: string, settings: Settings, trainingContext?: SessionFile, modelOverride?: string, cadLayerContext?: string, draftingStyleEntries?: DraftingStyleEntry[], autoHighThinkingModel: string = 'gemini-3.7-flash'): Chat => {
+export const startGeminiChat = (agentType: AgentType, fileContext: string | SessionFile | SessionFile[], model: string, settings: Settings, trainingContext?: SessionFile, modelOverride?: string, cadLayerContext?: string, draftingStyleEntries?: DraftingStyleEntry[]): Chat => {
   let modelForAgent = modelOverride
-    || (model === 'auto' ? getAutoModelForAgent(agentType, autoHighThinkingModel) : model);
+    || (model === 'auto' ? getAutoModelForAgent(agentType) : model);
     let additionalConfig: Record<string, unknown> = {};
 
     // Set appropriate thinking budget based on model type
@@ -2560,7 +2557,7 @@ ${bearingDistancePreferenceInstruction()}`;
         }) as unknown as Chat);
     }
 
-    // Vertex-only models (Gemini 3.x preview) route through the backend proxy
+    // Vertex-only models (Gemini 3.x/4.x) route through the backend proxy
     // so we can authenticate with Application Default Credentials server-side.
     // No client API key is required for this path. The OSS/local-mode build has
     // no backend at all, so skip the Vertex attempt entirely and go straight to
@@ -2579,10 +2576,13 @@ ${bearingDistancePreferenceInstruction()}`;
         // 2.x shape silently produces empty responses, which breaks the JSON handoff
         // for the Civil Plan Expert. So we only apply this Gemini-3/4-safe default for
         // Gemini Vertex models; non-Gemini publishers get an empty config by default.
-        const isArgonModel = modelForAgent === 'gemini-4-argon';
+        const isArgonModel = modelForAgent === DEFAULT_HIGH_THINKING_GEMINI_MODEL;
+        // Hydrogen's Google default is already HIGH; applying MEDIUM here would
+        // quietly downgrade the model's default reasoning quality.
+        const isHighThinkingGemini4Model = isArgonModel || modelForAgent === DEFAULT_GEMINI_MODEL;
         let vertexGenerationConfig: Record<string, unknown> = isGeminiVertexModel
           ? {
-              thinkingConfig: { thinkingLevel: isArgonModel ? 'HIGH' : 'MEDIUM' },
+              thinkingConfig: { thinkingLevel: isHighThinkingGemini4Model ? 'HIGH' : 'MEDIUM' },
               mediaResolution: 'MEDIA_RESOLUTION_MEDIUM',
               ...(isArgonModel ? { maxOutputTokens: 64000 } : {}),
             }
@@ -2601,12 +2601,13 @@ ${bearingDistancePreferenceInstruction()}`;
         // linework payload. The model's remaining job — correctly GROUPING
         // points into the right bank/edge/bench — is a spatial-classification
         // task that benefits from moderate reasoning. So we pin thinking to
-        // MEDIUM (or HIGH for Gemini 4 Argon) and keep the max output ceiling.
-        // The Gemini 3/4 panel's global thinking slider is respected for other agents.
+        // MEDIUM (or HIGH for the Gemini 4 reasoning models) and keep the max
+        // output ceiling. The Gemini 3/4 panel's global thinking slider is
+        // respected for other agents.
         if ((agentType === AgentType.CIVIL_DRAFTER || agentType === AgentType.ROADING_AGENT) && isGeminiVertexModel) {
             vertexGenerationConfig = {
                 ...vertexGenerationConfig,
-                thinkingConfig: { thinkingLevel: isArgonModel ? 'HIGH' : 'MEDIUM' },
+                thinkingConfig: { thinkingLevel: isHighThinkingGemini4Model ? 'HIGH' : 'MEDIUM' },
                 maxOutputTokens: Math.max(
                     (vertexGenerationConfig.maxOutputTokens as number | undefined) ?? 0,
                     64000, // Gemini 3/4 hard cap
@@ -3026,7 +3027,7 @@ Return ONLY the JSON object, no markdown or explanation.
 `;
     
     const response = await ai.models.generateContent({
-        model: 'gemini-3.7-flash',
+        model: DEFAULT_GEMINI_MODEL,
         contents: prompt,
         config: {
             responseMimeType: "application/json",
@@ -3139,7 +3140,7 @@ Return ONLY the JSON object, no markdown or explanation.
 `;
 
     const response = await ai.models.generateContent({
-        model: 'gemini-3.7-flash',
+        model: DEFAULT_GEMINI_MODEL,
         contents: prompt,
         config: { responseMimeType: 'application/json' },
     });
