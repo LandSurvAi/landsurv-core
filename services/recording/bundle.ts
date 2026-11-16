@@ -15,6 +15,7 @@ import {
 } from '../../utils/sessionZip';
 import { buildTimeMap } from '../../utils/recording/time';
 import { normalizeLoadedSession } from '../../utils/sessionMigration';
+import { toDisplaySettings } from '../../utils/recording/settings';
 import {
   RECORDER_VERSION,
   RECORDING_SCHEMA_VERSION,
@@ -59,7 +60,7 @@ export const createBundleFromSeed = (
     schemaVersion: RECORDING_SCHEMA_VERSION,
     capturedAt: now,
     appVersion,
-    project: seed.project,
+    project: { ...seed.project, settings: toDisplaySettings(seed.project.settings) },
   };
   const manifest: RecordingBundle['manifest'] = {
     schemaVersion: RECORDING_SCHEMA_VERSION,
@@ -173,9 +174,13 @@ const ndjson = (rows: unknown[]): string =>
 export const bundleToTrainingAssets = (bundle: RecordingBundle): TrainingAsset[] => {
   recountBundle(bundle);
   const base = `training/${bundle.manifest.id}`;
+  const startState = {
+    ...bundle.startState,
+    project: { ...bundle.startState.project, settings: toDisplaySettings(bundle.startState.project.settings) },
+  };
   return [
     { path: `${base}/manifest.json`, data: JSON.stringify(bundle.manifest, null, 2) },
-    { path: `${base}/start-state.json`, data: JSON.stringify(bundle.startState, null, 2) },
+    { path: `${base}/start-state.json`, data: JSON.stringify(startState, null, 2) },
     { path: `${base}/events.ndjson`, data: ndjson(bundle.events) },
     { path: `${base}/frames.ndjson`, data: ndjson(bundle.frames) },
     { path: `${base}/ai.ndjson`, data: ndjson(bundle.ai) },
@@ -227,6 +232,7 @@ export const bundleFromTrainingAssets = async (
     throw new Error('Training recording has an unsupported or mismatched manifest.');
   }
   const startState = JSON.parse(await get('start-state.json')) as ReplayStartState;
+  startState.project.settings = toDisplaySettings(startState.project.settings);
   let annotations = createEmptyAnnotations();
   let edits = createEmptyEdits();
   try {
@@ -266,7 +272,7 @@ export const buildSessionStateForBundle = (bundle: RecordingBundle): SessionStat
   const session = {
     version: bundle.startState.appVersion,
     savedAt: new Date().toISOString(),
-    settings: project.settings,
+    settings: toDisplaySettings(project.settings),
     rawFile: null,
     deedFile: null,
     planFiles: null,

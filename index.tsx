@@ -10,6 +10,8 @@ import { startGlobalSettingsPolling } from './utils/globalSettings';
 import { GlobalSettingsOverlay } from './components/GlobalSettingsOverlay';
 import { PwaLifecycleOverlay } from './components/PwaLifecycleOverlay';
 import { initializeOfflineQueue } from './services/OfflineQueue';
+import { installReplayNetworkGuard } from './services/recording/networkGuard';
+import type { AppBoot } from './utils/recording/boot';
 // Import Tailwind CSS
 import './index.css';
 
@@ -136,7 +138,9 @@ const registerServiceWorker = () => {
 // APP_VERSION is injected at build time by Vite (see vite.config.ts)
 const APP_VERSION = (import.meta as any).env.VITE_APP_VERSION || 'dev';
 const STORED_VERSION = localStorage.getItem('app_version');
-const replayId = new URLSearchParams(window.location.search).get('replay');
+const urlParams = new URLSearchParams(window.location.search);
+const replayId = urlParams.get('replay');
+const takeoverId = urlParams.get('takeover');
 
 // Force cache clear if version changed (live app only; replay is offline).
 if (!replayId && STORED_VERSION !== APP_VERSION) {
@@ -183,7 +187,7 @@ const reportPageLoad = () => {
 // clears it before mounting the isolated shell.
 setTimeout(clearInitialLoader, 4000);
 
-const bootLiveApp = async () => {
+const bootLiveApp = async (boot: AppBoot = { kind: 'live' }) => {
   registerServiceWorker();
   registerPwaLaunchQueue();
 
@@ -202,7 +206,7 @@ const bootLiveApp = async () => {
     <React.StrictMode>
       <PwaLifecycleOverlay />
       <GlobalSettingsOverlay />
-      <App />
+      <App boot={boot} />
     </React.StrictMode>
   );
   clearInitialLoader();
@@ -211,28 +215,32 @@ const bootLiveApp = async () => {
 };
 
 if (replayId) {
-  // Replay mode: no polling, offline queue, service worker, presence beacon, or
-  // live app providers. The replay module installs a zero-network guard once it
-  // has loaded, then reads the recorded bundle from IndexedDB.
+  // App playback: no polling, offline queue, service worker, presence beacon,
+  // or live services. The boot guard allows only the app's own static assets,
+  // then the playback session tightens it to blob/data after the first frame.
   clearInitialLoader();
-  void import('./components/replay/ReplayRoot.tsx')
-    .then(({ ReplayRoot }) => {
+  installReplayNetworkGuard({ phase: 'boot' });
+  const playbackBoot: AppBoot = { kind: 'playback', recordingId: replayId };
+  void import('./App.tsx')
+    .then(({ App }) => {
       root.render(
         <React.StrictMode>
-          <ReplayRoot recordingId={replayId} />
+          <App boot={playbackBoot} />
         </React.StrictMode>
       );
     })
     .catch((error) => {
-      console.error('[Replay] Failed to load the replay shell:', error);
+      console.error('[Playback] Failed to load the app:', error);
       rootElement.innerHTML = `
         <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#020617;color:#e2e8f0;font-family:system-ui,sans-serif;padding:24px;text-align:center;">
           <div style="max-width:420px;">
-            <h1 style="font-size:18px;color:#fda4af;">Training replay unavailable</h1>
-            <p style="font-size:13px;color:#94a3b8;margin-top:12px;">The replay shell could not be loaded. Open the .lsvz that contains this training and launch it again.</p>
+            <h1 style="font-size:18px;color:#fda4af;">App playback unavailable</h1>
+            <p style="font-size:13px;color:#94a3b8;margin-top:12px;">The application could not be loaded for playback. Open the .lsvz that contains this training and launch it again.</p>
           </div>
         </div>`;
     });
+} else if (takeoverId) {
+  void bootLiveApp({ kind: 'live-takeover', handoffId: takeoverId });
 } else {
   void bootLiveApp();
 }

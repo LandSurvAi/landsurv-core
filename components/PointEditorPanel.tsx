@@ -4,6 +4,7 @@ import { DownloadIcon, EraserIcon, FullscreenIcon, ExitFullscreenIcon, ChevronDo
 import { expandGoogleMapsShortLink, isGoogleMapsShortLink, parseGoogleMapsLatLon } from '../utils/googleMaps.ts';
 import { decodePlusCode, isShortPlusCode } from '../utils/plusCode.ts';
 import { useErrorReporter } from '../contexts/AppStateContext';
+import { ReplayPointEditorBinding } from './recording/ReplayPointEditorBinding.tsx';
 
 interface PointEditorPanelProps {
   pointLists: PointList[];
@@ -347,6 +348,24 @@ export const PointEditorPanel: React.FC<PointEditorPanelProps> = ({
 
   return (
     <div className="w-full h-full bg-gray-800 text-sm text-gray-300 flex flex-col light-theme:bg-gray-50 light-theme:text-gray-600">
+        <ReplayPointEditorBinding
+            newPoint={newPoint}
+            setNewPoint={setNewPoint}
+            addMode={addMode}
+            setAddMode={setAddMode}
+            latLonInput={latLonInput}
+            setLatLonInput={setLatLonInput}
+            plusCodeInput={plusCodeInput}
+            setPlusCodeInput={setPlusCodeInput}
+            mapsLinkInput={mapsLinkInput}
+            setMapsLinkInput={setMapsLinkInput}
+            expandedListIds={expandedListIds}
+            setExpandedListIds={setExpandedListIds}
+            mergeTargetListId={mergeTargetListId}
+            setMergeTargetListId={setMergeTargetListId}
+            confirmingDelete={confirmingDelete}
+            setConfirmingDelete={setConfirmingDelete}
+        />
         {photoTarget && (
             <div className="fixed inset-0 bg-gray-900/80 z-50 flex items-center justify-center p-4 animate-fade-in" onClick={handleClosePhotoModal}>
                 <div className="bg-gray-800 p-4 rounded-lg shadow-xl w-full max-w-lg" onClick={e => e.stopPropagation()}>

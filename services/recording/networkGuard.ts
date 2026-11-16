@@ -1,27 +1,61 @@
 /**
  * Replay-mode network guard.
  *
- * The replay tab is a self-contained artifact. It must never depend on live
- * inference, polling, telemetry, or a project backend. The guard is installed
- * after the replay module has loaded, so Vite's own module fetches have already
- * finished, and then blocks every outbound transport. Blob/data reads stay
- * available because they are local.
+ * Playback mounts the real app, so the guard has two phases:
+ * - boot: same-origin app assets may load, but API, cross-origin, sockets and
+ *   beacons are blocked while the app module graph evaluates.
+ * - strict: after the first recorded frame, only blob/data URLs are allowed.
  */
 
 type Restore = () => void;
+export type ReplayNetworkPhase = 'boot' | 'strict';
+
+export class ReplayOfflineError extends Error {
+  readonly code = 'REPLAY_OFFLINE';
+
+  constructor(message = 'Playback is offline: live network requests are blocked.') {
+    super(message);
+    this.name = 'ReplayOfflineError';
+  }
+}
 
 let blockedCount = 0;
 let installed = false;
+let currentPhase: ReplayNetworkPhase = 'strict';
 
 export const getBlockedReplayRequestCount = (): number => blockedCount;
 export const isReplayNetworkGuardInstalled = (): boolean => installed;
+export const getReplayNetworkGuardPhase = (): ReplayNetworkPhase => currentPhase;
+
+export const setReplayNetworkGuardPhase = (phase: ReplayNetworkPhase): void => {
+  currentPhase = phase;
+};
 
 const isLocalUrl = (value: unknown): boolean => {
   if (typeof value !== 'string') return false;
   return value.startsWith('blob:') || value.startsWith('data:');
 };
 
-export const installReplayNetworkGuard = (): Restore => {
+const isBootAssetUrl = (value: unknown): boolean => {
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value, window.location.href);
+    if (url.origin !== window.location.origin) return false;
+    return !url.pathname.startsWith('/api/');
+  } catch {
+    return false;
+  }
+};
+
+const mayRequest = (url: unknown): boolean => {
+  if (isLocalUrl(url)) return true;
+  return currentPhase === 'boot' && isBootAssetUrl(url);
+};
+
+export const installReplayNetworkGuard = (
+  options?: { phase?: ReplayNetworkPhase },
+): Restore => {
+  currentPhase = options?.phase ?? 'strict';
   if (typeof window === 'undefined' || installed) return () => {};
   installed = true;
 
@@ -39,14 +73,14 @@ export const installReplayNetworkGuard = (): Restore => {
 
   const blocked = (what: string): void => {
     blockedCount += 1;
-    console.warn(`[Replay] Blocked live network access (${what}).`);
+    console.warn(`[Playback] Blocked live network access (${what}).`);
   };
 
   w.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    if (isLocalUrl(url)) return originalFetch(input, init);
+    if (mayRequest(url)) return originalFetch(input, init);
     blocked(`fetch ${url.slice(0, 120)}`);
-    return Promise.reject(new Error('Replay mode is offline: live network requests are blocked.'));
+    return Promise.reject(new ReplayOfflineError());
   }) as typeof fetch;
 
   w.XMLHttpRequest = class ReplayBlockedXhr extends OriginalXhr {
@@ -64,21 +98,21 @@ export const installReplayNetworkGuard = (): Restore => {
   w.WebSocket = class ReplayBlockedWebSocket {
     constructor() {
       blocked('websocket');
-      throw new Error('Replay mode is offline: WebSocket connections are blocked.');
+      throw new ReplayOfflineError('Playback is offline: WebSocket connections are blocked.');
     }
   } as unknown as typeof WebSocket;
 
   w.EventSource = class ReplayBlockedEventSource {
     constructor() {
       blocked('eventsource');
-      throw new Error('Replay mode is offline: EventSource connections are blocked.');
+      throw new ReplayOfflineError('Playback is offline: EventSource connections are blocked.');
     }
   } as unknown as typeof EventSource;
 
   if (originalBeacon) {
     navigator.sendBeacon = ((url: string) => {
-      if (isLocalUrl(url)) return originalBeacon(url);
-      blocked(`beacon ${url.slice(0, 120)}`);
+      if (mayRequest(url)) return originalBeacon(url);
+      blocked(`beacon ${String(url).slice(0, 120)}`);
       return false;
     }) as typeof navigator.sendBeacon;
   }

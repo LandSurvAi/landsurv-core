@@ -4,6 +4,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { type SessionFile, type PdfHighlight, useHighlights } from '../types.ts';
 import { PlusIcon, MinusIcon, ChevronLeftIcon, ChevronRightIcon, ListBulletIcon, XMarkIcon, FullscreenIcon, ExitFullscreenIcon, RotateCcwIcon, RotateCwIcon } from './icons.tsx';
 import { useDocumentScrollLock } from '../hooks/useDocumentScrollLock.ts';
+import { ReplayPdfBinding } from './recording/ReplayPdfBinding.tsx';
 
 interface PdfViewerPanelProps {
   files: SessionFile[];
@@ -750,6 +751,16 @@ export const PdfViewerPanel: React.FC<PdfViewerPanelProps> = ({ files, onClose, 
 
   return (
     <div className={`flex flex-col text-gray-200 ${isFullscreen ? 'fixed inset-0 z-50 bg-gray-800' : 'w-full h-full relative bg-gray-800'}`}>
+      <ReplayPdfBinding
+        currentPage={currentPage}
+        setCurrentPage={setCurrentPage}
+        transform={transform}
+        setTransform={setTransform}
+        rotation={rotation}
+        setRotation={setRotation}
+        currentFileIndex={currentFileIndex}
+        setCurrentFileIndex={setCurrentFileIndex}
+      />
       <header className="flex-shrink-0 bg-gray-900/80 p-2 flex items-center justify-between border-b border-gray-700">
         <div className="flex items-center gap-2">
             <h3 className="font-semibold text-orange-400">PDF Reviewer</h3>

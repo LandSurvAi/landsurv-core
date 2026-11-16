@@ -46,6 +46,17 @@ import { TimelineDock } from './components/timeline/TimelineDock.tsx';
 import { useTimelineVisibility } from './components/timeline/timelineVisibility.ts';
 import { TimelineProvider, useTimeline } from './contexts/TimelineContext.tsx';
 import { RecordingProvider } from './contexts/RecordingContext.tsx';
+import { ReplaySessionProvider, useReplaySession } from './contexts/ReplaySessionContext.tsx';
+import { PlaybackChrome } from './components/replay/PlaybackChrome.tsx';
+import { PlaybackBootScreen } from './components/replay/PlaybackBootScreen.tsx';
+import { PlaybackAnnotations } from './components/replay/PlaybackAnnotations.tsx';
+import { ReplayCursorOverlay } from './components/replay/ReplayCursorOverlay.tsx';
+import { TakeoverNotice } from './components/replay/TakeoverNotice.tsx';
+import { ReplayInputShield } from './components/replay/ReplayInputShield.tsx';
+import { ReplayChannelBindings } from './components/recording/ReplayChannelBindings.tsx';
+import { ReplayCameraBinding } from './components/recording/ReplayCameraBinding.tsx';
+import { ReplayToolStateBinding } from './components/recording/ReplayToolStateBinding.tsx';
+import type { AppBoot } from './utils/recording/boot.ts';
 import { RecorderGate } from './components/recording/RecorderGate.tsx';
 import { RecordingBridge } from './components/recording/RecordingBridge.tsx';
 import { TrainingBadge } from './components/recording/TrainingBadge.tsx';
@@ -1194,6 +1205,7 @@ function collectVisibleCircleEntities(lines: SurveyLine[], points: SurveyPoint[]
 
 const AppContent = () => {
   const APP_VERSION = APP_VERSION_CONST;
+  const { mode } = useReplaySession();
   
   // ============================================================================
   // REFACTORING: Use FileStateContext (Strangler Pattern - Phase 1)
@@ -35082,8 +35094,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           )}
           <RecordingBridge
             pointLists={pointLists}
-            lines={visibleLines}
-            centerlines={visibleCenterlines}
+            lines={lines}
+            centerlines={centerlines}
             contourLabels={contourLabels}
             boundaryFiles={boundaryFiles}
             textAnnotations={textAnnotations}
@@ -35101,8 +35113,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             ui={{
               activeAgent,
               activeVisualPanel,
-              isChatPanelVisible: showToolShelf,
-              isToolShelfVisible: showToolShelf,
+              isChatPanelVisible,
+              isToolShelfVisible,
               theme: settings.theme,
               tool: canvasToolState.isDrawing
                 ? 'draw'
@@ -35120,11 +35132,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               selectedCount: canvasToolState.selectedCount,
             }}
           />
-          <TrainingBadge
-            index={embeddedTrainingIndex}
-            source={embeddedTrainingSourceRef.current}
-            projectKey={`${jobInfo.jobNo || 'project'}-${jobInfo.jobName || ''}`}
-          />
+          <ReplayCameraBinding camera={canvasTransform} setCamera={setCanvasTransform} />
+          <ReplayToolStateBinding state={canvasToolState} setState={setCanvasToolState} />
+          {mode === 'live' && (
+            <TrainingBadge
+              index={embeddedTrainingIndex}
+              source={embeddedTrainingSourceRef.current}
+              projectKey={`${jobInfo.jobNo || 'project'}-${jobInfo.jobName || ''}`}
+            />
+          )}
 
 
           </div>
@@ -35140,30 +35156,39 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 // ============================================================================
 // REFACTORING: App wrapper provides all context providers
 // ============================================================================
-export const App = () => {
+export const App = ({ boot = { kind: 'live' } }: { boot?: AppBoot }) => {
+  const playback = boot.kind === 'playback';
   return (
     <UserFriendlyErrorBoundary>
-      <FileStateProvider>
-        <ChatStateProvider>
-          <UIStateProvider>
-            <CanvasStateProvider defaultCutSheetInfo={{ companyName: 'Your Company', crewChief: 'Crew Chief' }}>
-              <TimelineProvider>
-                <AppStateProvider availableModels={availableModels}>
-                  <CadManagerProvider>
-                    <RecordingProvider appVersion={(import.meta as any).env.VITE_APP_VERSION || 'dev'}>
-                      <AppContent />
-                      <RecorderGate />
-                      <TimelineDock />
-                      <ConciergeOverlay />
-                      <GlobalErrorDialog />
-                    </RecordingProvider>
-                  </CadManagerProvider>
-                </AppStateProvider>
-              </TimelineProvider>
-            </CanvasStateProvider>
-          </UIStateProvider>
-        </ChatStateProvider>
-      </FileStateProvider>
+      <ReplaySessionProvider boot={boot}>
+        <FileStateProvider>
+          <ChatStateProvider>
+            <UIStateProvider>
+              <CanvasStateProvider defaultCutSheetInfo={{ companyName: 'Your Company', crewChief: 'Crew Chief' }}>
+                <TimelineProvider>
+                  <AppStateProvider availableModels={availableModels}>
+                    <CadManagerProvider>
+                      <RecordingProvider appVersion={(import.meta as any).env.VITE_APP_VERSION || 'dev'}>
+                        <ReplayChannelBindings />
+                        <ReplayInputShield />
+                        <AppContent />
+                        {!playback && <RecorderGate />}
+                        <TimelineDock />
+                        {playback ? <PlaybackChrome /> : <ConciergeOverlay />}
+                        <PlaybackAnnotations />
+                        <ReplayCursorOverlay />
+                        <TakeoverNotice />
+                        <PlaybackBootScreen />
+                        <GlobalErrorDialog />
+                      </RecordingProvider>
+                    </CadManagerProvider>
+                  </AppStateProvider>
+                </TimelineProvider>
+              </CanvasStateProvider>
+            </UIStateProvider>
+          </ChatStateProvider>
+        </FileStateProvider>
+      </ReplaySessionProvider>
     </UserFriendlyErrorBoundary>
   );
 };

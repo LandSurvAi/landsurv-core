@@ -17,7 +17,12 @@ import React, {
 } from 'react';
 import { MessageRole, type AgentType, type ChatMessage } from '../types';
 import { createBundleFromSeed, recountBundle } from '../services/recording/bundle';
-import { saveRecordingBundle } from '../services/recording/recordingStore';
+import { saveRecordingBundle, saveRecordingBundleV2, scrubLegacyRecordingCredentials } from '../services/recording/recordingStore';
+import { dedupeV2Assets } from '../services/recording/v2Assets';
+import { createV2CaptureFromSeed, makeV2Keyframe, recountV2Bundle, toJsonValue } from '../services/recording/v2Capture';
+import { diffKeyedArray, entityId as replayEntityId } from '../utils/recording/diff';
+import { stableStringify } from '../utils/recording/stable';
+import type { JsonValue, RecordingBundleV2 } from '../utils/recording/v2';
 import {
   MAX_RECORDING_DURATION_MS,
   type AiRecord,
@@ -50,6 +55,8 @@ interface RecordingContextValue {
   recordUi: (ui: ReplayUiState) => void;
   recordGeometry: (entity: string, items: unknown) => void;
   recordChat: (agent: AgentType, messages: ChatMessage[]) => void;
+  /** Record an arbitrary v2 channel from live provider state. */
+  recordChannel: (channel: string, value: unknown) => void;
 }
 
 const RecordingContext = createContext<RecordingContextValue | null>(null);
@@ -143,6 +150,17 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
   const lastGeometryRef = useRef<Map<string, unknown>>(new Map());
   const chatCountsRef = useRef<Map<AgentType, number>>(new Map());
   const cursorLastAtRef = useRef(0);
+  const v2Ref = useRef<RecordingBundleV2 | null>(null);
+  const v2ChannelsRef = useRef(new Map<string, JsonValue>());
+  const v2SeqRef = useRef(0);
+  const v2FrameSeqRef = useRef(0);
+  const v2LastFullRef = useRef(0);
+
+  useEffect(() => {
+    void scrubLegacyRecordingCredentials().catch(error => {
+      setStorageError(error instanceof Error ? error.message : 'Could not audit old recordings.');
+    });
+  }, []);
 
   const currentElapsed = useCallback((): number => {
     if (phaseRef.current === 'recording') {
@@ -173,13 +191,87 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
     });
   }, [currentElapsed]);
 
+  const recordV2Replace = useCallback((ch: string, value: JsonValue) => {
+    const bundle = v2Ref.current;
+    if (!bundle || phaseRef.current !== 'recording') return;
+    const prior = v2ChannelsRef.current.get(ch);
+    if (prior !== undefined && stableStringify(prior) === stableStringify(value)) return;
+    v2ChannelsRef.current.set(ch, value);
+    v2SeqRef.current += 1;
+    bundle.changes.push({
+      t: Math.round(currentElapsed()),
+      seq: v2SeqRef.current,
+      ch,
+      op: 'replace',
+      v: value,
+    });
+  }, [currentElapsed]);
+
+  const recordV2Geometry = useCallback((ch: string, entity: string, items: unknown) => {
+    const bundle = v2Ref.current;
+    if (!bundle || phaseRef.current !== 'recording') return;
+    const next = toJsonValue(items);
+    const prior = v2ChannelsRef.current.get(ch);
+    if (prior === undefined) {
+      v2ChannelsRef.current.set(ch, next);
+      return;
+    }
+    if (Array.isArray(prior) && Array.isArray(next)) {
+      try {
+        const deltas = diffKeyedArray(prior, next, replayEntityId, value => value);
+        if (deltas !== null && deltas.length === 0) return;
+        if (deltas !== null) {
+          v2ChannelsRef.current.set(ch, next);
+          v2SeqRef.current += 1;
+          bundle.changes.push({
+            t: Math.round(currentElapsed()),
+            seq: v2SeqRef.current,
+            ch,
+            op: 'keyed',
+            entity,
+            deltas,
+          });
+          return;
+        }
+      } catch {
+        // Non-keyed geometry falls back to a whole-channel replace below.
+      }
+    }
+    recordV2Replace(ch, next);
+  }, [currentElapsed, recordV2Replace]);
+
+  const pushV2Keyframe = useCallback((kind: 'full' | 'patch', reason: 'safety' | 'pause' | 'resume' | 'stop') => {
+    const bundle = v2Ref.current;
+    if (!bundle) return;
+    const elapsed = Math.round(currentElapsed());
+    v2FrameSeqRef.current += 1;
+    bundle.keyframes.push(makeV2Keyframe(
+      elapsed,
+      `v2-kf-${v2FrameSeqRef.current}`,
+      kind,
+      reason,
+      v2ChannelsRef.current,
+    ));
+    if (kind === 'full') v2LastFullRef.current = elapsed;
+  }, [currentElapsed]);
+
+  const recordChannel = useCallback((channel: string, value: unknown) => {
+    recordV2Replace(channel, toJsonValue(value));
+  }, [recordV2Replace]);
+
   const persistDraft = useCallback(async () => {
     const bundle = bundleRef.current;
     if (!bundle) return;
     bundle.manifest.durationMs = Math.round(currentElapsed());
     recountBundle(bundle);
+    const v2 = v2Ref.current;
+    if (v2) {
+      v2.manifest.durationMs = bundle.manifest.durationMs;
+      recountV2Bundle(v2);
+    }
     try {
       await saveRecordingBundle(bundle);
+      if (v2) await saveRecordingBundleV2(v2);
       setStorageError(null);
     } catch (error) {
       setStorageError(error instanceof Error ? error.message : 'Recording autosave failed.');
@@ -198,6 +290,20 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
     const bundle = createBundleFromSeed(cloned, appVersion);
     bundle.manifest.aiReveal = aiReveal;
     bundleRef.current = bundle;
+    const v2 = createV2CaptureFromSeed(
+      cloned,
+      appVersion,
+      bundle.manifest.id,
+      bundle.manifest.createdAt,
+    );
+    v2Ref.current = v2.bundle;
+    v2ChannelsRef.current = new Map(Object.entries(v2.channels));
+    v2SeqRef.current = 0;
+    v2FrameSeqRef.current = v2.bundle.keyframes.length;
+    v2LastFullRef.current = 0;
+    void saveRecordingBundleV2(v2.bundle).catch(error => {
+      setStorageError(error instanceof Error ? error.message : 'Could not save the app-playback recording.');
+    });
     eventSeqRef.current = 0;
     pausedAccumRef.current = 0;
     pauseStartedRef.current = null;
@@ -305,6 +411,21 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
     bundle.manifest.durationMs = t;
     bundle.manifest.status = 'draft';
     bundle.annotations.chapters = draftChapters(bundle.events);
+    const v2 = v2Ref.current;
+    if (v2) {
+      v2.manifest.durationMs = t;
+      v2.manifest.status = 'draft';
+      v2.annotations = bundle.annotations;
+      v2.edits = bundle.edits;
+      v2.ai = [...bundle.ai];
+      pushV2Keyframe('full', 'stop');
+      try {
+        await dedupeV2Assets(v2);
+      } catch (error) {
+        setStorageError(error instanceof Error ? error.message : 'Could not store recording assets.');
+      }
+      recountV2Bundle(v2);
+    }
     stoppedElapsedRef.current = t;
     phaseRef.current = 'stopped';
     setPhase('stopped');
@@ -313,14 +434,17 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
     setCompleted(bundle);
     try {
       await saveRecordingBundle(bundle);
+      if (v2) await saveRecordingBundleV2(v2);
       setStorageError(null);
     } catch (error) {
       setStorageError(error instanceof Error ? error.message : 'Could not save the finished recording.');
     }
-  }, [currentElapsed]);
+  }, [currentElapsed, pushV2Keyframe]);
 
   const clearCompleted = useCallback(() => {
     bundleRef.current = null;
+    v2Ref.current = null;
+    v2ChannelsRef.current = new Map();
     setCompleted(null);
     setPhase('idle');
     phaseRef.current = 'idle';
@@ -352,7 +476,8 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
     }
     lastCameraRef.current = camera;
     pushEvent({ type: 'camera', camera });
-  }, [pushEvent]);
+    recordV2Replace('canvas.camera', toJsonValue(camera));
+  }, [pushEvent, recordV2Replace]);
 
   const recordUi = useCallback((ui: ReplayUiState) => {
     if (phaseRef.current !== 'recording') return;
@@ -360,11 +485,24 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
     if (serialized === lastUiRef.current) return;
     lastUiRef.current = serialized;
     pushEvent({ type: 'ui/state', ui });
-  }, [pushEvent]);
+    if (ui.activeVisualPanel !== undefined) {
+      recordV2Replace('viewport.activeVisualPanel', toJsonValue(ui.activeVisualPanel));
+    }
+    if (ui.isChatPanelVisible !== undefined) {
+      recordV2Replace('viewport.isChatPanelVisible', toJsonValue(ui.isChatPanelVisible));
+    }
+    if (ui.isToolShelfVisible !== undefined) {
+      recordV2Replace('viewport.isToolShelfVisible', toJsonValue(ui.isToolShelfVisible));
+    }
+    if (ui.activeAgent !== undefined) {
+      recordV2Replace('app.activeAgent', toJsonValue(ui.activeAgent));
+    }
+  }, [pushEvent, recordV2Replace]);
 
   const recordGeometry = useCallback((entity: string, items: unknown) => {
     if (phaseRef.current !== 'recording') return;
     const next = Array.isArray(items) ? items : [];
+    recordV2Geometry(`canvas.${entity}`, entity, next);
     const previous = lastGeometryRef.current.get(entity);
     if (previous === undefined) {
       lastGeometryRef.current.set(entity, next);
@@ -401,7 +539,7 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
     if (deltas.length === 0) return;
     lastGeometryRef.current.set(entity, next);
     pushEvent({ type: 'geometry/deltas', entity, deltas });
-  }, [pushEvent]);
+  }, [pushEvent, recordV2Geometry]);
 
   const recordChat = useCallback((agent: AgentType, messages: ChatMessage[]) => {
     if (phaseRef.current !== 'recording') return;
@@ -420,6 +558,17 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
     const bundle = bundleRef.current;
     const newMessages = list.slice(previousCount);
     chatCountsRef.current.set(agent, list.length);
+
+    const priorThreads = v2ChannelsRef.current.get('chat.histories');
+    const threads = Array.isArray(priorThreads) ? priorThreads as JsonValue[] : [];
+    const nextThreads = [
+      ...threads.filter(thread => {
+        if (!thread || typeof thread !== 'object' || Array.isArray(thread)) return true;
+        return thread.agent !== agent;
+      }),
+      toJsonValue({ agent, messages: list }),
+    ];
+    recordV2Replace('chat.histories', nextThreads);
 
     newMessages.forEach((message, offset) => {
       const index = previousCount + offset;
@@ -453,7 +602,7 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
         pushEvent({ type: 'ai/result', ai: record });
       }
     });
-  }, [currentElapsed, pushEvent]);
+  }, [currentElapsed, pushEvent, recordV2Replace]);
 
   // Live timer for the HUD.
   useEffect(() => {
@@ -470,15 +619,16 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
       const now = performance.now();
       if (kind === 'move' && now - cursorLastAtRef.current < 50) return;
       cursorLastAtRef.current = now;
-      pushEvent({
-        type: 'cursor',
-        cursor: {
-          x: Math.min(1, Math.max(0, event.clientX / Math.max(1, window.innerWidth))),
-          y: Math.min(1, Math.max(0, event.clientY / Math.max(1, window.innerHeight))),
-          visible: true,
-          kind,
-        },
-      });
+      const cursor = {
+        x: Math.min(1, Math.max(0, event.clientX / Math.max(1, window.innerWidth))),
+        y: Math.min(1, Math.max(0, event.clientY / Math.max(1, window.innerHeight))),
+        visible: true,
+        kind,
+      } satisfies CursorSample;
+      pushEvent({ type: 'cursor', cursor });
+      if (v2Ref.current && phaseRef.current === 'recording') {
+        v2Ref.current.cursor.push({ t: Math.round(currentElapsed()), ...cursor });
+      }
     };
     const onMove = (event: PointerEvent) => sample(event, 'move');
     const onDown = (event: PointerEvent) => sample(event, 'down');
@@ -491,7 +641,7 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
       window.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [phase, pushEvent]);
+  }, [phase, pushEvent, currentElapsed]);
 
   // Autosave draft, keyframes, and the duration cap.
   useEffect(() => {
@@ -509,11 +659,21 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
       });
       if (currentElapsed() >= MAX_RECORDING_DURATION_MS) void stopRecording();
     }, 5000);
+    const v2Keyframe = window.setInterval(() => {
+      if (phaseRef.current !== 'recording') return;
+      const elapsed = Math.round(currentElapsed());
+      if (elapsed - v2LastFullRef.current >= 5 * 60 * 1000) {
+        pushV2Keyframe('full', 'safety');
+      } else {
+        pushV2Keyframe('patch', 'safety');
+      }
+    }, 30_000);
     return () => {
       window.clearInterval(autosave);
       window.clearInterval(keyframe);
+      window.clearInterval(v2Keyframe);
     };
-  }, [phase, persistDraft, currentElapsed, stopRecording]);
+  }, [phase, persistDraft, currentElapsed, stopRecording, pushV2Keyframe]);
 
   const value: RecordingContextValue = {
     phase,
@@ -533,6 +693,7 @@ export const RecordingProvider: React.FC<{ appVersion: string; children: ReactNo
     recordUi,
     recordGeometry,
     recordChat,
+    recordChannel,
   };
 
   return <RecordingContext.Provider value={value}>{children}</RecordingContext.Provider>;
