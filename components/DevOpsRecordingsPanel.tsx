@@ -32,10 +32,11 @@ interface RecorderSessionRow {
   ownerEmail: string | null;
 }
 
-const apiBase = (): string =>
+const envApiBase = (): string =>
   String((import.meta as any)?.env?.VITE_API_URL || '').trim().replace(/\/+$/, '');
 
-const apiUrl = (path: string): string => `${apiBase()}/api/recorder${path}`;
+const apiUrl = (base: string, path: string): string =>
+  `${base.replace(/\/+$/, '')}/api/recorder${path}`;
 
 const appBaseUrl = (): string => {
   const configured = String((import.meta as any)?.env?.VITE_APP_URL || '').trim().replace(/\/+$/, '');
@@ -64,7 +65,16 @@ const readError = async (response: Response): Promise<string> => {
   }
 };
 
-export const DevOpsRecordingsPanel: React.FC = () => {
+interface DevOpsRecordingsPanelProps {
+  apiBase?: string;
+  sessionToken?: string;
+}
+
+export const DevOpsRecordingsPanel: React.FC<DevOpsRecordingsPanelProps> = ({
+  apiBase,
+  sessionToken,
+}) => {
+  const base = String(apiBase || envApiBase()).trim().replace(/\/+$/, '');
   const [keys, setKeys] = useState<RecorderKeyRow[]>([]);
   const [sessions, setSessions] = useState<RecorderSessionRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -80,9 +90,10 @@ export const DevOpsRecordingsPanel: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
+      const headers = sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {};
       const [keysResponse, sessionsResponse] = await Promise.all([
-        fetch(apiUrl('/keys'), { credentials: 'include' }),
-        fetch(apiUrl('/sessions'), { credentials: 'include' }),
+        fetch(apiUrl(base, '/keys'), { credentials: 'include', headers }),
+        fetch(apiUrl(base, '/sessions'), { credentials: 'include', headers }),
       ]);
       if (!keysResponse.ok) {
         setError(await readError(keysResponse));
@@ -99,14 +110,17 @@ export const DevOpsRecordingsPanel: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [base, sessionToken]);
 
   useEffect(() => { void load(); }, [load]);
 
   const post = async (path: string, body?: unknown): Promise<any> => {
-    const response = await fetch(apiUrl(path), {
+    const response = await fetch(apiUrl(base, path), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      },
       credentials: 'include',
       body: body === undefined ? undefined : JSON.stringify(body),
     });
