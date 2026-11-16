@@ -36,6 +36,11 @@ export const MAX_QUICK_THOUGHT_FIELDS = 6;
  * before the model has asked for a specific parameter.
  */
 export const AGENT_INITIAL_QUICK_THOUGHTS: Record<AgentType, string[]> = {
+  [AgentType.RAW_REPLAY]: [
+    'Open Raw Replay',
+    'Upload a .rw5 file',
+    'Explain the field summary',
+  ],
   [AgentType.RAW_CRAWLER]: [
     'Upload a .RAW file',
     'Load the example .RAW survey',

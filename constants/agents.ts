@@ -53,6 +53,7 @@ export interface AgentConfig {
 }
 
 export const agentConfig: { [key in AgentType]?: AgentConfig } = {
+  [AgentType.RAW_REPLAY]: { icon: BrainCircuitIcon, label: 'Raw Replay', color: 'cyan' },
   [AgentType.RAW_CRAWLER]: { icon: BrainCircuitIcon, label: 'RAW Crawler', color: 'cyan' },
   [AgentType.VOICE_AGENT]: { icon: LsvzIcon, label: 'Voice Agent', color: 'cyan' },
   [AgentType.CIVIL_DRAFTER]: { icon: CivilDrafterIcon, label: 'Civil Drafter', color: 'fuchsia' },
@@ -118,6 +119,7 @@ export const agentPrimaryToolKey: Partial<Record<AgentType, string>> = {
 // ============================================================================
 
 export const agentThemeColors: { [key in AgentType]?: string } = {
+  [AgentType.RAW_REPLAY]: '#22d3ee', // cyan-400
   [AgentType.RAW_CRAWLER]: '#22d3ee', // cyan-400
   [AgentType.VOICE_AGENT]: '#22d3ee', // cyan-400
   [AgentType.CIVIL_DRAFTER]: '#e879f9', // fuchsia-400
@@ -165,6 +167,7 @@ export const agentSecondaryThemeColors: { [key in AgentType]?: string } = {
 // ============================================================================
 
 export const agentIcons: { [key in AgentType]?: React.FC<any> } = {
+  [AgentType.RAW_REPLAY]: BrainCircuitIcon,
   [AgentType.RAW_CRAWLER]: BrainCircuitIcon,
   [AgentType.VOICE_AGENT]: LsvzIcon,
   [AgentType.CIVIL_DRAFTER]: CivilDrafterIcon,
@@ -202,6 +205,7 @@ export const agentIcons: { [key in AgentType]?: React.FC<any> } = {
 // ============================================================================
 
 export const agentGradientClasses: { [key in AgentType]?: string } = {
+  [AgentType.RAW_REPLAY]: 'from-cyan-500 to-blue-600',
   [AgentType.RAW_CRAWLER]: 'from-cyan-500 to-blue-600',
   [AgentType.VOICE_AGENT]: 'from-cyan-500 to-blue-600',
   [AgentType.CIVIL_DRAFTER]: 'from-fuchsia-500 to-purple-600',
@@ -240,6 +244,7 @@ export const agentGradientClasses: { [key in AgentType]?: string } = {
 // ============================================================================
 
 export const addDataButtonLabels: { [key in AgentType]?: string } = {
+  [AgentType.RAW_REPLAY]: 'Open Raw Replay...',
   [AgentType.RAW_CRAWLER]: 'Replace RAW File...',
   [AgentType.CIVIL_DRAFTER]: 'Replace Point/PDF File...',
   [AgentType.DEED_READER]: 'Upload Deed',

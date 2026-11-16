@@ -31,7 +31,6 @@ const LOCAL_OVERRIDE_KEY = 'landsurv-retired-agents';
 // very first boot (before the public-settings fetch returns) still hides
 // the same agents the world would have hidden anyway.
 const DEFAULT_RETIRED_AGENTS: AgentType[] = [
-  AgentType.RAW_CRAWLER,
   AgentType.IMAGE_ANALYZER,
 ];
 
@@ -101,7 +100,7 @@ export const HOMEPAGE_AGENT_TYPES = [
   AgentType.POINT_EDITOR,
   AgentType.CAD_MANAGER,
   AgentType.STANDARDS_COMPLIANCE,
-  AgentType.RAW_CRAWLER,
+  AgentType.RAW_REPLAY,
   AgentType.CIVIL_DRAFTER,
   AgentType.ROADING_AGENT,
   AgentType.CENTERLINE_STATIONING,

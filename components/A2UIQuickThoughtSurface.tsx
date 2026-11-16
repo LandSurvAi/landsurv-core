@@ -21,6 +21,7 @@ import {
   type GpuPowerPreference,
 } from '../utils/webgpuBasemap.ts';
 import { agentThemeColors } from '../constants/agents.ts';
+import { isDirectoryPickerAbort, pickDirectoryFiles, supportsDirectoryPicker } from '../utils/folderUpload.ts';
 import { A2UIHostContext, WORKSPACE_TOOL_LABELS } from './A2UISurface.tsx';
 import { BoundaryDeedIntake } from './BoundaryDeedIntake.tsx';
 import { A2UIBoundarySummary } from './A2UIBoundarySummary.tsx';
@@ -680,6 +681,20 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
     [host],
   );
 
+  const handlePointFolderClick = useCallback(async () => {
+    if (!supportsDirectoryPicker()) {
+      pointFolderInputRef.current?.click();
+      return;
+    }
+    try {
+      const files = await pickDirectoryFiles();
+      if (files.length > 0) await handlePointFilesSelected(files);
+    } catch (error) {
+      if (isDirectoryPickerAbort(error)) return;
+      console.warn('[Point upload] Could not read the selected folder:', error);
+    }
+  }, [handlePointFilesSelected]);
+
   const handleComplianceFile = useCallback(
     async (file: File) => {
       if (!host.onStandardsComplianceSessionStart) {
@@ -975,7 +990,7 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
               <button
                 type="button"
                 data-no-drag
-                onClick={() => pointFolderInputRef.current?.click()}
+                onClick={() => { void handlePointFolderClick(); }}
                 className={btnClass}
               >
                 Choose folder
@@ -1007,7 +1022,7 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
               data-testid="quick-thought-raw-file-input"
               type="file"
               className="hidden"
-              accept=".raw,text/plain"
+              accept=".rw5,.raw,.txt,.fbk,.gsi,text/plain"
               onChange={async e => {
                 const file = e.target.files?.[0];
                 e.target.value = '';
@@ -1023,7 +1038,7 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
                 onClick={() => rawFileInputRef.current?.click()}
                 className={primaryBtnClass}
               >
-                Upload .RAW file
+                Upload raw survey file
               </button>
               <button
                 type="button"
@@ -1032,12 +1047,12 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
                   if (host.onRawFileUploaded) {
                     host.onRawFileUploaded(exampleFileContent, exampleFileName);
                   } else {
-                    onSendMessage?.('Load an example .RAW file');
+                    onSendMessage?.('Load an example raw file');
                   }
                 }}
                 className={btnClass}
               >
-                Load an example .RAW file
+                Load an example raw file
               </button>
             </div>
             <OpenChatFooter onOpenConversation={onOpenConversation} />

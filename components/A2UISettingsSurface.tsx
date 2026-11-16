@@ -852,6 +852,21 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
             </div>
           )}
 
+          <div>
+            <label htmlFor="a2ui-argon-reasoning" className="mb-1 block text-[9.5px] font-semibold uppercase tracking-wider text-slate-400">
+              Argon Reasoning
+            </label>
+            <select
+              id="a2ui-argon-reasoning"
+              value={settings.argonReasoning ?? 'fast'}
+              onChange={e => updateSetting('argonReasoning', e.target.value as Settings['argonReasoning'])}
+              className={inputClass}
+            >
+              <option value="fast">Fast (default)</option>
+              <option value="high">High Thinking</option>
+            </select>
+          </div>
+
           <div className="sm:col-span-2">
             <label htmlFor="a2ui-uncertainty" className="mb-1 block text-[9.5px] font-semibold uppercase tracking-wider text-slate-400">
               PDF Uncertainty Sensitivity

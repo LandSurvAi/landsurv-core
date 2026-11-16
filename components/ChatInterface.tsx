@@ -34,7 +34,7 @@ const MODEL_LABELS: Record<string, string> = {
     'gemini-3.7-flash': 'Gemini 3.7 Flash',
     'gemini-3.8-flash': 'Gemini 3.8 Flash',
     'gemini-4-hydrogen': 'Gemini 4 Hydrogen',
-    'gemini-4-argon': 'Gemini 4 Argon (High Thinking)',
+    'gemini-4-argon': 'Gemini 4 Argon',
     'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
     'claude-sonnet-5': 'Claude Sonnet 5',
     'claude-opus-5': 'Claude Opus 5',
@@ -47,7 +47,7 @@ function formatModelDisplay(id?: string): string {
 }
 
 const agentLabels: { [key in AgentType]?: string } = {
-    [AgentType.RAW_CRAWLER]: 'RAW Crawler',
+    [AgentType.RAW_REPLAY]: 'Raw Replay',
     [AgentType.DEED_READER]: 'Boundary Agent',
     [AgentType.CENTERLINE_STATIONING]: 'Stationing & CL',
     [AgentType.POINT_EDITOR]: 'Point Editor',
@@ -63,7 +63,7 @@ const agentLabels: { [key in AgentType]?: string } = {
 };
 
 const themeClasses: { [key in AgentType]?: { gradient: string; accent: string; }} = {
-    [AgentType.RAW_CRAWLER]: { gradient: 'from-cyan-500 to-blue-600', accent: 'accent-cyan-500' },
+    [AgentType.RAW_REPLAY]: { gradient: 'from-cyan-500 to-blue-600', accent: 'accent-cyan-500' },
     [AgentType.DEED_READER]: { gradient: 'from-green-500 to-emerald-600', accent: 'accent-green-500' },
     [AgentType.CIVIL_PLAN_EXPERT]: { gradient: 'from-orange-500 to-amber-600', accent: 'accent-orange-500' },
     [AgentType.DXF_ANALYZER]: { gradient: 'from-indigo-500 to-violet-600', accent: 'accent-indigo-500' },

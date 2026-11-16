@@ -2,9 +2,14 @@ import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { Eye } from 'lucide-react';
 import { formatStation } from '../utils/gimbalRoadModel.ts';
 import { gimbalVisionStore, type GimbalVisionSnapshot } from '../services/gimbalVisionStore.ts';
+import {
+  civilDrafterDiagnostics,
+  formatCivilDrafterTrace,
+  type CivilDrafterDiagnosticsSnapshot,
+} from '../services/civilDrafterDiagnostics.ts';
 import type { VisionFrame, VisionSurvey } from '../utils/civilDrafterVision.ts';
 
-type Section = 'frames' | 'road' | 'qa' | 'gates';
+type Section = 'frames' | 'road' | 'qa' | 'gates' | 'draft';
 type Tone = 'cyan' | 'emerald' | 'violet' | 'amber' | 'rose' | 'slate' | 'teal';
 type AcceptanceGate = NonNullable<GimbalVisionSnapshot['acceptance']>['verdict']['gates'][number];
 
@@ -584,11 +589,119 @@ function GatesSection({ acceptance }: { acceptance: GimbalVisionSnapshot['accept
   );
 }
 
+function DraftSection({ snapshot }: { snapshot: CivilDrafterDiagnosticsSnapshot }) {
+  const [copied, setCopied] = useState(false);
+  const latest = snapshot.turns[0];
+  if (!latest) {
+    return (
+      <EmptySection>
+        No Civil Drafter draw turn recorded yet. Run a draw request to see phase timings,
+        Surveyor's Eye cost, RAG status and the final commit count here.
+      </EmptySection>
+    );
+  }
+  const tone: Tone = latest.status === 'committed'
+    ? 'emerald'
+    : latest.status === 'running'
+      ? 'cyan'
+      : latest.status === 'failed'
+        ? 'rose'
+        : 'amber';
+  const copyReceipt = async () => {
+    try {
+      await navigator.clipboard.writeText(formatCivilDrafterTrace(latest));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard may be unavailable */ }
+  };
+  const frames = latest.vision?.frameCount ?? 0;
+  const megabytes = (latest.vision?.byteSize ?? 0) / 1024 / 1024;
+
+  return (
+    <div className="space-y-2">
+      <Card
+        title="Draft receipt"
+        tone={tone}
+        testId="civil-drafter-draft-receipt"
+        chip={<Chip tone={tone}>{latest.status}</Chip>}
+      >
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+          <Stat label="Elapsed" value={latest.durationMs !== null ? `${(latest.durationMs / 1000).toFixed(1)} s` : 'running'} />
+          <Stat label="Committed" value={latest.lines ? `${latest.lines.committed}/${latest.lines.attempted}` : '—'} />
+          <Stat label="Eye frames" value={`${frames} · ${megabytes.toFixed(1)} MB`} />
+          <Stat label="RAG" value={latest.rag ? `${latest.rag.hitCount} · ${latest.rag.latencyMs} ms` : '—'} />
+        </div>
+        <p className="mt-1.5 font-mono text-[9.5px] leading-4 text-slate-400">{latest.query || '(empty request)'}</p>
+        {latest.reason && (
+          <p className={`mt-1.5 rounded-md border px-2 py-1.5 font-mono text-[9.5px] leading-4 ${latest.status === 'committed' ? 'border-emerald-400/20 bg-emerald-400/[0.05] text-emerald-200/85' : 'border-amber-400/20 bg-amber-400/[0.05] text-amber-200/85'}`}>
+            {latest.reason}
+          </p>
+        )}
+        {latest.lines && Object.keys(latest.lines.byType).length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {Object.entries(latest.lines.byType).slice(0, 8).map(([type, count]) => (
+              <Chip key={type} tone="slate">{type} · {count}</Chip>
+            ))}
+            {latest.lines.unresolved > 0 && <Chip tone="rose">{latest.lines.unresolved} unresolved</Chip>}
+          </div>
+        )}
+        {latest.rag?.error && (
+          <p className="mt-1.5 font-mono text-[9px] leading-4 text-rose-300/80">RAG: {latest.rag.error}</p>
+        )}
+      </Card>
+
+      <Card title="Phase timings" tone="cyan" chip={<Chip tone="cyan">{latest.phases.length}</Chip>}>
+        {latest.phases.length === 0 ? (
+          <p className="font-mono text-[9.5px] text-slate-500">No phases recorded for this turn.</p>
+        ) : (
+          <ul className="space-y-1">
+            {latest.phases.map((phase, index) => (
+              <li key={`${phase.id}-${index}`} className="flex items-start justify-between gap-2 font-mono text-[9.5px] leading-4">
+                <span className={phase.status === 'error' ? 'text-rose-300' : phase.status === 'skipped' ? 'text-slate-500' : 'text-slate-300'}>
+                  {phase.status === 'ok' ? '✓' : phase.status === 'error' ? '✗' : phase.status === 'skipped' ? '–' : '·'} {phase.label}
+                  {phase.detail ? <span className="text-slate-500"> — {phase.detail}</span> : null}
+                </span>
+                <span className="shrink-0 text-slate-500">{phase.durationMs ?? 0} ms</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      {snapshot.turns.length > 1 && (
+        <Card title="Earlier turns" tone="slate" chip={<Chip tone="slate">{snapshot.turns.length - 1}</Chip>}>
+          <ul className="space-y-1">
+            {snapshot.turns.slice(1).map(turn => (
+              <li key={turn.id} className="flex items-center justify-between gap-2 font-mono text-[9px] text-slate-400">
+                <span className="truncate">{turn.query || '(empty)'}</span>
+                <span className={`shrink-0 ${turn.status === 'committed' ? 'text-emerald-300' : 'text-amber-300'}`}>{turn.status}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      <button
+        type="button"
+        onClick={() => { void copyReceipt(); }}
+        className="w-full rounded-md border border-cyan-400/25 bg-cyan-400/[0.06] px-2 py-1.5 font-mono text-[10px] font-semibold text-cyan-200 transition-colors hover:bg-cyan-400/10"
+      >
+        {copied ? 'Copied receipt' : 'Copy debug receipt'}
+      </button>
+    </div>
+  );
+}
+
 export const SurveyorsEyePanel: React.FC<{ showTitle?: boolean }> = ({ showTitle = false }) => {
   const snapshot = useSyncExternalStore(
     gimbalVisionStore.subscribe,
     gimbalVisionStore.getSnapshot,
     gimbalVisionStore.getSnapshot,
+  );
+  const diagnostics = useSyncExternalStore(
+    civilDrafterDiagnostics.subscribe,
+    civilDrafterDiagnostics.getSnapshot,
+    civilDrafterDiagnostics.getSnapshot,
   );
   const [section, setSection] = useState<Section>('frames');
 
@@ -605,6 +718,7 @@ export const SurveyorsEyePanel: React.FC<{ showTitle?: boolean }> = ({ showTitle
     { id: 'road', label: 'Road', tone: 'violet', count: roadCount || undefined },
     { id: 'qa', label: 'QA', tone: 'emerald', count: snapshot.qa && snapshot.qa.status !== 'unverified' ? 1 : undefined },
     { id: 'gates', label: 'Gates', tone: 'amber', count: gateCount || undefined },
+    { id: 'draft', label: 'Draft', tone: 'cyan', count: diagnostics.turns.length || undefined },
   ];
 
   return (
@@ -675,6 +789,7 @@ export const SurveyorsEyePanel: React.FC<{ showTitle?: boolean }> = ({ showTitle
           {section === 'road' && <RoadSection snapshot={snapshot} />}
           {section === 'qa' && <QaSection snapshot={snapshot} />}
           {section === 'gates' && <GatesSection acceptance={acceptance} />}
+          {section === 'draft' && <DraftSection snapshot={diagnostics} />}
         </div>
       </div>
     </div>

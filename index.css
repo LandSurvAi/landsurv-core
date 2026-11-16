@@ -376,6 +376,51 @@
     }
   }
 
+  /* Collapsed agent rail hover wave: accent and scale glide through a few
+     neighbours as the pointer moves, rather than lighting one glyph at a time. */
+  .agent-rail-glyph {
+    transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+  .agent-rail-glyph-color {
+    transition: opacity 300ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: opacity;
+  }
+  @keyframes agent-rail-name-in {
+    from { opacity: 0; transform: translate(-6px, -50%); }
+    to   { opacity: 1; transform: translate(0, -50%); }
+  }
+  .agent-rail-name {
+    animation: agent-rail-name-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .agent-rail-glyph,
+    .agent-rail-glyph-color {
+      transition: none;
+    }
+    .agent-rail-name {
+      animation: none;
+    }
+  }
+
+  /* Agent rail glyphs: mostly white at rest, with each glyph quietly surfacing
+     its own accent on an individually staggered, slow cycle. */
+  @keyframes agent-glyph-color-pulse {
+    0%, 56%, 100% { color: var(--agent-glyph-rest); }
+    64%, 76%      { color: var(--agent-glyph-accent, var(--agent-glyph-rest)); }
+    86%           { color: var(--agent-glyph-rest); }
+  }
+  .agent-glyph-pulse {
+    --agent-glyph-rest: rgba(255, 255, 255, 0.9);
+    color: var(--agent-glyph-rest);
+    animation: agent-glyph-color-pulse 22s ease-in-out infinite;
+    animation-delay: var(--agent-glyph-delay, 0s);
+    will-change: color;
+  }
+  .light-theme .agent-glyph-pulse {
+    --agent-glyph-rest: rgba(55, 65, 81, 0.9);
+  }
+
   /* First-run tool-shelf tour: pulse the re-open handle after the shelf slides
      away so the collapsed affordance is easy to find again. Uses outline/filter
      because the handle carries inline border and box-shadow chrome. */
@@ -716,6 +761,7 @@
     .command-status-dot,
     .command-caret,
     .animate-thinking-red-text,
+    .agent-glyph-pulse,
     .quick-thought-drift,
     .scout-scene-running .scout-terrain-far,
     .scout-scene-running .scout-terrain-near,

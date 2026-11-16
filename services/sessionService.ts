@@ -15,6 +15,7 @@ import { SessionState, SessionFile, AgentType, SessionSaveOptions } from '../typ
 import {
   createSessionZip as createCanonicalSessionZip,
   generateSessionFileName as generateCanonicalSessionFileName,
+  type TrainingAsset,
 } from '../utils/sessionZip';
 import {
   COMPATIBLE_VERSIONS as DEFAULT_COMPATIBLE_VERSIONS,
@@ -35,11 +36,13 @@ export const COMPATIBLE_VERSIONS = [
  */
 export const createSessionZip = async (
   sessionState: Omit<SessionState, 'fileManagerChatHistory' | 'textEditorChatHistory'>,
-  filesToInclude: (SessionFile | null | undefined)[]
+  filesToInclude: (SessionFile | null | undefined)[],
+  trainingAssets: TrainingAsset[] = []
 ): Promise<Blob> => {
   return createCanonicalSessionZip(
     sessionState as SessionState,
-    filesToInclude.filter(Boolean) as SessionFile[]
+    filesToInclude.filter(Boolean) as SessionFile[],
+    trainingAssets
   );
 };
 
@@ -121,6 +124,8 @@ export const needsVersionMigration = (version: string | undefined): boolean => {
 export const extractFilesFromZip = async (arrayBuffer: ArrayBuffer): Promise<{
   sessionState: SessionState;
   files: Map<string, string>;
+  /** Raw `training/**` entries, kept separate so they are never project files. */
+  training: Map<string, Blob>;
 }> => {
   const zip = await JSZip.loadAsync(arrayBuffer);
   const manifestFile = zip.file('manifest.json');
@@ -138,10 +143,17 @@ export const extractFilesFromZip = async (arrayBuffer: ArrayBuffer): Promise<{
   const sessionState = normalizeLoadedSession(parsedSessionState);
 
   // Extract files from both legacy files/ directory and canonical root layout.
+  // Training assets are returned separately and never treated as project files.
   const files = new Map<string, string>();
+  const training = new Map<string, Blob>();
 
   for (const [filePath, file] of Object.entries(zip.files)) {
     if (file.dir || filePath === 'manifest.json') continue;
+
+    if (filePath.startsWith('training/')) {
+      training.set(filePath, await file.async('blob'));
+      continue;
+    }
 
     const isLegacyFolderFile = filePath.startsWith('files/');
     const isRootFile = !filePath.includes('/');
@@ -154,7 +166,7 @@ export const extractFilesFromZip = async (arrayBuffer: ArrayBuffer): Promise<{
     }
   }
 
-  return { sessionState, files };
+  return { sessionState, files, training };
 };
 
 /**

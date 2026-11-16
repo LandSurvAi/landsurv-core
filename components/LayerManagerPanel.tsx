@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
     type PointList,
     type WmsService,
@@ -6,7 +6,7 @@ import {
     type OfflineMapArea,
     type TinSurface,
 } from '../types.ts';
-import { LayersIcon, ChevronDownIcon, ChevronUpIcon, EyeIcon, EyeSlashIcon } from './icons.tsx';
+import { LayersIcon, ChevronDownIcon } from './icons.tsx';
 
 /** Layer entry shown in the dynamic "CAD Layers" section */
 export interface CadLayerEntry {
@@ -61,43 +61,154 @@ interface LayerManagerPanelProps {
     hideHeader?: boolean;
 }
 
-const CollapsibleSection: React.FC<{ title: string; badge?: number; children: React.ReactNode }> = ({ title, badge, children }) => {
+const panelRowClass =
+    'group flex items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.025] px-2.5 py-2 transition-colors hover:border-white/[0.12] hover:bg-white/[0.045] light-theme:border-gray-200 light-theme:bg-gray-50 light-theme:hover:border-gray-300 light-theme:hover:bg-gray-100';
+
+const VisibilitySwitch: React.FC<{
+    label: string;
+    isVisible: boolean;
+    onToggle: () => void;
+}> = ({ label, isVisible, onToggle }) => (
+    <button
+        type="button"
+        role="switch"
+        aria-checked={isVisible}
+        aria-label={`${label} visibility`}
+        title={isVisible ? `Hide ${label}` : `Show ${label}`}
+        onClick={event => {
+            event.stopPropagation();
+            onToggle();
+        }}
+        className={`relative inline-flex h-[18px] w-[32px] shrink-0 items-center rounded-full border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/50 ${
+            isVisible
+                ? 'border-cyan-300/40 bg-cyan-400/25'
+                : 'border-white/[0.10] bg-white/[0.05] light-theme:border-gray-300 light-theme:bg-gray-200'
+        }`}
+    >
+        <span
+            aria-hidden="true"
+            className={`pointer-events-none block h-3 w-3 rounded-full transition-transform duration-200 ${
+                isVisible
+                    ? 'translate-x-[15px] bg-cyan-200 shadow-[0_0_8px_rgba(34,211,238,0.65)]'
+                    : 'translate-x-[3px] bg-slate-500 light-theme:bg-gray-500'
+            }`}
+        />
+    </button>
+);
+
+const ColorControl: React.FC<{
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+}> = ({ label, value, onChange }) => (
+    <label
+        className="relative h-5 w-5 shrink-0 cursor-pointer overflow-hidden rounded-md border border-white/[0.18] shadow-inner light-theme:border-gray-300"
+        title={label}
+    >
+        <span aria-hidden="true" className="absolute inset-0" style={{ backgroundColor: value }} />
+        <input
+            type="color"
+            value={value}
+            onChange={event => onChange(event.target.value)}
+            aria-label={label}
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        />
+    </label>
+);
+
+const CollapsibleSection: React.FC<{
+    title: string;
+    badge?: number;
+    hint?: string;
+    children: React.ReactNode;
+}> = ({ title, badge, hint, children }) => {
     const [isOpen, setIsOpen] = useState(true);
     return (
-        <div className="bg-gray-800/50 rounded-lg border border-gray-700 light-theme:bg-gray-100/50 light-theme:border-gray-300">
+        <section className="overflow-hidden rounded-xl border border-white/[0.07] bg-white/[0.018] light-theme:border-gray-200 light-theme:bg-white">
             <button
-                className="w-full flex justify-between items-center p-3 text-left"
-                onClick={() => setIsOpen(!isOpen)}
+                type="button"
+                aria-expanded={isOpen}
+                onClick={() => setIsOpen(open => !open)}
+                className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left transition-colors hover:bg-white/[0.025] light-theme:hover:bg-gray-50"
             >
-                <h4 className="font-semibold text-gray-200 light-theme:text-gray-800 flex items-center gap-2">
-                    {title}
+                <span className="flex min-w-0 items-center gap-2">
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400/80 shadow-[0_0_8px_rgba(34,211,238,0.45)]" />
+                    <span className="truncate text-[10px] font-bold uppercase tracking-[0.14em] text-slate-300 light-theme:text-gray-700">
+                        {title}
+                    </span>
                     {badge !== undefined && (
-                        <span className="text-xs font-normal bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded-full">{badge}</span>
+                        <span className="rounded-full border border-white/[0.08] bg-black/20 px-1.5 py-0.5 font-mono text-[8.5px] font-semibold text-slate-500 light-theme:border-gray-200 light-theme:bg-gray-100 light-theme:text-gray-500">
+                            {badge}
+                        </span>
                     )}
-                </h4>
-                {isOpen ? <ChevronUpIcon className="w-5 h-5 text-gray-400" /> : <ChevronDownIcon className="w-5 h-5 text-gray-400" />}
+                </span>
+                <ChevronDownIcon
+                    className={`h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform duration-200 ${isOpen ? '' : '-rotate-90'}`}
+                />
             </button>
             {isOpen && (
-                <div className="p-3 border-t border-gray-700/50 space-y-2 light-theme:border-gray-300/50">
+                <div className="space-y-1.5 border-t border-white/[0.06] p-2 light-theme:border-gray-200">
+                    {hint && (
+                        <p className="px-0.5 pb-0.5 text-[9px] leading-snug text-slate-500 light-theme:text-gray-500">
+                            {hint}
+                        </p>
+                    )}
                     {children}
                 </div>
             )}
-        </div>
+        </section>
     );
 };
 
-const LayerToggle: React.FC<{ label: string; sublabel?: string; isVisible: boolean; onToggle: () => void; children?: React.ReactNode }> = ({ label, sublabel, isVisible, onToggle, children }) => (
-    <div className="flex items-center justify-between p-2 bg-gray-700/40 rounded-md hover:bg-gray-700/60 light-theme:bg-gray-200/40 light-theme:hover:bg-gray-200/60">
-        <div className="flex flex-col min-w-0 mr-2">
-            <span className="text-sm truncate font-mono" title={label}>{label}</span>
-            {sublabel && <span className="text-xs text-gray-500 truncate">{sublabel}</span>}
+const LayerToggle: React.FC<{
+    label: string;
+    sublabel?: string;
+    isVisible: boolean;
+    onToggle: () => void;
+    children?: React.ReactNode;
+}> = ({ label, sublabel, isVisible, onToggle, children }) => (
+    <div className={`${panelRowClass} ${isVisible ? '' : 'opacity-60'}`}>
+        <div className="min-w-0 flex-1">
+            <div
+                className={`truncate text-[11px] font-medium ${
+                    isVisible
+                        ? 'text-slate-200 light-theme:text-gray-700'
+                        : 'text-slate-500 line-through light-theme:text-gray-400'
+                }`}
+                title={label}
+            >
+                {label}
+            </div>
+            {sublabel && (
+                <div className="mt-0.5 truncate text-[9px] text-slate-500 light-theme:text-gray-500">
+                    {sublabel}
+                </div>
+            )}
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-            {children}
-            <button onClick={onToggle} className="p-1.5 rounded-full" title={isVisible ? 'Hide Layer' : 'Show Layer'}>
-                {isVisible ? <EyeIcon className="w-5 h-5 text-yellow-400" /> : <EyeSlashIcon className="w-5 h-5 text-gray-500" />}
-            </button>
+        {children}
+        <VisibilitySwitch label={label} isVisible={isVisible} onToggle={onToggle} />
+    </div>
+);
+
+const PointAttributeRow: React.FC<{
+    label: string;
+    hint: string;
+    color: string;
+    isVisible: boolean;
+    onToggle: () => void;
+    onColorChange: (color: string) => void;
+}> = ({ label, hint, color, isVisible, onToggle, onColorChange }) => (
+    <div className={`${panelRowClass} ${isVisible ? '' : 'opacity-60'}`}>
+        <ColorControl label={`Color for ${label}`} value={color} onChange={onColorChange} />
+        <div className="min-w-0 flex-1">
+            <div className="truncate text-[11px] font-medium text-slate-200 light-theme:text-gray-700">
+                {label}
+            </div>
+            <div className="mt-0.5 truncate text-[9px] text-slate-500 light-theme:text-gray-500">
+                {isVisible ? hint : 'Hidden on canvas'}
+            </div>
         </div>
+        <VisibilitySwitch label={label} isVisible={isVisible} onToggle={onToggle} />
     </div>
 );
 
@@ -167,89 +278,115 @@ const LayerManagerPanel: React.FC<LayerManagerPanelProps> = (props) => {
         return Array.from(names).sort();
     }, [cadLinetypeOptions, cadLayerLinetypes]);
 
+    const hasMapOverlays = offlineMapAreas.length > 0 || activeWmsLayers.length > 0;
+
     return (
-        <div className="w-full h-full bg-gray-900 flex flex-col rounded-md overflow-hidden light-theme:bg-white">
+        <div className="flex h-full w-full flex-col overflow-hidden bg-[#0a0f16] text-slate-200 light-theme:bg-white light-theme:text-gray-700">
             {!hideHeader && (
-                <header className="flex-shrink-0 p-4 bg-gray-800/40 backdrop-blur border-b border-gray-700/30 light-theme:bg-gray-50/40 light-theme:border-gray-300/30">
-                    <h3 className="text-xl font-semibold text-gray-300 flex items-center gap-2 light-theme:text-gray-700">
-                        <LayersIcon className="w-6 h-6 text-cyan-400" />
-                        Data Visibility
-                    </h3>
-                    <p className="text-sm text-gray-400 mt-1">Control visibility of canvas layers, data, and overlays.</p>
+                <header className="flex shrink-0 items-start gap-2.5 border-b border-white/[0.07] bg-gradient-to-br from-cyan-400/[0.08] via-transparent to-transparent px-3 py-3 light-theme:border-gray-200">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-cyan-300/25 bg-cyan-400/10 text-cyan-200">
+                        <LayersIcon className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                            <h3 className="truncate text-sm font-semibold text-slate-100 light-theme:text-gray-800">
+                                Data Visibility
+                            </h3>
+                            <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-[0.12em] text-cyan-200">
+                                A2UI
+                            </span>
+                        </div>
+                        <p className="mt-0.5 text-[9.5px] text-slate-500 light-theme:text-gray-500">
+                            Canvas layers, point labels &amp; overlays in one live surface.
+                        </p>
+                    </div>
                 </header>
             )}
 
-            <div className="flex-grow overflow-auto p-4 space-y-4">
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-2.5 [scrollbar-color:rgba(34,211,238,0.28)_transparent] [scrollbar-width:thin]">
 
                 {/* ── CAD Layers (SSOT from CAD Manager) ── */}
                 <CollapsibleSection title="CAD Layers" badge={cadLayerCount}>
                     {cadLayerCount === 0 ? (
-                        <p className="text-xs text-gray-500 italic px-1">
+                        <p className="rounded-lg border border-dashed border-white/[0.08] bg-black/10 px-2.5 py-3 text-[9.5px] leading-snug text-slate-500 light-theme:border-gray-300 light-theme:bg-gray-50">
                             No CAD standard loaded. Upload a standard in CAD Manager to see layer controls here.
                             Default layers appear automatically as agents generate geometry.
                         </p>
                     ) : null}
                     {effectiveCadLayers.map(layer => {
                         const isVisible = cadLayerVisibility[layer.name] !== false;
-                        const colorOverride = cadLayerColors[layer.name] || BUILTIN_LAYER_COLORS[layer.name];
+                        const colorOverride = cadLayerColors[layer.name] || BUILTIN_LAYER_COLORS[layer.name] || '#94a3b8';
                         const lineType = (cadLayerLinetypes[layer.name] || 'CONTINUOUS').toUpperCase();
                         const badges: string[] = [];
                         if (layer.isPointLayer) badges.push('PT');
                         if (layer.isLineLayer) badges.push('LN');
                         return (
-                            <div key={layer.name}
-                                className="flex items-center justify-between p-2 bg-gray-700/40 rounded-md hover:bg-gray-700/60 light-theme:bg-gray-200/40"
+                            <div
+                                key={layer.name}
+                                className={`rounded-lg border border-white/[0.06] bg-white/[0.025] px-2 py-1.5 transition-colors hover:border-white/[0.12] hover:bg-white/[0.045] light-theme:border-gray-200 light-theme:bg-gray-50 light-theme:hover:bg-gray-100 ${isVisible ? '' : 'opacity-60'}`}
                             >
-                                <div className="flex flex-col min-w-0 mr-2 flex-1">
-                                    <div className="flex items-center gap-1.5">
-                                        <span className={`text-sm font-mono truncate ${isVisible ? 'text-gray-200' : 'text-gray-500 line-through'}`} title={layer.name}>
-                                            {layer.name}
+                                <div className="flex items-center gap-2">
+                                    <span
+                                        aria-hidden="true"
+                                        className="h-2 w-2 shrink-0 rounded-full ring-1 ring-white/20"
+                                        style={{ backgroundColor: colorOverride }}
+                                    />
+                                    <span
+                                        className={`min-w-0 flex-1 truncate font-mono text-[10.5px] ${
+                                            isVisible
+                                                ? 'text-slate-200 light-theme:text-gray-700'
+                                                : 'text-slate-500 line-through light-theme:text-gray-400'
+                                        }`}
+                                        title={layer.name}
+                                    >
+                                        {layer.name}
+                                    </span>
+                                    {badges.map(badge => (
+                                        <span
+                                            key={badge}
+                                            className="shrink-0 rounded border border-white/[0.08] bg-black/20 px-1 py-0.5 font-mono text-[7.5px] font-bold text-slate-400 light-theme:border-gray-200 light-theme:bg-gray-100 light-theme:text-gray-500"
+                                        >
+                                            {badge}
                                         </span>
-                                        {badges.map(b => (
-                                            <span key={b} className="text-xs bg-gray-600 text-gray-300 px-1 rounded shrink-0">{b}</span>
-                                        ))}
-                                    </div>
-                                    {layer.description && (
-                                        <span className="text-xs text-gray-500 truncate">{layer.description}</span>
-                                    )}
+                                    ))}
+                                    <VisibilitySwitch
+                                        label={layer.name}
+                                        isVisible={isVisible}
+                                        onToggle={() => onToggleCadLayer?.(layer.name)}
+                                    />
                                 </div>
-                                <div className="flex items-center gap-2 flex-shrink-0">
+                                <div className="mt-1.5 flex items-center gap-1.5 pl-4">
+                                    {layer.description ? (
+                                        <span className="min-w-0 flex-1 truncate text-[8.5px] text-slate-500 light-theme:text-gray-500" title={layer.description}>
+                                            {layer.description}
+                                        </span>
+                                    ) : (
+                                        <span className="min-w-0 flex-1" />
+                                    )}
                                     {onCadLayerColorChange && (
-                                        <input
-                                            type="color"
-                                            value={colorOverride || '#ffffff'}
-                                            onChange={e => onCadLayerColorChange(layer.name, e.target.value)}
-                                            className="w-6 h-6 bg-transparent border-none cursor-pointer rounded"
-                                            aria-label={`Color for ${layer.name}`}
-                                            title={`Layer color for ${layer.name}`}
+                                        <ColorControl
+                                            label={`Color for ${layer.name}`}
+                                            value={colorOverride}
+                                            onChange={color => onCadLayerColorChange(layer.name, color)}
                                         />
                                     )}
                                     {onCadLayerLinetypeChange ? (
                                         <select
                                             value={lineType}
-                                            onChange={e => onCadLayerLinetypeChange(layer.name, e.target.value)}
-                                            className="w-[92px] shrink-0 rounded border border-gray-600 bg-gray-800 px-1.5 py-1 font-mono text-[10px] text-cyan-200 focus:border-cyan-500 focus:outline-none"
+                                            onChange={event => onCadLayerLinetypeChange(layer.name, event.target.value)}
+                                            className="h-5 max-w-[96px] shrink-0 rounded-md border border-white/[0.09] bg-black/25 px-1 font-mono text-[8.5px] text-cyan-200 outline-none transition-colors focus:border-cyan-300/50 light-theme:border-gray-300 light-theme:bg-white light-theme:text-cyan-700"
                                             aria-label={`Linetype for ${layer.name}`}
                                             title={`Layer linetype for ${layer.name}`}
                                         >
                                             {cadLinetypeNames.map(name => (
-                                                <option key={name} value={name}>{name}</option>
+                                                <option key={name} value={name} className="bg-[#0a0f16]">{name}</option>
                                             ))}
                                         </select>
                                     ) : (
-                                        <span className="max-w-[92px] truncate font-mono text-[10px] text-gray-400" title={lineType}>
+                                        <span className="max-w-[96px] shrink-0 truncate rounded-md border border-white/[0.06] bg-black/15 px-1.5 py-0.5 font-mono text-[8.5px] text-slate-500 light-theme:border-gray-200 light-theme:bg-gray-100 light-theme:text-gray-500" title={lineType}>
                                             {lineType}
                                         </span>
                                     )}
-                                    <button
-                                        onClick={() => onToggleCadLayer?.(layer.name)}
-                                        className="p-1.5 rounded-full"
-                                        title={isVisible ? `Hide ${layer.name}` : `Show ${layer.name}`}
-                                    >
-                                        {isVisible
-                                            ? <EyeIcon className="w-5 h-5 text-yellow-400" />
-                                            : <EyeSlashIcon className="w-5 h-5 text-gray-500" />}
-                                    </button>
                                 </div>
                             </div>
                         );
@@ -259,21 +396,21 @@ const LayerManagerPanel: React.FC<LayerManagerPanelProps> = (props) => {
                 {/* ── Inclusion Boundaries (named closed inclusion polylines) ── */}
                 <CollapsibleSection title="Inclusion Boundaries" badge={inclusionBoundaries.length}>
                     {inclusionBoundaries.length === 0 && (
-                        <p className="text-xs text-gray-500 italic px-1">
+                        <p className="px-0.5 py-1 text-[9.5px] italic leading-snug text-slate-500 light-theme:text-gray-500">
                             No inclusion boundaries yet. Run a shrinkwrap, draw an inclusion polyline,
                             or generate one in the Boundary Editor.
                         </p>
                     )}
-                    {inclusionBoundaries.map(b => {
-                        const isVisible = inclusionBoundaryVisibility[b.polylineId] !== false;
-                        const segs = inclusionBoundarySegmentCounts[b.polylineId];
+                    {inclusionBoundaries.map(boundary => {
+                        const isVisible = inclusionBoundaryVisibility[boundary.polylineId] !== false;
+                        const segments = inclusionBoundarySegmentCounts[boundary.polylineId];
                         return (
                             <LayerToggle
-                                key={b.id}
-                                label={b.name}
-                                sublabel={segs !== undefined ? `${segs} segment${segs !== 1 ? 's' : ''}` : undefined}
+                                key={boundary.id}
+                                label={boundary.name}
+                                sublabel={segments !== undefined ? `${segments} segment${segments !== 1 ? 's' : ''}` : undefined}
                                 isVisible={isVisible}
-                                onToggle={() => onToggleInclusionBoundary?.(b.id)}
+                                onToggle={() => onToggleInclusionBoundary?.(boundary.id)}
                             />
                         );
                     })}
@@ -282,7 +419,9 @@ const LayerManagerPanel: React.FC<LayerManagerPanelProps> = (props) => {
                 {/* ── Point Data (point lists) ── */}
                 <CollapsibleSection title="Point Data" badge={pointLists.length}>
                     {pointLists.length === 0 && (
-                        <p className="text-xs text-gray-500 italic px-1">No point lists loaded.</p>
+                        <p className="px-0.5 py-1 text-[9.5px] italic leading-snug text-slate-500 light-theme:text-gray-500">
+                            No point lists loaded.
+                        </p>
                     )}
                     {pointLists.map(list => (
                         <LayerToggle
@@ -296,34 +435,34 @@ const LayerManagerPanel: React.FC<LayerManagerPanelProps> = (props) => {
                 </CollapsibleSection>
 
                 {/* ── Point Attributes ── */}
-                <CollapsibleSection title="Point Attributes">
-                    <div className="flex items-center justify-between p-2 bg-gray-700/40 rounded-md hover:bg-gray-700/60 light-theme:bg-gray-200/40 light-theme:hover:bg-gray-200/60">
-                        <span className="text-sm">Point Number</span>
-                        <div className="flex items-center gap-2">
-                            <input type="color" value={pointLayers.pointNumber.color} onChange={(e) => onLayerColorChange('pointNumber', e.target.value)} className="w-6 h-6 bg-transparent border-none cursor-pointer" />
-                            <button onClick={() => onLayerToggle('pointNumber')} className="p-1.5 rounded-full" title={pointLayers.pointNumber.visible ? 'Hide' : 'Show'}>
-                                {pointLayers.pointNumber.visible ? <EyeIcon className="w-5 h-5 text-yellow-400" /> : <EyeSlashIcon className="w-5 h-5 text-gray-500" />}
-                            </button>
-                        </div>
-                    </div>
-                    <div className="flex items-center justify-between p-2 bg-gray-700/40 rounded-md hover:bg-gray-700/60 light-theme:bg-gray-200/40 light-theme:hover:bg-gray-200/60">
-                        <span className="text-sm">Elevation</span>
-                        <div className="flex items-center gap-2">
-                            <input type="color" value={pointLayers.elevation.color} onChange={(e) => onLayerColorChange('elevation', e.target.value)} className="w-6 h-6 bg-transparent border-none cursor-pointer" />
-                            <button onClick={() => onLayerToggle('elevation')} className="p-1.5 rounded-full" title={pointLayers.elevation.visible ? 'Hide' : 'Show'}>
-                                {pointLayers.elevation.visible ? <EyeIcon className="w-5 h-5 text-yellow-400" /> : <EyeSlashIcon className="w-5 h-5 text-gray-500" />}
-                            </button>
-                        </div>
-                    </div>
-                    <div className="flex items-center justify-between p-2 bg-gray-700/40 rounded-md hover:bg-gray-700/60 light-theme:bg-gray-200/40 light-theme:hover:bg-gray-200/60">
-                        <span className="text-sm">Description</span>
-                        <div className="flex items-center gap-2">
-                            <input type="color" value={pointLayers.description.color} onChange={(e) => onLayerColorChange('description', e.target.value)} className="w-6 h-6 bg-transparent border-none cursor-pointer" />
-                            <button onClick={() => onLayerToggle('description')} className="p-1.5 rounded-full" title={pointLayers.description.visible ? 'Hide' : 'Show'}>
-                                {pointLayers.description.visible ? <EyeIcon className="w-5 h-5 text-yellow-400" /> : <EyeSlashIcon className="w-5 h-5 text-gray-500" />}
-                            </button>
-                        </div>
-                    </div>
+                <CollapsibleSection
+                    title="Point Attributes"
+                    hint="Global gate for every point style. A style can hide more labels, but it cannot force one back on here."
+                >
+                    <PointAttributeRow
+                        label="Point number"
+                        hint="PNEZD point ID"
+                        color={pointLayers.pointNumber.color}
+                        isVisible={pointLayers.pointNumber.visible}
+                        onToggle={() => onLayerToggle('pointNumber')}
+                        onColorChange={color => onLayerColorChange('pointNumber', color)}
+                    />
+                    <PointAttributeRow
+                        label="Elevation"
+                        hint="Z value"
+                        color={pointLayers.elevation.color}
+                        isVisible={pointLayers.elevation.visible}
+                        onToggle={() => onLayerToggle('elevation')}
+                        onColorChange={color => onLayerColorChange('elevation', color)}
+                    />
+                    <PointAttributeRow
+                        label="Description"
+                        hint="Field code"
+                        color={pointLayers.description.color}
+                        isVisible={pointLayers.description.visible}
+                        onToggle={() => onLayerToggle('description')}
+                        onColorChange={color => onLayerColorChange('description', color)}
+                    />
                 </CollapsibleSection>
 
                 {/* ── Line Work (global toggles) ── */}
@@ -335,13 +474,15 @@ const LayerManagerPanel: React.FC<LayerManagerPanelProps> = (props) => {
                 {/* ── TIN Surfaces ── */}
                 <CollapsibleSection title="TIN Surfaces" badge={tinSurfaces.length}>
                     {tinSurfaces.length === 0 && (
-                        <p className="text-xs text-gray-500 italic px-1">No imported TIN surfaces yet.</p>
+                        <p className="px-0.5 py-1 text-[9.5px] italic leading-snug text-slate-500 light-theme:text-gray-500">
+                            No imported TIN surfaces yet.
+                        </p>
                     )}
                     {tinSurfaces.map(surface => (
                         <LayerToggle
                             key={surface.id}
                             label={surface.name}
-                            sublabel={`${surface.vertices.length} vertices · ${surface.triangles.length} triangles`}
+                            sublabel={`${surface.vertices.length} vertices / ${surface.triangles.length} triangles`}
                             isVisible={!surface.hidden}
                             onToggle={() => onToggleTinSurfaceVisibility?.(surface.id)}
                         />
@@ -350,6 +491,11 @@ const LayerManagerPanel: React.FC<LayerManagerPanelProps> = (props) => {
 
                 {/* ── Map Overlays ── */}
                 <CollapsibleSection title="Map Overlays">
+                    {!hasMapOverlays && (
+                        <p className="px-0.5 py-1 text-[9.5px] italic leading-snug text-slate-500 light-theme:text-gray-500">
+                            No WMS or offline map overlays active.
+                        </p>
+                    )}
                     {offlineMapAreas.map(area => (
                         <LayerToggle
                             key={area.id}
@@ -359,8 +505,8 @@ const LayerManagerPanel: React.FC<LayerManagerPanelProps> = (props) => {
                         />
                     ))}
                     {activeWmsLayers.map(layer => {
-                        const service = wmsServices.find(s => s.url === layer.serviceUrl);
-                        const layerInfo = service?.layers.find(l => l.name === layer.layerName);
+                        const service = wmsServices.find(candidate => candidate.url === layer.serviceUrl);
+                        const layerInfo = service?.layers.find(candidate => candidate.name === layer.layerName);
                         return (
                             <LayerToggle
                                 key={`${layer.serviceUrl}-${layer.layerName}`}

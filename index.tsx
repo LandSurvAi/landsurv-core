@@ -2,8 +2,6 @@
 // Do not modify this file unless you are changing the root component or adding a top-level provider.
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-// FIX: Changed default import to a named import to match the updated export style of App.tsx.
-import { App } from './App.tsx';
 // Initialize error logging system
 import { errorLogger } from './utils/errorLogger';
 // World-wide settings (announcement banner, maintenance mode, retired agents).
@@ -135,18 +133,13 @@ const registerServiceWorker = () => {
   });
 };
 
-registerServiceWorker();
-registerPwaLaunchQueue();
-
-// Initialize offline queue for request replay on reconnect
-initializeOfflineQueue();
-
 // APP_VERSION is injected at build time by Vite (see vite.config.ts)
 const APP_VERSION = (import.meta as any).env.VITE_APP_VERSION || 'dev';
 const STORED_VERSION = localStorage.getItem('app_version');
+const replayId = new URLSearchParams(window.location.search).get('replay');
 
-// Force cache clear if version changed
-if (STORED_VERSION !== APP_VERSION) {
+// Force cache clear if version changed (live app only; replay is offline).
+if (!replayId && STORED_VERSION !== APP_VERSION) {
   console.log(`Version changed from ${STORED_VERSION} to ${APP_VERSION}. Clearing caches...`);
   
   // Clear all caches
@@ -172,16 +165,6 @@ if (!rootElement) {
 }
 
 const root = ReactDOM.createRoot(rootElement);
-// Kick off the world-wide settings poll before first render so banners /
-// maintenance mode / retired-agents updates land as soon as possible.
-startGlobalSettingsPolling();
-root.render(
-  <React.StrictMode>
-    <PwaLifecycleOverlay />
-    <GlobalSettingsOverlay />
-    <App />
-  </React.StrictMode>
-);
 
 // Report the page load so the DevOps console can chart front-end traffic.  The
 // static host has no request counters of its own, so the shell is the sensor.
@@ -194,10 +177,62 @@ const reportPageLoad = () => {
   }
   void fetch(url, { method: 'POST', keepalive: true }).catch(() => {});
 };
-reportPageLoad();
 
-// Startup fail-safe: never let the static splash block the UI forever.
-requestAnimationFrame(() => {
-  setTimeout(clearInitialLoader, 150);
-});
+// Startup fail-safe: never let the static splash block the UI forever. The
+// live app clears it as soon as the lazily loaded app has rendered; replay
+// clears it before mounting the isolated shell.
 setTimeout(clearInitialLoader, 4000);
+
+const bootLiveApp = async () => {
+  registerServiceWorker();
+  registerPwaLaunchQueue();
+
+  // Initialize offline queue for request replay on reconnect
+  initializeOfflineQueue();
+
+  // Kick off the world-wide settings poll before first render so banners /
+  // maintenance mode / retired-agents updates land as soon as possible.
+  startGlobalSettingsPolling();
+
+  // Load the live app only in live mode. Replay mode must not evaluate the
+  // full app/provider graph or any of its module-level integrations.
+  const { App } = await import('./App.tsx');
+
+  root.render(
+    <React.StrictMode>
+      <PwaLifecycleOverlay />
+      <GlobalSettingsOverlay />
+      <App />
+    </React.StrictMode>
+  );
+  clearInitialLoader();
+
+  reportPageLoad();
+};
+
+if (replayId) {
+  // Replay mode: no polling, offline queue, service worker, presence beacon, or
+  // live app providers. The replay module installs a zero-network guard once it
+  // has loaded, then reads the recorded bundle from IndexedDB.
+  clearInitialLoader();
+  void import('./components/replay/ReplayRoot.tsx')
+    .then(({ ReplayRoot }) => {
+      root.render(
+        <React.StrictMode>
+          <ReplayRoot recordingId={replayId} />
+        </React.StrictMode>
+      );
+    })
+    .catch((error) => {
+      console.error('[Replay] Failed to load the replay shell:', error);
+      rootElement.innerHTML = `
+        <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#020617;color:#e2e8f0;font-family:system-ui,sans-serif;padding:24px;text-align:center;">
+          <div style="max-width:420px;">
+            <h1 style="font-size:18px;color:#fda4af;">Training replay unavailable</h1>
+            <p style="font-size:13px;color:#94a3b8;margin-top:12px;">The replay shell could not be loaded. Open the .lsvz that contains this training and launch it again.</p>
+          </div>
+        </div>`;
+    });
+} else {
+  void bootLiveApp();
+}

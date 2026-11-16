@@ -52,9 +52,9 @@
   ],
   "shortcuts": [
     {
-      "name": "Raw Crawler",
+      "name": "Raw Replay",
       "short_name": "RAW",
-      "description": "Open the RAW Crawler workflow",
+      "description": "Replay a raw field survey in 3D",
       "url": "/?agent=raw"
     },
     {

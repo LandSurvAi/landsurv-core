@@ -117,6 +117,22 @@ const formatAgentSegment = (activeAgent: AgentType | undefined): string => {
   return sanitizeNameSegment(activeAgent || '');
 };
 
+export interface TrainingAsset {
+  /** Must live under training/<recordingId>/… inside the archive. */
+  path: string;
+  data: string | Blob | ArrayBuffer | Uint8Array;
+  base64?: boolean;
+}
+
+const TRAINING_PATH_PATTERN = /^training\/[a-z0-9_-]+\//i;
+
+const isSafeTrainingPath = (path: string): boolean =>
+  TRAINING_PATH_PATTERN.test(path)
+  && !path.includes('..')
+  && !path.startsWith('/')
+  && !path.endsWith('/')
+  && path !== 'manifest.json';
+
 /**
  * Creates a .lsvz ZIP file from session state and files.
  * This is a pure function that takes all data as parameters.
@@ -127,11 +143,13 @@ const formatAgentSegment = (activeAgent: AgentType | undefined): string => {
  *
  * @param sessionState - The complete session state object
  * @param files - Array of SessionFiles to include in the ZIP (rawFile, deedFile, etc.)
+ * @param trainingAssets - Optional embedded training bundle files (training/<id>/…)
  * @returns Promise<Blob> - The ZIP file blob
  */
 export const createSessionZip = async (
   sessionState: SessionState,
-  files: { name?: string; content?: string; fileData?: string }[]
+  files: { name?: string; content?: string; fileData?: string }[],
+  trainingAssets: TrainingAsset[] = []
 ): Promise<Blob> => {
   const zip = new JSZip();
 
@@ -166,6 +184,28 @@ export const createSessionZip = async (
       }
     } else if (typeof file.content === 'string') {
       zip.file(makeUniqueName(file.name, usedNames), file.content);
+    }
+  }
+
+  // Embedded training assets live under training/<recordingId>/. They are
+  // written after project files and never allowed to collide with or escape
+  // that reserved tree.
+  const usedTrainingPaths = new Set<string>();
+  for (const asset of Array.isArray(trainingAssets) ? trainingAssets : []) {
+    if (!asset || !isSafeTrainingPath(asset.path)) {
+      console.warn('[sessionZip] Skipping unsafe training asset path:', asset?.path);
+      continue;
+    }
+    if (usedTrainingPaths.has(asset.path) || usedNames.has(asset.path)) {
+      console.warn('[sessionZip] Skipping duplicate training asset path:', asset.path);
+      continue;
+    }
+    usedTrainingPaths.add(asset.path);
+    try {
+      zip.file(asset.path, asset.data as any, asset.base64 ? { base64: true } : undefined);
+    } catch (err) {
+      // One malformed training asset must not sink the project save.
+      console.warn('[sessionZip] Skipping unreadable training asset:', asset.path, err);
     }
   }
 

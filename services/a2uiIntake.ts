@@ -290,7 +290,7 @@ export function buildA2UIIntakeGreeting(
         'Welcome to the drawing canvas! Would you like to upload a field <strong>.RAW</strong> survey file for me to parse and plot, or load our example .RAW file to explore?';
       questionOptions = [
         'Yes, upload a .RAW file',
-        'Load an example .RAW file',
+        'Load an example raw file',
         'Continue on canvas',
       ];
       break;

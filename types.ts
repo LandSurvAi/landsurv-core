@@ -27,6 +27,8 @@ export enum MessageRole {
 // FUTURE GEMINI: This enum is the canonical list of all available AI agents.
 // When adding a new agent, you MUST add it here.
 export enum AgentType {
+  RAW_REPLAY = 'RAW_REPLAY',
+  /** @deprecated Migrated to RAW_REPLAY; kept only to decode old sessions. */
   RAW_CRAWLER = 'RAW_CRAWLER',
   VOICE_AGENT = 'VOICE_AGENT',
   CIVIL_DRAFTER = 'CIVIL_DRAFTER',
@@ -1149,6 +1151,16 @@ export interface SurveyLine {
   bfeDatum?: string;
   /** Pavement-marking metadata when this line is a road paint band. */
   roadPaint?: RoadPaintStripeMeta;
+  /**
+   * Projected sketch reference geometry. Visible and snappable, but immutable:
+   * trim, erase, move, and property edits must leave it untouched.
+   */
+  reference?: boolean;
+  /** Source metadata for a projected reference line. */
+  projectedFrom?: {
+    lineId?: string;
+    sketchId?: string;
+  };
 }
 
 /**
@@ -2239,6 +2251,8 @@ export interface Settings {
     northArrowPosition: 'left' | 'right';
     pointLabelingSettings: PointLabelingSettings;
     uncertaintySensitivity: 'low' | 'medium' | 'high' | 'strict';
+    /** Gemini 4 Argon reasoning: Fast by default, with High Thinking as an opt-in. */
+    argonReasoning?: 'fast' | 'high';
     /** Baseline / Stationing & CL auto-point and annotation preferences. */
     stationing?: StationingSettings;
   userApiKey?: string;
@@ -3583,6 +3597,29 @@ export interface RedlineResponseAdapter {
   build(run: RedlineRun, sourceFiles: SessionFile[]): Promise<RedlineResponsePackage>;
 }
 
+/**
+ * Embedded training recordings shipped inside a .lsvz archive.
+ * Additive: older archives omit it and still open normally.
+ */
+export interface EmbeddedTrainingIndex {
+  schemaVersion: 1;
+  recordings: Array<{
+    id: string;
+    title: string;
+    createdAt: string;
+    appVersion: string;
+    durationMs: number;
+    editedDurationMs: number;
+    status: 'draft' | 'edited' | 'exported' | 'linked';
+    hasVideo: boolean;
+    hasAudio: boolean;
+    manifestPath: string;
+    thumbnailPath?: string;
+    sourceProjectLabel?: string;
+  }>;
+  defaultRecordingId?: string;
+}
+
 export interface SessionState {
     version: string;
     savedAt: string;
@@ -3718,6 +3755,12 @@ export interface SessionState {
     /** Feature timeline + sketch grouping. Live snapshots are stripped; the
      *  archive stores one baseline snapshot and per-feature entity deltas. */
     timeline?: import('./utils/timeline/types').SerializedTimelineDocument;
+    /**
+     * Embedded training recordings (screen-captured sessions with annotations).
+     * The recording payload lives in `training/<id>/` entries inside the ZIP;
+     * this index only lists them so loading a project never parses a bundle.
+     */
+    training?: EmbeddedTrainingIndex;
     
     // FIX: Added gisFeatures to SessionState
     gisFeatures?: GisFeature[];

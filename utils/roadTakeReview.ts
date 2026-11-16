@@ -507,6 +507,20 @@ export function extractRoadGrounding(lines: DraftLineLike[]): RoadGrounding {
  * project frame. Read-only and best-effort: any failure returns an empty list so
  * the take review still runs on parcel/survey evidence.
  */
+const OSM_FAILURE_TTL_MS = 60_000;
+const OSM_LOOKUP_TIMEOUT_MS = 5_000;
+const osmFailureCache = new Map<string, number>();
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    promise.then(
+      value => { clearTimeout(timer); resolve(value); },
+      error => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 export async function fetchOsmGroundingWays(
   bounds: SynthesisBounds,
   projectEpsg?: number | null,
@@ -515,6 +529,11 @@ export async function fetchOsmGroundingWays(
   const spanE = bounds.maxE - bounds.minE;
   const spanN = bounds.maxN - bounds.minN;
   if (!(spanE > 0) || !(spanN > 0)) return [];
+
+  // A down/slow Overpass proxy must not tax every draw in the same area.
+  const failureKey = `${projectEpsg ?? 4326}:${bounds.minE.toFixed(1)}:${bounds.minN.toFixed(1)}:${bounds.maxE.toFixed(1)}:${bounds.maxN.toFixed(1)}`;
+  const failedAt = osmFailureCache.get(failureKey);
+  if (failedAt && Date.now() - failedAt < OSM_FAILURE_TTL_MS) return [];
 
   try {
     let bbox: [number, number, number, number];
@@ -537,7 +556,7 @@ export async function fetchOsmGroundingWays(
     }
 
     const { fetchStreetWays } = await import('../services/streetNameService.ts');
-    const ways = await fetchStreetWays(bbox);
+    const ways = await withTimeout(fetchStreetWays(bbox), OSM_LOOKUP_TIMEOUT_MS, 'OSM grounding');
     const project = !projectEpsg || projectEpsg === 4326
       ? (lon: number, lat: number) => ({ easting: lon, northing: lat })
       : await (async () => {
@@ -560,6 +579,8 @@ export async function fetchOsmGroundingWays(
     }
     return result;
   } catch {
+    if (osmFailureCache.size > 24) osmFailureCache.clear();
+    osmFailureCache.set(failureKey, Date.now());
     return [];
   }
 }

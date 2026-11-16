@@ -18,8 +18,14 @@ const WORKFLOW_ROUTES: Record<string, WorkflowRoute> = {
   raw: {
     id: 'raw',
     path: '/raw',
-    name: 'Raw Crawler',
-    description: 'Raw data processing and coordinate extraction',
+    name: 'Raw Replay',
+    description: 'Replay a raw field survey in 3D with a deterministic summary',
+  },
+  rawreplay: {
+    id: 'rawreplay',
+    path: '/raw-replay',
+    name: 'Raw Replay',
+    description: 'Replay a raw field survey in 3D with a deterministic summary',
   },
   deed: {
     id: 'deed',

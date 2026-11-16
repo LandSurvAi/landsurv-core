@@ -16,6 +16,8 @@ import {
   EMPTY_CIVIL_DRAFTER_CONTEXT_VOLUME,
   loadCivilDrafterContextConfig,
   setCivilDrafterContextConfig,
+  SURVEYORS_EYE_RESOLUTION_LABELS,
+  type SurveyorsEyeResolution,
 } from '../services/civilDrafterContextConfig.ts';
 
 interface Props {
@@ -83,6 +85,43 @@ const SwitchRow: React.FC<{
   </div>
 );
 
+const NumberRow: React.FC<{
+  id: string;
+  label: string;
+  hint: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  suffix?: string;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+}> = ({ id, label, hint, value, min, max, step = 1, suffix, disabled, onChange }) => (
+  <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
+    <div className="flex items-center justify-between gap-3">
+      <label htmlFor={id} className="text-[11px] font-semibold text-slate-100">
+        {label}
+      </label>
+      <output htmlFor={id} className="font-mono text-[11px] text-fuchsia-300">
+        {value}{suffix ? ` ${suffix}` : ''}
+      </output>
+    </div>
+    <input
+      id={id}
+      type="range"
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      disabled={disabled}
+      aria-describedby={`${id}-hint`}
+      onChange={event => onChange(parseInt(event.target.value, 10))}
+      className="mt-2 w-full accent-fuchsia-400 disabled:opacity-40"
+    />
+    <p id={`${id}-hint`} className="mt-1 text-[10px] leading-snug text-slate-500">{hint}</p>
+  </div>
+);
+
 export const CivilDrafterContextPanel: React.FC<Props> = ({
   volume = EMPTY_CIVIL_DRAFTER_CONTEXT_VOLUME,
   modelName,
@@ -131,6 +170,15 @@ export const CivilDrafterContextPanel: React.FC<Props> = ({
   const pointDatabaseId = `${idPrefix}-point-database`;
   const visionId = `${idPrefix}-vision`;
   const autoResetId = `${idPrefix}-auto-reset`;
+  const eyeResolutionId = `${idPrefix}-eye-resolution`;
+  const corridorFramesId = `${idPrefix}-corridor-frames`;
+  const zoneFramesId = `${idPrefix}-zone-frames`;
+  const detailFramesId = `${idPrefix}-detail-frames`;
+  const maxRoadTurnsId = `${idPrefix}-max-road-turns`;
+  const lessonsId = `${idPrefix}-lessons`;
+  const parcelGroundingId = `${idPrefix}-parcel-grounding`;
+  const osmGroundingId = `${idPrefix}-osm-grounding`;
+  const synthesisQaId = `${idPrefix}-synthesis-qa`;
 
   return (
     <div data-testid="civil-drafter-context-surface" className="space-y-3 text-slate-200">
@@ -306,6 +354,125 @@ export const CivilDrafterContextPanel: React.FC<Props> = ({
           checked={config.attachVisionImagery}
           disabled={controlsDisabled}
           onChange={value => update('attachVisionImagery', value)}
+        />
+      </section>
+
+      <section aria-labelledby={`${idPrefix}-eye-heading`} className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <h3
+            id={`${idPrefix}-eye-heading`}
+            className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400"
+          >
+            Surveyor's Eye
+          </h3>
+          <span className="text-[9.5px] text-slate-500">Capture cost</span>
+        </div>
+
+        <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
+          <label htmlFor={eyeResolutionId} className="text-[11px] font-semibold text-slate-100">
+            Frame resolution
+          </label>
+          <select
+            id={eyeResolutionId}
+            value={config.surveyorsEyeResolution}
+            disabled={controlsDisabled}
+            onChange={event => update('surveyorsEyeResolution', event.target.value as SurveyorsEyeResolution)}
+            className="mt-2 w-full rounded-md border border-white/[0.12] bg-[#0b1220] px-2 py-1.5 text-[11px] text-slate-200 disabled:opacity-40"
+          >
+            {(Object.keys(SURVEYORS_EYE_RESOLUTION_LABELS) as SurveyorsEyeResolution[]).map(resolution => (
+              <option key={resolution} value={resolution}>{SURVEYORS_EYE_RESOLUTION_LABELS[resolution]}</option>
+            ))}
+          </select>
+          <p className="mt-1 text-[10px] leading-snug text-slate-500">
+            Higher resolution reads pavement edges better but multiplies capture time and image tokens.
+          </p>
+        </div>
+
+        <NumberRow
+          id={corridorFramesId}
+          label="Corridor frames"
+          hint="Overlapping road-run frames. Fewer frames is faster; 4 still covers the full shot run."
+          value={config.maxCorridorFrames}
+          min={2}
+          max={6}
+          disabled={controlsDisabled}
+          onChange={value => update('maxCorridorFrames', value)}
+        />
+        <NumberRow
+          id={zoneFramesId}
+          label="Zone frames"
+          hint="Density-grid close-ups. Set 0 to rely only on the overview and corridor sweep."
+          value={config.maxZoneFrames}
+          min={0}
+          max={6}
+          disabled={controlsDisabled}
+          onChange={value => update('maxZoneFrames', value)}
+        />
+        <NumberRow
+          id={detailFramesId}
+          label="Detail frames"
+          hint="Tight zooms on the busiest clusters. 0–1 is usually enough when corridor frames are on."
+          value={config.maxDetailFrames}
+          min={0}
+          max={4}
+          disabled={controlsDisabled}
+          onChange={value => update('maxDetailFrames', value)}
+        />
+      </section>
+
+      <section aria-labelledby={`${idPrefix}-drafting-heading`} className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <h3
+            id={`${idPrefix}-drafting-heading`}
+            className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400"
+          >
+            Drafting speed & checks
+          </h3>
+          <span className="text-[9.5px] text-slate-500">Per draw</span>
+        </div>
+
+        <NumberRow
+          id={maxRoadTurnsId}
+          label="Road acceptance turns"
+          hint="1 draws once. 3 adds a gate check and one confirmation redraw. 8 is the exhaustive audit."
+          value={config.maxRoadTurns}
+          min={1}
+          max={8}
+          suffix="turns"
+          disabled={controlsDisabled}
+          onChange={value => update('maxRoadTurns', value)}
+        />
+        <SwitchRow
+          id={lessonsId}
+          label="Use approved RAG lessons"
+          hint="Retrieves reviewed drafting guidance before the turn. Times out in 2.5 s and cools down after a failure."
+          checked={config.useDraftingLessons}
+          disabled={controlsDisabled}
+          onChange={value => update('useDraftingLessons', value)}
+        />
+        <SwitchRow
+          id={parcelGroundingId}
+          label="Auto-fetch parcel grounding"
+          hint="Pulls county frontage when a road/driveway turn has no parcel lines. Best-effort and cached per work area."
+          checked={config.autoParcelGrounding}
+          disabled={controlsDisabled}
+          onChange={value => update('autoParcelGrounding', value)}
+        />
+        <SwitchRow
+          id={osmGroundingId}
+          label="Auto-fetch OSM road grounding"
+          hint="Looks up existing street ways as a cross-check. A failure is cached for 60 s so it cannot slow every draw."
+          checked={config.autoOsmGrounding}
+          disabled={controlsDisabled}
+          onChange={value => update('autoOsmGrounding', value)}
+        />
+        <SwitchRow
+          id={synthesisQaId}
+          label="Run imagery synthesis QA"
+          hint="Re-checks committed road linework against background pixels. Turn off for the fastest raw draft."
+          checked={config.runSynthesisQa}
+          disabled={controlsDisabled}
+          onChange={value => update('runSynthesisQa', value)}
         />
       </section>
 

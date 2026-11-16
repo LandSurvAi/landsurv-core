@@ -40,7 +40,8 @@ export const isGrokModel = (model: string): boolean => /^grok-/i.test(model);
 export const AUTO_FAST_MODEL = 'gemini-3.5-flash-lite';
 /** Standard reasoning model for normal Auto routing and Gemini fallbacks. */
 export const DEFAULT_GEMINI_MODEL = 'gemini-4-hydrogen';
-/** Model pinned when the user selects the High Thinking command-bar mode. */
+/** Model pinned when the user selects the High Thinking command-bar mode.
+ *  Its own reasoning defaults to Fast; High Thinking is opt-in in Settings. */
 export const DEFAULT_HIGH_THINKING_GEMINI_MODEL = 'gemini-4-argon';
 export const DIRECT_FALLBACK_MODEL = 'gemini-2.5-flash';
 export const AUTO_HIGH_THINKING_MODELS = [DEFAULT_HIGH_THINKING_GEMINI_MODEL, DEFAULT_GEMINI_MODEL, 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5'] as const;
@@ -2577,12 +2578,17 @@ ${bearingDistancePreferenceInstruction()}`;
         // for the Civil Plan Expert. So we only apply this Gemini-3/4-safe default for
         // Gemini Vertex models; non-Gemini publishers get an empty config by default.
         const isArgonModel = modelForAgent === DEFAULT_HIGH_THINKING_GEMINI_MODEL;
-        // Hydrogen's Google default is already HIGH; applying MEDIUM here would
-        // quietly downgrade the model's default reasoning quality.
-        const isHighThinkingGemini4Model = isArgonModel || modelForAgent === DEFAULT_GEMINI_MODEL;
+        // Argon is opt-in reasoning: Fast (LOW) is the default, and only an
+        // explicit High Thinking choice raises it to HIGH. Hydrogen keeps its
+        // HIGH default because it is the standard reasoning model.
+        const argonThinkingLevel = settings.argonReasoning === 'high' ? 'HIGH' : 'LOW';
+        const isHydrogenModel = modelForAgent === DEFAULT_GEMINI_MODEL;
+        const gemini4ThinkingLevel = isArgonModel
+          ? argonThinkingLevel
+          : isHydrogenModel ? 'HIGH' : 'MEDIUM';
         let vertexGenerationConfig: Record<string, unknown> = isGeminiVertexModel
           ? {
-              thinkingConfig: { thinkingLevel: isHighThinkingGemini4Model ? 'HIGH' : 'MEDIUM' },
+              thinkingConfig: { thinkingLevel: gemini4ThinkingLevel },
               mediaResolution: 'MEDIA_RESOLUTION_MEDIUM',
               ...(isArgonModel ? { maxOutputTokens: 64000 } : {}),
             }
@@ -2607,7 +2613,7 @@ ${bearingDistancePreferenceInstruction()}`;
         if ((agentType === AgentType.CIVIL_DRAFTER || agentType === AgentType.ROADING_AGENT) && isGeminiVertexModel) {
             vertexGenerationConfig = {
                 ...vertexGenerationConfig,
-                thinkingConfig: { thinkingLevel: isHighThinkingGemini4Model ? 'HIGH' : 'MEDIUM' },
+                thinkingConfig: { thinkingLevel: gemini4ThinkingLevel },
                 maxOutputTokens: Math.max(
                     (vertexGenerationConfig.maxOutputTokens as number | undefined) ?? 0,
                     64000, // Gemini 3/4 hard cap

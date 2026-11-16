@@ -31,10 +31,10 @@ export const AGENT_WELCOME_PROFILES: Partial<Record<AgentType, AgentWelcomeProfi
     summary:
       'I keep your project moving across the full LandSurv.ai agent suite. Ask a question in plain language and I will handle the work or bring in the right specialist, with no hand-offs for you to manage. I also own project location: every uploaded point cluster is resolved to its state, county, and municipality and shared with every agent over CACP.',
   },
-  [AgentType.RAW_CRAWLER]: {
-    name: 'RAW Crawler',
+  [AgentType.RAW_REPLAY]: {
+    name: 'Raw Replay',
     summary:
-      'I parse field <strong>.RAW</strong> survey files, validate the observations, and plot the resulting geometry on the canvas.',
+      'I read raw field files, reconstruct the observation sequence, and replay the survey in true 3D with a deterministic summary. I do not recompute or adjust coordinates.',
   },
   [AgentType.DEED_READER]: {
     name: 'Boundary',

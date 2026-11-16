@@ -18,6 +18,71 @@ export interface CanvasLineworkContextOptions {
 
 type WorldPoint = { x: number; y: number };
 
+export interface EndpointLookupPoint {
+  easting: number;
+  northing: number;
+  elevation?: number;
+}
+
+export interface AnchoredLinework {
+  /** Lines with both endpoints resolved (ready for canvas rendering). */
+  lines: SurveyLine[];
+  /** Lines that still have no resolvable endpoint, with the reason attached. */
+  unresolved: SurveyLine[];
+  /** Number of lines that gained a stored coordinate from the point lookup. */
+  anchored: number;
+}
+
+/**
+ * Fill missing `fromPt`/`toPt` coordinates from the live point database.
+ *
+ * The canvas renders a line from its point references first. If a generated or
+ * renumbered point reference goes stale, the line keeps rendering only when its
+ * endpoints were stored on the entity. Stamping the coordinates at commit time
+ * is what prevents a freshly drafted driveway/road from vanishing the moment
+ * the point-renumbering pass settles.
+ */
+export function anchorLineEndpoints(
+  lines: SurveyLine[],
+  lookup: ReadonlyMap<string, EndpointLookupPoint>,
+): AnchoredLinework {
+  const anchoredLines: SurveyLine[] = [];
+  const unresolved: SurveyLine[] = [];
+  let anchored = 0;
+
+  for (const line of lines) {
+    if (!line) continue;
+    const resolve = (ref: string, stored: { x: number; y: number; z: number } | undefined) => {
+      if (stored && finiteNumber(stored.x) && finiteNumber(stored.y)) return stored;
+      const point = lookup.get(String(ref));
+      if (point && finiteNumber(point.easting) && finiteNumber(point.northing)) {
+        return { x: point.easting, y: point.northing, z: finiteNumber(point.elevation) ? point.elevation : 0 };
+      }
+      return null;
+    };
+
+    const circleCenter = line.isCircle && line.circleCenter
+      && finiteNumber(line.circleCenter.x) && finiteNumber(line.circleCenter.y)
+      ? { x: line.circleCenter.x, y: line.circleCenter.y, z: finiteNumber(line.circleCenter.z) ? line.circleCenter.z : 0 }
+      : null;
+
+    const fromPt = circleCenter ?? resolve(line.from, line.fromPt);
+    const toPt = circleCenter ?? resolve(line.to, line.toPt);
+    if (!fromPt || !toPt) {
+      unresolved.push(line);
+      continue;
+    }
+    if (!line.fromPt || !line.toPt) anchored += 1;
+    anchoredLines.push(
+      line.fromPt === fromPt && line.toPt === toPt
+        ? line
+        : { ...line, fromPt, toPt },
+    );
+  }
+
+  return { lines: anchoredLines, unresolved, anchored };
+}
+
 interface LineworkEntity {
   line: SurveyLine;
   from: WorldPoint | null;

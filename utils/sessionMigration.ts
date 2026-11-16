@@ -242,6 +242,8 @@ export const normalizeLoadedSession = (rawSession: Partial<SessionState>): Sessi
     knowledgeFacts: rawSession.knowledgeFacts || [],
     draftingStyleLibrary: rawSession.draftingStyleLibrary || [],
     cadManagerState: rawSession.cadManagerState,
+    // Embedded training is additive and must survive a load/save round-trip.
+    training: rawSession.training,
     soilMapUnits: rawSession.soilMapUnits || [],
     descriptionKeys: rawSession.descriptionKeys,
     keyframeCache: rawSession.keyframeCache || [],

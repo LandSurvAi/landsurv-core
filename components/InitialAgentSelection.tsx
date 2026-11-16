@@ -178,7 +178,7 @@ export const releaseStageLabels: Record<ReleaseStage, { short: string; full: str
 
 // Mapping from AgentType to SEO landing page URLs
 const agentSeoUrls: Partial<Record<AgentType, string>> = {
-  [AgentType.RAW_CRAWLER]: 'https://raw.landsurv.ai',
+  [AgentType.RAW_REPLAY]: 'https://raw.landsurv.ai',
   [AgentType.DEED_READER]: 'https://deed.landsurv.ai',
   [AgentType.CIVIL_PLAN_EXPERT]: 'https://plan.landsurv.ai',
   [AgentType.DXF_ANALYZER]: 'https://dxf.landsurv.ai',
@@ -339,9 +339,9 @@ export const homepageAgentCards = [
         releaseStage: 'alpha' as ReleaseStage
       },
     { 
-        type: AgentType.RAW_CRAWLER, 
-        title: 'RAW File Crawler', 
-        description: 'Upload a surveyor\'s .RAW file to analyze and visualize its contents using natural language.',
+        type: AgentType.RAW_REPLAY, 
+        title: 'Raw Replay', 
+        description: 'Open an RW5, TDS, GSI or legacy raw field file and replay the observation sequence in true 3D with a deterministic summary.',
         icon: BrainCircuitIcon,
         color: 'cyan',
         actionType: 'agent' as const,

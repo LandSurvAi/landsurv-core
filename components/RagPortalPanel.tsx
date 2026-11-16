@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import DraftingLessonsPanel from './DraftingLessonsPanel.tsx';
 
 /**
  * DevOps control room for the private surveybrain Cloud Run service.
@@ -8,7 +9,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
  * browser only ever sees a DevOps session.
  */
 
-export type RagSection = 'live' | 'overview' | 'corpus' | 'ingest' | 'query';
+export type RagSection = 'live' | 'overview' | 'corpus' | 'ingest' | 'lessons' | 'query';
 type Section = RagSection;
 
 interface RagPortalPanelProps {
@@ -946,6 +947,7 @@ export function RagPortalPanel({ apiBase, sessionToken, focusSection }: RagPorta
     { id: 'overview', label: 'Overview', hint: 'Budget, corpus health and effective limits' },
     { id: 'corpus', label: 'Corpus', hint: 'Every claimed URL and its ingestion outcome' },
     { id: 'ingest', label: 'Run ingestion', hint: 'Start a bounded, single-flight government-source crawl' },
+    { id: 'lessons', label: 'Drafting lessons', hint: 'Review operator markups and export the Civil Drafter training dataset' },
     { id: 'query', label: 'Query', hint: 'Semantic search over the ingested chunks' },
   ];
 
@@ -956,10 +958,10 @@ export function RagPortalPanel({ apiBase, sessionToken, focusSection }: RagPorta
           <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300">
             SurveyBrain
           </p>
-          <h1 className="mt-1 text-2xl font-bold text-white">Ingestion control room</h1>
+          <h1 className="mt-1 text-2xl font-bold text-white">SurveyBrain control room</h1>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-400">
-            Live evidence from the private Cloud Run crawler: what it fetched, what it
-            deduplicated, what it embedded, and exactly what reached PostgreSQL.
+            Live crawl evidence, approved Civil Drafter lessons, and the versioned training
+            dataset built from operator-reviewed corrections.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -1560,6 +1562,10 @@ export function RagPortalPanel({ apiBase, sessionToken, focusSection }: RagPorta
                 </div>
               )}
             </div>
+          )}
+
+          {section === 'lessons' && (
+            <DraftingLessonsPanel api={api} apiBase={apiBase} sessionToken={sessionToken} />
           )}
 
           {section === 'query' && (

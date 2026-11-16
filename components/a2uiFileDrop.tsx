@@ -230,7 +230,7 @@ export async function routeA2UIFileDrop(
       return;
     }
     case 'raw-upload': {
-      if (!/\.raw$/i.test(file.name) && file.type !== 'text/plain') return;
+      if (!/\.(raw|rw5|txt|fbk|gsi)$/i.test(file.name) && file.type !== 'text/plain') return;
       host.onRawFileUploaded?.(await readFileAsText(file), file.name);
       return;
     }

@@ -22,6 +22,9 @@ export interface WorkflowQuickThoughtNotice {
   steps: WorkflowQuickThoughtStep[];
   actionLabel: string;
   onAction: () => void;
+  /** Optional second choice shown beside the primary action. */
+  secondaryActionLabel?: string;
+  onSecondaryAction?: () => void;
   onDismiss?: () => void;
 }
 
@@ -123,16 +126,27 @@ export const WorkflowQuickThought: React.FC<{ notice: WorkflowQuickThoughtNotice
 
       <p className="mt-2 text-[10.5px] leading-snug text-white/65">{notice.summary}</p>
 
-      <div className="mt-2 flex items-center gap-1.5">
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <button
           type="button"
           data-no-drag
           onClick={notice.onAction}
-          className={`inline-flex flex-1 items-center justify-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold transition-colors ${styles.action}`}
+          className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold transition-colors ${styles.action}`}
         >
           <span className="truncate">{notice.actionLabel}</span>
           <span aria-hidden="true">→</span>
         </button>
+        {notice.secondaryActionLabel && notice.onSecondaryAction && (
+          <button
+            type="button"
+            data-no-drag
+            data-testid="workflow-quick-thought-secondary"
+            onClick={notice.onSecondaryAction}
+            className="shrink-0 rounded-md border border-white/15 bg-white/[0.03] px-2 py-1 text-[10px] font-semibold text-white/70 transition-colors hover:border-white/30 hover:bg-white/[0.06] hover:text-white"
+          >
+            {notice.secondaryActionLabel}
+          </button>
+        )}
         {notice.onDismiss && (
           <button
             type="button"

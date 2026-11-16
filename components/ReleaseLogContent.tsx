@@ -2,6 +2,14 @@
 
 const releases = [
     {
+        version: "26.11.15.01",
+        date: "November 15, 2026",
+        highlights: [
+            "⌨️ S Is Scale Again, SS Enters Sketch: A single S now starts the SCALE command with a live reference-point and factor flow; double-tap SS to enter a timeline sketch. The command reference, shortcut help, timeline tooltip and docs all show the new split. With the timeline disabled, SS reports that sketch mode is unavailable instead of changing the selection.",
+            "↩️ Legacy Undo Restored With the Timeline Off: Adding a baseline no longer opens a hidden timeline feature or clears the undo stack while the timeline is disabled. Timeline imports, events and baseline features now stay dormant unless the timeline is both enabled and visible, leaving the automatic legacy undo history free to capture points, lines, centerlines and boundary edits as before. The timeline remains off by default.",
+        ],
+    },
+    {
         version: "26.11.14.01",
         date: "November 14, 2026",
         highlights: [

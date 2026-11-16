@@ -79,7 +79,8 @@ import { buildAnnotationMatchers, resolveAnnotation, renderAnnotationTemplate } 
 import { perBoundaryAnnotationLines, shouldRenderGlobalDeedAnnotation, bearingDistanceAnnotationHeight, boundaryReadingAngle, isBoundaryAnnotationLine, isManualBoundaryLine, createManualBoundaryPolylineId } from '../utils/boundaryAnnotations.ts';
 import { createAoiPolylineId } from '../utils/aoiBoundary.ts';
 import { fetchImageBlobViaProxy } from '../utils/corsProxy.ts';
-import { getCachedBitmap, planMapTiles, mapWithConcurrency, decodeImageCached, trackTileLoad, subscribeTileActivity, getPendingTileCount, type PlannedTile } from '../utils/mapTileCache.ts';
+import { getCachedBitmap, planMapTiles, mapWithConcurrency, decodeImageCached, trackTileLoad, type PlannedTile } from '../utils/mapTileCache.ts';
+import type { MapImageryStatus } from '../utils/mapImageryStatus.ts';
 import { WebGpuBasemap, GpuLineBatch, parseCssColor, isWebGpuEnabled, WEBGPU_PREF_EVENT, type BasemapLayer, type BasemapSource, type WorldQuad } from '../utils/webgpuBasemap.ts';
 import { buildParcelLabelLines, resolveParcelTextStyle } from '../utils/parcelLabelFormatter.ts';
 import { buildContourPathsFromLines, resolveContourLabelPath, slideContourLabelAlongPath } from '../utils/contourLabels.ts';
@@ -95,7 +96,7 @@ import {
     shouldCompressPointCloud,
     shouldDrawPointPrimitives,
 } from '../utils/pointEfficiency.ts';
-import { createPointStyleResolver } from '../services/pointStyles.ts';
+import { createPointStyleResolver, resolvePointLabelVisibility } from '../services/pointStyles.ts';
 import { findNearestPointInWorld, getPointSpatialIndex } from '../utils/pointSpatialIndex.ts';
 import { getStaticMap, type StaticMapRequest } from '../services/staticMapsService.ts';
 import { useCadManager } from '../contexts/CadManagerContext.tsx';
@@ -309,6 +310,8 @@ export interface DrawingCanvasHandles {
   zoomToBbox: (minE: number, maxE: number, minN: number, maxN: number, padding?: number) => void;
   redraw: () => void;
   finishDrawing: () => void;
+  /** Arm the Fusion-style project picker for the open sketch. */
+  startProjectionMode: () => void;
   cancelDeleteMode: () => void;
   confirmDelete: () => void;
   getTransform: () => { scale: number; offsetX: number; offsetY: number };
@@ -379,6 +382,13 @@ import {
 import { orderConnectedChain, offsetOrderedChain, offsetCircleRadius, resolveArcGeometry, type ChainSegment, type OffsetEntitySegment } from '../utils/offsetGeometry';
 import { resolveMendCandidates, type MendCandidate, type MendPoint } from '../utils/mendGeometry.ts';
 import { createLayerValueLookup, resolveCadEntityColor, resolveCadEntityLinetype } from '../utils/cadEntityStyle.ts';
+import {
+    buildSketchLockedLineKeys,
+    isLineLocked,
+    isReferenceLine,
+    projectLineAsReference,
+    PROJECT_GEOMETRY_EVENT,
+} from '../utils/referenceGeometry.ts';
 import { underlayContainsWorldPoint, underlayCorners, underlayImageToWorld } from '../utils/rasterUnderlay.ts';
 
 /** Stable empty default: a fresh `[]` here would retrigger the underlay image effect on every render. */
@@ -615,6 +625,10 @@ interface DrawingCanvasProps {
         lineType?: 'normal' | 'breakline' | 'inclusion' | 'exclusion';
     }) => void;
     onShowSettings?: () => void;
+    /** Report map imagery state/progress to the header Map flyout. */
+    onMapStatusChange?: (status: MapImageryStatus | null) => void;
+    /** Open the project projection picker from the map notice. */
+    onRequestProjection?: () => void;
     /** Current global model route shown in the lower command bar. */
     modelMode?: 'normal' | 'high' | 'custom';
     /** Configured high-thinking model name shown in the picker. */
@@ -822,6 +836,8 @@ interface DrawingCanvasProps {
     chatToolDialogs?: import('./AgentToolDock.tsx').DockableToolItem[];
     /** Increment to pull the command bar's agent feed back open (e.g. Return to chat). */
     agentChatOpenSignal?: number;
+    /** Increment to dismiss the visible Quick Thought preview (e.g. after a file load). */
+    quickThoughtDismissSignal?: number;
     /** Boundary Agent deed-intake choices for the command bar quick thought. */
     boundaryQuickActions?: {
         onUpload: () => void;
@@ -830,6 +846,8 @@ interface DrawingCanvasProps {
     };
     /** Tracked workflow progress/reminder for the command bar quick thought. */
     workflowThought?: import('./WorkflowQuickThought.tsx').WorkflowQuickThoughtNotice | null;
+    /** Lightweight contextual hint shown inside the command bar quick thought. */
+    quickThoughtHint?: import('./CanvasTerminal.tsx').QuickThoughtHint | null;
     /** Reports the command bar height so overlay drawers can rest on its top edge. */
     onCommandBarHeightChange?: (height: number) => void;
     /** Reports the quick-thought card's height so the sidebar can clear it. */
@@ -1430,7 +1448,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         onUpdatePointLabelOffset, onAddLine, onDeleteLine, onDeletePoints, onDeleteCenterline, onUpsertCenterline, onBaselineFinish, onOpenStationingSettings, onOpenCenterlineTools, canUndo, canRedo, onUndo, onRedo, wmsServices, activeWmsLayers, offlineMapAreas, onRedrawAndShowAll, onOpenDxfExportModal, forcedAgent = null,
         onUpdatePointAnnotationOffset,
         isLayerPanelOpen, setIsLayerPanelOpen, onLayerToggle, activeAccent, currentPosition, projectedPosition, onZoomToPoint,
-        linesVisible, onSetLinesVisible, centerlinesVisible, onSetCenterlinesVisible, pointLists, onTogglePointListVisibility, deedMetadata, onToolStateChange, onShowSettings,
+        linesVisible, onSetLinesVisible, centerlinesVisible, onSetCenterlinesVisible, pointLists, onTogglePointListVisibility, deedMetadata, onToolStateChange, onShowSettings, onMapStatusChange, onRequestProjection,
         isC3DConnected, isGridVisible, tinShading, agentDrawMode, onCycleAgentDrawMode, agentAnnotMode, onCycleAgentAnnotMode, onAddBoundaryCall, onConvertSelectionToBoundary, onComputeCurrentClosure,
         dimensions, onAddDimension, onUpdateDimension, onDeleteDimension, onClearDimensions, onAddPoint, nextAvailablePointNumber, dimensionScale, setDimensionScale, symbolScale, setSymbolScale,
         hatches = [], onAddHatch, onUpdateHatch, onDeleteHatch, onOpenHatchManager, onOpenGeneration,
@@ -2032,6 +2050,8 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [drawMenuAnchor, setDrawMenuAnchor] = useState<{ left: number; top: number } | null>(null);
     const [isSelectionMode, setIsSelectionMode] = useState(false);
     const [isBoxSelectMode, setIsBoxSelectMode] = useState(false);
+    /** Project-pick mode: each click copies existing geometry into the sketch as a reference. */
+    const [isProjectingLines, setIsProjectingLines] = useState(false);
     /** Z arms a one-shot window zoom; the next drag frames the view. */
     const [isZoomBoxMode, setIsZoomBoxMode] = useState(false);
     const [zoomBox, setZoomBox] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
@@ -2374,8 +2394,60 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const [googleOverlayDiagnostic, setGoogleOverlayDiagnostic] = useState<{ tone: 'info' | 'error'; message: string } | null>(null);
     const googleOverlaySeqRef = useRef(0);
     const overlayTilesRef = useRef<{ image: HTMLImageElement; bbox: [number, number, number, number]; quad?: WorldQuad; source: 'user-maps' | 'user-gemini' | 'proxy' | 'naip-proxy' }[]>([]);
-    const [pendingTiles, setPendingTiles] = useState(0);
+    const [googleOverlayProgress, setGoogleOverlayProgress] = useState<{
+        active: boolean;
+        completed: number;
+        total: number;
+        label: string;
+    } | null>(null);
     const lastOverlayDiagnosticNotificationRef = useRef<string | null>(null);
+
+    const mapImageryStatus = useMemo<MapImageryStatus>(() => {
+        if (!settings.googleMaps?.enabled) {
+            return { kind: 'disabled', message: 'Map imagery is off.' };
+        }
+        if (!settings.projection?.epsg) {
+            return {
+                kind: 'no-projection',
+                message: 'Map imagery needs a project coordinate system. Select a State Plane zone or EPSG code so aerial tiles can be placed on the drawing.',
+            };
+        }
+        if (googleOverlayProgress?.active) {
+            return {
+                kind: 'loading',
+                message: googleOverlayProgress.label,
+                completed: googleOverlayProgress.completed,
+                total: googleOverlayProgress.total,
+            };
+        }
+        if (googleOverlayDiagnostic?.tone === 'error') {
+            return { kind: 'error', message: googleOverlayDiagnostic.message };
+        }
+        if (googleOverlayImage) {
+            return {
+                kind: 'ready',
+                message: 'Map imagery loaded.',
+                source: googleOverlayImage.source,
+                mapType: googleOverlayImage.mapType,
+                tileCount: googleOverlayImage.tiles?.length ?? 1,
+            };
+        }
+        return { kind: 'idle', message: 'Map imagery is on. Pan or zoom to load tiles.' };
+    }, [
+        settings.googleMaps?.enabled,
+        settings.projection?.epsg,
+        googleOverlayProgress,
+        googleOverlayDiagnostic,
+        googleOverlayImage,
+    ]);
+
+    useEffect(() => {
+        onMapStatusChange?.(mapImageryStatus);
+    }, [mapImageryStatus, onMapStatusChange]);
+
+    useEffect(() => {
+        return () => { onMapStatusChange?.(null); };
+    }, [onMapStatusChange]);
 
     useEffect(() => {
         if (!settings.googleMaps?.enabled || !googleOverlayDiagnostic) {
@@ -2560,6 +2632,24 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     const isLinearDrawingMode = useCallback((mode: typeof drawingMode) => isChainLineMode(mode), []);
 
     const [pendingSketchStart, setPendingSketchStart] = useState<(() => void) | null>(null);
+    const lockedLineKeys = useMemo(
+        () => buildSketchLockedLineKeys(timeline?.activeTransaction, timeline?.document),
+        [timeline?.activeTransaction, timeline?.document],
+    );
+    const isLineProtected = useCallback(
+        (line: SurveyLine) => isLineLocked(line, lockedLineKeys),
+        [lockedLineKeys],
+    );
+    const notifyProtectedLine = useCallback(() => {
+        setTerminalIncoming({
+            text: 'IMMUTABLE REFERENCE — projected and earlier-sketch geometry can be seen and snapped to, but not edited here. Open its own sketch to change it.',
+            tone: 'error',
+        });
+        setCommandFocusRequest(n => n + 1);
+    }, []);
+    const existingSketches = timeline?.features.filter(
+        feature => feature.kind === 'sketch' && !feature.suppressed,
+    ) ?? [];
 
     const requestSketchForDrawing = useCallback((start: () => void): boolean => {
         if (props.isSketchGatingEnabled === false || props.isSketchActive !== false || lines.length === 0) {
@@ -2586,6 +2676,54 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         });
         setCommandFocusRequest(n => n + 1);
     }, []);
+
+    const startProjectionMode = useCallback(() => {
+        if (!props.isSketchActive) {
+            setTerminalIncoming({
+                text: 'PROJECT: Open or start a sketch before projecting geometry into it.',
+                tone: 'error',
+            });
+            setCommandFocusRequest(n => n + 1);
+            return;
+        }
+        setDrawingMode('none');
+        setIsSelectionMode(false);
+        setIsBoxSelectMode(false);
+        setPendingSelectionCommand(null);
+        setIsTrimmingLines(false);
+        setIsExtendingLines(false);
+        setIsDeletingLines(false);
+        setTrimPoint(null);
+        setExtendFromLine(null);
+        setSelectedLineIds(new Set());
+        setIsProjectingLines(true);
+        setTerminalIncoming({
+            text: 'PROJECT: Click linework to project it into this sketch as an immutable reference. [Enter or Esc to finish]',
+            tone: 'ok',
+        });
+        setCommandFocusRequest(n => n + 1);
+        requestAnimationFrame(() => drawRef.current?.());
+    }, [props.isSketchActive]);
+
+    useEffect(() => {
+        const armProject = () => startProjectionMode();
+        window.addEventListener(PROJECT_GEOMETRY_EVENT, armProject);
+        return () => window.removeEventListener(PROJECT_GEOMETRY_EVENT, armProject);
+    }, [startProjectionMode]);
+
+    useEffect(() => {
+        if (!props.isSketchActive) setIsProjectingLines(false);
+    }, [props.isSketchActive]);
+
+    // Reopening a finished sketch is another way through the gate. Resume the
+    // drawing action that raised the prompt once the sketch is open.
+    const reopenSketchForPendingDrawing = useCallback((featureId: string) => {
+        const start = pendingSketchStart;
+        if (!start || !timeline?.reopenSketch) return;
+        if (!timeline.reopenSketch(featureId)) return;
+        setPendingSketchStart(null);
+        requestAnimationFrame(() => start());
+    }, [pendingSketchStart, timeline]);
 
     /** The single entry point for L, boundary, breakline, inclusion, and exclusion. */
     const startChainLineMode = useCallback((mode: Exclude<ChainLineMode, 'baseline'>) => {
@@ -2847,13 +2985,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         }> = [];
         selectedLineIds.forEach(selectionId => {
             const line = lines.find(l => (l.id || `${l.from}-${l.to}`) === selectionId);
-            if (!line || line.hidden) return;
+            if (!line || line.hidden || isLineProtected(line)) return;
             const ends = resolveLineEndpoints(line);
             if (!ends) return;
             entities.push({ selectionId, line, ends, isCircle: isCircleLine(line) });
         });
         return entities;
-    }, [selectedLineIds, lines, resolveLineEndpoints, isCircleLine]);
+    }, [selectedLineIds, lines, resolveLineEndpoints, isCircleLine, isLineProtected]);
 
     const getSelectionBoundingCenter = useCallback((): PlanarPoint | null => {
         const entities = getSelectedLineEntities();
@@ -2889,6 +3027,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
     const commitLineBatch = useCallback((removeIds: string[], addLines: SurveyLine[]) => {
         if (removeIds.length === 0 && addLines.length === 0) return;
+        const blockedReference = removeIds.some(id => {
+            const line = lines.find(item => (item.id || `${item.from}-${item.to}`) === id);
+            return line ? isLineProtected(line) : false;
+        });
+        if (blockedReference) {
+            notifyProtectedLine();
+            return;
+        }
         if (props.onBatchLinesChange) {
             props.onBatchLinesChange(removeIds, addLines);
         } else {
@@ -2896,7 +3042,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             addLines.forEach(line => onAddLine(line));
         }
         requestAnimationFrame(() => drawRef.current?.());
-    }, [props.onBatchLinesChange, onDeleteLine, onAddLine]);
+    }, [props.onBatchLinesChange, onDeleteLine, onAddLine, lines, isLineProtected, notifyProtectedLine]);
 
     /** Replace the selected entities with transformed copies (move/rotate/scale/mirror). */
     const transformSelectedLines = useCallback((transform: PlanarTransform, resetAnnotations: boolean): number => {
@@ -3218,9 +3364,17 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
     /** Apply a property patch to every selected entity (one canvas refresh). */
     const handleUpdateSelectedLines = useCallback((ids: string[], changes: Partial<SurveyLine>) => {
         if (ids.length === 0) return;
-        ids.forEach(id => props.onUpdateLine?.(id, changes));
+        const editableIds = ids.filter(id => {
+            const line = lines.find(item => (item.id || `${item.from}-${item.to}`) === id);
+            return !line || !isLineProtected(line);
+        });
+        if (editableIds.length === 0) {
+            notifyProtectedLine();
+            return;
+        }
+        editableIds.forEach(id => props.onUpdateLine?.(id, changes));
         requestAnimationFrame(() => drawRef.current?.());
-    }, [props.onUpdateLine]);
+    }, [props.onUpdateLine, lines, isLineProtected, notifyProtectedLine]);
 
     const handleUpdateSelectedHatches = useCallback((ids: string[], changes: Partial<CanvasHatch>) => {
         if (ids.length === 0) return;
@@ -3230,7 +3384,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
     const selectAllEntitiesCommand = useCallback((): number => {
         const ids = new Set(
-            lines.filter(line => !line.hidden).map(line => line.id || `${line.from}-${line.to}`),
+            lines.filter(line => !line.hidden && !isLineProtected(line)).map(line => line.id || `${line.from}-${line.to}`),
         );
         const hatchIds = new Set(hatches.filter(hatch => !hatch.hidden).map(hatch => hatch.id));
         setSelectedLineIds(ids);
@@ -3238,7 +3392,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         setIsSelectionMode(ids.size + hatchIds.size > 0);
         setIsBoxSelectMode(false);
         return ids.size + hatchIds.size;
-    }, [lines, hatches]);
+    }, [lines, hatches, isLineProtected]);
 
     const deselectAllCommand = useCallback(() => {
         setSelectedLineIds(new Set());
@@ -6080,6 +6234,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         let skipped = 0;
         for (const entity of [...lines]) {
             if (entity.hidden) continue;
+            if (isLineProtected(entity)) continue;
             const ends = resolveLineEndpoints(entity);
             if (!ends) continue;
 
@@ -6150,7 +6305,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             tone: trimmed > 0 ? 'ok' : 'info',
         });
         requestAnimationFrame(() => drawRef.current?.());
-    }, [lines, resolveLineEndpoints, isCircleLine, computeTrimAction, onDeleteLine, onAddLine]);
+    }, [lines, resolveLineEndpoints, isCircleLine, computeTrimAction, onDeleteLine, onAddLine, isLineProtected]);
 
     const getGripsForSelectedLines = useCallback((): EntityGrip[] => {
         if (selectedLineIds.size === 0) return [];
@@ -6158,7 +6313,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
         selectedLineIds.forEach(selId => {
             const selLine = lines.find(l => (l.id || `${l.from}-${l.to}`) === selId);
-            if (!selLine || selLine.hidden) return;
+            if (!selLine || selLine.hidden || isLineProtected(selLine)) return;
             const sp1 = pointMap.get(selLine.from);
             const sp2 = pointMap.get(selLine.to);
             const p1c = sp1 ? { x: sp1.easting, y: sp1.northing } : (selLine.fromPt ? { x: selLine.fromPt.x, y: selLine.fromPt.y } : null);
@@ -6221,7 +6376,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         });
 
         return result;
-    }, [selectedLineIds, lines, pointMap]);
+    }, [selectedLineIds, lines, pointMap, isLineProtected]);
 
     const findGripNearClick = useCallback((screenX: number, screenY: number, thresholdPx = 9): EntityGrip | null => {
         const grips = getGripsForSelectedLines();
@@ -6699,6 +6854,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         startTextEdit,
         startAoiDrawing: () => startChainLineMode('aoi'),
         finishDrawing,
+        startProjectionMode,
         closeDrawingToolsMenu: () => setIsDrawingToolsMenuOpen(false),
         toggleDrawingToolsMenu: () => {
             if (isDrawingToolsMenuOpen) {
@@ -7068,16 +7224,19 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         if (!canvasElement || !gm?.enabled) {
             setGoogleOverlayImage(null);
             setGoogleOverlayDiagnostic(null);
+            setGoogleOverlayProgress(null);
             return;
         }
         if (!currentSettings.projection.epsg) {
             setGoogleOverlayImage(null);
             setGoogleOverlayDiagnostic({
                 tone: 'info',
-                message: 'Map imagery is hidden: set a project EPSG in Settings. WMS layers require this too.',
+                message: 'Map imagery cannot load: this project has no coordinate system (projection). Select one from the Map button above.',
             });
+            setGoogleOverlayProgress(null);
             return;
         }
+        setGoogleOverlayProgress({ active: true, completed: 0, total: 0, label: 'Preparing map imagery' });
 
         const { scale, offsetX, offsetY } = currentTransform;
         const { width, height } = canvasElement;
@@ -7101,6 +7260,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     tone: 'error',
                     message: 'Map imagery reprojection failed: non-finite coordinates. Verify EPSG and georeferenced point values.',
                 });
+                setGoogleOverlayProgress(null);
                 return;
             }
         } catch (e) {
@@ -7110,6 +7270,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 tone: 'error',
                 message: 'Map imagery reprojection failed. Verify project EPSG and coordinate units.',
             });
+            setGoogleOverlayProgress(null);
             return;
         }
 
@@ -7129,6 +7290,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 tone: 'error',
                 message: 'Map imagery is out of range after reprojection. Verify EPSG matches your drawing coordinates.',
             });
+            setGoogleOverlayProgress(null);
             return;
         }
         const zoom = zoomForBboxWgs84(wgsBbox);
@@ -7150,6 +7312,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             const projHeight = maxNView - minNView;
             if (!(projWidth > 0) || !(projHeight > 0)) {
                 setGoogleOverlayImage(null);
+                setGoogleOverlayProgress(null);
                 return;
             }
 
@@ -7247,6 +7410,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
             // Six in flight cuts fresh-extent load time roughly in half; each
             // tile is an independent small image request.
+            setGoogleOverlayProgress({
+                active: true,
+                completed: 0,
+                total: naipTiles.length,
+                label: `Loading ${naipTiles.length} NAIP tile${naipTiles.length === 1 ? '' : 's'}`,
+            });
+            let settledNaipTiles = 0;
             await mapWithConcurrency(naipTiles, 6, async tile => {
                 if (seq !== googleOverlaySeqRef.current) return;
                 try {
@@ -7254,6 +7424,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     publishNaip(false);
                 } catch (err) {
                     lastNaipError = err;
+                } finally {
+                    if (seq === googleOverlaySeqRef.current) {
+                        settledNaipTiles += 1;
+                        setGoogleOverlayProgress({
+                            active: true,
+                            completed: settledNaipTiles,
+                            total: naipTiles.length,
+                            label: 'Loading NAIP imagery',
+                        });
+                    }
                 }
             });
             if (seq !== googleOverlaySeqRef.current) return;
@@ -7262,14 +7442,22 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 console.warn('[GoogleOverlay] NAIP overlay fetch failed:', lastNaipError);
                 overlayTilesRef.current = [];
                 setGoogleOverlayImage(null);
+                setGoogleOverlayProgress(null);
                 const detail = lastNaipError instanceof Error && lastNaipError.message ? ` ${lastNaipError.message}` : '';
                 setGoogleOverlayDiagnostic({ tone: 'error', message: `Map imagery fetch failed.${detail}` });
                 return;
             }
             publishNaip(true);
+            setGoogleOverlayProgress({
+                active: false,
+                completed: naipTiles.length,
+                total: naipTiles.length,
+                label: 'NAIP imagery ready',
+            });
             return;
         }
 
+        setGoogleOverlayProgress({ active: true, completed: 0, total: 1, label: 'Requesting satellite imagery' });
         try {
             const staticMap = await getStaticMap(
                 {
@@ -7307,40 +7495,14 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 mapType: resolvedMapType,
             });
             setGoogleOverlayDiagnostic(null);
+            setGoogleOverlayProgress({ active: false, completed: 1, total: 1, label: 'Map imagery ready' });
         } catch (e) {
             if (seq !== googleOverlaySeqRef.current) return;
             console.warn('[GoogleOverlay] fetch failed:', e);
+            setGoogleOverlayProgress(null);
             setGoogleOverlayDiagnostic({ tone: 'error', message: e instanceof Error ? e.message : String(e) });
         }
     }, 200), []);
-
-    useEffect(() => {
-        let timer: number | undefined;
-        const sync = () => {
-            const n = getPendingTileCount();
-            if (n === 0) {
-                if (timer !== undefined) {
-                    window.clearTimeout(timer);
-                    timer = undefined;
-                }
-                setPendingTiles(0);
-                return;
-            }
-            // Delay first appearance so cache hits don't flash the indicator.
-            setPendingTiles(prev => (prev > 0 ? n : prev));
-            if (timer === undefined) {
-                timer = window.setTimeout(() => {
-                    timer = undefined;
-                    setPendingTiles(getPendingTileCount());
-                }, 250);
-            }
-        };
-        const unsubscribe = subscribeTileActivity(sync);
-        return () => {
-            unsubscribe();
-            if (timer !== undefined) window.clearTimeout(timer);
-        };
-    }, []);
 
     useEffect(() => {
         fetchGoogleOverlayImage(transform, settings, canvasRef.current);
@@ -8287,7 +8449,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 let isDashed = false;
                 let isContourLinework = false;
 
-                if (line.type === 'breakline') {
+                if (line.reference) {
+                    // Projected references use a fixed violet dashed pen so they
+                    // read as construction geometry at any CAD layer setting.
+                    strokeStyle = isLightTheme ? '#6D28D9' : '#C4B5FD';
+                    lineWidth = Math.max(scaledLineWidth * 0.9, minScreenPixelWidth);
+                    isDashed = true;
+                } else if (line.type === 'breakline') {
                     strokeStyle = '#FF69B4'; // Hot Pink
                     lineWidth = scaledLineWidth * 1.5;
                 } else if (line.type === 'inclusion') {
@@ -8732,7 +8900,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 let lineWidth = scaledLineWidth;
                 let isDashed = false;
 
-                if (line.type === 'breakline') {
+                if (line.reference) {
+                    strokeStyle = isLightTheme ? '#6D28D9' : '#C4B5FD';
+                    lineWidth = Math.max(scaledLineWidth * 0.9, minScreenPixelWidth);
+                    isDashed = true;
+                } else if (line.type === 'breakline') {
                     strokeStyle = '#FF69B4';
                     lineWidth = Math.max(scaledLineWidth * 1.5, minScreenPixelWidth);
                 } else if (line.type === 'inclusion') {
@@ -11802,9 +11974,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
               ? p.labelOffset.y * transform.scale
               : baseTextOffsetY;
             
-            const showPointNumber = labelStyle?.showPointNumber ?? pointLayers.pointNumber.visible;
-            const showElevation = labelStyle?.showElevation ?? pointLayers.elevation.visible;
-            const showDescription = labelStyle?.showDescription ?? pointLayers.description.visible;
+            const { showPointNumber, showElevation, showDescription } = resolvePointLabelVisibility(pointLayers, labelStyle);
             const areAnyLabelsVisible = showPointNumber || showElevation || showDescription;
             const hasPerPointOffset = Boolean(p.labelOffset && (p.labelOffset.x !== 0 || p.labelOffset.y !== 0));
             const leaderMode = labelStyle?.leader ?? 'when-offset';
@@ -13484,6 +13654,13 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         const target = e.target as HTMLElement | null;
         const tag = target?.tagName;
         const isTextInput = tag === 'INPUT' || tag === 'TEXTAREA' || !!target?.isContentEditable;
+        if (!isTextInput && isProjectingLines && (e.key === 'Escape' || e.key === 'Enter')) {
+            e.preventDefault();
+            setIsProjectingLines(false);
+            setTerminalIncoming({ text: 'PROJECT: Finished projecting references.', tone: 'info' });
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
         // Escape always backs out of an open canvas menu before it cancels any
         // drawing/tool state. This runs even while a flyout input has focus, so
         // the menu can always be dismissed with the keyboard.
@@ -14251,19 +14428,9 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             return;
         }
         if ((e.key === 's' || e.key === 'S') && !isTextInput && drawingMode !== 'hatch' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            // Single S is SCALE. The dedicated double-tap listener below waits
+            // out the tap window so SS can enter sketch mode instead.
             e.preventDefault();
-            if (timeline && props.isSketchGatingEnabled !== false) {
-                (props.onBeginSketch ?? timeline.beginSketch)();
-                setTerminalIncoming({
-                    text: 'SKETCH: Draw normally. Finish sketch to add one timeline entry [S]',
-                    tone: 'ok',
-                });
-                return;
-            }
-            setTerminalIncoming({
-                text: 'SKETCH: Timeline is off — enable it to start a sketch [Q selects]',
-                tone: 'info',
-            });
             return;
         }
         if ((e.key === 'q' || e.key === 'Q') && !isTextInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -14542,11 +14709,16 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             && (selectedEntityCount > 0 || selectedPointNumbers.size > 0 || selectedCenterlineIds.size > 0)) {
             if (isTextInput) return;
             e.preventDefault();
-            const removedLineCount = selectedLineIds.size;
+            const deletableLineIds = Array.from(selectedLineIds).filter(id => {
+                const line = lines.find(item => (item.id || `${item.from}-${item.to}`) === id);
+                return !line || !isLineProtected(line);
+            });
+            const skippedProtected = selectedLineIds.size - deletableLineIds.length;
+            const removedLineCount = deletableLineIds.length;
             const removedHatchCount = selectedHatchIds.size;
             const removedPointCount = selectedPointNumbers.size;
             const removedClCount = selectedCenterlineIds.size;
-            selectedLineIds.forEach(id => onDeleteLine(id));
+            deletableLineIds.forEach(id => onDeleteLine(id));
             selectedHatchIds.forEach(id => onDeleteHatch?.(id));
             if (removedPointCount > 0) onDeletePoints?.(Array.from(selectedPointNumbers));
             if (removedClCount > 0) selectedCenterlineIds.forEach(id => onDeleteCenterline?.(id));
@@ -14556,7 +14728,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setSelectedPointNumbers(new Set());
             setSelectedCenterlineIds(new Set());
             setTerminalIncoming({
-                text: `Deleted ${removedLineCount} line${removedLineCount === 1 ? '' : 's'}, ${removedHatchCount} hatch${removedHatchCount === 1 ? '' : 'es'}, ${removedPointCount} point${removedPointCount === 1 ? '' : 's'}, ${removedClCount} centerline${removedClCount === 1 ? '' : 's'}.`,
+                text: `Deleted ${removedLineCount} line${removedLineCount === 1 ? '' : 's'}, ${removedHatchCount} hatch${removedHatchCount === 1 ? '' : 'es'}, ${removedPointCount} point${removedPointCount === 1 ? '' : 's'}, ${removedClCount} centerline${removedClCount === 1 ? '' : 's'}${skippedProtected > 0 ? ` — ${skippedProtected} immutable reference${skippedProtected === 1 ? '' : 's'} skipped` : ''}.`,
                 tone: 'ok',
             });
             requestAnimationFrame(() => drawRef.current?.());
@@ -14689,7 +14861,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             setTtrEntity2(null);
             setTtrHoverEntity(null);
         }
-    }, [startBoxZoom, isResumePickMode, lines, findSegmentEndingAt, beginResumeFromSegment, isZoomBoxMode, startBaselineMode, selectedTextAnnotationId, props, selectedLineIds, selectedHatchIds, selectedEntityCount, selectedPointNumbers, selectedCenterlineIds, isPickingMirrorLine, onDeletePoints, onDeleteCenterline, onDeleteHatch, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, activeDrawingLayer, onAddLine, isTrimmingLines, isTrimFenceMode, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, polylineArcMode, polylineFixedRadius, polylineRadiusInput, polylineRadiusPrompt, polylineTangentExit, polylineArcExitToLine, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, buildLineEndpoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, isFreehandSelectMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isPickingDistance, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, filletSelectionCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu]);
+    }, [startBoxZoom, isResumePickMode, lines, findSegmentEndingAt, beginResumeFromSegment, isZoomBoxMode, startBaselineMode, selectedTextAnnotationId, props, selectedLineIds, selectedHatchIds, selectedEntityCount, selectedPointNumbers, selectedCenterlineIds, isPickingMirrorLine, onDeletePoints, onDeleteCenterline, onDeleteHatch, selectedDimensionId, onDeleteDimension, onDeleteLine, boundaryAlignSliding, rotateAlign180, drawingMode, activeDrawingLayer, onAddLine, isTrimmingLines, isTrimFenceMode, isExtendingLines, isDeletingLines, inlineOsnapMenuPos, typedSegmentLength, polylinePoints, polylineArcMode, polylineFixedRadius, polylineRadiusInput, polylineRadiusPrompt, polylineTangentExit, polylineArcExitToLine, activeOsnapPoint, isOrthoEnabled, applyOrthoConstraint, makeTempWorldPoint, buildLineEndpoint, isLinearDrawingMode, cornerAlignPicker, cornerAlignPendingCorner, circleCenter, circleSizeParam, typedCircleValue, circleSubMode, polygonCenter, polygonSides, typedPolygonDiameter, commitPolygonFromRadius, ttrStep, ttrEntity1, ttrEntity2, solveTtrCircle, addCircleGeometry, settings.linearUnits, isPickingOtOrigin, isPickingOtLineAlign, isSelectionMode, isBoxSelectMode, isCopyingSelection, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, isFreehandSelectMode, pendingSelectionCommand, isRotatingSelection, isMirroringSelection, isPickingDistance, isMovingSelection, typedRotateAngle, rotateSelectionCommand, rotatePivot, stopInteractiveTransforms, startRotateMode, beginSelectionForCommand, filletSelectionCommand, isScalingSelection, typedScaleFactor, scaleBasePoint, scaleSelectionCommand, activeCommandPrompt, cancelCommandPrompt, isPickingPolarCenter, cancelPolarCenterPick, isAttributeFlyoutOpen, isZoomExtentsOpen, isZoomToPointOpen, isFindPointsOpen, isDrawingToolsMenuOpen, isDimFlyoutOpen, isDimSettingsOpen, isOtPopupOpen, isPropertiesOpen, dimContextMenu, isProjectingLines, isLineProtected, notifyProtectedLine]);
 
     const handleKeyUp = useCallback((e: KeyboardEvent) => {
         if (e.key === 'Control' || e.key === 'Meta') {
@@ -16538,6 +16710,36 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
         }
 
+        if (isProjectingLines && drawingMode === 'none') {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const clickedLine = findLineNearClick(clickX, clickY, 18);
+            if (!clickedLine) {
+                setTerminalIncoming({
+                    text: 'PROJECT: No linework under that pick — click a line, arc, or circle. [Enter or Esc to finish]',
+                    tone: 'info',
+                });
+                return;
+            }
+            if (isReferenceLine(clickedLine)) {
+                setTerminalIncoming({
+                    text: 'PROJECT: That is already a reference and is already immutable.',
+                    tone: 'info',
+                });
+                return;
+            }
+            onAddLine(projectLineAsReference(clickedLine, timeline?.activeSketch?.id));
+            setTerminalIncoming({
+                text: `PROJECT: ${clickedLine.from} → ${clickedLine.to} projected as an immutable reference. [Enter or Esc to finish]`,
+                tone: 'ok',
+            });
+            requestAnimationFrame(() => drawRef.current?.());
+            return;
+        }
+
         // Line selection mode: dedicated selection tool, or a command that is
         // currently waiting for picks. Keeping this independent of the toolbar
         // toggle means an armed command can never lose its click-to-select.
@@ -16590,6 +16792,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
 
             const clickedLine = findLineNearClick(clickX, clickY, 15);
             if (clickedLine && !isBoxSelectMode) {
+                if (isLineProtected(clickedLine)) {
+                    notifyProtectedLine();
+                    return;
+                }
                 // A single click selects only the segment under the cursor. The
                 // connected chain is selected by double-click instead.
                 const clickedLineId = clickedLine.id || `${clickedLine.from}-${clickedLine.to}`;
@@ -16659,6 +16865,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             }
 
             const clickedLine = findLineNearClick(clickX, clickY, 15);
+            if (clickedLine && isLineProtected(clickedLine)) {
+                notifyProtectedLine();
+                return;
+            }
             if (clickedLine?.id) {
                 // If member of a polyline, delete all constituent segments together
                 const targetPolylineId = clickedLine.polylineId;
@@ -16702,6 +16912,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             // Find the line clicked
             const clickedLine = findLineNearClick(clickX, clickY, 15);
             if (!clickedLine) return;
+            if (isLineProtected(clickedLine)) {
+                notifyProtectedLine();
+                return;
+            }
             
             const action = computeTrimAction(clickedLine, worldX, worldY);
             if (action) {
@@ -18423,6 +18637,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     const selectedLines = new Set<string>();
                     for (const line of lines) {
                         if (line.hidden) continue;
+                        if (isLineProtected(line)) continue;
                         const p1 = pointMap.get(line.from);
                         const p2 = pointMap.get(line.to);
                         const x1w = p1 ? p1.easting : line.fromPt?.x;
@@ -18600,6 +18815,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 const selected = new Set<string>();
                 for (const line of lines) {
                     if (line.hidden) continue;
+                    if (isLineProtected(line)) continue;
                     const p1 = pointMap.get(line.from);
                     const p2 = pointMap.get(line.to);
                     const x1w = p1 ? p1.easting : line.fromPt?.x;
@@ -18765,7 +18981,7 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
             document.body.classList.remove('panning');
             setIsPanning(false);
         }
-    }, [zoomBox, isZoomBoxMode, isLabelDragging, isStationLabelDragging, isPanning, shiftBoxSelect, lines, pointMap, transform, activeGrip, isBoxSelectMode, selectedLineIds, selectedHatchIds, selectedEntityCount, hatches, commitActiveGrip, screenToWorld, activeOsnapPoint, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, updateOffsetPreview, clearOffsetPreview, trimByFence, zoomToBbox, props]);
+    }, [zoomBox, isZoomBoxMode, isLabelDragging, isStationLabelDragging, isPanning, shiftBoxSelect, lines, pointMap, transform, activeGrip, isBoxSelectMode, selectedLineIds, selectedHatchIds, selectedEntityCount, hatches, commitActiveGrip, screenToWorld, activeOsnapPoint, isOffsetMode, offsetDistance, offsetTargetId, offsetSelectionIds, offsetTargetConfirmed, updateOffsetPreview, clearOffsetPreview, trimByFence, zoomToBbox, props, isLineProtected]);
     
     const handleTouchStart = useCallback((e: React.TouchEvent) => {
         if (drawingMode !== 'none') return;
@@ -19204,6 +19420,41 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         // CIRCLE owns T for TTR and LINE owns T for tangent exit; prompts and
         // editors own their own keyboard input.
         { enabled: drawingMode !== 'circle' && !isPlacingText && !activeCommandPrompt && !(isLinearDrawingMode(drawingMode) && polylinePoints.length > 0) },
+    );
+
+    // S is SCALE on one tap; SS enters sketch mode when the timeline is active.
+    // Kept separate from T/B so CIRCLE and chained-line modes can still scale.
+    useDoubleTapShortcuts(
+        [{
+            key: 's',
+            onDoubleTap: () => {
+                if (timeline && props.isSketchGatingEnabled !== false) {
+                    (props.onBeginSketch ?? timeline.beginSketch)();
+                    setTerminalIncoming({
+                        text: 'SKETCH: Draw normally. Finish sketch to add one timeline entry [SS]',
+                        tone: 'ok',
+                    });
+                    return;
+                }
+                setTerminalIncoming({
+                    text: 'SKETCH: Timeline is off — enable it to start a sketch [Q selects]',
+                    tone: 'info',
+                });
+            },
+            onSingleTap: () => {
+                if (isScalingSelection) {
+                    stopInteractiveTransforms();
+                    setTerminalIncoming({ text: 'Command: S (SCALE) cancelled', tone: 'info' });
+                    return;
+                }
+                if (selectedEntityCount === 0) {
+                    beginSelectionForCommand('sc', 'SCALE');
+                } else {
+                    startScaleMode();
+                }
+            },
+        }],
+        { enabled: drawingMode !== 'hatch' && !isPlacingText && !activeCommandPrompt },
     );
 
     const startPolygonMode = useCallback((sides?: number, center?: { easting: number; northing: number }) => {
@@ -20083,8 +20334,12 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                             ? 'bg-rose-900/80 border-rose-400/50 text-rose-100 hover:bg-rose-900/90'
                             : 'bg-amber-900/80 border-amber-400/50 text-amber-100 hover:bg-amber-900/90'
                     }`}
-                    title="Map imagery diagnostics (click to open map settings)"
+                    title={!settings.projection.epsg ? 'Map imagery needs a project projection — click to select one' : 'Map imagery diagnostics (click to open map settings)'}
                     onClick={() => {
+                        if (!settings.projection.epsg && onRequestProjection) {
+                            onRequestProjection();
+                            return;
+                        }
                         if (!onShowSettings) return;
                         onShowSettings();
                         setTimeout(() => {
@@ -20093,65 +20348,11 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     }}
                 >
                     <span>{googleOverlayDiagnostic.message}</span>
+                    {!settings.projection.epsg && (
+                        <span className="ml-2 whitespace-nowrap underline decoration-dotted">Select projection →</span>
+                    )}
                 </button>
             )}
-
-            {pendingTiles > 0 && (
-                <div
-                    role="status"
-                    aria-live="polite"
-                    className="absolute z-30 px-2.5 py-1 rounded bg-gray-900/85 border border-cyan-500/40 text-[11px] text-cyan-100 font-mono flex items-center gap-2 pointer-events-none"
-                    style={{ right: 12, bottom: 56 }}
-                >
-                    <svg viewBox="0 0 24 24" className="w-3 h-3 animate-spin text-cyan-300" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true">
-                        <circle cx="12" cy="12" r="9" opacity="0.25" />
-                        <path d="M21 12a9 9 0 0 0-9-9" strokeLinecap="round" />
-                    </svg>
-                    <span>Downloading map tiles ({pendingTiles} left)</span>
-                </div>
-            )}
-
-            {googleOverlayImage && settings.googleMaps?.enabled && (() => {
-                const sourceLabel =
-                    googleOverlayImage.source === 'naip-proxy' ? 'NAIP proxy'
-                    : googleOverlayImage.source === 'user-maps' ? 'User Maps key'
-                    : googleOverlayImage.source === 'user-gemini' ? 'User AI key'
-                    : 'Server proxy';
-                const mapTypeLabel =
-                    googleOverlayImage.mapType === 'naip' ? 'NAIP'
-                    : googleOverlayImage.mapType === 'hybrid' ? 'Hybrid'
-                    : googleOverlayImage.mapType === 'satellite' ? 'Satellite'
-                    : googleOverlayImage.mapType === 'terrain' ? 'Terrain'
-                    : 'Roadmap';
-                return (
-                    <button
-                        type="button"
-                        className="absolute z-30 px-2 py-1 rounded bg-gray-900/85 border border-emerald-500/30 text-[10px] text-emerald-100 font-mono hover:bg-gray-800/90 transition-colors flex items-center gap-1"
-                        style={{ right: 12, bottom: 28 }}
-                        title="Active basemap imagery (click to open map settings)"
-                        onClick={() => {
-                            if (!onShowSettings) return;
-                            onShowSettings();
-                            setTimeout(() => {
-                                window.dispatchEvent(new CustomEvent('landsurv-open-settings-google-maps'));
-                            }, 80);
-                        }}
-                    >
-                        <svg viewBox="0 0 24 24" className="w-3 h-3 text-emerald-300/90" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M12 2v3" />
-                            <path d="M12 19v3" />
-                            <path d="M4.93 4.93l2.12 2.12" />
-                            <path d="M16.95 16.95l2.12 2.12" />
-                            <path d="M2 12h3" />
-                            <path d="M19 12h3" />
-                            <path d="M4.93 19.07l2.12-2.12" />
-                            <path d="M16.95 7.05l2.12-2.12" />
-                            <circle cx="12" cy="12" r="3" />
-                        </svg>
-                        <span>{`IMAGERY: ${mapTypeLabel} | SOURCE: ${sourceLabel}`}</span>
-                    </button>
-                );
-            })()}
 
             {zoomBox && (() => {
                 const left = Math.min(zoomBox.startX, zoomBox.endX);
@@ -20849,12 +21050,43 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                         aria-labelledby="sketch-required-title"
                         aria-describedby="sketch-required-description"
                         data-testid="sketch-required-dialog"
-                        className="w-full max-w-md rounded-xl border border-slate-600 bg-slate-900 p-5 text-slate-100 shadow-2xl"
+                        className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-xl border border-slate-600 bg-slate-900 p-5 text-slate-100 shadow-2xl"
                     >
-                        <h2 id="sketch-required-title" className="text-lg font-semibold">Start a new sketch?</h2>
+                        <h2 id="sketch-required-title" className="text-lg font-semibold">Start or edit a sketch</h2>
                         <p id="sketch-required-description" className="mt-2 text-sm text-slate-300">
-                            Drawing must happen inside a sketch. Start a new sketch to continue with this tool.
+                            Drawing must happen inside a sketch. Start a new sketch to continue with this tool, or reopen an existing sketch to edit it.
                         </p>
+                        {existingSketches.length > 0 && (
+                            <div className="mt-4">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                                        Existing sketches
+                                    </span>
+                                    <span className="font-mono text-[10px] text-slate-500">{existingSketches.length}</span>
+                                </div>
+                                <div
+                                    data-testid="sketch-required-existing-list"
+                                    className="mt-2 max-h-44 space-y-1 overflow-y-auto pr-1"
+                                >
+                                    {existingSketches.map(feature => (
+                                        <button
+                                            key={feature.id}
+                                            type="button"
+                                            data-testid={`sketch-required-existing-${feature.id}`}
+                                            onClick={() => reopenSketchForPendingDrawing(feature.id)}
+                                            className="group flex w-full items-center gap-2 rounded-md border border-slate-700/80 bg-slate-800/60 px-3 py-2 text-left transition-colors hover:border-cyan-400/50 hover:bg-cyan-400/[0.08]"
+                                        >
+                                            <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-200 group-hover:text-cyan-100">
+                                                {feature.label}
+                                            </span>
+                                            <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.12em] text-slate-500 group-hover:text-cyan-300/80">
+                                                Edit
+                                            </span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                         <div className="mt-5 flex justify-end gap-2">
                             <button
                                 type="button"
@@ -23203,8 +23435,10 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                 standaloneA2UIMessage={props.standaloneA2UIMessage}
                 chatToolDialogs={props.chatToolDialogs}
                 agentChatOpenSignal={props.agentChatOpenSignal}
+                quickThoughtDismissSignal={props.quickThoughtDismissSignal}
                 boundaryQuickActions={props.boundaryQuickActions}
                 workflowThought={props.workflowThought}
+                quickThoughtHint={props.quickThoughtHint}
                 textScale={props.settings.commandBar?.textScale ?? 1.15}
                 showShortcutHints={props.settings.commandBar?.showShortcutHints ?? true}
                 showStatusBadges={props.settings.commandBar?.showStatusBadges ?? true}

@@ -4,6 +4,7 @@ import { PlumbBobIcon } from './icons';
 import { UploadShell, UploadPanel, UploadDropzone, UploadPrimaryButton, UploadGhostButton } from './UploadShell.tsx';
 import { type SurveyPoint } from '../types.ts';
 import { useErrorReporter } from '../contexts/AppStateContext';
+import { isDirectoryPickerAbort, pickDirectoryFiles, supportsDirectoryPicker } from '../utils/folderUpload.ts';
 
 interface PointEditorInputProps {
   onSessionStart: () => void;
@@ -197,7 +198,24 @@ const PointEditorInput: React.FC<PointEditorInputProps> = ({ onSessionStart, onG
       document.getElementById('point-editor-file-input')?.click();
     }
   };
-  const handleFolderClick = (e: React.MouseEvent) => { e.stopPropagation(); folderInputRef.current?.click(); };
+  const handleFolderClick = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!supportsDirectoryPicker()) {
+      folderInputRef.current?.click();
+      return;
+    }
+    try {
+      const files = await pickDirectoryFiles();
+      if (files.length > 0) await handleFiles(files);
+    } catch (error) {
+      if (isDirectoryPickerAbort(error)) return;
+      reportError({
+        title: 'Folder read failed',
+        message: 'The browser could not read that folder. Drag it onto the drop zone instead, or choose individual point files.',
+        severity: 'warning',
+      });
+    }
+  }, [handleFiles, reportError]);
 
   // webkitdirectory / directory aren't in React's input typings and are unreliable via spread props,
   // so set them directly on the DOM node the moment it mounts. This is what puts the native picker

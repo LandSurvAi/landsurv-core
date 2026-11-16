@@ -10,6 +10,7 @@ export type DevOpsTabId =
   | 'dashboard'
   | 'subscribers'
   | 'apikeys'
+  | 'recordings'
   | 'deeds'
   | 'security'
   | 'compliance'
@@ -94,6 +95,20 @@ export const DEVOPS_TABS: DevOpsTab[] = [
     accent: 'cyan',
     keywords: ['tokens', 'credentials', 'usage', 'last used', 'issue key'],
     sections: [{ label: 'API key usage', keywords: ['key', 'owner', 'requests', 'last used'] }],
+  },
+  {
+    id: 'recordings',
+    label: 'Recordings',
+    icon: '●',
+    group: 'Operate',
+    hint: 'Recorder keys, launch links and session registry',
+    accent: 'amber',
+    keywords: ['recording', 'recorder', 'training', 'session', 'key', 'unlock', 'launch', 'lsvz', 'replay'],
+    sections: [
+      { label: 'Recorder keys', keywords: ['create key', 'revoke', 'expires', 'portable'] },
+      { label: 'Launch unlocked app', keywords: ['launch', 'tab', 'one-time'] },
+      { label: 'Session registry', keywords: ['duration', 'events', 'operator', 'metadata'] },
+    ],
   },
   {
     id: 'deeds',

@@ -195,7 +195,14 @@ export const standardsComplianceAgentConfig: AgentConfig = {
  * @returns Agent configuration or undefined if not found
  */
 export function getAgentConfig(agentType: AgentType): AgentConfig | undefined {
-  const configMap: Record<AgentType, AgentConfig> = {
+  const configMap: Partial<Record<AgentType, AgentConfig>> = {
+    [AgentType.RAW_REPLAY]: {
+      agentType: AgentType.RAW_REPLAY,
+      displayName: 'Raw Replay',
+      greetingMessage: buildAgentWelcome(AgentType.RAW_REPLAY, 'Load a raw field file to replay the observation sequence in 3D and review its deterministic summary.'),
+      suggestedQuestions: ['Open Raw Replay', 'Upload a .rw5 file', 'Explain the field summary'],
+      logMessage: 'Raw Replay activated.',
+    },
     [AgentType.CONTOURING_AGENT]: contouringAgentConfig,
     [AgentType.PROFILE_AGENT]: profileAgentConfig,
     [AgentType.COGO_AGENT]: cogoAgentConfig,

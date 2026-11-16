@@ -45,6 +45,14 @@ import { DrawingCanvas } from './components/DrawingCanvas.tsx';
 import { TimelineDock } from './components/timeline/TimelineDock.tsx';
 import { useTimelineVisibility } from './components/timeline/timelineVisibility.ts';
 import { TimelineProvider, useTimeline } from './contexts/TimelineContext.tsx';
+import { RecordingProvider } from './contexts/RecordingContext.tsx';
+import { RecorderGate } from './components/recording/RecorderGate.tsx';
+import { RecordingBridge } from './components/recording/RecordingBridge.tsx';
+import { TrainingBadge } from './components/recording/TrainingBadge.tsx';
+import { clearAttachedTraining, getAttachedTrainingBundles } from './services/recording/attachedTraining.ts';
+import { buildTrainingIndexForBundles, bundleToTrainingAssets, mergeTrainingIndexes } from './services/recording/bundle.ts';
+import type { EmbeddedTrainingIndex } from './types.ts';
+import type { TrainingAsset } from './utils/sessionZip.ts';
 import type { TimelineIcon } from './utils/timeline/types.ts';
 import { divideLinesIntoPoints, parseDivideSelectionIntent } from './utils/divideSelection.ts';
 import CutSheetPanel from './components/CutSheetPanel.tsx';
@@ -129,6 +137,11 @@ import {
   parseMoundPointIntent,
 } from './utils/proceduralPoints.ts';
 import { convertLinearUnits, getLinearUnitAbbreviation } from './utils/linearUnits.ts';
+import RawReplayCanvas from './components/rawReplay/RawReplayCanvas.tsx';
+import RawReplayToolPanel from './components/rawReplay/RawReplayToolPanel.tsx';
+import { useRawReplayController } from './components/rawReplay/useRawReplayController.ts';
+import Project3DView from './components/rawReplay/Project3DView.tsx';
+import { RAW_UNIT_TO_LINEAR_UNIT, type RawImportOptions, type RawSurvey } from './services/rawReplay/types.ts';
 import { applyAnnotationStyleCommand } from './utils/annotationStyleCommand.ts';
 import { normalizeCadLayerColor, normalizeCadLayerLinetype, parseCadLayerChatCommand } from './services/cadLayerChatCommands.ts';
 import CadLayerPicker from './components/CadLayerPicker.tsx';
@@ -260,6 +273,8 @@ import { OpenSourceSubdomainPage } from './components/OpenSourceSubdomainPage.ts
 import { Roadmap2026Page } from './components/Roadmap2026Page.tsx';
 import InvestorInquiryForm from './components/InvestorInquiryForm.tsx';
 import HelpModal from './components/HelpModal.tsx';
+import { MapStatusFlyout } from './components/MapStatusFlyout.tsx';
+import type { MapImageryStatus } from './utils/mapImageryStatus.ts';
 import AboutPage from './components/AboutPage.tsx';
 import ForwardThinkingPage from './components/ForwardThinkingPage.tsx';
 import DisclaimerPage from './components/DisclaimerPage.tsx';
@@ -350,6 +365,8 @@ import { loadGemini3Config } from './services/gemini3Config.ts';
 import {
   loadCivilDrafterContextConfig,
   getCivilDrafterContextConfig,
+  DEFAULT_CIVIL_DRAFTER_CONTEXT_CONFIG,
+  resolveSurveyorsEyeFrameSize,
   EMPTY_CIVIL_DRAFTER_CONTEXT_VOLUME,
   type CivilDrafterContextVolume,
 } from './services/civilDrafterContextConfig.ts';
@@ -367,7 +384,16 @@ import {
   stripUnrequestedRoadBaselines,
 } from './utils/roadStyles.ts';
 import { detectRoadPaintRequest } from './utils/roadPaint.ts';
-import { buildCivilDrafterLineworkContext } from './utils/civilDrafterLinework.ts';
+import { anchorLineEndpoints, buildCivilDrafterLineworkContext } from './utils/civilDrafterLinework.ts';
+import { buildDraftingLessonsContext, fetchDraftingLessons } from './services/draftingLessons.ts';
+import { civilDrafterDiagnostics } from './services/civilDrafterDiagnostics.ts';
+import {
+  buildCombinedLayer,
+  buildSketchLockedLineKeys,
+  isLineLocked,
+  isReferenceLine,
+  protectReferenceLines,
+} from './utils/referenceGeometry.ts';
 import {
   addLineToList,
   inheritConnectedLayer,
@@ -796,7 +822,7 @@ const useMediaQuery = (query: string): boolean => {
 
 const AUTO_MODEL_OPTION = 'auto';
 // Gemini 4 Hydrogen is the standard reasoning model; Gemini 4 Argon is the
-// explicit High Thinking tier.
+// explicit High Thinking tier, but its own reasoning defaults to Fast.
 const CURRENT_GEMINI_MODEL = DEFAULT_GEMINI_MODEL;
 const AUTO_FAST_GEMINI_MODEL = AUTO_FAST_MODEL;
 const FABLE_5_MODEL_ID = 'claude-fable-5';
@@ -835,7 +861,7 @@ const getModelDisplayLabel = (modelName: string): string => (
   : modelName === CURRENT_GEMINI_MODEL ? 'Gemini 4 Hydrogen'
   : modelName === 'gemini-3.7-flash' ? 'Gemini 3.7 Flash'
   : modelName === 'gemini-3.8-flash' ? 'Gemini 3.8 Flash'
-  : modelName === 'gemini-4-argon' ? 'Gemini 4 Argon (High Thinking)'
+  : modelName === 'gemini-4-argon' ? 'Gemini 4 Argon'
   : modelName === AUTO_FAST_GEMINI_MODEL ? 'Gemini 3.5 Flash Lite'
   : modelName === OPENAI_FLAGSHIP_MODEL ? 'GPT-5.6 Terra (your OpenAI key)'
   : modelName === OPENAI_FAST_MODEL ? 'GPT-5.4 Mini (your OpenAI key)'
@@ -868,6 +894,8 @@ interface DrawingCanvasHandles {
   zoomToBbox: (minE: number, maxE: number, minN: number, maxN: number, padding?: number) => void;
   redraw: () => void;
   finishDrawing: () => void;
+  /** Arm the Fusion-style reference projection picker for the open sketch. */
+  startProjectionMode: () => void;
   toggleDrawingToolsMenu: () => void;
   closeDrawingToolsMenu: () => void;
   startPointPlacement: (options: { pointNumber?: string; elevation?: string; description?: string }) => void;
@@ -1300,7 +1328,7 @@ const AppContent = () => {
   // REFACTORING NOTE: Canvas and geometry state moved to CanvasStateContext
   const {
     pointLists, setPointLists,
-    lines, setLines,
+    lines, setLines: rawSetLines,
     contourLabels, setContourLabels,
     profileData, setProfileData,
     profileInfo, setProfileInfo,
@@ -1353,6 +1381,39 @@ const AppContent = () => {
   const timeline = useTimeline();
   const timelineVisibility = useTimelineVisibility();
   const isTimelineSketchFlowEnabled = timelineVisibility.enabled && timelineVisibility.visible;
+  /** Lines frozen because they predate the sketch currently being edited. */
+  const sketchLockedLineKeys = useMemo(
+    () => buildSketchLockedLineKeys(timeline.activeTransaction, timeline.document),
+    [timeline.activeTransaction, timeline.document],
+  );
+  /**
+   * Reference and earlier-sketch geometry is immutable. App-level line writes
+   * re-assert every locked line that already existed, so AI/bulk edits cannot
+   * trim, move, or delete one by accident. Undo/redo and timeline replay use
+   * the history setters directly and can still restore older canvases.
+   */
+  const setLines = useCallback<React.Dispatch<React.SetStateAction<SurveyLine[]>>>((action) => {
+    rawSetLines(previous => {
+      const next = typeof action === 'function'
+        ? (action as (prev: SurveyLine[]) => SurveyLine[])(previous)
+        : action;
+      return protectReferenceLines(previous, next, sketchLockedLineKeys);
+    });
+  }, [rawSetLines, sketchLockedLineKeys]);
+  const isLineLockedForSketch = useCallback(
+    (line: SurveyLine) => isLineLocked(line, sketchLockedLineKeys),
+    [sketchLockedLineKeys],
+  );
+  const sketchQuickThoughtHint = useMemo(
+    () => timeline.activeSketch
+      ? {
+          key: `sketch:${timeline.activeSketch.id}`,
+          label: 'Sketch',
+          text: 'Close the sketch when done drafting',
+        }
+      : null,
+    [timeline.activeSketch],
+  );
   // Point-file imports are one-shot async actions. Open the timeline import
   // when the handler starts, then close it after React has committed the new
   // point list so the feature captures the actual resulting geometry.
@@ -1365,13 +1426,18 @@ const AppContent = () => {
     label: string,
     options?: { sketchGroup?: boolean; icon?: TimelineIcon; detail?: string },
   ) => {
+    if (!isTimelineSketchFlowEnabled) {
+      pendingTimelineImportRef.current = false;
+      return;
+    }
     pendingTimelineImportRef.current = timeline.beginImport(label, options);
-  }, [timeline.beginImport]);
+  }, [isTimelineSketchFlowEnabled, timeline.beginImport]);
 
   /** Record an inspectable, non-geometric step without opening a transaction. */
   const recordTimelineEvent = useCallback((label: string, icon: TimelineIcon, detail?: string) => {
+    if (!isTimelineSketchFlowEnabled) return;
     timeline.recordEvent({ kind: 'event', label, icon, detail });
-  }, [timeline.recordEvent]);
+  }, [isTimelineSketchFlowEnabled, timeline.recordEvent]);
   useEffect(() => {
     if (!pendingTimelineImportRef.current) return;
     const transaction = timeline.activeTransaction;
@@ -1445,6 +1511,9 @@ const AppContent = () => {
   const [standaloneA2UIMessage, setStandaloneA2UIMessage] = useState<ChatMessage | null>(null);
   const [isSpreadsheetEditorOpen, setIsSpreadsheetEditorOpen] = useState<boolean>(false);
   const [agentChatOpenSignal, setAgentChatOpenSignal] = useState(0);
+  // A completed file load retires the answer preview that Quick Thought would
+  // otherwise keep floating over the canvas.
+  const [quickThoughtDismissSignal, setQuickThoughtDismissSignal] = useState(0);
   
   // REFACTORING NOTE: Application-level state moved to AppStateContext
   const {
@@ -2417,6 +2486,12 @@ const AppContent = () => {
   const cutSheetRef = useRef<CutSheetPanelHandles>(null);
   const [canvasTransform, setCanvasTransform] = useState<{ scale: number; offsetX: number; offsetY: number } | null>(null);
 
+  // Embedded training from a loaded .lsvz: manifest index, raw archive for a
+  // lazy per-recording import, and already-extracted assets for re-saving.
+  const [embeddedTrainingIndex, setEmbeddedTrainingIndex] = useState<EmbeddedTrainingIndex | null>(null);
+  const embeddedTrainingSourceRef = useRef<ArrayBuffer | null>(null);
+  const embeddedTrainingAssetsRef = useRef<Map<string, Blob>>(new Map());
+
   
   // Ref to always access current pointLists (avoids stale closure in async handlers)
   const pointListsRef = useRef(pointLists);
@@ -2651,6 +2726,11 @@ const AppContent = () => {
   const [isSteepSlopePanelVisible, setIsSteepSlopePanelVisible] = useState<boolean>(false);
   const [isSteepSlopePanelMinimized, setIsSteepSlopePanelMinimized] = useState<boolean>(false);
   const [tinSurfaces, setTinSurfaces] = useState<TinSurface[]>([]);
+  const [showRawReplay, setShowRawReplay] = useState(false);
+  // First upload offers points vs. replay in Quick Thought. Keeping the file
+  // loaded but the replay closed lets the points be used first.
+  const [rawIntakeOpen, setRawIntakeOpen] = useState(false);
+  const [showProject3D, setShowProject3D] = useState(false);
   const [isAutoDraftTinHidden, setIsAutoDraftTinHidden] = useState<boolean>(false);
   const [isImportingTin, setIsImportingTin] = useState(false);
   const [tinImportProgress, setTinImportProgress] = useState(0);
@@ -3317,6 +3397,7 @@ const AppContent = () => {
 
     const resetChatSession = (agent: AgentType | null) => {
       switch (agent) {
+        case AgentType.RAW_REPLAY:
         case AgentType.RAW_CRAWLER: setRawChat(null); break;
         case AgentType.CIVIL_DRAFTER: setCivilDrafterChat(null); break;
         case AgentType.DEED_READER: setDeedChat(null); break;
@@ -3369,14 +3450,59 @@ const AppContent = () => {
     if (settings.forceAgent) return;
 
     if (activeAgent && activeAgent !== AgentType.LSVZ_AGENT) {
-      setLsvzChatHistory(prev => [
-        ...prev,
-        {
-          role: MessageRole.MODEL,
-          text: buildCallInAnnouncement(activeAgent),
-          callInEvent: { kind: 'called-in', agent: activeAgent },
-        },
-      ]);
+      const isRawReplay = activeAgent === AgentType.RAW_REPLAY;
+      // The loaded-file call-in would otherwise revive the answer preview after
+      // the intake card closes. Only retire it when a file is actually loaded,
+      // so a fresh call-in can still present the raw upload widget.
+      if (isRawReplay && rawFile) setQuickThoughtDismissSignal(signal => signal + 1);
+      // Raw Replay opens as a Quick Thought workspace. Close the tool shelf so
+      // the upload choice is not duplicated beside it, and do not auto-enter
+      // the simulation beneath a fresh intake.
+      if (isRawReplay) {
+        setIsToolShelfVisible(false);
+        if (!rawIntakeOpen) setShowRawReplay(Boolean(rawFile));
+      }
+      setLsvzChatHistory(prev => {
+        if (isRawReplay && !rawFile) {
+          const alreadyAsking = prev.some(message =>
+            message.a2ui?.kind === 'upload-widget' &&
+            message.a2ui.widgetType === 'raw-upload' &&
+            message.a2ui.status !== 'completed' &&
+            message.a2ui.status !== 'dismissed',
+          );
+          if (alreadyAsking) return prev;
+        }
+        return [
+          ...prev,
+          isRawReplay
+            ? {
+                role: MessageRole.MODEL,
+                text: rawFile
+                  ? `**Raw Replay is called in.** <strong>"${rawFile.name}"</strong> is ready. Scrub the timeline or ask about the field summary.`
+                  : '**Raw Replay is called in.** Load a raw field record to reconstruct the survey in 3D. The source file stays read-only until you explicitly add it to the project.',
+                quickThoughtLabel: 'Raw Replay',
+                quickThoughtText: rawFile
+                  ? `${rawFile.name} · field record ready`
+                  : 'Load a raw field record to replay it in 3D.',
+                callInEvent: { kind: 'called-in', agent: activeAgent },
+                ...(rawFile
+                  ? {}
+                  : {
+                      a2ui: {
+                        kind: 'upload-widget' as const,
+                        agent: AgentType.RAW_REPLAY,
+                        widgetType: 'raw-upload' as const,
+                        status: 'expanded' as const,
+                      },
+                    }),
+              }
+            : {
+                role: MessageRole.MODEL,
+                text: buildCallInAnnouncement(activeAgent),
+                callInEvent: { kind: 'called-in', agent: activeAgent },
+              },
+        ];
+      });
     } else if (previous !== AgentType.LSVZ_AGENT && !isAgentRetired(previous)) {
       // Retired agents (e.g. the old RAW Crawler) should never be named in
       // release copy; a stale saved session must not surface them.
@@ -3389,7 +3515,7 @@ const AppContent = () => {
         },
       ]);
     }
-  }, [activeAgent, settings.forceAgent]);
+  }, [activeAgent, settings.forceAgent, rawFile, rawIntakeOpen, setIsToolShelfVisible]);
 
   // ── CACP agent focus ──────────────────────────────────────────────────────
   // CACP owns the delegation stack for visible agent hand-offs. When an agent
@@ -3469,6 +3595,13 @@ const AppContent = () => {
   const headerHelpRef = useRef<HTMLDivElement | null>(null);
   const headerHelpMenuRef = useRef<HTMLDivElement | null>(null);
   const [headerHelpMenuPos, setHeaderHelpMenuPos] = useState<{ top: number; right: number } | null>(null);
+  const [isMapFlyoutOpen, setIsMapFlyoutOpen] = useState(false);
+  const [mapFlyoutPos, setMapFlyoutPos] = useState<{ top: number; right: number } | null>(null);
+  const mapButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [mapImageryStatus, setMapImageryStatus] = useState<MapImageryStatus | null>(null);
+  const handleMapStatusChange = useCallback((status: MapImageryStatus | null) => {
+    setMapImageryStatus(status);
+  }, []);
   const [isHeaderFileOpen, setIsHeaderFileOpen] = useState(false);
   const headerFileRef = useRef<HTMLDivElement | null>(null);
     const canvasToolbarDockRef = useRef<HTMLDivElement | null>(null);
@@ -4693,6 +4826,10 @@ const AppContent = () => {
     } catch { /* ignore */ }
     setShowWelcome(true);
     setIsInitialScreen(true);
+    setEmbeddedTrainingIndex(null);
+    embeddedTrainingSourceRef.current = null;
+    embeddedTrainingAssetsRef.current = new Map();
+    clearAttachedTraining();
     setProjectionGpsFix(null);
     setInitializedAgents(new Set());
     setIsAddingData(false);
@@ -4811,7 +4948,7 @@ const AppContent = () => {
     setSuggestedQuestions([]);
     
     setPointLists([{ id: 'working', name: 'Unsaved Points', points: [], isVisible: true }]);
-    setLines([]);
+    rawSetLines([]);
     setContourLabels([]);
     setContourLabelTool(null);
     setLineLabelScale(1);
@@ -4934,60 +5071,231 @@ const AppContent = () => {
 
   const handleFileUploaded = useCallback((content: string, name: string) => {
     try {
-        if (rawFile) {
-            setGeneratedFiles(prev => [...prev, { ...rawFile, name: `(Archived) ${rawFile.name}` }]);
-            logActionToFieldbook(`Replaced RAW file with: ${name}`);
-            try {
-              const newChat = startChatWithOverride(AgentType.RAW_CRAWLER, content);
-              setRawChat(newChat);
-            } catch (chatErr) {
-              console.warn('[RAW Crawler] AI chat deferred:', chatErr);
-            }
-            setRawFile({ name, content });
-            setRawChatHistory(prev => [
-                ...markPendingA2UICompleted(prev, name),
-                { 
-                    role: MessageRole.MODEL, 
-                    text: `The <strong style="color: ${agentThemeColors[AgentType.RAW_CRAWLER]};">RAW Crawler</strong> agent has loaded the new active file <strong style="color: ${agentThemeColors[AgentType.RAW_CRAWLER]};">"${name}"</strong>.`
-                }
-            ]);
-            setPointLists(prev => prev.map(l => l.id === 'working' ? { ...l, points: [] } : l));
-            setLines([]);
-            setContourLabels([]);
-            setIsAddingData(false);
-            return;
-        }
-
+        // Only the first load asks whether to enter the replay. Loading a
+        // replacement file from inside Raw Replay keeps the replay open.
+        const isInitialRawUpload = !rawFile;
         startSession();
-        logActionToFieldbook(`Loaded RAW file: ${name}`);
-        try {
-          const newChat = startChatWithOverride(AgentType.RAW_CRAWLER, content);
-          setRawChat(newChat);
-        } catch (chatErr) {
-          console.warn('[RAW Crawler] AI chat deferred:', chatErr);
+        if (rawFile && rawFile.name !== name) {
+            setGeneratedFiles(prev => [...prev, { ...rawFile, name: `(Archived) ${rawFile.name}` }]);
+            logActionToFieldbook(`Replaced raw file with: ${name}`);
+        } else {
+            logActionToFieldbook(`Loaded raw file: ${name}`);
         }
         setRawFile({ name, content });
+        setRawChat(null);
         setRawChatHistory(prev => [
             ...markPendingA2UICompleted(prev, name),
             {
                 role: MessageRole.MODEL,
-                text: buildAgentWelcome(AgentType.RAW_CRAWLER, `I have loaded <strong>"${name}"</strong>. Ask me to summarize the observations, validate the field data, or plot the file on the canvas.`),
+                text: buildAgentWelcome(AgentType.RAW_REPLAY, `I have loaded <strong>"${name}"</strong>. Add its shot points to the project to inspect them now, or open the 3D field replay. The raw file stays read-only until you explicitly add data to the project.`),
             }
         ]);
-        
-        const questionsSource = name === exampleFileName ? suggestedQuestionsText : userSuggestedQuestionsText;
-        const questions = questionsSource.split('\n').filter(q => q.trim() !== '');
-        setSuggestedQuestions(questions);
-        
+        // Quick Thought reads the visible LSAI thread, so close the standard
+        // upload surface there and post the loaded state in the same thread.
+        setLsvzChatHistory(prev => [
+            ...markPendingA2UICompleted(prev, name),
+            {
+                role: MessageRole.MODEL,
+                text: `**Raw Replay is called in.** <strong>"${name}"</strong> is ready. Add its shot points to the project or open the 3D replay.`,
+            }
+        ]);
+        setQuickThoughtDismissSignal(signal => signal + 1);
+        setActiveAgent(AgentType.RAW_REPLAY);
+        setSuggestedQuestions([]);
+        setInitializedAgents(prev => new Set(prev).add(AgentType.RAW_REPLAY));
         setError(null);
-        setActiveAgent(AgentType.RAW_CRAWLER);
-        setInitializedAgents(prev => new Set(prev).add(AgentType.RAW_CRAWLER));
+        // Do not drop a first-time upload straight into the simulation. Keep
+        // the canvas visible, offer points-only intake, and leave the replay
+        // one click away.
+        setShowRawReplay(!isInitialRawUpload);
+        setRawIntakeOpen(isInitialRawUpload);
+        if (!isInitialRawUpload) openToolShelfPanel('raw-replay');
         showView('canvas');
     } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Failed to initialize AI chat.';
-        setError(`Initialization Error: ${errorMessage}`);
+        setError(`Raw Replay could not open: ${err instanceof Error ? err.message : 'Unknown error.'}`);
     }
-  }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, rawFile, settings, startChatWithOverride]);
+  }, [showView, startSession, logActionToFieldbook, rawFile, openToolShelfPanel]);
+
+  // Raw Replay is read-only until this explicit write step. The import is one
+  // undoable canvas-history action so points, traverse linework and an optional
+  // TIN move together rather than leaving a half-imported project.
+  const handleRawReplayImport = useCallback((survey: RawSurvey, options: RawImportOptions) => {
+    const fromUnit = RAW_UNIT_TO_LINEAR_UNIT[survey.job.units];
+    const toUnit = settings.linearUnits ?? 'usSurveyFoot';
+    const convert = (value: number) => convertLinearUnits(value, fromUnit, toUnit);
+    const located = survey.observations.filter(
+      observation => observation.easting != null && observation.northing != null,
+    );
+    const importedPoints: SurveyPoint[] = options.pointList
+      ? located.map(observation => ({
+          pointNumber: observation.pointNumber ?? `RR-${observation.sequence}`,
+          northing: convert(observation.northing!),
+          easting: convert(observation.easting!),
+          elevation: observation.elevation == null ? undefined : convert(observation.elevation),
+          description: observation.description,
+        }))
+      : [];
+
+    const importedLines: SurveyLine[] = [];
+    if (options.traverse) {
+      const setups = survey.setups.filter(setup => setup.easting != null && setup.northing != null);
+      for (let index = 1; index < setups.length; index += 1) {
+        const from = setups[index - 1];
+        const to = setups[index];
+        importedLines.push({
+          id: `raw-replay-traverse-${index}-${Date.now()}`,
+          from: from.id,
+          to: to.id,
+          fromPt: {
+            x: convert(from.easting!),
+            y: convert(from.northing!),
+            z: from.elevation == null ? 0 : convert(from.elevation),
+          },
+          toPt: {
+            x: convert(to.easting!),
+            y: convert(to.northing!),
+            z: to.elevation == null ? 0 : convert(to.elevation),
+          },
+          color: '#fbbf24',
+          type: 'baseline',
+        });
+      }
+    }
+
+    const importPoints = located.map(observation => ({
+      pointNumber: observation.pointNumber ?? `RR-${observation.sequence}`,
+      northing: convert(observation.northing!),
+      easting: convert(observation.easting!),
+      elevation: observation.elevation == null ? undefined : convert(observation.elevation),
+      description: observation.description,
+    }));
+    const tin = options.tin && importPoints.length >= 3
+      ? buildTinFromPoints(importPoints, {
+          name: `${survey.job.name ?? survey.fileName.replace(/\.[^.]+$/, '')} TIN`,
+          color: '#06b6d4',
+        })
+      : null;
+
+    canvasHistory.withLabel(`Import Raw Replay: ${survey.fileName}`, () => {
+      if (importedPoints.length > 0) {
+        setPointLists(prev => [...prev, {
+          id: `raw-replay-${Date.now()}`,
+          name: `${survey.fileName} shots`,
+          points: importedPoints,
+          isVisible: true,
+        }]);
+      }
+      if (importedLines.length > 0) setLines(prev => [...prev, ...importedLines]);
+      if (tin) setTinSurfaces(prev => [...prev, tin]);
+    });
+    logActionToFieldbook(`Raw Replay imported ${importedPoints.length} point${importedPoints.length === 1 ? '' : 's'} from ${survey.fileName}.`);
+  }, [canvasHistory, settings.linearUnits, logActionToFieldbook]);
+
+  const visibleProjectPoints = useMemo(
+    () => points.filter(point => !point.hidden),
+    [points],
+  );
+
+  const rawReplay = useRawReplayController({
+    rawFile,
+    onImport: handleRawReplayImport,
+  });
+
+  const handleRawIntakeDismiss = useCallback(() => {
+    setRawIntakeOpen(false);
+  }, []);
+
+  const handleRawIntakeOpenReplay = useCallback(() => {
+    setRawIntakeOpen(false);
+    if (!rawFile) return;
+    setShowRawReplay(true);
+    openToolShelfPanel('raw-replay');
+  }, [rawFile, openToolShelfPanel]);
+
+  // The "points only" branch of the initial-upload offer uses the same
+  // undoable import as Raw Replay's explicit Add to project step, minus the
+  // traverse linework and TIN so the points can be inspected and edited first.
+  const handleRawIntakePointsOnly = useCallback(() => {
+    const survey = rawReplay.survey;
+    if (!survey) return;
+    handleRawReplayImport(survey, { pointList: true, traverse: false, tin: false, attachRaw: true });
+    setRawIntakeOpen(false);
+    setShowRawReplay(false);
+    setOpenToolShelfPanelIds(previous => previous.filter(id => id !== 'raw-replay'));
+    addNotification({
+      kind: 'raw-intake',
+      severity: 'success',
+      title: 'Raw shot points added',
+      message: `${survey.stats.coordinateCount} point${survey.stats.coordinateCount === 1 ? '' : 's'} from ${survey.fileName} are on the canvas. Open Raw Replay from the tool shelf whenever you want the 3D field replay.`,
+      autoDismissMs: 9000,
+    });
+  }, [rawReplay.survey, handleRawReplayImport, addNotification]);
+
+  // A fresh raw upload is a Quick Thought choice, never a modal. The card owns
+  // the two intake paths until the user picks one, dismisses it, or opens the
+  // replay from elsewhere.
+  const rawIntakeThought = useMemo<WorkflowQuickThoughtNotice | undefined>(() => {
+    if (!rawIntakeOpen || !rawFile || showWelcome || showRawReplay) return undefined;
+    if (activeVisualPanel !== 'canvas') return undefined;
+
+    const survey = rawReplay.survey;
+    if (!survey) {
+      const parseError = rawReplay.parseError;
+      return {
+        key: `raw-intake:${rawFile.name}:${parseError ? 'review' : 'reading'}`,
+        title: 'Raw file loaded',
+        ownerAgent: AgentType.RAW_REPLAY,
+        attention: 'active',
+        progressLabel: parseError ? 'REVIEW' : 'READING',
+        summary: parseError ?? `Reading ${rawFile.name}…`,
+        steps: [],
+        actionLabel: 'Open 3D Replay',
+        onAction: handleRawIntakeOpenReplay,
+        onDismiss: handleRawIntakeDismiss,
+      };
+    }
+
+    const count = survey.stats.coordinateCount;
+    const pointWord = count === 1 ? 'point' : 'points';
+    const canAdd = count > 0;
+    const summary = canAdd
+      ? `${count.toLocaleString()} ${pointWord} · ${survey.observations.length} observations · ${survey.setups.length} setups. Add the shot points to inspect and edit them on the canvas now, or open the 3D field replay.`
+      : `${count.toLocaleString()} ${pointWord} · ${survey.observations.length} observations · ${survey.setups.length} setups. This record has no local grid coordinates, so there are no points to add. Open the replay to review the field summary instead.`;
+
+    return {
+      key: `raw-intake:${rawFile.name}:${count}:${survey.observations.length}:${survey.setups.length}`,
+      title: 'Raw file loaded',
+      ownerAgent: AgentType.RAW_REPLAY,
+      attention: 'active',
+      progressLabel: 'READY',
+      summary,
+      steps: [],
+      actionLabel: canAdd ? `Add ${count.toLocaleString()} ${pointWord}` : 'Open 3D Replay',
+      onAction: canAdd ? handleRawIntakePointsOnly : handleRawIntakeOpenReplay,
+      secondaryActionLabel: canAdd ? 'Open 3D Replay' : undefined,
+      onSecondaryAction: canAdd ? handleRawIntakeOpenReplay : undefined,
+      onDismiss: handleRawIntakeDismiss,
+    };
+  }, [
+    activeVisualPanel,
+    handleRawIntakeDismiss,
+    handleRawIntakeOpenReplay,
+    handleRawIntakePointsOnly,
+    rawFile,
+    rawIntakeOpen,
+    rawReplay.parseError,
+    rawReplay.survey,
+    showRawReplay,
+    showWelcome,
+  ]);
+
+  // Clear the intake offer when the file goes away or the replay opens from
+  // somewhere other than the card. Parser failures stay in the card and use its
+  // Open 3D Replay action instead of silently taking over the canvas.
+  useEffect(() => {
+    if (!rawIntakeOpen) return;
+    if (!rawFile || showRawReplay) setRawIntakeOpen(false);
+  }, [rawIntakeOpen, rawFile, showRawReplay]);
   
   // Civil Drafter file upload handler - similar to RAW Crawler but uses intelligent linework generation
   const handleCivilDrafterFileUploaded = useCallback((content: string, name: string) => {
@@ -5031,7 +5339,7 @@ const AppContent = () => {
             } else {
                 setPointLists(prev => prev.map(l => l.id === 'working' ? { ...l, points: [] } : l));
             }
-            setLines([]);
+            rawSetLines([]);
             setContourLabels([]);
             setIsAddingData(false);
             // Clear vision cache � new file, fresh gimbal scan on next draw request
@@ -6849,6 +7157,15 @@ const AppContent = () => {
     }
   }, [projectionPrompt, settings, processGisFile]);
 
+  const openMapProjectionPicker = useCallback(() => {
+    setIsMapFlyoutOpen(false);
+    setProjectionPrompt({
+      message: 'Map imagery needs a project coordinate system. Select the State Plane zone or EPSG code for this site so aerial tiles can be placed on the drawing.',
+      onConfirm: () => {},
+      onCancel: () => {},
+    });
+  }, [setProjectionPrompt]);
+
   /**
    * Compute the WGS84 envelope of the project's inclusion lines (optionally
    * narrowed to one named inclusion boundary or held AOI). Used by the GIS Agent to load
@@ -7967,6 +8284,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
   const getSpecialistHistorySetter = useCallback((agent: AgentType): React.Dispatch<React.SetStateAction<ChatMessage[]>> | null => {
     switch (agent) {
+      case AgentType.RAW_REPLAY:
       case AgentType.RAW_CRAWLER: return setRawChatHistory;
       case AgentType.CIVIL_DRAFTER: return setCivilDrafterChatHistory;
       case AgentType.DEED_READER: return setDeedChatHistory;
@@ -15273,6 +15591,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     if (!fileToSwitch) return;
 
     switch (activeAgent) {
+        case AgentType.RAW_REPLAY:
         case AgentType.RAW_CRAWLER:
             handleFileUploaded(fileToSwitch.content, fileToSwitch.name);
             break;
@@ -15694,12 +16013,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // open the provider holds it with that sketch so the strip stays compact.
     if (!isInternalFollowUp && askPeerDepth === 0 && query.trim()) {
       const askedAgent = agentOverride ?? activeAgent;
-      timeline.recordEvent({
-        kind: 'utterance',
-        label: query.trim(),
-        icon: 'question',
-        detail: `Asked ${agentConfig[askedAgent]?.label ?? askedAgent}`,
-      });
+      recordTimelineEvent(
+        query.trim(),
+        'question',
+        `Asked ${agentConfig[askedAgent]?.label ?? askedAgent}`,
+      );
     }
     // Developer / Testing: a forced agent pins interactive requests to one
     // specialist. Explicit agent overrides (CACP peer calls, C3D hand-offs,
@@ -17444,6 +17762,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     let setHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>> | null = null;
     
     switch (agent) {
+        case AgentType.RAW_REPLAY:
         case AgentType.RAW_CRAWLER: chat = rawChat; setHistory = setRawChatHistory; break;
         case AgentType.CIVIL_DRAFTER: chat = civilDrafterChat; setHistory = setCivilDrafterChatHistory; break;
         case AgentType.DEED_READER: chat = deedChat; setHistory = setDeedChatHistory; break;
@@ -17823,13 +18142,52 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // Gimbal Pass A is point + parcel geometry, never background imagery. Pull
     // county parcels now when they are not already on the canvas so the vision
     // pass and road grounding share the same frontage evidence on this turn.
+    // Every draw turn gets a receipt so an empty or slow draft can be explained
+    // after the fact instead of leaving the user with a blank canvas.
+    const drafterDrawTurn =
+      (agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT)
+      && isDrawIntent(query);
+    // New drafting/Surveyor's Eye knobs still apply when the legacy context
+    // manager is switched off, so fall back to the persisted config.
+    const drafterConfig = getCivilDrafterContextConfig() ?? loadCivilDrafterContextConfig();
+    if (drafterDrawTurn) {
+      civilDrafterDiagnostics.startTurn({ agent, query });
+      civilDrafterDiagnostics.beginPhase('grounding', 'Grounding & preflight');
+    }
     let autoParcelGrounding: SurveyLine[] = [];
-    if (shouldFetchParcelLineGrounding(agent, query) && isDrawIntent(query)) {
+    const parcelGroundingEnabled = drafterDrawTurn
+      ? (drafterConfig?.autoParcelGrounding ?? true)
+      : true;
+    if (parcelGroundingEnabled && shouldFetchParcelLineGrounding(agent, query) && isDrawIntent(query)) {
       try {
-        autoParcelGrounding = await ensureParcelGroundingForRoadDraw();
+        // Grounding is supporting evidence, not a reason to hold the draw open.
+        // A county parcel service can be slow or cold; cap the wait and draft
+        // from the field shots when frontage does not arrive in time.
+        let parcelTimedOut = false;
+        autoParcelGrounding = await Promise.race([
+          ensureParcelGroundingForRoadDraw(),
+          new Promise<SurveyLine[]>(resolve => {
+            setTimeout(() => {
+              parcelTimedOut = true;
+              resolve([]);
+            }, 4_000);
+          }),
+        ]);
+        if (parcelTimedOut) {
+          logActionToFieldbook(
+            'Gimbal Pass A: parcel grounding took longer than 4 s — drafting from field shots and existing linework.',
+          );
+        }
       } catch (parcelErr) {
         console.warn('[Gimbal] automatic parcel grounding failed:', parcelErr);
       }
+    }
+    if (drafterDrawTurn) {
+      civilDrafterDiagnostics.endPhase(
+        'grounding',
+        'ok',
+        `${autoParcelGrounding.length} parcel line(s) held`,
+      );
     }
 
     if (agent === AgentType.LSVZ_AGENT) {
@@ -17867,7 +18225,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         // and blow the token budget. The profile is computed locally from survey points;
         // the agent only needs to know point numbers and centerline geometry.
         const profileLines = lines.filter(l => !l.type?.startsWith('contour') && l.layer !== 'ESRI-CONTOUR');
-        context = `---BEGIN PROJECT DATA---\n${JSON.stringify({ pointLists: contextPointLists, lines: profileLines, centerlines }, null, 2)}\n---END PROJECT DATA---\n\n`;
+        const combinedLayer = buildCombinedLayer(profileLines, timeline.document);
+        context = `---BEGIN PROJECT DATA---\n${JSON.stringify({ pointLists: contextPointLists, lines: profileLines, centerlines, combinedLayer }, null, 2)}\n---END PROJECT DATA---\n\n`;
     } else if (agent === AgentType.RAW_CRAWLER) {
         // RAW_CRAWLER (COGO agent) - make point context public and always available
         context = `---BEGIN POINT DATABASE---\n${JSON.stringify(contextPointLists, null, 2)}\n---END POINT DATABASE---\n\n`;
@@ -17909,6 +18268,30 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         // being turned into a bank line across ground nobody shot.
         const breaklineInventory = buildBreaklineChainInventory(points);
         if (breaklineInventory) context += breaklineInventory;
+        // Approved SurveyBrain lessons are the reviewed drafting memory. Keep
+        // this lookup to true drafting turns and never let a RAG outage block
+        // the actual drawing request.
+        if (agent === AgentType.CIVIL_DRAFTER && (isDrawIntent(query) || isBreaklineRequest(query))) {
+          const lessonsEnabled = drafterConfig?.useDraftingLessons ?? true;
+          if (!lessonsEnabled) {
+            civilDrafterDiagnostics.recordRag({ status: 'skipped', hitCount: 0, latencyMs: 0 });
+          } else {
+            civilDrafterDiagnostics.beginPhase('rag', 'Approved RAG lessons');
+            try {
+              const draftedLessons = await fetchDraftingLessons(query, { limit: 4 });
+              const lessonContext = buildDraftingLessonsContext(draftedLessons);
+              if (lessonContext) context += lessonContext;
+              civilDrafterDiagnostics.endPhase('rag', 'ok', `${draftedLessons.length} lesson(s)`);
+            } catch (lessonErr) {
+              console.warn('[Civil Drafter] approved lesson lookup skipped:', lessonErr);
+              civilDrafterDiagnostics.endPhase(
+                'rag',
+                'error',
+                lessonErr instanceof Error ? lessonErr.message : 'retrieval failed',
+              );
+            }
+          }
+        }
         // Road grounding: tax-parcel frontage already on the canvas plus OSM road
         // ways for the work area. This is what keeps the drafter honest when the
         // aerial is unusable (all canopy/shadow) — the road still has to follow a
@@ -17936,15 +18319,23 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             if (l.toPt) includePoint(l.toPt.x, l.toPt.y);
           }
           const groundEpsg = settings.projection?.epsg;
-          if (Number.isFinite(minE) && maxE > minE && maxN > minN && typeof groundEpsg === 'number') {
+          const osmGroundingEnabled = drafterConfig?.autoOsmGrounding ?? true;
+          if (osmGroundingEnabled && Number.isFinite(minE) && maxE > minE && maxN > minN && typeof groundEpsg === 'number') {
             const key = `${groundEpsg}:${minE.toFixed(0)}:${minN.toFixed(0)}:${maxE.toFixed(0)}:${maxN.toFixed(0)}`;
             if (!roadGroundingOsmRef.current || roadGroundingOsmRef.current.key !== key) {
+              if (drafterDrawTurn) civilDrafterDiagnostics.beginPhase('osm', 'OSM road grounding');
               const fetched = await fetchOsmGroundingWays({ minE, maxE, minN, maxN }, groundEpsg);
               roadGroundingOsmRef.current = { key, ways: fetched };
               // A new work area invalidates the previous take's critique.
               lastRoadTakeReviewRef.current = null;
+              if (drafterDrawTurn) {
+                civilDrafterDiagnostics.endPhase('osm', 'ok', `${fetched.length} OSM way(s)`);
+              }
             }
             if (roadGroundingOsmRef.current?.ways.length) osmWays = roadGroundingOsmRef.current.ways;
+          } else if (drafterDrawTurn) {
+            civilDrafterDiagnostics.beginPhase('osm', 'OSM road grounding');
+            civilDrafterDiagnostics.endPhase('osm', 'skipped', osmGroundingEnabled ? 'no project CRS/bounds' : 'disabled in settings');
           }
           context += buildRoadGroundingContext({
             parcelLines: parcelGrounding,
@@ -18073,24 +18464,49 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         if (needScan) {
             setIsVisionScanning(true);
             setShowVisionHUD(true);
+            if (drafterDrawTurn) civilDrafterDiagnostics.beginPhase('vision', "Surveyor's Eye capture");
             try {
+                const eyeFrameSize = resolveSurveyorsEyeFrameSize(
+                    drafterConfig ?? DEFAULT_CIVIL_DRAFTER_CONTEXT_CONFIG,
+                );
                 activeSurvey = await captureVisionSurvey(points, geometryLines, {
                     boundaryFiles,
                     pass: 'geometry',
                     renderParcelLines,
                     aoiBounds: activeAoiBoundsRef.current ?? undefined,
+                    canvasWidth: eyeFrameSize.width,
+                    canvasHeight: eyeFrameSize.height,
+                    maxCorridorFrames: drafterConfig?.maxCorridorFrames
+                        ?? DEFAULT_CIVIL_DRAFTER_CONTEXT_CONFIG.maxCorridorFrames,
+                    maxClusterFrames: drafterConfig?.maxZoneFrames
+                        ?? DEFAULT_CIVIL_DRAFTER_CONTEXT_CONFIG.maxZoneFrames,
+                    maxDetailFrames: drafterConfig?.maxDetailFrames
+                        ?? DEFAULT_CIVIL_DRAFTER_CONTEXT_CONFIG.maxDetailFrames,
                 });
                 setCivilDrafterVisionSurvey(activeSurvey);
                 civilDrafterVisionSurveyRef.current = activeSurvey;
                 lastVisionPointCountRef.current = currentFeatureCount;
                 lastVisionAoiKeyRef.current = aoiKey;
+                if (drafterDrawTurn) {
+                    civilDrafterDiagnostics.endPhase('vision', 'ok', `${activeSurvey.frames.length} frame(s)`);
+                }
             } catch (visionErr) {
                 console.warn('[CivilDrafterVision] scan failed:', visionErr);
                 activeSurvey = null;
                 civilDrafterVisionSurveyRef.current = null;
+                if (drafterDrawTurn) {
+                    civilDrafterDiagnostics.endPhase(
+                        'vision',
+                        'error',
+                        visionErr instanceof Error ? visionErr.message : 'capture failed',
+                    );
+                }
             } finally {
                 setIsVisionScanning(false);
             }
+        } else if (drafterDrawTurn) {
+            civilDrafterDiagnostics.beginPhase('vision', "Surveyor's Eye capture");
+            civilDrafterDiagnostics.endPhase('vision', 'skipped', 'cached survey reused');
         }
 
         // Best-effort NAIP aerial of the survey extent � fetched once per scan and
@@ -18409,6 +18825,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         queryToSend = `${context}Jurisdiction: ${jurisdiction}.${districtCtx}\n\nUser question: ${query}`;
       }
       
+      if (drafterDrawTurn) civilDrafterDiagnostics.beginPhase('model', 'Model draft');
       const responseStream = await chat.sendMessageStream({ message: queryToSend });
       console.log('[handleSendMessage] Got response stream, processing chunks...');
 
@@ -18493,6 +18910,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             // Streaming preview is best-effort � never let it abort the chat.
           }
         }
+      }
+      if (drafterDrawTurn) {
+        civilDrafterDiagnostics.endPhase(
+          'model',
+          fullResponse ? 'ok' : 'error',
+          `${fullResponse.length.toLocaleString()} chars`,
+        );
       }
       civilDrafterRequestCompleted = !stopGenerationRef.current;
       
@@ -19363,6 +19787,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             }
           }
           let visualDataFound = false;
+          let committedLineCount = 0;
+          let unresolvedLineCount = 0;
           let uncertaintyFound = false;
           let closureReportFound = false;
 
@@ -20677,6 +21103,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 let passOneMath: RoadMathModel | null = null;
                 let passOneFrames: VisionSurvey | null = null;
                 try {
+                  if (drafterDrawTurn) civilDrafterDiagnostics.beginPhase('take-review', 'Deterministic take review');
                   const roadReview = runRoadTakeReview(linesToPlot, roadGrounding, {
                     maxTakes: 3,
                     inferUnlabeledRoads: roadTakeIntent,
@@ -20733,8 +21160,22 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   } finally {
                     setIsGimbalInspecting(false);
                   }
+                  if (drafterDrawTurn) {
+                    civilDrafterDiagnostics.endPhase(
+                      'take-review',
+                      'ok',
+                      reviewedTake ? `${reviewedTake.takes} take(s), ${reviewedTake.featuresAudited} feature(s)` : 'no road take recognized',
+                    );
+                  }
                 } catch (reviewErr) {
                   console.warn('[RoadTakeReview] review pass failed:', reviewErr);
+                  if (drafterDrawTurn) {
+                    civilDrafterDiagnostics.endPhase(
+                      'take-review',
+                      'error',
+                      reviewErr instanceof Error ? reviewErr.message : 'review failed',
+                    );
+                  }
                 }
 
                 // ── SECOND / THIRD TAKE: redraw from the inspection ───────────
@@ -20757,12 +21198,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                   const acceptanceRequest = { wantsCenterline, wantsPaint };
 
                   setIsLoading(true);
+                  if (drafterDrawTurn) civilDrafterDiagnostics.beginPhase('acceptance', 'Road acceptance loop');
                   try {
                     const result = await runRoadAcceptanceLoop<SurveyLine>({
                       initialLines: initialRoadLines,
                       passOneModel: passOneMath,
                       request: acceptanceRequest,
-                      maxTurns: MAX_ROAD_TURNS,
+                      maxTurns: Math.max(
+                        1,
+                        Math.min(
+                          MAX_ROAD_TURNS,
+                          drafterConfig?.maxRoadTurns ?? DEFAULT_CIVIL_DRAFTER_CONTEXT_CONFIG.maxRoadTurns,
+                        ),
+                      ),
                       shouldStop: () => stopGenerationRef.current,
                       runReview: candidate => runRoadTakeReview(candidate, roadGrounding, {
                         maxTakes: 3,
@@ -20946,7 +21394,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                       },
                     });
 
-                    linesToPlot = [...otherLines, ...result.lines];
+                    // A redraw that loses the road must never replace the
+                    // audited first take. Commit the incumbent geometry, not an
+                    // empty canvas, when the loop returns no usable segments.
+                    const acceptedRoadLines = result.lines.length > 0 ? result.lines : initialRoadLines;
+                    if (result.lines.length === 0 && initialRoadLines.length > 0) {
+                      logActionToFieldbook(
+                        'Road acceptance: the redraw returned no usable geometry — keeping the audited first take instead of committing an empty road.',
+                      );
+                    }
+                    linesToPlot = [...otherLines, ...acceptedRoadLines];
                     committedTake = result.report;
                     lastRoadTakeReviewRef.current = result.report;
                     setRoadTakeReview(result.report);
@@ -20987,6 +21444,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                     console.warn('[RoadAcceptance] loop failed:', acceptanceErr);
                     logActionToFieldbook('  ! Road acceptance loop failed — keeping the audited take for review.');
                   } finally {
+                    if (drafterDrawTurn) {
+                      civilDrafterDiagnostics.endPhase(
+                        'acceptance',
+                        'ok',
+                        committedTake ? `${committedTake.takes} take(s) retained` : 'no committed take',
+                      );
+                    }
                     setIsLoading(false);
                   }
                 }
@@ -21031,6 +21495,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               // improves, so it can never make a clean draft worse.
               if (
                 (agent === AgentType.CIVIL_DRAFTER || agent === AgentType.ROADING_AGENT)
+                && (drafterConfig?.runSynthesisQa ?? true)
                 && linesToPlot.length > 0
               ) {
                 try {
@@ -21079,7 +21544,44 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 // standard and falls back to a solid stroke, which is why the
                 // same road sometimes showed a solid CL and sometimes dashed.
                 linesToPlot = applyRoadCenterlineStyles(linesToPlot);
+                // Stamp endpoints before the commit. A traced driveway or a
+                // renumbered chain must survive even when its point reference
+                // no longer resolves against the live point database.
+                const anchored = anchorLineEndpoints(linesToPlot, pointLookup);
+                linesToPlot = anchored.lines;
+                unresolvedLineCount += anchored.unresolved.length;
+                if (anchored.anchored > 0) {
+                  logActionToFieldbook(
+                    `Civil Drafter: anchored ${anchored.anchored} line(s) with stored endpoints so they render independently of point renumbering.`,
+                  );
+                }
+                if (anchored.unresolved.length > 0) {
+                  logActionToFieldbook(
+                    `Civil Drafter: skipped ${anchored.unresolved.length} line(s) with unresolved endpoints — their point references were not in the project database.`,
+                  );
+                }
+              }
+              if (linesToPlot.length > 0) {
+                const byType: Record<string, number> = {};
+                for (const line of linesToPlot) {
+                  const key = line.type || line.layer || 'untyped';
+                  byType[key] = (byType[key] ?? 0) + 1;
+                }
+                committedLineCount += linesToPlot.length;
+                civilDrafterDiagnostics.recordLines({
+                  attempted: committedLineCount + unresolvedLineCount,
+                  committed: committedLineCount,
+                  unresolved: unresolvedLineCount,
+                  byType,
+                });
                 setLines(prevLines => [...prevLines, ...linesToPlot]);
+                logActionToFieldbook(
+                  `Civil Drafter: committed ${linesToPlot.length} line segment(s) to the canvas.`,
+                );
+              } else if (unresolvedLineCount > 0) {
+                logActionToFieldbook(
+                  `Civil Drafter: no linework committed — ${unresolvedLineCount} segment(s) had no resolvable endpoints.`,
+                );
               }
               // Roading Agent: whenever it drafts road linework from the survey
               // shots, look up the existing street name from OSM and place it on
@@ -22111,6 +22613,36 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           // alerted via the NotificationCenter bell in the canvas header and
           // can choose when to open the PDF Reviewer. Auto-switching was
           // disruptive to the parse ? review ? accept flow.
+          const askedForInput = Boolean(
+            parsedJson.question
+            || (Array.isArray(parsedJson.fields) && parsedJson.fields.length > 0)
+            || (Array.isArray(parsedJson.options) && parsedJson.options.length > 0)
+            || (Array.isArray(parsedJson.clarifyingQuestions) && parsedJson.clarifyingQuestions.length > 0),
+          );
+          if (drafterDrawTurn && askedForInput) {
+            civilDrafterDiagnostics.finishTurn({
+              status: 'empty',
+              reason: 'Waiting for the user to answer a clarifying question.',
+            });
+          } else if (drafterDrawTurn) {
+            const emptyReason = unresolvedLineCount > 0
+              ? `The model returned ${unresolvedLineCount} segment(s), but none had resolvable endpoints. Check that the point references exist in the project database.`
+              : 'The model returned no linework for this request. Open the Draft tab in Surveyor\'s Eye for phase timings, vision/RAG status and the raw receipt.';
+            civilDrafterDiagnostics.finishTurn({
+              status: committedLineCount > 0 ? 'committed' : 'empty',
+              ...(committedLineCount > 0 ? {} : { reason: emptyReason }),
+            });
+            if (committedLineCount === 0) {
+              logActionToFieldbook(`Civil Drafter draft receipt: ${emptyReason}`);
+              setError(`Civil Drafter drafted nothing. ${emptyReason}`);
+              setTimeout(() => setError(null), 10_000);
+            } else {
+              logActionToFieldbook(
+                `Civil Drafter draft receipt: ${committedLineCount} segment(s) committed to the canvas.`,
+              );
+            }
+          }
+
           if (closureReportFound) {
             showView('closurereport');
           } else if (visualDataFound && activeVisualPanel !== 'cutsheet' && activeVisualPanel !== 'profile') {
@@ -22120,6 +22652,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
         } catch (e) {
           console.error("Failed to parse JSON from model response:", e, "\nContent was:", contentToParse);
+          if (drafterDrawTurn) {
+            civilDrafterDiagnostics.failTurn(
+              `Model response could not be parsed: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
           if (agent === AgentType.DEED_READER) {
             const failureMsg = '**Deed analysis could not be read.** The structured response was incomplete or invalid. Re-run the extraction, or paste the deed calls manually.';
             setHistory(prev => {
@@ -22160,7 +22697,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     closePointEntrySurface, openCivilDrafterContextSurface,
     ensureProjectClusterLocations, ensureParcelGroundingForRoadDraw, openProjectLocationPanel, resolveProjectLocationAction,
     buildProjectLocationPayload, applyProjectProjection, buildProjectionSurfacePayload,
-    openProjectionControls, timeline.recordEvent
+    openProjectionControls, recordTimelineEvent
   ]);
 
   // CACP hand-offs from the Civil 3D connector arrive on the sync socket, which
@@ -22280,6 +22817,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const handleToggleExpandMessage = useCallback((msgIndex: number) => {
     let setHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>> | null = null;
     switch (activeAgent) {
+        case AgentType.RAW_REPLAY:
         case AgentType.RAW_CRAWLER: setHistory = setRawChatHistory; break;
         case AgentType.CIVIL_DRAFTER: setHistory = setCivilDrafterChatHistory; break;
         case AgentType.DEED_READER: setHistory = setDeedChatHistory; break;
@@ -22866,6 +23404,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setLastActiveAgent(agent);
     }
     setActiveAgent(agent);
+    if (agent === AgentType.RAW_REPLAY) {
+      setShowProject3D(false);
+      // With no field record, keep the normal canvas visible. The call-in
+      // effect posts the standard A2UI upload intake into the visible thread;
+      // keep the tool shelf closed so Quick Thought owns the intake.
+      setShowRawReplay(Boolean(rawFile));
+      setIsToolShelfVisible(false);
+    } else {
+      setShowRawReplay(false);
+    }
     setIsAddingData(false);
     if (!isDesktop) setIsMobileMenuOpen(false);
 
@@ -22939,7 +23487,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               }
         }
     }
-  }, [isDesktop, isSessionActive, setShowWelcome, showView, activeVisualPanel, activeAgent, handleStartGpsStakeoutSession, pushNavigation, isInitialScreen, initializedAgents, pointLists, settings, dxfFile, startChatWithOverride, setCivilDrafterChat, setCivilDrafterChatHistory, setRawFile, logActionToFieldbook, cadStandardsLoaded, handleCadManagerSessionStart, initializeDroneAgent]);
+  }, [isDesktop, isSessionActive, setShowWelcome, showView, activeVisualPanel, activeAgent, handleStartGpsStakeoutSession, pushNavigation, isInitialScreen, initializedAgents, pointLists, settings, dxfFile, startChatWithOverride, setCivilDrafterChat, setCivilDrafterChatHistory, setRawFile, setRawChatHistory, logActionToFieldbook, cadStandardsLoaded, handleCadManagerSessionStart, initializeDroneAgent, rawFile, setIsToolShelfVisible]);
 
   /**
    * Experimental agent click: instead of bouncing into App Settings, raise an
@@ -23250,9 +23798,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   const handleUpsertCenterline = useCallback((centerline: Centerline) => {
     // A new id means BASELINE draw mode created an object, not merely edited an
     // existing alignment. Start its feature before the centerline state lands so
-    // the transaction's start snapshot is the pre-baseline canvas.
+    // the transaction's start snapshot is the pre-baseline canvas. Only do this
+    // while the timeline is active: committing a feature re-seeds the history
+    // engine and would wipe the legacy undo stack when the timeline is off.
     const isNewBaseline = !centerlinesRef.current.some(existing => existing.id === centerline.id);
-    if (isNewBaseline && !timeline.activeTransaction && !pendingTimelineBaselineRef.current) {
+    if (isNewBaseline && isTimelineSketchFlowEnabled && !timeline.activeTransaction && !pendingTimelineBaselineRef.current) {
       timeline.beginFeature(centerline.name || 'Baseline', {
         icon: 'baseline',
         detail: 'Baseline created on canvas',
@@ -23266,7 +23816,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       next[index] = centerline;
       return next;
     });
-  }, [timeline.activeTransaction, timeline.beginFeature]);
+  }, [isTimelineSketchFlowEnabled, timeline.activeTransaction, timeline.beginFeature]);
 
   const handleBaselineFinish = useCallback((centerline: Centerline) => {
     if (pendingTimelineBaselineRef.current !== centerline.id) return;
@@ -23552,6 +24102,15 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   /** Apply a multi-entity CAD edit as one history entry and one state update. */
   const handleBatchLines = useCallback((removeIds: string[], newLines: SurveyLine[]) => {
     if (removeIds.length === 0 && newLines.length === 0) return;
+    const lockedHit = removeIds.some(id => {
+      const line = linesRef.current.find(item => (item.id || `${item.from}-${item.to}`) === id);
+      return line ? isLineLockedForSketch(line) : false;
+    });
+    if (lockedHit) {
+      setError('Projected and earlier-sketch geometry is immutable. Open its own sketch to edit it.');
+      setTimeout(() => setError(null), 4000);
+      return;
+    }
     if (newLines.length > 0) beginAutoSketchForFirstLine();
     pushHistory(removeIds.length > 0 ? 'Modified line geometry' : 'Added line geometry');
     setLines(prev => {
@@ -23565,7 +24124,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         ? `CAD edit: replaced ${removeIds.length} line(s) with ${newLines.length}.`
         : `CAD edit: added ${newLines.length} line(s).`,
     );
-  }, [pushHistory, logActionToFieldbook, beginAutoSketchForFirstLine]);
+  }, [pushHistory, logActionToFieldbook, beginAutoSketchForFirstLine, isLineLockedForSketch, setError]);
 
   // Forward-propagate COGO from a given index through the rest of a traverse.
   // Returns updated calls (with derived chord fields filled in) plus a working
@@ -25476,10 +26035,16 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, [boundaryFiles]);
 
   const handleDeleteLine = useCallback((lineId: string) => {
+    const line = linesRef.current.find(item => (item.id || `${item.from}-${item.to}`) === lineId);
+    if (line && isLineLockedForSketch(line)) {
+      setError('Projected and earlier-sketch geometry is immutable. Open its own sketch to edit it.');
+      setTimeout(() => setError(null), 4000);
+      return;
+    }
     pushHistory('Deleted line');
     setLines(prev => deleteLineFromList(lineId, prev));
     logActionToFieldbook(`Deleted line with ID: ${lineId}`);
-  }, [pushHistory, logActionToFieldbook]);
+  }, [pushHistory, logActionToFieldbook, isLineLockedForSketch, setError]);
 
   const handleAddPoint = useCallback((newPoint: SurveyPoint) => {
       if (activeAgent === AgentType.POINT_EDITOR) {
@@ -25866,24 +26431,37 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setPointLists(prev => updatePointAnnotationOffset(pointNumber, offset, prev));
   }, []);
 
+  const canEditLineId = useCallback((lineId: string): boolean => {
+    const line = linesRef.current.find(item => (item.id || `${item.from}-${item.to}`) === lineId);
+    return !line || !isLineLockedForSketch(line);
+  }, [isLineLockedForSketch]);
+
   const handleUpdateLineLabelOffset = useCallback((lineId: string, offset: { x: number; y: number }) => {
+    if (!canEditLineId(lineId)) return;
     setLines(prev => updateLineLabelOffset(lineId, offset, prev));
-  }, []);
+  }, [canEditLineId, setLines]);
 
   const handleToggleLineLabelRotation = useCallback((lineId: string) => {
+    if (!canEditLineId(lineId)) return;
     setLines(prev => toggleLineLabelRotation(lineId, prev));
-  }, []);
+  }, [canEditLineId, setLines]);
 
   const handleSwapLineBearingDirection = useCallback((lineId: string) => {
+    if (!canEditLineId(lineId)) return;
     setLines(prev => swapLineBearingDirection(lineId, prev));
-  }, []);
+  }, [canEditLineId, setLines]);
 
   const handleUpdateLine = useCallback((lineId: string, changes: Partial<import('./types.ts').SurveyLine>) => {
+    if (!canEditLineId(lineId)) {
+      setError('Projected and earlier-sketch geometry is immutable. Open its own sketch to edit it.');
+      setTimeout(() => setError(null), 4000);
+      return;
+    }
     setLines(prev => prev.map(l => {
       const id = l.id || `${l.from}-${l.to}`;
       return id === lineId ? { ...l, ...changes } : l;
     }));
-  }, []);
+  }, [canEditLineId, setLines, setError]);
 
   const handleToggleBoundaryCallLabelRotation = useCallback((fileId: string, callId: string) => {
     setBoundaryFiles(prev => prev.map(bf => {
@@ -26647,8 +27225,18 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             ...(generatedFiles || [])
         ].filter(f => f !== null && f !== undefined);
 
+        // Preserve training already in the project and embed any newly attached
+        // recordings. Nothing is uploaded; the bytes go straight into the ZIP.
+        const attachedBundles = getAttachedTrainingBundles();
+        const attachedIndex = buildTrainingIndexForBundles(attachedBundles);
+        const mergedTraining = mergeTrainingIndexes(embeddedTrainingIndex, attachedIndex);
+        if (mergedTraining) sessionState.training = mergedTraining;
+        const trainingAssets: TrainingAsset[] = [];
+        embeddedTrainingAssetsRef.current.forEach((data, path) => trainingAssets.push({ path, data }));
+        for (const bundle of attachedBundles) trainingAssets.push(...bundleToTrainingAssets(bundle));
+
         // Use utility to create ZIP
-        const blob = await createSessionZip(sessionState, filesToInclude);
+        const blob = await createSessionZip(sessionState, filesToInclude, trainingAssets);
 
         if (targetHandle) {
             await writeBlobToFileHandle(targetHandle, blob);
@@ -26669,7 +27257,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     isSessionActive, settings, rawFile, deedFile, planFiles, dxfFile, clFile, imageFiles, gisFile, generatedFiles, jobInfo, rawChatHistory, deedChatHistory, civilDrafterChatHistory, dxfChatHistory, stationingChatHistory, 
     pointEditorChatHistory, fieldbookLog, gpsStakeoutChatHistory, lsvzChatHistory, planExpertChatHistory, imageAnalyzerChatHistory, gisChatHistory, contouringChatHistory, steepSlopeChatHistory, profileChatHistory, fieldbookNotes,
     pointLists, lines, contourLabels, centerlines, wmsServices, activeWmsLayers, offlineMapAreas, cutSheetData, cutSheetInfo, activeAgent, activeModel,
-    activeVisualPanel, pdfViewerFiles, highlights, customSymbols, closureReports, boundaryFiles,
+    activeVisualPanel, pdfViewerFiles, highlights, customSymbols, closureReports, boundaryFiles, embeddedTrainingIndex,
     inclusionBoundaries, activeInclusionBoundaryId, aoiBoundaries, activeAoiBoundaryId, floodFirmetteData, contourGenerations, generationBlocks, streetLabels,
     isVisualPanelFullscreen, attributeScale, pointLayers, activeTextEditorFile, isChatPanelVisible, linesVisible, centerlinesVisible,
     profileData, profileInfo, APP_VERSION, lineLabelScale, draftingStyleLibrary,
@@ -26736,6 +27324,22 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 }
                 const manifestContent = await manifestFile.async("string");
                 const sessionState = JSON.parse(manifestContent) as SessionState;
+
+                // Embedded training is optional and never gates project loading.
+                // Keep the index for the badge, the archive for lazy playback,
+                // and the extracted assets so a re-save does not drop them.
+                const loadedTrainingIndex = sessionState.training ?? null;
+                setEmbeddedTrainingIndex(loadedTrainingIndex);
+                embeddedTrainingSourceRef.current = loadedTrainingIndex ? arrayBuffer.slice(0) : null;
+                const loadedTrainingAssets = new Map<string, Blob>();
+                if (loadedTrainingIndex) {
+                  for (const [path, entry] of Object.entries(zip.files)) {
+                    if (!entry.dir && path.startsWith('training/')) {
+                      loadedTrainingAssets.set(path, await entry.async('blob'));
+                    }
+                  }
+                }
+                embeddedTrainingAssetsRef.current = loadedTrainingAssets;
                 
                 // Use flexible version check that accepts date-based (YY.MM.DD.xx) and semantic (X.Y.Z) versions
                 if (!isVersionCompatible(sessionState.version) || !sessionState.uiState) {
@@ -26919,7 +27523,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 setStandardsComplianceChecks(sessionState.standardsComplianceChecks || DEFAULT_STANDARDS_CHECKS);
                 setStandardsComplianceLastReport(sessionState.standardsComplianceLastReport || null);
                 setFieldbookNotes(sessionState.fieldbookNotes || '');
-                setLines(sessionState.lines);
+                rawSetLines(sessionState.lines);
                 // FIX: Load contour labels from session state.
                 setContourLabels(sessionState.contourLabels || []);
                 // FIX: Load profile data and info from session state.
@@ -27754,6 +28358,41 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setTimeout(() => setPulseProjection(false), 3000); // Stop pulsing after 3 seconds
   }, []);
 
+  const setMapImageryEnabled = useCallback((enabled: boolean) => {
+    setSettings(prev => ({
+      ...prev,
+      googleMaps: {
+        ...prev.googleMaps,
+        enabled,
+        ...(enabled && !prev.googleMaps?.enabled ? { mapType: 'naip' as const, scale: 2 } : {}),
+      },
+    }));
+  }, [setSettings]);
+
+  const handleMapButtonClick = useCallback(() => {
+    if (isMapFlyoutOpen) {
+      setIsMapFlyoutOpen(false);
+      return;
+    }
+    if (!settings.googleMaps?.enabled) setMapImageryEnabled(true);
+    const rect = mapButtonRef.current?.getBoundingClientRect();
+    if (rect) {
+      setMapFlyoutPos({
+        top: Math.round(rect.bottom + 8),
+        right: Math.max(8, Math.round(window.innerWidth - rect.right)),
+      });
+    }
+    setIsMapFlyoutOpen(true);
+  }, [isMapFlyoutOpen, setMapImageryEnabled, settings.googleMaps?.enabled]);
+
+  const openMapSettingsFromFlyout = useCallback(() => {
+    setIsMapFlyoutOpen(false);
+    showSettings();
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('landsurv-open-settings-google-maps'));
+    }, 80);
+  }, [showSettings]);
+
   useEffect(() => {
     if (!settings.a2ui?.autoOpenCacpReview) return;
     return startCacpSurfaceBridge({ onOpen: openCacpReviewSurface });
@@ -27922,7 +28561,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     const agent = agentConfig[activeAgent];
     if (agent) {
         switch (activeAgent) {
-            case AgentType.RAW_CRAWLER: return rawFile?.name || 'No file';
+            case AgentType.RAW_REPLAY:
+            case AgentType.RAW_CRAWLER: return rawFile?.name || 'No raw file';
             case AgentType.DEED_READER: return deedFile?.name || 'No file';
             case AgentType.CIVIL_PLAN_EXPERT: return planFiles && planFiles.length > 0 ? `${planFiles.length} Plan(s)` : 'No plans';
             case AgentType.DXF_ANALYZER: return dxfFile?.name || 'No file';
@@ -27947,6 +28587,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
 
     let files: SessionFile[] = [];
     switch (activeAgent) {
+        case AgentType.RAW_REPLAY:
+            files = allFiles.filter(f => /\.(rw5|raw|fbk|gsi|txt)$/i.test(f.name));
+            break;
         case AgentType.RAW_CRAWLER:
             files = allFiles.filter(f => f.name.toLowerCase().endsWith('.raw'));
             break;
@@ -29457,6 +30100,23 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   // same shelf instead of replacing the canvas or hiding in a dropdown.
   const toolShelfPanelCatalog: ShelfPanelCatalogItem[] = [
     {
+      id: 'raw-replay',
+      title: 'Raw Replay',
+      group: 'Field',
+      keywords: 'raw rw5 gsi tds 3d replay survey observations',
+      icon: <span className="flex h-3.5 w-3.5 items-center justify-center rounded-[3px] border border-cyan-300/30 text-[7px] font-bold tracking-tighter text-cyan-200">RR</span>,
+      render: () => (
+        <RawReplayToolPanel
+          controller={rawReplay}
+          onRawFileChange={({ name, content }) => handleFileUploaded(content, name)}
+          onClose={() => {
+            setShowRawReplay(false);
+            setOpenToolShelfPanelIds(previous => previous.filter(id => id !== 'raw-replay'));
+          }}
+        />
+      ),
+    },
+    {
       id: 'command-help',
       title: 'Command Reference',
       group: 'Reference',
@@ -29583,6 +30243,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   // The old sidebar's Tools & Panels tab lives directly below the command
   // reference in the shelf. Full-canvas views keep their existing actions.
   const toolShelfDefaultTools: ShelfDefaultTool[] = [
+    ...((rawFile || activeAgent === AgentType.RAW_REPLAY) ? toolShelfPanelTool('raw-replay') : []),
     {
       id: 'cad-standards',
       label: 'CAD Standards',
@@ -31290,7 +31951,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                     />
                 ) : (
                   <>
-                    {activeAgent === AgentType.RAW_CRAWLER && <FileUpload onFileUploaded={handleFileUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
+                    {(activeAgent === AgentType.RAW_REPLAY || activeAgent === AgentType.RAW_CRAWLER) && <FileUpload onFileUploaded={handleFileUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
                     {activeAgent === AgentType.CIVIL_DRAFTER && <CivilDrafterFileUpload onFileUploaded={handleCivilDrafterFileUploaded} onPdfUploaded={handleCivilDrafterPdfUploaded} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} existingPointCount={pointLists.reduce((sum, l) => sum + l.points.length, 0)} onUseExistingPoints={handleCivilDrafterUseExistingPoints} />}
                     {activeAgent === AgentType.DEED_READER && <DeedInput onDeedSubmitted={handleDeedSubmitted} onStartFromScratch={handleDeedStartFromScratch} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} freeDeedsRemaining={deedCreditSnapshot?.remaining ?? null} freeDeedsLimit={deedCreditSnapshot?.limit ?? FREE_DEED_LIMIT} freeDeedsUnlimited={Boolean(deedCreditSnapshot?.unlimited || isDeedMeterExempt)} freeDeedsUnverified={Boolean(deedCreditSnapshot?.unverified)} onShowUpgrade={openDeedUpgradeDialog} onOpenGis={handleOpenBoundaryGis} />}
                     {activeAgent === AgentType.CIVIL_PLAN_EXPERT && <PlanInput onPlansSubmitted={handlePlansSubmitted} onGoBack={handleGoBackFromUpload} backButtonTitle={isAddingData ? "Cancel" : "Go to Home Screen"} />}
@@ -31565,21 +32226,46 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                     </button>
                                     <button onClick={() => handleOpenDxfExportModal()} className="p-2 rounded-md hover:bg-gray-700 transition-colors flex items-center gap-1" title="Export DXF"><DownloadIcon className="h-[18px] w-[18px] text-gray-300"/><span className="text-xs font-medium text-gray-300">DXF</span></button>
                                     <button
-                                        onClick={() => {
-                                            setSettings(prev => ({
-                                                ...prev,
-                                                googleMaps: {
-                                                    ...prev.googleMaps,
-                                                    enabled: !prev.googleMaps?.enabled,
-                                                    ...(!prev.googleMaps?.enabled ? { mapType: 'naip' as const, scale: 2 } : {}),
-                                                },
-                                            }));
-                                        }}
-                                        className={`px-2.5 py-2 rounded text-[11px] font-bold font-mono transition-colors ${settings.googleMaps?.enabled ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'hover:bg-gray-700 text-gray-300'}`}
-                                        title={settings.googleMaps?.enabled ? 'Map Imagery: ON (Click to toggle)' : 'Map Imagery: OFF (Click to toggle)'}
+                                        ref={mapButtonRef}
+                                        type="button"
+                                        data-map-button
+                                        data-testid="toolbar-map-imagery"
+                                        onClick={handleMapButtonClick}
+                                        aria-haspopup="dialog"
+                                        aria-expanded={isMapFlyoutOpen}
+                                        className={`flex items-center gap-1.5 px-2.5 py-2 rounded text-[11px] font-bold font-mono transition-colors ${
+                                            !settings.googleMaps?.enabled
+                                                ? 'hover:bg-gray-700 text-gray-300'
+                                                : settings.projection?.epsg
+                                                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                                    : 'bg-amber-600 hover:bg-amber-700 text-white'
+                                        }`}
+                                        title={
+                                            !settings.googleMaps?.enabled
+                                                ? 'Map imagery: OFF — click to turn it on and see load status'
+                                                : !settings.projection?.epsg
+                                                    ? 'Map imagery needs a project projection — click to select one'
+                                                    : mapImageryStatus?.kind === 'loading'
+                                                        ? 'Map imagery is loading — click for progress'
+                                                        : 'Map imagery: ON — click for status and settings'
+                                        }
                                     >
+                                        {mapImageryStatus?.kind === 'loading' && (
+                                            <span className="h-2.5 w-2.5 animate-spin rounded-full border border-white/40 border-t-white" aria-hidden="true" />
+                                        )}
                                         MAP
                                     </button>
+                                    {isMapFlyoutOpen && mapFlyoutPos && (
+                                        <MapStatusFlyout
+                                            status={mapImageryStatus}
+                                            enabled={Boolean(settings.googleMaps?.enabled)}
+                                            position={mapFlyoutPos}
+                                            onClose={() => setIsMapFlyoutOpen(false)}
+                                            onToggleEnabled={setMapImageryEnabled}
+                                            onSelectProjection={openMapProjectionPicker}
+                                            onOpenSettings={openMapSettingsFromFlyout}
+                                        />
+                                    )}
                                     <button
                                         onClick={() => {
                                             setAddressLookupError(null);
@@ -31671,6 +32357,33 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                             )}
                             
                             <div className="flex-grow"></div>
+                            {/* Permanent shelf control. The command bar's small Tools tab
+                                can be covered by the docked view toolbar / timeline, so
+                                keep a labeled control in the header where it is always
+                                reachable. */}
+                            <button
+                                type="button"
+                                data-testid="canvas-toolshelf-button"
+                                onClick={() => {
+                                    if (showToolShelf) {
+                                        setIsToolShelfVisible(false);
+                                        return;
+                                    }
+                                    showView('canvas');
+                                    setIsToolShelfVisible(true);
+                                }}
+                                className={`flex items-center gap-1.5 rounded-md p-2 text-xs font-medium transition-colors ${
+                                    showToolShelf
+                                        ? 'bg-cyan-600 text-white hover:bg-cyan-700'
+                                        : 'text-gray-300 hover:bg-gray-700'
+                                }`}
+                                title={showToolShelf ? 'Hide the Agent Tools shelf' : 'Open the Agent Tools shelf'}
+                                aria-label={showToolShelf ? 'Hide the Agent Tools shelf' : 'Open the Agent Tools shelf'}
+                                aria-expanded={showToolShelf}
+                            >
+                                <TableCellsIcon className="h-[18px] w-[18px]" />
+                                <span className="hidden sm:inline">Tools</span>
+                            </button>
                             {/* Civil 3D connector status: green connected, red disconnected. */}
                             <button
                                 type="button"
@@ -31785,7 +32498,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         </div>
                         {/* Visual Panel Area */}
                         <div className="flex-grow min-h-0 relative">
-                           {activeVisualPanel === 'canvas' && isHistoryPanelOpen && (
+                           {activeVisualPanel === 'canvas' && isHistoryPanelOpen && !showProject3D && (
                              <div className="absolute top-0 right-0 z-30 w-72 max-h-full shadow-2xl border-l border-b border-gray-700 rounded-bl-lg overflow-hidden">
                                <HistoryPanel onClose={() => setIsHistoryPanelOpen(false)} />
                              </div>
@@ -31802,6 +32515,48 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                              />
                            )}
                            <div className="absolute inset-0">
+                             {activeVisualPanel === 'canvas' && showRawReplay && (
+                               <RawReplayCanvas
+                                 controller={rawReplay}
+                                 projectPoints={visibleProjectPoints}
+                                 projectLines={visibleLines}
+                                 tinSurfaces={tinSurfaces}
+                                 contourGenerations={contourGenerations}
+                                 contourLabels={contourLabels}
+                                 centerlines={visibleCenterlines}
+                                 boundaryFiles={boundaryFiles}
+                                 hatches={visibleHatches}
+                                 rasterUnderlays={rasterUnderlays}
+                                 textAnnotations={textAnnotations}
+                                 settings={settings}
+                                 onRequestProjection={openMapProjectionPicker}
+                                 onAddPoint={handleAddPoint}
+                                 onAddLine={handleAddLine}
+                                 nextAvailablePointNumber={nextAvailablePointNumber}
+                                 bottomInset={commandBarHeight + (quickThoughtHeight > 0 ? quickThoughtHeight + 40 : 0)}
+                               />
+                             )}
+                             {activeVisualPanel === 'canvas' && showProject3D && !showRawReplay && (
+                               <Project3DView
+                                 points={visibleProjectPoints}
+                                 lines={visibleLines}
+                                 tinSurfaces={tinSurfaces}
+                                 contourGenerations={contourGenerations}
+                                 contourLabels={contourLabels}
+                                 centerlines={visibleCenterlines}
+                                 boundaryFiles={boundaryFiles}
+                                 hatches={visibleHatches}
+                                 rasterUnderlays={rasterUnderlays}
+                                 textAnnotations={textAnnotations}
+                                 settings={settings}
+                                 linearUnit={settings.linearUnits ?? 'usSurveyFoot'}
+                                 onRequestProjection={openMapProjectionPicker}
+                                 onAddPoint={handleAddPoint}
+                                 onAddLine={handleAddLine}
+                                 nextAvailablePointNumber={nextAvailablePointNumber}
+                                 onClose={() => setShowProject3D(false)}
+                               />
+                             )}
                              {activeVisualPanel === 'canvas' ? (
                                     <>
                                     <DrawingCanvas 
@@ -31824,6 +32579,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onToggleA2UIFloat={handleToggleA2UIFloat}
                                         standaloneA2UIMessage={standaloneA2UIMessage}
                                         agentChatOpenSignal={agentChatOpenSignal}
+                                        quickThoughtDismissSignal={quickThoughtDismissSignal}
                                         boundaryQuickActions={
                                             activeAgent === AgentType.DEED_READER
                                                 ? {
@@ -31833,7 +32589,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                 }
                                                 : undefined
                                         }
-                                        workflowThought={gimbalVisionThought ?? pointWorkflowThought ?? rasterUnderlayWorkflowThought}
+                                        workflowThought={rawIntakeThought ?? gimbalVisionThought ?? pointWorkflowThought ?? rasterUnderlayWorkflowThought}
+                                        quickThoughtHint={sketchQuickThoughtHint}
                                         keyInfo={{
                                             label: activeKeyStatusLabel,
                                             detail: activeKeyStatusDetail,
@@ -31955,6 +32712,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         onTogglePointListVisibility={handleTogglePointListVisibility}
                                         onToolStateChange={setCanvasToolState}
                                         onShowSettings={showSettings}
+                                        onMapStatusChange={handleMapStatusChange}
+                                        onRequestProjection={openMapProjectionPicker}
                                         isC3DConnected={isC3DConnected}
                                         agentDrawMode={agentDrawMode}
                                         onCycleAgentDrawMode={cycleAgentDrawMode}
@@ -32350,7 +33109,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                         const headerBottom = (typeof document !== 'undefined'
                                             ? document.querySelector<HTMLElement>('[data-canvas-header]')?.getBoundingClientRect().bottom
                                             : null) ?? 56;
-                                        const defaultPos = { x: Math.max(0, window.innerWidth - 400), y: headerBottom + 12 };
+                                        const defaultPos = { x: Math.max(8, window.innerWidth - 406), y: headerBottom + 12 };
                                         const dvPos = dataVisibilityPos || defaultPos;
                                         const handleDvDrag = (e: React.MouseEvent) => {
                                             e.preventDefault();
@@ -32363,39 +33122,69 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                             window.addEventListener('mousemove', onMove);
                                             window.addEventListener('mouseup', onUp);
                                         };
-                                        return (
-                                            <div className="fixed z-40 flex flex-col bg-gray-900 border border-cyan-500/30 rounded-xl shadow-2xl overflow-hidden" style={{ left: dvPos.x, top: dvPos.y, width: 360, maxHeight: '80vh' }}>
-                                                <div className="flex items-center justify-between px-4 py-2.5 bg-gray-800/80 border-b border-cyan-500/20 cursor-grab active:cursor-grabbing select-none flex-shrink-0" onMouseDown={handleDvDrag}>
-                                                    <div className="flex items-center gap-2">
-                                                        <LayersIcon className="w-4 h-4 text-cyan-400" />
-                                                        <span className="text-sm font-semibold text-gray-200">Data Visibility</span>
+                                        // Portal to the document body so the canvas container's
+                                        // z-[35] stacking context cannot trap the dialog behind
+                                        // the tool shelf (z-[9986]).
+                                        return createPortal((
+                                            <div
+                                                data-testid="data-visibility-dialog"
+                                                className="fixed flex flex-col overflow-hidden rounded-2xl border border-cyan-300/20 bg-[#070e18]/[0.985] text-slate-200 shadow-[0_28px_80px_-20px_rgba(0,0,0,0.95)] backdrop-blur-xl"
+                                                style={{ left: dvPos.x, top: dvPos.y, width: 'min(390px, calc(100vw - 16px))', maxHeight: 'calc(100dvh - 88px)', zIndex: 9987 }}
+                                            >
+                                                <div
+                                                    className="flex shrink-0 cursor-grab select-none items-center justify-between gap-2 border-b border-white/[0.07] bg-gradient-to-br from-cyan-400/[0.10] via-transparent to-transparent px-3 py-2.5 active:cursor-grabbing"
+                                                    onMouseDown={handleDvDrag}
+                                                    title="Drag to move"
+                                                >
+                                                    <div className="flex min-w-0 items-center gap-2.5">
+                                                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-cyan-300/25 bg-cyan-400/10 text-cyan-200">
+                                                            <LayersIcon className="h-3.5 w-3.5" />
+                                                        </span>
+                                                        <div className="min-w-0">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className="truncate text-[12px] font-semibold text-slate-100">Data Visibility</span>
+                                                                <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-1.5 py-0.5 font-mono text-[8px] font-bold uppercase tracking-[0.12em] text-cyan-200">A2UI</span>
+                                                            </div>
+                                                            <p className="truncate text-[9px] text-slate-500">Canvas layers, point labels &amp; overlays</p>
+                                                        </div>
                                                     </div>
-                                                    <button onClick={() => setIsLayerPanelOpen(false)} className="p-0.5 rounded hover:bg-gray-700 text-gray-400 hover:text-white" title="Close">
-                                                        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setIsLayerPanelOpen(false)}
+                                                        onMouseDown={event => event.stopPropagation()}
+                                                        className="rounded-md border border-transparent p-1 text-slate-500 transition-colors hover:border-white/[0.12] hover:bg-white/[0.05] hover:text-slate-100"
+                                                        title="Close"
+                                                        aria-label="Close Data Visibility"
+                                                    >
+                                                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 18L18 6M6 6l12 12"/></svg>
                                                     </button>
                                                 </div>
                                                 {/* Current drawing layer selector */}
-                                                <div className="flex-shrink-0 px-4 py-2.5 bg-gray-800/40 border-b border-gray-700/40">
-                                                    <div className="flex items-center gap-2">
-                                                        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
-                                                        <span className="text-xs text-gray-400 flex-shrink-0">Drawing Layer</span>
-                                                        {activeCadLayers.length > 0 ? (
-                                                            <select
-                                                                value={activeDrawingLayer}
-                                                                onChange={e => setActiveDrawingLayer(e.target.value)}
-                                                                className="flex-1 min-w-0 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs font-mono text-amber-200 focus:outline-none focus:border-amber-500"
-                                                                title="Layer assigned to manually drawn lines"
-                                                            >
-                                                                <option value="">(AI selects layer)</option>
-                                                                {activeCadLayers.map(l => <option key={l.name} value={l.name}>{l.name}</option>)}
-                                                            </select>
-                                                        ) : (
-                                                            <span className="text-xs text-gray-500 italic">No CAD standard loaded � AI selects layer</span>
-                                                        )}
+                                                <div className="shrink-0 border-b border-white/[0.06] px-3 py-2">
+                                                    <div className="rounded-lg border border-white/[0.07] bg-black/20 px-2 py-1.5">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-amber-300/20 bg-amber-400/10 text-amber-300">
+                                                                <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                                                            </span>
+                                                            <span className="shrink-0 text-[8.5px] font-bold uppercase tracking-[0.12em] text-slate-500">Drawing layer</span>
+                                                            {activeCadLayers.length > 0 ? (
+                                                                <select
+                                                                    value={activeDrawingLayer}
+                                                                    onChange={e => setActiveDrawingLayer(e.target.value)}
+                                                                    className="h-6 min-w-0 flex-1 appearance-none rounded-md border border-amber-300/20 bg-amber-400/[0.06] px-1.5 font-mono text-[9.5px] text-amber-100 outline-none transition-colors focus:border-amber-300/50"
+                                                                    title="Layer assigned to manually drawn lines"
+                                                                >
+                                                                    <option value="" className="bg-[#0a0f16]">(AI selects layer)</option>
+                                                                    {activeCadLayers.map(l => <option key={l.name} value={l.name} className="bg-[#0a0f16]">{l.name}</option>)}
+                                                                </select>
+                                                            ) : (
+                                                                <span className="min-w-0 flex-1 truncate text-[9.5px] italic text-slate-500">No CAD standard loaded. AI selects layers.</span>
+                                                            )}
+                                                        </div>
+                                                        <p className="mt-1 pl-7 text-[8.5px] text-slate-600">Manual linework only. AI agents smart-select.</p>
                                                     </div>
-                                                    <p className="text-[10px] text-gray-600 mt-1 pl-5">Manual lines use this layer � AI agents always smart-select</p>
                                                 </div>
-                                                <div className="flex-1 overflow-y-auto">
+                                                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                                                     <LayerManagerPanel
                                                         hideHeader
                                                         pointLists={pointLists}
@@ -32455,7 +33244,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                                                     />
                                                 </div>
                                             </div>
-                                        );
+                                        ), document.body);
                                     })()}
                                     {/* Boundary Editor overlay � shown when there are boundary files */}
                                     {/* Boundary Editor: Render floating ONLY when explicitly popped out */}
@@ -33271,7 +34060,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           {!showWelcome && cacpManifestAgent && (
             <CacpManifestModal agent={cacpManifestAgent} onClose={() => setCacpManifestAgent(null)} />
           )}
-          {!showWelcome && isHelpModalVisible && <HelpModal onClose={() => setIsHelpModalVisible(false)} activeAgent={activeAgent} onShowAbout={showAbout} onShowForwardThinking={showForwardThinking} onShowTech={showTech} onShowDisclaimer={showDisclaimer} onShowErrorConsole={() => setIsErrorConsoleVisible(true)} onShowReleaseLog={showReleaseLog} />}
+          {!showWelcome && isHelpModalVisible && <HelpModal onClose={() => setIsHelpModalVisible(false)} activeAgent={activeAgent} onShowAbout={showAbout} onShowForwardThinking={showForwardThinking} onShowTech={showTech} onShowDisclaimer={showDisclaimer} onShowErrorConsole={() => setIsErrorConsoleVisible(true)} onShowReleaseLog={showReleaseLog} onShowLsvzFormat={showDoc} />}
           {!showWelcome && isAboutVisible && <AboutPage onClose={() => setIsAboutVisible(false)} onShowTech={showTech} onShowDoc={showDoc} onShowReleaseLog={showReleaseLog} />}
           {!showWelcome && isForwardThinkingVisible && <ForwardThinkingPage onClose={() => setIsForwardThinkingVisible(false)} />}
           {!showWelcome && isDisclaimerVisible && <DisclaimerPage onClose={() => setIsDisclaimerVisible(false)} />}
@@ -34139,7 +34928,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             activeAgent={activeAgent}
             associatedFiles={[rawFile?.name, deedFile?.name, centerlines[0]?.name]}
           />}
-           {!showWelcome && projectionPrompt && <ProjectionSelectionModal onConfirm={handleConfirmProjection} onClose={() => setProjectionPrompt(null)} gpsPosition={currentPosition ? { latitude: currentPosition.coords.latitude, longitude: currentPosition.coords.longitude } : null} />}
+           {!showWelcome && projectionPrompt && <ProjectionSelectionModal onConfirm={handleConfirmProjection} onClose={() => setProjectionPrompt(null)} reason={projectionPrompt.message} gpsPosition={currentPosition ? { latitude: currentPosition.coords.latitude, longitude: currentPosition.coords.longitude } : null} />}
 
           {/* C3D Sync Center — webapp-side sync wizard (Phase 2) */}
           <C3DSyncCenter
@@ -34261,6 +35050,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           {/* CACP inter-agent activity indicator � unobtrusive bottom-left pill */}
           <CacpActivityIndicator enabled={!!settings.showCacpNotifications} />
           {/* Global A2UI surface stack: chat, dialogs, settings, CACP, and catalog launches */}
+          {!showProject3D && (
           <A2UISurfaceHost
             audience="workspace"
             defaultSize={settings.a2ui?.defaultSize ?? 'standard'}
@@ -34289,6 +35079,66 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               }
             }}
           />
+          )}
+          <RecordingBridge
+            pointLists={pointLists}
+            lines={visibleLines}
+            centerlines={visibleCenterlines}
+            contourLabels={contourLabels}
+            boundaryFiles={boundaryFiles}
+            textAnnotations={textAnnotations}
+            dimensions={dimensions}
+            hatches={visibleHatches}
+            streetLabels={streetLabels}
+            parcelLabels={parcelLabels}
+            areaLabels={areaLabels}
+            customSymbols={customSymbols}
+            jobInfo={jobInfo}
+            settings={settings}
+            camera={canvasTransform}
+            chat={currentChatHistory}
+            activeAgent={activeAgent}
+            ui={{
+              activeAgent,
+              activeVisualPanel,
+              isChatPanelVisible: showToolShelf,
+              isToolShelfVisible: showToolShelf,
+              theme: settings.theme,
+              tool: canvasToolState.isDrawing
+                ? 'draw'
+                : canvasToolState.isTrimming
+                  ? 'trim'
+                  : canvasToolState.isExtending
+                    ? 'extend'
+                    : canvasToolState.isDeleting
+                      ? 'delete'
+                      : 'select',
+              isDrawing: canvasToolState.isDrawing,
+              isTrimming: canvasToolState.isTrimming,
+              isExtending: canvasToolState.isExtending,
+              isDeleting: canvasToolState.isDeleting,
+              selectedCount: canvasToolState.selectedCount,
+            }}
+          />
+          <TrainingBadge
+            index={embeddedTrainingIndex}
+            source={embeddedTrainingSourceRef.current}
+            projectKey={`${jobInfo.jobNo || 'project'}-${jobInfo.jobName || ''}`}
+          />
+
+          {!showWelcome && activeVisualPanel === 'canvas' && !showRawReplay && !showProject3D && (
+            <button
+              type="button"
+              onClick={() => setShowProject3D(true)}
+              className="fixed right-5 top-20 z-[95] flex items-center gap-2 rounded-md border border-cyan-400/35 bg-[#07131d]/90 px-3 py-2 text-xs font-semibold text-cyan-100 shadow-xl backdrop-blur hover:border-cyan-300/70 hover:bg-[#0a1b28]"
+              title="Open the project in true 3D"
+            >
+              <span className="text-[10px] tracking-[0.16em]">3D</span>
+              <span className="hidden sm:inline">Project view</span>
+            </button>
+          )}
+
+
           </div>
         </div>
         </A2UIHostContext.Provider>
@@ -34312,10 +35162,13 @@ export const App = () => {
               <TimelineProvider>
                 <AppStateProvider availableModels={availableModels}>
                   <CadManagerProvider>
-                    <AppContent />
-                    <TimelineDock />
-                    <ConciergeOverlay />
-                    <GlobalErrorDialog />
+                    <RecordingProvider appVersion={(import.meta as any).env.VITE_APP_VERSION || 'dev'}>
+                      <AppContent />
+                      <RecorderGate />
+                      <TimelineDock />
+                      <ConciergeOverlay />
+                      <GlobalErrorDialog />
+                    </RecordingProvider>
                   </CadManagerProvider>
                 </AppStateProvider>
               </TimelineProvider>

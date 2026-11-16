@@ -23,8 +23,8 @@ import type { SessionState } from '../types';
 // Additive fields under existing groups DO NOT require a bump because the
 // schema is compile-time-checked against SessionState and rendered live. A new
 // top-level group or a semantic contract change is a minor-version release.
-export const LSVZ_SPEC_VERSION = '1.4';
-export const LSVZ_SPEC_RELEASE = '2026-11-14';
+export const LSVZ_SPEC_VERSION = '1.5';
+export const LSVZ_SPEC_RELEASE = '2026-11-15';
 
 // Fields that are saved for restore-on-load but aren't part of the publicly
 // documented .lsvz schema (chat histories listed separately to keep the
@@ -44,6 +44,7 @@ export type LsvzGroupId =
   | 'fieldbook'
   | 'redline'
   | 'chat'
+  | 'training'
   | 'ui';
 
 export interface LsvzField<K extends keyof SessionState = keyof SessionState> {
@@ -266,6 +267,15 @@ export const LSVZ_SCHEMA = [
       { key: 'rinexChatHistory',         description: 'RINEX / GNSS conversation.',              example: '[ ... ]' },
       { key: 'zoningChatHistory',        description: 'Zoning Agent conversation.',              example: '[ ... ]' },
       { key: 'lsvzChatHistory',          description: 'Meta LSVZ-aware concierge conversation.', example: '[ ... ]' },
+    ],
+  },
+  {
+    id: 'training',
+    title: 'Embedded training (optional)',
+    description: 'Screen-captured sessions that replay with zero inference and zero live network. The index lives in the manifest; each bundle lives under training/<recordingId>/ inside the ZIP. Older archives omit this field and open normally; playback never autostarts.',
+    fields: [
+      { key: 'training', description: 'Optional embedded training index: recording id, title, duration, status, media flags, manifest path, and defaultRecordingId. The project opens normally with a Training badge; recipients need no DevOps access, studio access, or recorder key to watch.',
+        example: '{ "schemaVersion":1, "defaultRecordingId":"rec-abc123", "recordings":[ { "id":"rec-abc123", "title":"Boundary workflow", "durationMs":420000, "editedDurationMs":380000, "status":"edited", "manifestPath":"training/rec-abc123/manifest.json" } ] }' },
     ],
   },
   {

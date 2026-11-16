@@ -12,10 +12,12 @@ interface ProjectionSelectionModalProps {
   bbox?: [number, number, number, number] | null;
   /** Live GPS fix, used to auto-suggest the local CRS. */
   gpsPosition?: { latitude: number; longitude: number } | null;
+  /** Context-specific explanation (map imagery, GIS, stakeout, …). */
+  reason?: string;
 }
 
 const ProjectionSelectionModal: React.FC<ProjectionSelectionModalProps> = ({
-  onConfirm, onClose, bbox, gpsPosition,
+  onConfirm, onClose, bbox, gpsPosition, reason,
 }) => {
   const [mode, setMode] = useState<'us' | 'global'>('us');
   const [state, setState] = useState<string | null>(null);
@@ -86,7 +88,7 @@ const ProjectionSelectionModal: React.FC<ProjectionSelectionModalProps> = ({
           </button>
         </header>
         <main className="p-6 space-y-4">
-          <p className="text-gray-300 light-theme:text-gray-700">A State Plane Coordinate System is required to plot GIS data. Please select a projection for this session.</p>
+          <p className="text-gray-300 light-theme:text-gray-700">{reason ?? 'A State Plane Coordinate System is required to plot GIS data. Please select a projection for this session.'}</p>
 
           <div className="rounded-lg border border-teal-700/50 bg-teal-950/30 p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">

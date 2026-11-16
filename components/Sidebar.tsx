@@ -4,6 +4,7 @@
 // - The `SidebarButton` and `NavButton` components define the consistent look and feel of all menu items. Maintain this consistency.
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { AgentType, useAgent, useUI } from '../types.ts';
 import { StormwaterIcon, DirtVolumeIcon } from './icons.tsx';
 import { useExperimentalAgentEnabled } from '../hooks/useExperimentalAgentEnabled.ts';
@@ -69,7 +70,7 @@ const SIDEBAR_TRANSITION_MS = 700;
 type SidebarAgentEntry = { icon: React.FC<any>; label: string; color: string };
 
 const agentConfig: Partial<Record<AgentType, SidebarAgentEntry>> = {
-    [AgentType.RAW_CRAWLER]: { icon: BrainCircuitIcon, label: 'RAW Crawler', color: 'cyan' },
+    [AgentType.RAW_REPLAY]: { icon: BrainCircuitIcon, label: 'Raw Replay', color: 'cyan' },
     [AgentType.CIVIL_DRAFTER]: { icon: CivilDrafterIcon, label: 'Civil Drafter', color: 'fuchsia' },
     [AgentType.DEED_READER]: { icon: CourthouseIcon, label: 'Boundary Agent', color: 'green' },
     [AgentType.CIVIL_PLAN_EXPERT]: { icon: DocumentDuplicateIcon, label: 'Civil Plan Expert', color: 'orange' },
@@ -121,7 +122,7 @@ export const getOrderedSidebarAgentKeys = (agentOrderSidebar: string[] | null): 
 };
 
 const agentThemeColors: { [key in AgentType]?: string } = {
-    [AgentType.RAW_CRAWLER]: '#22d3ee', // cyan-400
+    [AgentType.RAW_REPLAY]: '#22d3ee', // cyan-400
     [AgentType.CIVIL_DRAFTER]: '#e879f9', // fuchsia-400
     [AgentType.DEED_READER]: '#34d399', // green-400
     [AgentType.CENTERLINE_STATIONING]: '#c084fc', // purple-400
@@ -158,16 +159,31 @@ const hexToRgb = (hex: string): string => {
         : '148, 163, 184'; // fallback slate-400
 };
 
+const AGENT_RAIL_HOVER_RADIUS = 4;
+
+/**
+ * Smooth cosine falloff for the collapsed rail's hover wave: 1 on the hovered
+ * glyph and 0 four slots away. The gradual distance falloff is what makes the
+ * accent and scale slide through neighbouring glyphs instead of snapping.
+ */
+export const getAgentRailHoverInfluence = (index: number, hoveredIndex: number | null): number => {
+    if (hoveredIndex === null) return 0;
+    const distance = Math.abs(index - hoveredIndex);
+    if (distance >= AGENT_RAIL_HOVER_RADIUS) return 0;
+    return 0.5 * (1 + Math.cos((distance / AGENT_RAIL_HOVER_RADIUS) * Math.PI));
+};
+
 // These rows live at module scope on purpose. Declaring them inside Sidebar
 // gives them a new identity on every render, which remounts the whole agent
 // list and can drop a click that spans a re-render.
-const SidebarButton = ({ agent, isDesktop, isActive, isThinking, isExperimentalOff = false, onSelect }: {
+const SidebarButton = ({ agent, isDesktop, isActive, isThinking, isExperimentalOff = false, onSelect, pulseIndex }: {
     agent: AgentType;
     isDesktop: boolean;
     isActive: boolean;
     isThinking: boolean;
     isExperimentalOff?: boolean;
     onSelect: (agent: AgentType) => void;
+    pulseIndex: number;
 }) => {
     const config = agentConfig[agent];
     if (!config) return null;
@@ -204,8 +220,10 @@ const SidebarButton = ({ agent, isDesktop, isActive, isThinking, isExperimentalO
                     />
                 )}
                 <Icon
-                    className="h-[18px] w-[18px] flex-shrink-0"
-                    style={{ color: isActive ? hexColor : `rgba(${rgbColor},0.82)` }}
+                    className="agent-glyph-pulse h-[18px] w-[18px] flex-shrink-0 transition-transform duration-150 group-hover:scale-110"
+                    style={{
+                        '--agent-glyph-accent': hexColor,                                        '--agent-glyph-delay': `${-((pulseIndex * 2.35) % 22)}s`,
+                    } as React.CSSProperties}
                 />
                 <span className={`truncate text-[12.5px] font-medium leading-none ${isDesktop ? 'hidden lg:inline' : ''} ${isThinking ? 'animate-thinking-red-text' : ''}`}>
                     {config.label}
@@ -283,6 +301,9 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
         return SIDEBAR_DEFAULT_WIDTH;
     });
     const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+    // The collapsed rail's hover wave: which glyph the pointer is on, plus the
+    // measured anchor for the borderless name that sits out over the canvas.
+    const [railHover, setRailHover] = useState<{ index: number; left: number; top: number } | null>(null);
     const sidebarRef = useRef<HTMLElement | null>(null);
     const sidebarIntroPlayedRef = useRef(false);
     const sidebarIntroTimersRef = useRef<number[]>([]);
@@ -312,6 +333,11 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     useEffect(() => {
         props.onCollapsedChange?.(isCollapsed);
     }, [isCollapsed, props.onCollapsedChange]);
+
+    // The hover wave and its name belong to the collapsed rail only.
+    useEffect(() => {
+        if (!isCollapsed) setRailHover(null);
+    }, [isCollapsed]);
 
     // Keep the expanded content mounted until the width animation finishes, then
     // swap in the compact rail so the close reads as a slide rather than a snap.
@@ -536,7 +562,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                     <div className={!props.isDesktop ? 'flex flex-wrap justify-center gap-2' : ''}>
                         {(() => {
                             const ordered = getOrderedSidebarAgentKeys(agentOrderSidebar);
-                            return ordered.map(agentKey => {
+                            return ordered.map((agentKey, index) => {
                                 const agent = agentKey as AgentType;
                                 // Hide retired agents from the sidebar
                                 if (retiredAgents.includes(agent)) {
@@ -546,6 +572,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                                     <SidebarButton
                                         key={agentKey}
                                         agent={agent}
+                                        pulseIndex={index}
                                         isDesktop={props.isDesktop}
                                         isActive={agent === activeAgent}
                                         isThinking={agent === activeAgent && props.isLoading}
@@ -568,6 +595,9 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
     // mounted through the width transition, then the rail swaps in.
     if (props.isDesktop) {
         const railOrder = getOrderedSidebarAgentKeys(agentOrderSidebar);
+        const hoveredRailAgent = railHover ? railOrder[railHover.index] : null;
+        const hoveredRailConfig = hoveredRailAgent ? agentConfig[hoveredRailAgent] : null;
+        const hoveredRailColor = hoveredRailAgent ? agentThemeColors[hoveredRailAgent] || '#94a3b8' : '#94a3b8';
 
         const collapsedRail = (
             <>
@@ -584,8 +614,12 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                         <ChevronDoubleRightIcon className="h-[18px] w-[18px]" />
                     </button>
                 </div>
-                <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto scrollbar-hide px-1.5 py-2">
-                    {railOrder.map(agentKey => {
+                <div
+                    className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto scrollbar-hide px-1.5 py-2"
+                    onMouseLeave={() => setRailHover(null)}
+                    onScroll={() => setRailHover(null)}
+                >
+                    {railOrder.map((agentKey, index) => {
                         if (retiredAgents.includes(agentKey)) return null;
                         const config = agentConfig[agentKey];
                         if (!config) return null;
@@ -597,6 +631,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                             (agentKey === AgentType.ROADING_AGENT && !experimentalRoadingEnabled) ||
                             (agentKey === AgentType.STORMWATER_AGENT && !experimentalStormwaterEnabled) ||
                             (agentKey === AgentType.REDLINE_AGENT && !experimentalRedlineEnabled);
+                        const railInfluence = getAgentRailHoverInfluence(index, railHover?.index ?? null);
                         return (
                             <button
                                 key={agentKey}
@@ -604,7 +639,15 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                                 onClick={() => handleAgentSelect(agentKey)}
                                 title={isExperimentalOff ? `${config.label} — Experimental; click to enable in Settings` : config.label}
                                 aria-label={isExperimentalOff ? `${config.label} — Experimental; enable in Settings` : config.label}
-                                className={`relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md transition-colors ${
+                                onMouseEnter={event => {
+                                    const rect = event.currentTarget.getBoundingClientRect();
+                                    setRailHover({
+                                        index,
+                                        left: Math.max(rect.right + 10, 56),
+                                        top: rect.top + rect.height / 2,
+                                    });
+                                }}
+                                className={`group relative flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md transition-colors ${
                                     isActive ? 'text-white' : 'hover:bg-white/[0.06] light-theme:hover:bg-black/[0.04]'
                                 } ${isExperimentalOff ? 'opacity-60 hover:opacity-100' : ''}`}
                                 style={isActive ? {
@@ -612,7 +655,23 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                                     boxShadow: `inset 0 0 0 1px rgba(${rgbColor},0.32)`,
                                 } : undefined}
                             >
-                                <Icon className="h-[18px] w-[18px]" style={{ color: isActive ? hexColor : `rgba(${rgbColor},0.8)` }} />
+                                <span
+                                    className="agent-rail-glyph relative flex h-[18px] w-[18px] items-center justify-center"
+                                    style={{ transform: `scale(${1 + railInfluence * 0.15})` }}
+                                >
+                                    <Icon
+                                        className="agent-glyph-pulse h-[18px] w-[18px]"
+                                        style={{
+                                            '--agent-glyph-accent': hexColor,
+                                            '--agent-glyph-delay': `${-((index * 2.35) % 22)}s`,
+                                        } as React.CSSProperties}
+                                    />
+                                    <Icon
+                                        aria-hidden="true"
+                                        className="agent-rail-glyph-color pointer-events-none absolute inset-0 h-[18px] w-[18px]"
+                                        style={{ color: hexColor, opacity: railInfluence * 0.95 }}
+                                    />
+                                </span>
                                 {isExperimentalOff && (
                                     <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-amber-400" />
                                 )}
@@ -630,6 +689,7 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
         );
 
         return (
+            <>
             <aside
                 ref={sidebarRef}
                 data-testid="agent-sidebar"
@@ -677,6 +737,24 @@ export const Sidebar = (props: SidebarProps): React.ReactElement => {
                     </div>
                 )}
             </aside>
+            {isCollapsed && railHover && hoveredRailConfig && typeof document !== 'undefined' && createPortal(
+                <div
+                    data-testid="agent-rail-hover-name"
+                    aria-hidden="true"
+                    className="agent-rail-name pointer-events-none fixed z-[45] whitespace-nowrap text-[12px] font-semibold tracking-tight"
+                    style={{
+                        left: railHover.left,
+                        top: railHover.top,
+                        color: hoveredRailColor,
+                        transform: 'translateY(-50%)',
+                        textShadow: '0 1px 3px rgba(0,0,0,0.9), 0 0 14px rgba(0,0,0,0.55)',
+                    }}
+                >
+                    {hoveredRailConfig.label}
+                </div>,
+                document.body,
+            )}
+            </>
         );
     }
     

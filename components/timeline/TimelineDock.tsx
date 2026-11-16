@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useOptionalTimeline } from '../../contexts/TimelineContext.tsx';
+import { PROJECT_GEOMETRY_EVENT } from '../../utils/referenceGeometry.ts';
 import { useOptionalUIState } from '../../contexts/UIStateContext.tsx';
 import { COMMAND_DOCK_LAYOUT_EVENT } from '../../utils/layoutEvents.ts';
 import { useTimelineVisibility } from './timelineVisibility.ts';
@@ -853,20 +854,32 @@ export const TimelineDock: React.FC = () => {
             </div>
 
             <div className="ml-auto flex shrink-0 items-center gap-1.5 border-l border-slate-800 pl-2">
+              {isSketch && (
+                <button
+                  type="button"
+                  data-testid="timeline-project-button"
+                  onClick={() => window.dispatchEvent(new Event(PROJECT_GEOMETRY_EVENT))}
+                  title="Project existing linework into this sketch as an immutable reference"
+                  className="h-6 rounded-md border border-violet-400/40 bg-violet-400/[0.08] px-2 text-[9.5px] font-semibold text-violet-200 transition-colors hover:border-violet-300/70 hover:bg-violet-400/[0.16] hover:text-white"
+                >
+                  Project
+                </button>
+              )}
               <button
                 type="button"
                 data-testid="timeline-sketch-button"
-                onClick={timeline.beginSketch}
-                disabled={busy || isSketch}
+                onClick={isSketch ? timeline.finishSketch : timeline.beginSketch}
+                disabled={busy && !isSketch}
                 aria-pressed={isSketch}
-                title={isSketch ? 'Sketch mode active' : 'Enter sketch mode (S)'}
+                aria-label={isSketch ? 'Finish sketch' : 'Sketch'}
+                title={isSketch ? 'Finish sketch and add it to the timeline' : 'Enter sketch mode (SS)'}
                 className={`h-6 rounded-md px-2 text-[9.5px] font-semibold transition-colors ${
                   isSketch
-                    ? 'border border-pink-500/30 bg-pink-500/[0.07] text-pink-200 outline outline-1 outline-offset-1 outline-pink-500 disabled:cursor-default disabled:opacity-100'
+                    ? 'border border-red-400/80 bg-red-600 text-white shadow-[0_0_12px_rgba(220,38,38,0.55)] hover:border-red-300 hover:bg-red-500'
                     : 'border border-white/10 bg-white/[0.03] text-slate-300 hover:border-cyan-400/35 hover:bg-cyan-400/[0.06] hover:text-cyan-100'
                 } ${busy && !isSketch ? 'hidden' : ''}`}
               >
-                {isSketch ? 'Sketch' : '+ Sketch'}
+                {isSketch ? 'Finish sketch' : 'Sketch'}
               </button>
               <button
                 type="button"
@@ -883,23 +896,14 @@ export const TimelineDock: React.FC = () => {
               >
                 {isFeature ? 'Feature' : '+ Feature'}
               </button>
-              {busy && (
-                <>
-                  <button
-                    type="button"
-                    onClick={isSketch ? timeline.finishSketch : () => timeline.commitFeature()}
-                    className="h-6 rounded-md border border-cyan-400/40 bg-cyan-400/[0.10] px-2 text-[9.5px] font-bold text-cyan-100 transition-colors hover:bg-cyan-400/[0.18]"
-                  >
-                    {isSketch ? 'Finish sketch' : 'End feature'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={isSketch ? timeline.cancelSketch : timeline.cancelFeature}
-                    className="h-6 rounded-md border border-white/10 bg-transparent px-2 text-[9.5px] font-semibold text-slate-400 transition-colors hover:border-rose-400/40 hover:text-rose-200"
-                  >
-                    Cancel
-                  </button>
-                </>
+              {isFeature && (
+                <button
+                  type="button"
+                  onClick={() => timeline.commitFeature()}
+                  className="h-6 rounded-md border border-cyan-400/40 bg-cyan-400/[0.10] px-2 text-[9.5px] font-bold text-cyan-100 transition-colors hover:bg-cyan-400/[0.18]"
+                >
+                  End feature
+                </button>
               )}
             </div>
           </div>

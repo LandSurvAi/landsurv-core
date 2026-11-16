@@ -76,11 +76,20 @@ export interface SnapControls {
   onToggleOption: (id: string) => void;
 }
 
+/** Lightweight contextual guidance shown at the top of Quick Thought. */
+export interface QuickThoughtHint {
+  /** Stable identity so a new hint replaces the previous card state. */
+  key: string;
+  /** Short label shown in the Quick Thought header. Defaults to "Hint". */
+  label?: string;
+  text: string;
+}
+
 const MODEL_LABELS: Record<string, string> = {
   'gemini-3.7-flash': 'Gemini 3.7 Flash',
   'gemini-3.8-flash': 'Gemini 3.8 Flash',
   'gemini-4-hydrogen': 'Gemini 4 Hydrogen',
-  'gemini-4-argon': 'Gemini 4 Argon (High Thinking)',
+  'gemini-4-argon': 'Gemini 4 Argon',
   'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
   'claude-sonnet-5': 'Claude Sonnet 5',
   'claude-opus-5': 'Claude Opus 5',
@@ -175,6 +184,8 @@ interface CanvasTerminalProps {
   };
   /** Tracked workflow status/reminder shown in Quick Thought when its panel is away. */
   workflowThought?: WorkflowQuickThoughtNotice | null;
+  /** Lightweight contextual hint shown inside Quick Thought. */
+  quickThoughtHint?: QuickThoughtHint | null;
   /** Key of the A2UI surface currently docked in the agent tool shelf. */
   dockedA2UIKey?: string | null;
   /** Key of the A2UI surface currently floating on the canvas. */
@@ -191,6 +202,8 @@ interface CanvasTerminalProps {
   chatToolDialogs?: DockableToolItem[];
   /** Increment to pull the command bar's agent feed back open (e.g. Return to chat). */
   agentChatOpenSignal?: number;
+  /** Increment to dismiss the visible Quick Thought preview (e.g. after a file load). */
+  quickThoughtDismissSignal?: number;
   /** Reports the command bar height so the tool drawer can rest on its top edge. */
   onHeightChange?: (height: number) => void;
   /** Reports the open quick-thought card's height so the sidebar can clear it. */
@@ -249,6 +262,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   onToggleAgentChat,
   boundaryQuickActions,
   workflowThought,
+  quickThoughtHint = null,
   dockedA2UIKey,
   floatingA2UIKey,
   standaloneA2UIMessage,
@@ -257,6 +271,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   onToggleA2UIFloat,
   chatToolDialogs = [],
   agentChatOpenSignal,
+  quickThoughtDismissSignal,
   onHeightChange,
   onQuickThoughtHeightChange,
   rightExtension = 0,
@@ -370,6 +385,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const agentInputRef = useRef<HTMLInputElement | null>(null);
   const terminalRootRef = useRef<HTMLDivElement | null>(null);
+  const [commandBarHeightPx, setCommandBarHeightPx] = useState(0);
   const historyScrollRef = useRef<HTMLDivElement | null>(null);
   const agentFeedScrollRef = useRef<HTMLDivElement | null>(null);
   const latestAgentMessageRef = useRef<HTMLDivElement | null>(null);
@@ -828,7 +844,10 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     !isLoading &&
     !hasPendingPrompt &&
     Boolean(latestAgentPreview);
-  const hasQuickThought = hasPendingPrompt || hasCompletedAgentThought;
+  const quickThoughtHintText = quickThoughtHint?.text?.trim() ?? '';
+  const hasQuickThoughtHint = quickThoughtHintText.length > 0;
+  const hasAgentThoughtContent = hasPendingPrompt || hasCompletedAgentThought;
+  const hasQuickThought = hasAgentThoughtContent || hasQuickThoughtHint;
   // Escalation: a multi-field custom panel handed off from Quick Thought belongs
   // beside the canvas, not floating over the conversation. Dock it once; the
   // user can still move it back to Chat from the placement controls.
@@ -901,11 +920,13 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     workflowThought,
   ]);
   const pendingOptions = lastMessage?.questionOptions ?? quickThoughtBreakdown.options ?? [];
-  const thoughtKey = lastMessage
-    ? `${behaviorAgent}:${messages.length}:${lastMessage.role}:${lastMessage.quickThoughtText ?? ''}:${lastMessage.quickThoughtLabel ?? ''}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}:${quickThoughtBreakdown.kind ?? ''}:${latestAgentPreview}:${liveScoutActivity?.id ?? ''}`
-    : liveScoutActivity
-      ? `scout:${liveScoutActivity.id}`
-      : null;
+  const thoughtKey = quickThoughtHint?.key
+    ? `hint:${quickThoughtHint.key}`
+    : lastMessage
+      ? `${behaviorAgent}:${messages.length}:${lastMessage.role}:${lastMessage.quickThoughtText ?? ''}:${lastMessage.quickThoughtLabel ?? ''}:${pendingOptions.join('|')}:${lastMessage.a2ui?.widgetType ?? ''}:${lastMessage.a2ui?.status ?? ''}:${quickThoughtBreakdown.kind ?? ''}:${latestAgentPreview}:${liveScoutActivity?.id ?? ''}`
+      : liveScoutActivity
+        ? `scout:${liveScoutActivity.id}`
+        : null;
   const a2uiHost = useContext(A2UIHostContext);
   const quickThoughtFileDrop = useA2UIFileDrop({
     host: a2uiHost,
@@ -922,12 +943,14 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
         : workflowThought.attention === 'away'
           ? 'Workflow paused'
           : 'Workflow step'
-      : lastMessage?.quickThoughtLabel?.trim() ||
-        (lastMessage?.quickThoughtText
-          ? 'Handoff'
-          : hasCompletedAgentThought
-            ? 'Answer'
-            : 'Needs input');
+      : hasQuickThoughtHint
+        ? quickThoughtHint?.label?.trim() || 'Hint'
+        : lastMessage?.quickThoughtLabel?.trim() ||
+          (lastMessage?.quickThoughtText
+            ? 'Handoff'
+            : hasCompletedAgentThought
+              ? 'Answer'
+              : 'Needs input');
   const isThoughtDismissed = thoughtKey !== null && dismissedThoughtKey === thoughtKey;
 
   const setHoverReveal = useCallback((key: string | null) => {
@@ -1006,6 +1029,19 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
     }
     wasBottomFeedOpenForThoughtRef.current = isBottomAgentChatOpen;
   }, [isBottomAgentChatOpen, thoughtKey, workflowThought, setHoverReveal, clearQuickThoughtHideTimer]);
+
+  // A load or other completed intake action retires the current answer preview
+  // without touching a workflow card, which owns its own dismissal state.
+  const lastQuickThoughtDismissSignalRef = useRef(quickThoughtDismissSignal ?? 0);
+  useEffect(() => {
+    if (quickThoughtDismissSignal === undefined) return;
+    if (quickThoughtDismissSignal === lastQuickThoughtDismissSignalRef.current) return;
+    lastQuickThoughtDismissSignalRef.current = quickThoughtDismissSignal;
+    if (thoughtKey) setDismissedThoughtKey(thoughtKey);
+    setHoverReveal(null);
+    isPointerOverQuickThoughtRef.current = false;
+    clearQuickThoughtHideTimer();
+  }, [clearQuickThoughtHideTimer, quickThoughtDismissSignal, setHoverReveal, thoughtKey]);
 
   const cleanedThoughtText = (lastMessage?.quickThoughtText || latestAgentFullText)
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -1839,10 +1875,15 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
 
   // Report the bar's height (including an expanded feed) so the agent tool
   // drawer can sit with its bottom edge exactly on the top of the command bar.
+  // The same measurement anchors the portaled Tools handle above the bar edge.
   useEffect(() => {
     const el = terminalRootRef.current;
-    if (!el || !onHeightChange) return;
-    const report = () => onHeightChange(el.getBoundingClientRect().height);
+    if (!el) return;
+    const report = () => {
+      const height = el.getBoundingClientRect().height;
+      setCommandBarHeightPx(height);
+      onHeightChange?.(height);
+    };
     report();
     if (typeof ResizeObserver === 'undefined') {
       window.addEventListener('resize', report);
@@ -2006,6 +2047,55 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
 
   if (hasFullscreenA2UISurface) return null;
 
+  // The drawer handle must sit above the canvas's 3D overlay (Raw Replay /
+  // Project 3D, both z-60). Inside the command bar's z-30 stacking context it
+  // would be painted over and become unclickable while the shelf is closed, so
+  // portal it above the bar and let the wrapper own the bar-edge anchor.
+  const drawerHandleButton = (
+    <button
+      type="button"
+      data-no-drag
+      data-testid="command-bar-expand-handle"
+      onClick={() => {
+        if (onToggleToolDock && !(isCollapsePulsing && isExpanded)) {
+          onToggleToolDock();
+          return;
+        }
+        toggleExpand();
+      }}
+      aria-expanded={onToggleToolDock && !(isCollapsePulsing && isExpanded) ? isToolDockOpen : isExpanded}
+      aria-label={
+        onToggleToolDock && !(isCollapsePulsing && isExpanded)
+          ? (isToolDockOpen ? 'Close agent tool shelf' : 'Open agent tool shelf')
+          : (isExpanded ? 'Hide / Collapse command line' : 'Expand command line')
+      }
+      title={
+        onToggleToolDock && !(isCollapsePulsing && isExpanded)
+          ? (isToolDockOpen ? `Close ${agentLabel} tool shelf` : `Open ${agentLabel} tool shelf`)
+          : (isExpanded ? 'Collapse command line' : 'Expand command line')
+      }
+      className={`tab-bump group pointer-events-auto absolute bottom-full right-4 z-50 flex h-[20px] w-auto min-w-[40px] items-center justify-center rounded-[10px] border bg-[#0a111b] px-1.5 transition-all duration-200 hover:brightness-125 active:scale-95 ${
+        isCollapsePulsing && isExpanded ? 'animate-pulse ring-2 ring-white/40' : ''
+      } ${introPulse && onToggleToolDock && !isToolDockOpen && !(isCollapsePulsing && isExpanded) ? 'tool-shelf-intro-flash' : ''}`}
+      style={{
+        borderColor: (onToggleToolDock ? isToolDockOpen : isExpanded) ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.25)',
+        color: '#fff',
+        boxShadow: (onToggleToolDock ? isToolDockOpen : isExpanded)
+          ? '0 4px 14px rgba(0,0,0,0.75), 0 0 14px rgba(255,255,255,0.12), inset 0 1px 0 rgba(255,255,255,0.2)'
+          : '0 -4px 14px rgba(0,0,0,0.75), inset 0 1px 0 rgba(255,255,255,0.08)',
+      }}
+    >
+      <span className="tab-bump__lift flex items-center justify-center gap-1">
+        {onToggleToolDock && !(isCollapsePulsing && isExpanded) && (
+          <span className="text-[9px] font-bold uppercase tracking-[0.12em]">Tools</span>
+        )}
+        {(onToggleToolDock && !(isCollapsePulsing && isExpanded) ? isToolDockOpen : isExpanded)
+          ? <ChevronDownIcon className="h-3.5 w-3.5 transition-transform duration-200" />
+          : <ChevronUpIcon className="h-3.5 w-3.5 transition-transform duration-200" />}
+      </span>
+    </button>
+  );
+
   // The terminal sits inside the canvas viewport, whose wheel handler zooms the
   // drawing. Keep wheel events here so scrolling the command history (or just
   // hovering the command line) never changes the scene scale.
@@ -2052,48 +2142,15 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
       {/* Right-mounted drawer handle. In the workspace it opens/closes the right
           Agent Tool Shelf; in standalone CAD mode (or when Help expands the command
           line) it toggles the command bar drawer. */}
-      <button
-        type="button"
-        data-no-drag
-        data-testid="command-bar-expand-handle"
-        onClick={() => {
-          if (onToggleToolDock && !(isCollapsePulsing && isExpanded)) {
-            onToggleToolDock();
-            return;
-          }
-          toggleExpand();
-        }}
-        aria-expanded={onToggleToolDock && !(isCollapsePulsing && isExpanded) ? isToolDockOpen : isExpanded}
-        aria-label={
-          onToggleToolDock && !(isCollapsePulsing && isExpanded)
-            ? (isToolDockOpen ? 'Close agent tool shelf' : 'Open agent tool shelf')
-            : (isExpanded ? 'Hide / Collapse command line' : 'Expand command line')
-        }
-        title={
-          onToggleToolDock && !(isCollapsePulsing && isExpanded)
-            ? (isToolDockOpen ? `Close ${agentLabel} tool shelf` : `Open ${agentLabel} tool shelf`)
-            : (isExpanded ? 'Collapse command line' : 'Expand command line')
-        }
-        className={`tab-bump group absolute bottom-full right-4 z-50 flex h-[20px] w-auto min-w-[40px] items-center justify-center rounded-[10px] border bg-[#0a111b] px-1.5 transition-all duration-200 hover:brightness-125 active:scale-95 ${
-          isCollapsePulsing && isExpanded ? 'animate-pulse ring-2 ring-white/40' : ''
-        } ${introPulse && onToggleToolDock && !isToolDockOpen && !(isCollapsePulsing && isExpanded) ? 'tool-shelf-intro-flash' : ''}`}
-        style={{
-          borderColor: (onToggleToolDock ? isToolDockOpen : isExpanded) ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.25)',
-          color: '#fff',
-          boxShadow: (onToggleToolDock ? isToolDockOpen : isExpanded)
-            ? '0 4px 14px rgba(0,0,0,0.75), 0 0 14px rgba(255,255,255,0.12), inset 0 1px 0 rgba(255,255,255,0.2)'
-            : '0 -4px 14px rgba(0,0,0,0.75), inset 0 1px 0 rgba(255,255,255,0.08)',
-        }}
-      >
-        <span className="tab-bump__lift flex items-center justify-center gap-1">
-          {onToggleToolDock && !(isCollapsePulsing && isExpanded) && (
-            <span className="text-[9px] font-bold uppercase tracking-[0.12em]">Tools</span>
-          )}
-          {(onToggleToolDock && !(isCollapsePulsing && isExpanded) ? isToolDockOpen : isExpanded)
-            ? <ChevronDownIcon className="h-3.5 w-3.5 transition-transform duration-200" />
-            : <ChevronUpIcon className="h-3.5 w-3.5 transition-transform duration-200" />}
-        </span>
-      </button>
+      {typeof document !== 'undefined' && createPortal(
+        <div
+          className="pointer-events-none fixed inset-x-0 z-[9970]"
+          style={{ bottom: commandBarHeightPx, height: 0 }}
+        >
+          {drawerHandleButton}
+        </div>,
+        document.body,
+      )}
 
       {/* Top resize handle when history / agent feed is expanded */}
       {isExpanded && (
@@ -3120,6 +3177,17 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                     Drag &amp; drop a file here
                   </div>
                 )}
+                {hasQuickThoughtHint && (
+                  <div
+                    data-testid="quick-thought-hint"
+                    className="mb-2 flex items-start gap-1.5 rounded-md border border-cyan-300/25 bg-cyan-300/[0.06] px-2 py-1.5"
+                  >
+                    <span className="mt-[1px] shrink-0 rounded border border-cyan-300/35 bg-cyan-300/[0.08] px-1 py-px font-mono text-[7.5px] font-bold uppercase tracking-[0.14em] text-cyan-200/90">
+                      Hint
+                    </span>
+                    <span className="text-[10.5px] leading-snug text-white/75">{quickThoughtHintText}</span>
+                  </div>
+                )}
                 {hasWorkflowThoughtNotice && workflowThought && (
                   <WorkflowQuickThought notice={workflowThought} />
                 )}
@@ -3128,7 +3196,7 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                   ref={thoughtTextRef}
                   data-testid="agent-thought-text"
                   title={thoughtText}
-                  className={`max-h-[52px] overflow-y-auto overscroll-contain text-[12px] leading-[1.5] text-white/70 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${hasQuickThought ? '' : 'hidden'}`}
+                  className={`max-h-[52px] overflow-y-auto overscroll-contain text-[12px] leading-[1.5] text-white/70 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${hasAgentThoughtContent ? '' : 'hidden'}`}
                 >
                   <div
                     className={isThoughtOverflowing ? 'quick-thought-drift' : undefined}
@@ -3139,9 +3207,9 @@ export const CanvasTerminal: React.FC<CanvasTerminalProps> = ({
                 </div>
                 )}
 
-                {!hasWorkflowThoughtNotice && hasQuickThought && <ScoutQuickThought />}
+                {!hasWorkflowThoughtNotice && hasAgentThoughtContent && <ScoutQuickThought />}
 
-                {!hasWorkflowThoughtNotice && lastMessage && hasQuickThought && (
+                {!hasWorkflowThoughtNotice && lastMessage && hasAgentThoughtContent && (
                   <>
                   <A2UIQuickThoughtSurface
                     breakdown={quickThoughtBreakdown}

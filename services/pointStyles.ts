@@ -481,6 +481,26 @@ export function resolvePointRenderStyle(
     return createPointStyleResolver(state).resolve(point, listId);
 }
 
+/**
+ * Data Visibility is the global gate over Point Studio's per-style labels.
+ * A style may hide an attribute on its own, but it can never force an
+ * attribute back on after the user hides it in the layer panel.
+ */
+export function resolvePointLabelVisibility(
+    layers: {
+        pointNumber: { visible: boolean };
+        elevation: { visible: boolean };
+        description: { visible: boolean };
+    },
+    labels?: Pick<PointLabelStyle, 'showPointNumber' | 'showElevation' | 'showDescription'> | null,
+): Pick<PointLabelStyle, 'showPointNumber' | 'showElevation' | 'showDescription'> {
+    return {
+        showPointNumber: layers.pointNumber.visible !== false && (labels?.showPointNumber ?? true),
+        showElevation: layers.elevation.visible !== false && (labels?.showElevation ?? true),
+        showDescription: layers.description.visible !== false && (labels?.showDescription ?? true),
+    };
+}
+
 export function getPointStyleUsage(state: PointStudioState, styleId: string): number {
     return state.assignments.filter(assignment => assignment.styleId === styleId).length
         + (state.defaultStyleId === styleId ? 1 : 0);

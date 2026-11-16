@@ -17,7 +17,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUploaded, onGoBack, backB
   const { reportError } = useErrorReporter();
 
   const handleFile = useCallback((file: File) => {
-    if (file && (file.name.toLowerCase().endsWith('.raw') || file.type === 'text/plain')) {
+    const extension = file.name.toLowerCase().split('.').pop();
+    if (file && (['rw5', 'raw', 'txt', 'fbk', 'gsi'].includes(extension ?? '') || file.type === 'text/plain')) {
       const reader = new FileReader();
       reader.onload = (e) => {
         const content = e.target?.result as string;
@@ -25,7 +26,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUploaded, onGoBack, backB
       };
       reader.readAsText(file);
     } else {
-      reportError({ title: 'Invalid file', message: 'Please upload a valid .RAW or text file.' });
+      reportError({ title: 'Invalid file', message: 'Please upload a valid .RW5, .RAW, .FBK, .GSI or text file.' });
     }
   }, [onFileUploaded, reportError]);
 
@@ -74,15 +75,15 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUploaded, onGoBack, backB
     <UploadShell
       icon={BrainCircuitIcon}
       accent="#22d3ee"
-      title="RAW Crawler"
-      description="Upload a surveyor's .RAW file and interrogate it in plain language — the agent parses codes, shots, and geometry for you."
+      title="Raw Replay"
+      description="Open a raw field survey and replay the observation sequence in 3D. Raw Replay reads the file read-only and produces a deterministic field summary — no AI inference, no coordinate adjustment."
       onGoBack={onGoBack}
       backTitle={backButtonTitle}
     >
       <UploadPanel>
         <UploadDropzone
           id="file-input"
-          accept=".raw,text/plain"
+          accept=".rw5,.raw,.txt,.fbk,.gsi,text/plain"
           onFiles={(selected) => {
             const file = selected?.[0];
             if (file) handleFile(file);
@@ -91,13 +92,13 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileUploaded, onGoBack, backB
           onDragEnter={handleDragEnter}
           onDragLeave={handleDragLeave}
           isDragging={isDragging}
-          title="Drop your .RAW file here"
-          hint="or click to browse local files"
+          title="Drop your raw survey file here"
+          hint="RW5 · TDS / Survey Pro · legacy RAW · GSI · TXT"
         />
       </UploadPanel>
 
       <div className="flex justify-center">
-        <UploadGhostButton onClick={handleLoadExample}>Load an example .RAW file</UploadGhostButton>
+        <UploadGhostButton onClick={handleLoadExample}>Load an example raw file</UploadGhostButton>
       </div>
     </UploadShell>
   );

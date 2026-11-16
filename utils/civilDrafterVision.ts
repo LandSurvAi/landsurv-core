@@ -23,6 +23,7 @@ import type { SurveyPoint, SurveyLine, BoundaryFile } from '../types';
 import { parseBearingToRadians, parseDistance, direct, directCurve } from './cogo';
 import { resolveArcGeometry } from './offsetGeometry';
 import { inferParcelGapRoads } from './parcelRoadInference';
+import { civilDrafterDiagnostics } from '../services/civilDrafterDiagnostics.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -114,6 +115,8 @@ export interface VisionCaptureOptions {
   maxClusterFrames?: number;
   /** Maximum detail (tight-zoom) frames to capture (default 2) */
   maxDetailFrames?: number;
+  /** Maximum overlapping corridor sweep frames (default 5, minimum 2). */
+  maxCorridorFrames?: number;
   canvasWidth?: number;
   canvasHeight?: number;
   /** Optional boundary files to render onto the vision frames and use for extent calculation */
@@ -524,7 +527,7 @@ function corridorAxis(points: SurveyPoint[]): { cE: number; cN: number; ux: numb
  * shots further down the corridor. These windows collectively cover the full
  * shot run; adjacent windows overlap so there is no gap between frames.
  */
-export function buildCorridorWindows(points: SurveyPoint[]): CorridorWindow[] {
+export function buildCorridorWindows(points: SurveyPoint[], maxCorridorFrames = 5): CorridorWindow[] {
   const finite = points.filter(p => Number.isFinite(p.easting) && Number.isFinite(p.northing));
   if (finite.length < 4) return [];
 
@@ -538,7 +541,8 @@ export function buildCorridorWindows(points: SurveyPoint[]): CorridorWindow[] {
 
   // More, tighter corridor glances than the old 4-frame/700-ft sweep. The
   // windows still overlap, so no shot falls between two frames.
-  const count = Math.min(5, Math.max(2, Math.ceil(span / 450)));
+  const frameCap = Math.max(2, Math.min(8, Math.round(maxCorridorFrames)));
+  const count = Math.min(frameCap, Math.max(2, Math.ceil(span / 450)));
   const overlap = 0.30;
   const windowSpan = span / (count - (count - 1) * overlap);
   const step = windowSpan * (1 - overlap);
@@ -1001,10 +1005,16 @@ export function expandFeatureTrace(
   const addChainLines = (pts: SurveyPoint[], layer: string, polylineId: string, isClosed = false) => {
     if (pts.length < 2) return;
     interpolateChainElevations(pts);
+    // Stamp coordinates on every generated segment. The canvas resolves refs
+    // against the live point database first, but a traced point can be
+    // renumbered or deduplicated later in the turn. Stored endpoints keep the
+    // drafted line visible even when its point reference no longer resolves.
     for (let i = 0; i < pts.length - 1; i++) {
       generatedLines.push({
         from: pts[i].pointNumber,
         to: pts[i + 1].pointNumber,
+        fromPt: { x: pts[i].easting, y: pts[i].northing, z: pts[i].elevation ?? 0 },
+        toPt: { x: pts[i + 1].easting, y: pts[i + 1].northing, z: pts[i + 1].elevation ?? 0 },
         layer,
         polylineId,
       });
@@ -1013,6 +1023,12 @@ export function expandFeatureTrace(
       generatedLines.push({
         from: pts[pts.length - 1].pointNumber,
         to: pts[0].pointNumber,
+        fromPt: {
+          x: pts[pts.length - 1].easting,
+          y: pts[pts.length - 1].northing,
+          z: pts[pts.length - 1].elevation ?? 0,
+        },
+        toPt: { x: pts[0].easting, y: pts[0].northing, z: pts[0].elevation ?? 0 },
         layer,
         polylineId,
       });
@@ -1692,9 +1708,11 @@ export async function captureVisionSurvey(
   lines: SurveyLine[],
   opts: VisionCaptureOptions = {},
 ): Promise<VisionSurvey> {
+  const captureStartedAt = Date.now();
   const {
     maxClusterFrames = 6,
     maxDetailFrames  = 3,
+    maxCorridorFrames = 5,
     canvasWidth      = VISION_W,
     canvasHeight     = VISION_H,
     pass             = 'geometry',
@@ -1853,7 +1871,7 @@ export async function captureVisionSurvey(
 
   // ── Corridor sweep: cover the whole road, not just the densest cells ──────
   const corridorPoints = pass === 'geometry' ? pointsInScope.filter(isRoadCorridorPoint) : [];
-  const corridorWindows = targetedWindows.length > 0 ? [] : buildCorridorWindows(corridorPoints);
+  const corridorWindows = targetedWindows.length > 0 ? [] : buildCorridorWindows(corridorPoints, maxCorridorFrames);
   for (let i = 0; i < corridorWindows.length; i++) {
     const win = corridorWindows[i];
     const inside = (p: SurveyPoint) =>
@@ -1988,6 +2006,19 @@ export async function captureVisionSurvey(
       ? `Use this pass only for background context (canopy, buildings, driveways, visible pavement). It is not a geometry source and must not override the point/parcel pass.`
       : `Use the point, parcel/frontage and boundary geometry in these frames as the primary evidence for drafting decisions. The background is intentionally blank.`,
   ].filter(Boolean).join('\n');
+
+  const visionByteSize = frames.reduce(
+    (sum, frame) => sum + Math.floor((frame.base64?.length ?? 0) * 0.75),
+    0,
+  );
+  civilDrafterDiagnostics.recordVision({
+    pass: draftInspection ? 'draft-inspection' : pass,
+    frameCount: frames.length,
+    byteSize: visionByteSize,
+    durationMs: Date.now() - captureStartedAt,
+    width: canvasWidth,
+    height: canvasHeight,
+  });
 
   return {
     frames,
