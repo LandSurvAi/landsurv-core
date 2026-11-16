@@ -35126,18 +35126,6 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             projectKey={`${jobInfo.jobNo || 'project'}-${jobInfo.jobName || ''}`}
           />
 
-          {!showWelcome && activeVisualPanel === 'canvas' && !showRawReplay && !showProject3D && (
-            <button
-              type="button"
-              onClick={() => setShowProject3D(true)}
-              className="fixed right-5 top-20 z-[95] flex items-center gap-2 rounded-md border border-cyan-400/35 bg-[#07131d]/90 px-3 py-2 text-xs font-semibold text-cyan-100 shadow-xl backdrop-blur hover:border-cyan-300/70 hover:bg-[#0a1b28]"
-              title="Open the project in true 3D"
-            >
-              <span className="text-[10px] tracking-[0.16em]">3D</span>
-              <span className="hidden sm:inline">Project view</span>
-            </button>
-          )}
-
 
           </div>
         </div>
