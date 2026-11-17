@@ -10,9 +10,9 @@
  * before launching their first agent.
  */
 
-export const TOS_EFFECTIVE_DATE = 'November 3, 2026';
-export const TOS_PUBLISHED_ISO = '2026-11-03';
-export const TOS_VERSION = '2.0';
+export const TOS_EFFECTIVE_DATE = 'November 17, 2026';
+export const TOS_PUBLISHED_ISO = '2026-11-17';
+export const TOS_VERSION = '2.1';
 
 export interface TosTakeaway {
   badge: string;
@@ -55,7 +55,7 @@ export const TOS_AT_A_GLANCE: TosTakeaway[] = [
     badge: '03 · Data & Ownership',
     title: 'You Own Your Project Files & Content',
     summary:
-      'You retain full ownership of your uploaded deeds, plans, point clouds, DXFs, and .lsvz archives. We never sell your personal data or train general-purpose third-party foundation models on your private project files.',
+      'You retain full ownership of your uploaded deeds, plans, point clouds, DXFs, and .lsvz archives. Submitted deeds, extraction results, and drafted boundaries are used strictly to train and improve LandSurv.ai’s own system; we never sell your personal data or train general-purpose third-party foundation models on your private project files.',
     accent: 'emerald',
   },
   {
@@ -131,8 +131,8 @@ export const TOS_SECTIONS: TosSectionData[] = [
     title: '5. Your Content, Project Files & Data Ownership',
     paragraphs: [
       '"User Content" means all data, files, and inputs you upload, paste, key in, capture, or transmit through the Platform—including legal descriptions, deed PDFs, civil plan sheets, DXF/DWG drawings, GeoJSON files, RINEX GNSS observation logs, UAV/drone imagery, point files (.csv/.txt), TIN/LandXML surfaces, CAD standards, chat prompts, saved .lsvz project archives, and the project-specific geometry or reports generated from your inputs.',
-      'You retain 100% ownership of your User Content. By submitting User Content to the Platform, you grant LandSurv.ai a limited, worldwide, royalty-free, non-exclusive license to host, cache, parse, transform, transmit, and display that User Content solely to the extent necessary to provide, secure, debug, and maintain the Platform features you invoke, and to comply with applicable law.',
-      'No Foundation Model Training on Your Private Data: LandSurv.ai does NOT sell your User Content and does NOT use your private deeds, survey points, plans, or CAD drawings to train general-purpose third-party foundation AI models. When you invoke cloud AI inference, your request is processed through our enterprise cloud endpoints (such as Google Cloud Vertex AI) or via your own Bring-Your-Own-Key (BYOK) credentials in accordance with Section 6 and Section 7.',
+      'You retain 100% ownership of your User Content. By submitting User Content to the Platform, you grant LandSurv.ai a limited, worldwide, royalty-free, non-exclusive license to host, cache, parse, transform, transmit, display, and use that User Content to provide, secure, debug, and maintain the Platform features you invoke, to comply with applicable law, and to train, evaluate, and improve LandSurv.ai’s own models, agents, parsers, extraction workflows, and drafting outputs. This training license is limited to improving the LandSurv.ai system and does not transfer ownership of your User Content.',
+      'Training Use — Strictly for Our System: LandSurv.ai does NOT sell your User Content. We use submitted deeds, legal descriptions, extracted calls and results, generated boundary drafts, closure results, corrections, and related prompts strictly to train and improve LandSurv.ai’s own system. We do NOT use your User Content to train general-purpose third-party foundation AI models. When you invoke cloud AI inference, your request is processed through our enterprise cloud endpoints (such as Google Cloud Vertex AI) or via your own Bring-Your-Own-Key (BYOK) credentials in accordance with Section 6 and Section 7.',
       'You represent and warrant that you own or hold all necessary rights, consents, and permissions to submit your User Content, and that its processing under these Terms does not violate any third-party intellectual property right, trade secret, non-disclosure agreement, privacy statute, or critical-infrastructure security restriction.',
     ],
   },
@@ -348,7 +348,11 @@ export const TOS_SECTIONS: TosSectionData[] = [
     bullets: [
       {
         lead: 'Local-First Architecture:',
-        text: 'Most interactive drafting state, point lists, and BYOK keys reside in your browser’s local storage unless you explicitly invoke cloud AI agents, cloud storage, or C3D WebSocket relay sync.',
+        text: 'Most interactive drafting state, point lists, and BYOK keys reside in your browser’s local storage unless you explicitly invoke cloud AI agents, cloud storage, or C3D WebSocket relay sync. When you process a deed, the source deed text or file, extracted results, generated draft geometry, closure reports, and deed chat are transmitted to LandSurv.ai’s training store and used strictly to train and improve our system as described in Section 5.',
+      },
+      {
+        lead: 'Training Data Handling:',
+        text: 'Deed training artifacts are retained in access-controlled storage and used only to train and improve LandSurv.ai’s own models, agents, parsers, and drafting workflows. We do not sell these artifacts or use them to train general-purpose third-party foundation models. Do not submit deed content you are not authorized to use for this purpose.',
       },
       {
         lead: 'Enterprise Data Processing Addendum (DPA) & Subprocessors:',

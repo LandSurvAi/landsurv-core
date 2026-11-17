@@ -182,6 +182,11 @@ const BASE_CRS: CrsDefinition[] = [
     proj4: '+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs',
     bbox: [-180, 60, 180, 90], area: 'Northern hemisphere - north of 60°N.', country: 'Arctic',
   }),
+  entry({
+    code: 3997, name: 'Dubai Local TM', kind: 'projected',
+    proj4: '+proj=tmerc +lat_0=0 +lon_0=55.3333333333333 +k=1 +x_0=500000 +y_0=0 +datum=WGS84 +units=m +no_defs',
+    bbox: [54.5, 24.5, 56.5, 25.5], area: 'United Arab Emirates (UAE) - Dubai emirate.', country: 'United Arab Emirates',
+  }),
 ];
 
 /** EPSG:32601–32660 (UTM 1N–60N) and EPSG:32701–32760 (UTM 1S–60S). */

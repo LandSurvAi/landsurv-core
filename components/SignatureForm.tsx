@@ -17,7 +17,7 @@ import { getDeviceFingerprint } from '../services/deviceFingerprint.ts';
  */
 
 export const LEGAL_AGREEMENT_STORAGE_KEY = 'landsurv-legal-agreement-v1';
-export const LEGAL_AGREEMENT_VERSION = '2026-07-01';
+export const LEGAL_AGREEMENT_VERSION = '2026-11-17';
 
 export interface SignatureRecord {
   name: string;

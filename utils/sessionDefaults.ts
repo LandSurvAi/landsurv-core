@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS: Settings = {
   northArrowPosition: 'right',
   pointLabelingSettings: { style: 'numeric', prefix: '', nextNumber: 1 },
   uncertaintySensitivity: 'medium',
+  aiOutputLanguage: 'en',
   argonReasoning: 'fast',
   pointAttributeScaling: 'screen',
   stationing: {

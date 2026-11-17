@@ -53,6 +53,11 @@ const LOCAL_ALIASES: Record<number, string> = {
   6668: 'jgd2011 japan',
   7844: 'gda2020 australia',
   28348: 'gda94 mga australia',
+  3997: 'dubai local tm dltm uae united arab emirates dubai municipality',
+  32639: 'uae united arab emirates abu dhabi dubai gulf utm 39n',
+  32640: 'uae united arab emirates abu dhabi dubai gulf utm 40n',
+  9358: 'saudi arabia ksa ksa-grf17 geosa utm 39n',
+  9359: 'saudi arabia ksa ksa-grf17 geosa utm 40n',
 };
 
 function storageAvailable(): boolean {

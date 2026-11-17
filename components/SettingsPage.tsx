@@ -646,6 +646,20 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         <p className="text-xs text-gray-500 mt-1">Gemini 4 Argon runs Fast by default to keep latency and thinking-token use low. Choose High Thinking only when the task needs deeper reasoning.</p>
                     </div>
                     <div>
+                        <label htmlFor="aiOutputLanguage" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">AI Output Language</label>
+                        <select
+                            id="aiOutputLanguage"
+                            value={settings.aiOutputLanguage ?? 'en'}
+                            onChange={e => handleSettingChange('aiOutputLanguage', e.target.value as Settings['aiOutputLanguage'])}
+                            className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
+                        >
+                            <option value="en">English (default)</option>
+                            <option value="ar">العربية — Modern Standard Arabic</option>
+                            <option value="auto">Match my input</option>
+                        </select>
+                        <p className="text-xs text-gray-500 mt-1">Applies to AI explanations, questions, and chat replies in this session. Coordinates, point IDs, layer names, EPSG codes, JSON keys, and tool names stay in Latin script.</p>
+                    </div>
+                    <div>
                         <label htmlFor="uncertaintySensitivity" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">Uncertainty Sensitivity</label>
                         <select 
                             id="uncertaintySensitivity" 

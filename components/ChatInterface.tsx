@@ -385,6 +385,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 </div>
               )}
               <div
+                dir="auto"
                 className="text-[13px] leading-relaxed break-words [overflow-wrap:anywhere] [&>*]:max-w-full [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:break-words [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto"
                 dangerouslySetInnerHTML={{ __html: (() => {
                 const raw = msg.result || msg.text || '';

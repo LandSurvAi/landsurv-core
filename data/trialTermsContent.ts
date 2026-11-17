@@ -8,8 +8,8 @@ import { TOS_SECTIONS, type TosSectionData } from './tosContent.ts';
  * drift. Counsel should review the selected set, the intro, and the bullets.
  */
 
-export const TRIAL_TERMS_VERSION = '1.1';
-export const TRIAL_TERMS_EFFECTIVE_DATE = 'November 14, 2026';
+export const TRIAL_TERMS_VERSION = '1.2';
+export const TRIAL_TERMS_EFFECTIVE_DATE = 'November 17, 2026';
 
 export const TRIAL_TERMS_INTRO =
   'Free CAD is a limited trial for evaluation. It is not a professional service and does not create a signed agreement. Draw, use the full workspace, and save your work. The trial includes 20 assistant prompts on this device; up to 5 can process deeds. When the prompts are used, drawing, editing, saving, and exports still work; only the assistant pauses until you add a key or move to Business CAD.';

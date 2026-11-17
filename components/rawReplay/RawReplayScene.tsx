@@ -1413,7 +1413,10 @@ export default function RawReplayScene({
           satelliteSkyRef.current?.setEnabled(satelliteCount > 0);
 
           // Update RTK correction link from Base Tower to GNSS Rover dome — dashed red.
-          if (towerTopPosRef.current && state.showSightRays && state.sightRayMode !== 'off') {
+          // This is a correction data link, not an optical sight ray. Keep it
+          // visible whenever the tower and rover are present; the Rays toggle
+          // and Ray Mode only hide total-station/prism beams.
+          if (towerTopPosRef.current) {
             const fromTower = towerTopPosRef.current;
             const mid = Vector3.Lerp(fromTower, activeTargetHeadPos, 0.5);
             mid.y += Math.max(14, Vector3.Distance(fromTower, activeTargetHeadPos) * 0.085);
@@ -1441,6 +1444,9 @@ export default function RawReplayScene({
             rtkMesh.color = Color3.FromHexString('#ef4444');
             rtkMesh.alpha = 0.95;
             rtkMesh.isPickable = false;
+            // The beam is rebuilt each frame at world coordinates; keep it from
+            // being camera-culled while the tower/rover remain in view.
+            rtkMesh.alwaysSelectAsActiveMesh = true;
             rtkMesh.renderingGroupId = 2;
             rtkLinkMeshRef.current = rtkMesh;
           } else if (rtkLinkMeshRef.current) {
@@ -1898,11 +1904,16 @@ export default function RawReplayScene({
           (event.button === 1 && event.shiftKey)
           || (event.button === 0 && event.ctrlKey)
           || event.button === 2
-          // Inspect is click-to-select in free navigation. In Follow Pole the
-          // camera is locked to the moving pole, so left-drag must still swing
-          // around that lock; a click without movement falls through to inspect.
+          // Inspect is click-to-select, but a left drag should still orbit in
+          // the free and Follow Pole camera modes. The drag is only committed
+          // after the pointer moves; a click without movement falls through to
+          // inspect. Instrument POV is camera-locked, so leave clicks alone.
           || (event.button === 0 && tool === 'orbit')
-          || (event.button === 0 && tool === 'select' && liveStateRef.current.cameraFollowMode === 'follow-shot')
+          || (
+            event.button === 0
+            && tool === 'select'
+            && liveStateRef.current.cameraFollowMode !== 'instrument-pov'
+          )
         );
 
       if (orbit || pan) {

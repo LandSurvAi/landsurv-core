@@ -4,6 +4,7 @@
  */
 
 import planTableParser from './planTableParser';
+import { getOcrLanguageHints, getOcrLanguages } from './ocrLanguages.ts';
 import { extractCoordinateTable as extractCoordTableFromOCR } from '../services/ocrService';
 import { processAndCorrectCoordinates } from '../services/geminiService';
 
@@ -82,6 +83,7 @@ async function callBackendOCR(imageBase64: string, userId: string): Promise<OCRP
     },
     body: JSON.stringify({
       imageBase64,
+      languageHints: getOcrLanguageHints(),
     }),
   });
 
@@ -136,7 +138,7 @@ async function processImageWithTesseract(imageBase64: string): Promise<OCRProces
 
     console.log('[OCRClient] Starting Tesseract recognition...');
 
-    const result = await Tesseract.recognize(imageUrl, 'eng', {
+    const result = await Tesseract.recognize(imageUrl, getOcrLanguages(), {
       logger: (m: any) => {
         if (m.status === 'recognizing') {
           console.log(`[OCRClient] Tesseract progress: ${Math.round(m.progress * 100)}%`);

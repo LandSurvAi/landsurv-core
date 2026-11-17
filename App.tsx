@@ -578,6 +578,7 @@ import {
   FREE_DEED_LIMIT,
   type DeedCreditSnapshot,
 } from './services/deedCredits.ts';
+import { uploadDeedArtifact } from './services/deedArtifact.ts';
 import { useCheckoutRouting } from './hooks/useCheckoutRouting.tsx';
 
 // ============================================================================
@@ -604,6 +605,7 @@ import { suggestedQuestionsText } from './assets/suggested_questions.ts';
 import { userSuggestedQuestionsText } from './assets/user_suggested_questions.ts';
 import { deedSuggestedQuestionsText } from './assets/deed_suggested_questions.ts';
 import { exampleFileName, exampleFileContent } from './assets/example.raw.ts';
+import { gulfSampleFileName, gulfSampleFileContent } from './assets/gulfSample.raw.ts';
 import { exampleDeedContent } from './assets/example.deed.ts';
 import JSZip from 'jszip';
 import proj4 from 'proj4';
@@ -1620,7 +1622,7 @@ const AppContent = () => {
   // On first agent click (after splash + API key) we block the user with a
   // signature form. Persisted in localStorage so it appears only once per device.
   const [showLegalGate, setShowLegalGate] = useState(false);
-  const pendingLegalLaunchRef = useRef<'blank' | 'sample' | 'existing' | 'deed' | null>(null);
+  const pendingLegalLaunchRef = useRef<'blank' | 'sample' | 'sample-uae' | 'existing' | 'deed' | null>(null);
   const [hasLegalSignature, setHasLegalSignature] = useState<boolean>(() => {
     try { return hasSignedLegalAgreement(); } catch { return false; }
   });
@@ -2161,6 +2163,9 @@ const AppContent = () => {
   /** Increments on every deed submission. A slow summary from an earlier
    *  upload must never replace the summary for the newly loaded deed. */
   const deedSummaryRequestRef = useRef(0);
+  /** Set when a deed is submitted so the training-artifact effect only uploads
+   *  material produced by this deed, not a session opened from an older .lsvz. */
+  const deedArtifactCaptureRef = useRef<{ deedName: string; armedAt: number } | null>(null);
   /** Set of summary `tractId`s whose DEED_READER parse is currently in flight,
    *  so the panel can disable the button + show a spinner. */
   const [computingTractIds, setComputingTractIds] = useState<Set<string>>(new Set());
@@ -5505,7 +5510,7 @@ const AppContent = () => {
     }
   }, [pointLists, dxfFile, settings, initializedAgents, startSession, logActionToFieldbook, startChatWithOverride, pushNavigation, showView]);
 
-  const handleLaunchAgenticCad = useCallback((mode: 'blank' | 'sample' | 'existing' = 'blank') => {
+  const handleLaunchAgenticCad = useCallback((mode: 'blank' | 'sample' | 'sample-uae' | 'existing' = 'blank') => {
     // First-time legal gate check
     if (!hasLegalSignature && !hasSignedLegalAgreement()) {
       pendingLegalLaunchRef.current = mode;
@@ -5527,6 +5532,38 @@ const AppContent = () => {
       handleCivilDrafterFileUploaded(exampleFileContent, exampleFileName);
       setIsInitialScreen(false);
       setShowWelcome(false);
+      return;
+    }
+
+    if (mode === 'sample-uae') {
+      void (async () => {
+        const { ensureCrsRegistered } = await import('./utils/crs/registry.ts');
+        const resolved = await ensureCrsRegistered(3997);
+        setSettings(prev => ({
+          ...prev,
+          linearUnits: 'meter',
+          ...(resolved?.proj4
+            ? {
+              projection: {
+                state: 'United Arab Emirates',
+                zoneName: 'Dubai Local TM',
+                epsg: 3997,
+                epoch: null,
+              },
+            }
+            : {}),
+        }));
+        handleCivilDrafterFileUploaded(gulfSampleFileContent, gulfSampleFileName);
+        logActionToFieldbook('Loaded the synthetic UAE student sample (Dubai Local TM, metres). Sample data — not a real survey.');
+        addNotification({
+          kind: 'usage-dashboard',
+          severity: 'info',
+          title: 'UAE sample project loaded',
+          message: 'Synthetic training data — not a real survey. Units: metres · EPSG:3997.',
+        });
+        setIsInitialScreen(false);
+        setShowWelcome(false);
+      })();
       return;
     }
 
@@ -5580,6 +5617,8 @@ const AppContent = () => {
     setPointLists,
     setLines,
     setContourLabels,
+    setSettings,
+    addNotification,
   ]);
 
   const startFreeCadWorkspace = useCallback(() => {
@@ -5786,6 +5825,7 @@ const AppContent = () => {
 
   const applyDeedSubmission = useCallback(async (file: SessionFile) => {
     try {
+      deedArtifactCaptureRef.current = { deedName: file.name, armedAt: Date.now() };
       const summaryRequestId = ++deedSummaryRequestRef.current;
       const previousDeedName = deedFile && deedFile.content && deedFile.name !== 'Manual Entry'
         ? (deedSummary?.fileName ?? deedFile.name)
@@ -5926,6 +5966,29 @@ const AppContent = () => {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeModel, showView, startSession, logActionToFieldbook, initializedAgents, deedFile, settings, clearHighlights, startChatWithOverride, revealDeedPanelAfterIntake]);
+
+  /**
+   * Capture the latest processed deed for DevOps review and model training.
+   * The source, extracted summary, drafted boundary files, closure reports, and
+   * deed chat are sent after the summary/draft settles; failure is non-fatal.
+   */
+  useEffect(() => {
+    const capture = deedArtifactCaptureRef.current;
+    if (!capture || !deedFile || deedFile.name !== capture.deedName) return;
+    if (!deedSummary && boundaryFiles.length === 0) return;
+
+    const timer = window.setTimeout(() => {
+      if (deedArtifactCaptureRef.current !== capture) return;
+      void uploadDeedArtifact({
+        deedFile,
+        deedSummary,
+        boundaryFiles,
+        closureReports,
+        deedChatHistory,
+      });
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [deedFile, deedSummary, boundaryFiles, closureReports, deedChatHistory]);
 
   /**
    * Deed submission from the upload screen: spends one free deed first (free
@@ -31864,6 +31927,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                         onShowUpgrade={() => {
                           setShowUpgradeModal(true);
                         }}
+                        onOpenUaeSample={() => handleLaunchAgenticCad('sample-uae')}
                         cadStandardsLoaded={cadStandardsLoaded}
                         onLoadPoints={() => {
                           // Don't queue any auto-open or session-start work until

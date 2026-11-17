@@ -2251,6 +2251,11 @@ export interface Settings {
     northArrowPosition: 'left' | 'right';
     pointLabelingSettings: PointLabelingSettings;
     uncertaintySensitivity: 'low' | 'medium' | 'high' | 'strict';
+    /**
+     * Language for AI prose in this session. Tool names, JSON keys, point IDs,
+     * layer names, EPSG codes, and coordinates always stay in Latin script.
+     */
+    aiOutputLanguage?: 'en' | 'ar' | 'auto';
     /** Gemini 4 Argon reasoning: Fast by default, with High Thinking as an opt-in. */
     argonReasoning?: 'fast' | 'high';
     /** Baseline / Stationing & CL auto-point and annotation preferences. */

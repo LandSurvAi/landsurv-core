@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ar" dir="rtl" data-page="ar-dubai-coordinates">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>إحداثيات دبي: Dubai Local TM وUTM 40N — دليل عملي | LandSurv.ai</title>
+  <meta name="description" content="الفرق بين EPSG:3997 (Dubai Local TM) وEPSG:32640 (WGS 84 / UTM 40N)، ومتى تستخدم كل شبكة، وأخطاء التسليم الشائعة في مشاريع دبي." />
+  <link rel="canonical" href="https://landsurv.ai/ar/dubai-coordinates" />
+  <link rel="alternate" hreflang="ar-AE" href="https://landsurv.ai/ar/dubai-coordinates" />
+  <link rel="alternate" hreflang="en" href="https://landsurv.ai/" />
+  <link rel="alternate" hreflang="x-default" href="https://landsurv.ai/" />
+  <meta property="og:type" content="article" />
+  <meta property="og:locale" content="ar_AE" />
+  <meta property="og:title" content="إحداثيات دبي: Dubai Local TM وUTM 40N" />
+  <meta property="og:description" content="دليل عملي للفرق بين الشبكة المحلية لدبي وشبكة UTM، وأخطاء التسليم الشائعة." />
+  <meta property="og:url" content="https://landsurv.ai/ar/dubai-coordinates" />
+  <link rel="stylesheet" href="/ar/ar.css" />
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-467H2YZ5E4"></script>
+  <script defer src="/ar/ar.js"></script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "inLanguage": "ar",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "ما هي إحداثيات دبي المحلية؟",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "هي إسقاط مستعرض ميركاتور محلي مركزه خط طول 55.3333333333333 درجة شرقاً، ويُعرف برمز EPSG:3997 واسم Dubai Local TM."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "هل UTM 40N بديل عن شبكة دبي المحلية؟",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "ليس بديلاً مباشراً. UTM 40N شبكة عالمية بمركز 57 درجة شرقاً، وقد تطلبها جهات أخرى. استخدم الشبكة التي يحددها العميل أو الجهة المنظمة."
+        }
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <div class="ar-shell">
+    <header class="ar-nav">
+      <a class="brand" href="/ar/"><span class="brand-mark">L</span> LandSurv.ai</a>
+      <nav aria-label="التنقل الرئيسي">
+        <a href="/ar/">الرئيسية</a>
+        <a href="/ar/coordinate-conversion.html">تحويل الإحداثيات</a>
+        <a href="/ar/survey-plan.html">قراءة المخططات</a>
+        <a class="lang-switch" href="https://landsurv.ai/" hreflang="en">English</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <span class="eyebrow">دليل الشبكات المحلية</span>
+        <h1>إحداثيات دبي: الفرق بين Dubai Local TM وUTM 40N</h1>
+        <p class="lead">
+          أكثر سبب لرفض ملف مساحي في دبي ليس الحساب، بل اختيار الشبكة الخطأ أو الخلط بين
+          الشبكة المحلية وشبكة UTM. هذا الدليل يوضح الفرق، ومتى تستخدم كل واحدة، وما الذي
+          يجب التحقق منه قبل التسليم.
+        </p>
+      </section>
+
+      <section>
+        <h2>الشبكة المحلية لدبي — EPSG:3997</h2>
+        <p>
+          تُعرف أيضاً باسم Dubai Local TM، وهي إسقاط مستعرض ميركاتور (Transverse Mercator)
+          بمركز خط طول 55.3333333333333 درجة شرقاً، ومقياس 1، وإزاحة شرقية 500,000 متر.
+          تستخدمها بلدية دبي في أعمال المساحة والتخطيط المحلي، وتظهر في كثير من المخططات
+          والبيانات المساحية داخل الإمارة.
+        </p>
+        <table>
+          <thead>
+            <tr><th>الخاصية</th><th>القيمة</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>رمز EPSG</td><td>3997</td></tr>
+            <tr><td>الاسم</td><td>Dubai Local TM</td></tr>
+            <tr><td>نوع الإسقاط</td><td>Transverse Mercator</td></tr>
+            <tr><td>خط الطول المركزي</td><td>55.3333333333333° شرقاً</td></tr>
+            <tr><td>خط العرض الأصلي</td><td>0°</td></tr>
+            <tr><td>الإزاحة الشرقية</td><td>500,000 م</td></tr>
+            <tr><td>الوحدة</td><td>متر</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>شبكة UTM 40N — EPSG:32640</h2>
+        <p>
+          UTM 40N شبكة عالمية تغطي النطاق بين 54° و60° شرقاً، ومركزها 57° شرقاً.
+          قد تطلبها جهات أو عملاء ضمن تسليمات إقليمية أو دراسات GIS، لكنها ليست الشبكة
+          المحلية لدبي. الفرق في الإحداثيات ليس خطأً؛ إنه اختيار شبكة مختلف.
+        </p>
+        <div class="note">
+          لا تفترض أن كل مشروع في الإمارات يستخدم الشبكة نفسها. اسأل العميل أو الجهة
+          المنظمة: ما رمز EPSG المطلوب؟ وما المنسوب المرجعي؟ وهل هناك تحويل إلزامي؟
+        </div>
+      </section>
+
+      <section>
+        <h2>متى تستخدم كل شبكة؟</h2>
+        <div class="grid grid-2">
+          <article class="card">
+            <h3>استخدم EPSG:3997</h3>
+            <p>عندما يطلب العميل أو بلدية دبي تسليمات محلية، أو عندما تعمل على بيانات واردة أصلاً بالشبكة المحلية.</p>
+          </article>
+          <article class="card">
+            <h3>استخدم EPSG:32640</h3>
+            <p>عندما يحدد العميل UTM 40N، أو عند دمج بيانات مع مشاريع إقليمية أو خرائط تعتمد UTM.</p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>قائمة تحقق قبل التسليم</h2>
+        <ul class="checks">
+          <li>رمز EPSG المستخدم موثق في الملف أو التقرير، وليس ضمنياً فقط.</li>
+          <li>الوحدات مترية، والفواصل العشرية واضحة، ولا يوجد خلط مع القدم.</li>
+          <li>المنسوب المرجعي (Datum) محدد، وخصوصاً عند دمج بيانات GNSS.</li>
+          <li>لا توجد إحداثيات سالبة أو قيم خارج نطاق المشروع بسبب شبكة خاطئة.</li>
+          <li>تم اختبار نقطة تحكم واحدة على الأقل بين الشبكتين قبل الإرسال.</li>
+        </ul>
+      </section>
+
+      <section class="cta-band">
+        <h2 style="margin-top:0">حوّل وتحقق داخل LandSurv.ai</h2>
+        <p class="lead" style="margin-bottom:18px">
+          اختر EPSG:3997 أو UTM 40N، واعمل بالأمتار، ودع النظام يوضح الشبكة النشطة قبل
+          تصدير أي ملف.
+        </p>
+        <a class="btn btn-primary" data-cta="dubai-band" href="https://landsurv.ai/?region=AE&amp;utm_source=ar_landing&amp;utm_medium=organic&amp;utm_campaign=dubai_crs">افتح المشروع</a>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>هذا الدليل تعليمي ولا يغني عن متطلبات الجهة المنظمة. تحقق دائماً من مواصفات التسليم الرسمية.</p>
+      <p><a href="/ar/">العودة إلى الرئيسية</a> · <a href="https://landsurv.ai/">English</a></p>
+    </footer>
+  </div>
+</body>
+</html>

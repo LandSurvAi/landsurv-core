@@ -2,6 +2,14 @@
 
 const releases = [
     {
+        version: "26.11.17.01",
+        date: "November 17, 2026",
+        highlights: [
+            "🗂️ DevOps Deeds Open as Reviewable .lsvz Packages: Newly processed deeds now save an artifact with the submitting user and device, deed source, extracted tracts, drafted boundary files, closure reports and deed chat. In DevOps → Deeds, click the latest deed or any recent event to preview the source, results and draft, then use Load .lsvz to download a self-contained archive that opens in the workspace. Artifacts are stored per device and deed name, so a repeat run replaces that deed's package without overwriting the device's other deeds.",
+            "📜 Terms v2.1 Adds Transparent Training Use: The Terms of Service and signed agreement now state that submitted deeds, extraction and closure results, draft geometry and related prompts are used strictly to train and improve LandSurv.ai's own system. The terms still prohibit selling personal data or training general-purpose third-party foundation models on private project files, and signatures are re-collected under the new legal-agreement version.",
+        ],
+    },
+    {
         version: "26.11.16.01",
         date: "November 16, 2026",
         highlights: [

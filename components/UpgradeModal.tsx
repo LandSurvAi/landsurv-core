@@ -5,6 +5,8 @@
 import React, { useEffect, useState } from 'react';
 import { useAppState } from '../contexts/AppStateContext.tsx';
 import { getCreditRunwayUnitsPerDay, useGlobalSettings } from '../utils/globalSettings';
+import { detectBrowserRegion, vatBreakdown } from '../utils/regions.ts';
+import { trackGrowthEvent } from '../utils/analytics.ts';
 import {
   detectKeyProvider,
   resolveKeyProvider,
@@ -18,6 +20,8 @@ export interface CheckoutSelection {
   creditPackage?: '1K' | '5K' | '10K';
   servicePlan?: '1M' | '3M' | '6M' | '1Y';
   customerEmail?: string;
+  /** Omitted for USD so existing checkout callers stay unchanged. */
+  currency?: 'usd' | 'aed';
 }
 
 interface ServiceStatusLookup {
@@ -31,7 +35,7 @@ interface BillingCatalogItem {
   selection: '1K' | '5K' | '10K' | '1M' | '3M' | '6M' | '1Y';
   label: string;
   unitAmount: number;
-  currency: 'usd';
+  currency: 'usd' | 'aed';
   grant: number;
 }
 
@@ -41,6 +45,11 @@ interface BillingConfig {
   checkoutEnabled: boolean;
   catalogReady: boolean;
   catalog: BillingCatalogItem[];
+  aedCheckoutEnabled?: boolean;
+  aedCatalogReady?: boolean;
+  catalogAed?: BillingCatalogItem[];
+  /** When false, show AED prices without claiming Stripe is collecting VAT. */
+  taxCollectionEnabled?: boolean;
 }
 
 export interface UpgradeModalProps {
@@ -99,6 +108,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
   const [confirmEmail, setConfirmEmail] = useState('');
   const [emailStep, setEmailStep] = useState<'entry' | 'confirm'>(() => (initialEmail ? 'confirm' : 'entry'));
   const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [billingCurrency, setBillingCurrency] = useState<'usd' | 'aed'>('usd');
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [billingConfig, setBillingConfig] = useState<BillingConfig | null>(null);
   const [statusLookup, setStatusLookup] = useState<ServiceStatusLookup | null>(null);
@@ -126,7 +136,11 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
         return res.json();
       })
       .then((config: BillingConfig) => {
-        if (!cancelled) setBillingConfig(config);
+        if (cancelled) return;
+        setBillingConfig(config);
+        if (config.aedCheckoutEnabled && (config.catalogAed?.length ?? 0) > 0) {
+          if (detectBrowserRegion().region === 'AE') setBillingCurrency('aed');
+        }
       })
       .catch(() => {
         if (!cancelled) {
@@ -136,6 +150,10 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
             checkoutEnabled: false,
             catalogReady: false,
             catalog: [],
+            aedCheckoutEnabled: false,
+            aedCatalogReady: false,
+            catalogAed: [],
+            taxCollectionEnabled: false,
           });
         }
       });
@@ -194,18 +212,31 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
 
   if (!isOpen) return null;
 
-  const catalogPriceBySelection = new Map(
-    (billingConfig?.catalog || []).map((item) => [item.selection, item.unitAmount / 100])
+  const aedCatalogAvailable = Boolean(
+    billingConfig?.aedCheckoutEnabled && (billingConfig.catalogAed?.length ?? 0) > 0
   );
+  const activeCatalog = billingCurrency === 'aed'
+    ? (billingConfig?.catalogAed || [])
+    : (billingConfig?.catalog || []);
+  const catalogPriceBySelection = new Map(
+    activeCatalog.map((item) => [item.selection, item.unitAmount / 100])
+  );
+  const formatPrice = (amount: number | null): string => amount === null
+    ? '—'
+    : billingCurrency === 'aed'
+      ? `AED ${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : `$${amount.toFixed(2)}`;
 
   const computeBuyIns = COMPUTE_BUY_INS.map((buyIn) => ({
     ...buyIn,
-    price: catalogPriceBySelection.get(buyIn.id) ?? buyIn.defaultPrice,
+    price: catalogPriceBySelection.get(buyIn.id)
+      ?? (billingCurrency === 'aed' ? null : buyIn.defaultPrice),
   }));
 
   const servicePlans = SERVICE_PLANS.map((plan) => ({
     ...plan,
-    price: catalogPriceBySelection.get(plan.id) ?? plan.defaultPrice,
+    price: catalogPriceBySelection.get(plan.id)
+      ?? (billingCurrency === 'aed' ? null : plan.defaultPrice),
   }));
 
   const selectedComputeBuyIn = computeBuyIns.find((buyIn) => buyIn.id === selectedPackage);
@@ -213,6 +244,9 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
   const selectedPricesReady = (!selectedPackage || selectedComputeBuyIn?.price !== null)
     && (!selectedServicePlan || selectedService?.price !== null);
   const checkoutTotal = (selectedComputeBuyIn?.price || 0) + (selectedService?.price || 0);
+  const checkoutVat = billingCurrency === 'aed' && billingConfig?.taxCollectionEnabled
+    ? vatBreakdown(checkoutTotal, 0.05)
+    : null;
 
   const detectedApiKeyProvider = apiKeyInput.trim() ? detectKeyProvider(apiKeyInput) : null;
 
@@ -340,11 +374,19 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
         localStorage.setItem('landsurv_last_purchased_email', trimmedStatusEmail.toLowerCase());
         localStorage.setItem('landsurv_customer_email', trimmedStatusEmail.toLowerCase());
       }
+      if (billingCurrency === 'aed') {
+        trackGrowthEvent('aed_checkout_started', {
+          region: 'AE',
+          total: checkoutTotal,
+          tax_collection: billingConfig?.taxCollectionEnabled === true,
+        });
+      }
       if (onProceedWithCheckout) {
         await Promise.resolve(onProceedWithCheckout({
           creditPackage: selectedPackage || undefined,
           servicePlan: selectedServicePlan || undefined,
           customerEmail: trimmedStatusEmail.toLowerCase(),
+          ...(billingCurrency === 'aed' ? { currency: 'aed' as const } : {}),
         }));
       } else if (selectedPackage && selectedServicePlan) {
         throw new Error('Combined checkout is unavailable');
@@ -390,6 +432,29 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
               <h2 className="text-sm sm:text-base font-bold text-white tracking-tight">Upgrade Service &amp; Inference</h2>
               <p className="text-[11px] text-gray-400">Continuous 24/7 service access, compute credits, or bring your own API keys</p>
             </div>
+            {aedCatalogAvailable && (
+              <div
+                role="group"
+                aria-label="Checkout currency"
+                className="ml-1 flex shrink-0 items-center rounded-md border border-gray-700 bg-gray-800 p-0.5"
+              >
+                {(['usd', 'aed'] as const).map((currency) => (
+                  <button
+                    key={currency}
+                    type="button"
+                    onClick={() => setBillingCurrency(currency)}
+                    aria-pressed={billingCurrency === currency}
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors ${
+                      billingCurrency === currency
+                        ? 'bg-emerald-600 text-white'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    {currency.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           {onClose && (
             <button
@@ -407,10 +472,10 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
           {notice && (
             <div
               role="status"
-              className="rounded-lg border border-amber-500/50 bg-amber-950/40 px-3 py-2.5"
+              className="rounded-lg border border-cyan-500/40 bg-cyan-950/30 px-3 py-2.5"
             >
-              <p className="text-xs font-bold text-amber-200">{notice.title}</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-amber-100/80">{notice.message}</p>
+              <p className="text-xs font-bold text-cyan-100">{notice.title}</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-cyan-100/80">{notice.message}</p>
             </div>
           )}
 
@@ -474,7 +539,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                             ? 'text-gray-400 group-hover:text-gray-300'
                             : 'text-emerald-300'
                       }`}>
-                        {plan.price !== null ? `$${plan.price.toFixed(2)}` : '—'}
+                        {plan.price !== null ? formatPrice(plan.price) : '—'}
                       </div>
                       <div className={`mt-0.5 text-[10px] ${
                         isSelected
@@ -556,7 +621,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                     <div className="flex items-center justify-between">
                       <span className={`text-xs font-semibold transition-colors ${isSelected ? 'text-pink-200' : 'text-gray-200 group-hover:text-pink-300'}`}>{buyIn.label}</span>
                       <span className="text-xs font-bold text-pink-300">
-                        {buyIn.price !== null ? `$${buyIn.price.toFixed(2)}` : '—'}
+                        {buyIn.price !== null ? formatPrice(buyIn.price) : '—'}
                       </span>
                     </div>
                     <div className="mt-0.5 text-xs font-bold text-cyan-200">{buyIn.units.toLocaleString()} units</div>
@@ -863,7 +928,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                     Service · {selectedService.label}
                     {autoAddedServiceMonth && ' (added with compute)'}
                   </span>
-                  <span className="shrink-0 text-gray-400">${selectedService.price.toFixed(2)}</span>
+                  <span className="shrink-0 text-gray-400">{formatPrice(selectedService.price)}</span>
                 </div>
               )}
               {selectedComputeBuyIn && (
@@ -871,15 +936,24 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                   <span className="truncate">
                     Compute · {selectedComputeBuyIn.label} ({selectedComputeBuyIn.units.toLocaleString()} units)
                   </span>
-                  <span className="shrink-0 text-gray-400">${selectedComputeBuyIn.price.toFixed(2)}</span>
+                  <span className="shrink-0 text-gray-400">{formatPrice(selectedComputeBuyIn.price)}</span>
                 </div>
               )}
               {!selectedServicePlan && !selectedPackage && (
                 <span className="text-gray-400">No plan selected</span>
               )}
             </div>
-            <div className="shrink-0 text-sm sm:text-base font-extrabold text-white">
-              Total: ${checkoutTotal.toFixed(2)}
+            <div className="shrink-0 text-right">
+              <div className="text-sm sm:text-base font-extrabold text-white">
+                Total: {formatPrice(checkoutTotal)}
+              </div>
+              {billingCurrency === 'aed' && (
+                <p className="mt-0.5 text-[10px] font-medium text-gray-400">
+                  {checkoutVat
+                    ? `Includes 5% VAT (${formatPrice(checkoutVat.vat)})`
+                    : 'VAT is not being collected on this purchase.'}
+                </p>
+              )}
             </div>
           </div>
 
@@ -895,7 +969,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
             disabled={isCheckingOut || !selectedPricesReady || (!selectedPackage && !selectedServicePlan)}
             className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed px-4 py-2 text-xs sm:text-sm font-bold text-white transition-colors shadow-md shadow-emerald-950/40 cursor-pointer"
           >
-            {isCheckingOut ? 'Opening Secure Checkout...' : `Proceed to Checkout · $${checkoutTotal.toFixed(2)}`}
+            {isCheckingOut ? 'Opening Secure Checkout...' : `Proceed to Checkout · ${formatPrice(checkoutTotal)}`}
           </button>
 
           <div className="flex items-center justify-between text-[11px] text-gray-400">

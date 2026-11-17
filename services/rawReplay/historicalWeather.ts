@@ -5,7 +5,8 @@
  * ERA5 archive (1940–present) gives the matching hourly conditions, which drive
  * cloud cover, haze, sun dimming and precipitation in the replay sky.
  *
- * Open-Meteo data is CC BY 4.0. Attribution is shown in the Raw Replay sky HUD.
+ * Open-Meteo data is CC BY 4.0. Attribution is shown in the Raw Replay sky HUD
+ * and in the field summary.
  */
 import { resolveSkyContext, wallClockToUtcMs } from './astronomy';
 import type { RawSurvey } from './types';

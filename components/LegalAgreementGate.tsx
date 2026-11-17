@@ -203,6 +203,12 @@ export const LegalAgreementGate: React.FC<LegalAgreementGateProps> = ({ onSigned
                           <strong className="text-white">SOC 2, GDPR &amp; AI Safety Governance:</strong> Protected by access controls, audit logging, Google Model Armor screening, and Anthropic Usage Policy / Claude Fable 5 Advanced AI Safety Addendum rules.
                         </span>
                       </li>
+                      <li className="flex gap-2.5">
+                        <span className="text-cyan-400 font-bold shrink-0">✓</span>
+                        <span>
+                          <strong className="text-white">Training &amp; Improvement:</strong> Submitted deeds, extraction results, and drafted boundaries are used <strong>strictly to train and improve LandSurv.ai&apos;s own system</strong>. We do not sell this data or use it to train general-purpose third-party foundation models.
+                        </span>
+                      </li>
                     </ul>
                   </div>
 

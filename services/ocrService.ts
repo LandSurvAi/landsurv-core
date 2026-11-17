@@ -10,6 +10,7 @@
  */
 
 import Tesseract from 'tesseract.js';
+import { getOcrLanguageHints, getOcrLanguages } from '../utils/ocrLanguages.ts';
 
 export interface OCRResult {
   success: boolean;
@@ -119,6 +120,7 @@ async function extractUsingGoogleDocAI(
         processorId: config.processorId,
         location: config.location,
         imageBase64: base64Data,
+        languageHints: getOcrLanguageHints(),
       }),
     });
 
@@ -158,7 +160,7 @@ async function extractUsingTesseract(imageData: Uint8Array | Blob | File): Promi
       imageUrl = URL.createObjectURL(blob);
     }
 
-    const result = await Tesseract.recognize(imageUrl, 'eng', {
+    const result = await Tesseract.recognize(imageUrl, getOcrLanguages(), {
       logger: (m) => {
         if (m.status === 'recognizing') {
           console.log(`[OCR] Tesseract progress: ${Math.round(m.progress * 100)}%`);

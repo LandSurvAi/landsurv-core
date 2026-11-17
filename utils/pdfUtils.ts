@@ -2,6 +2,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import Tesseract from 'tesseract.js';
 import type { PageViewport } from 'pdfjs-dist';
 import type { RenderParameters } from 'pdfjs-dist/types/src/display/api.js';
+import { getOcrLanguages } from './ocrLanguages.ts';
 
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@5.4.394/build/pdf.worker.mjs`;
@@ -96,13 +97,16 @@ export const extractPdfStructuralInfo = async (
 const performOcrOnPdfPages = async (
   pdf: pdfjsLib.PDFDocumentProxy,
   onProgress: ProgressCallback,
-  pageNumbers?: number[]
-): Promise<string> => {
+  pageNumbers?: number[],
+  languages: string = getOcrLanguages()
+): Promise<{ text: string; confidence: number | null }> => {
   let allText = '';
+  let confidenceSum = 0;
+  let confidenceCount = 0;
   const pagesToProcess = pageNumbers || Array.from({ length: pdf.numPages }, (_, i) => i + 1);
   let currentPageForLogger = 0;
   
-  const worker = await Tesseract.createWorker('eng', 1, {
+  const worker = await Tesseract.createWorker(languages, 1, {
     logger: m => {
         if (m.status === 'recognizing text' && m.progress !== undefined) {
             onProgress({
@@ -134,22 +138,32 @@ const performOcrOnPdfPages = async (
     };
     await page.render(renderParameters).promise;
     
-    const { data: { text } } = await worker.recognize(canvas);
+    const { data: { text, confidence } } = await worker.recognize(canvas);
     allText += text + '\n\n';
+    if (typeof confidence === 'number' && Number.isFinite(confidence)) {
+      confidenceSum += confidence;
+      confidenceCount += 1;
+    }
     page.cleanup();
   }
   
   await worker.terminate();
-  return allText;
+  return {
+    text: allText,
+    confidence: confidenceCount > 0 ? confidenceSum / confidenceCount / 100 : null,
+  };
 };
 
 const _loadPdfAndExtractText = async (
   pdf: pdfjsLib.PDFDocumentProxy,
   onProgress: ProgressCallback,
-  pageNumbers?: number[]
-): Promise<string> => {
+  pageNumbers?: number[],
+  languages: string = getOcrLanguages()
+): Promise<{ text: string; usedOcr: boolean; ocrConfidence: number | null }> => {
     onProgress({ status: 'extracting_text' });
     let allText = '';
+    let usedOcr = false;
+    let ocrConfidence: number | null = null;
     const pagesToProcess = pageNumbers || Array.from({ length: pdf.numPages }, (_, i) => i + 1);
 
     for (const i of pagesToProcess) {
@@ -161,30 +175,35 @@ const _loadPdfAndExtractText = async (
         }
     }
     if (allText.trim().length < 100) { 
-        allText = await performOcrOnPdfPages(pdf, onProgress, pageNumbers);
+        usedOcr = true;
+        const ocr = await performOcrOnPdfPages(pdf, onProgress, pageNumbers, languages);
+        allText = ocr.text;
+        ocrConfidence = ocr.confidence;
     }
-    return allText;
+    return { text: allText, usedOcr, ocrConfidence };
 };
 
 export const extractTextFromPdf = async (
   file: File,
   onProgress: ProgressCallback,
-  pageNumbers?: number[]
+  pageNumbers?: number[],
+  languages: string = getOcrLanguages()
 ): Promise<string> => {
   onProgress({ status: 'initializing' });
   const arrayBuffer = await file.arrayBuffer();
   const loadingTask = pdfjsLib.getDocument(arrayBuffer);
   const pdf = await loadingTask.promise;
-  const allText = await _loadPdfAndExtractText(pdf, onProgress, pageNumbers);
+  const { text } = await _loadPdfAndExtractText(pdf, onProgress, pageNumbers, languages);
   onProgress({ status: 'done' });
-  return allText;
+  return text;
 };
 
 export const processPdfForMultimodal = async (
   file: File,
   onProgress: ProgressCallback,
-  pageNumbers?: number[]
-): Promise<{ text: string, rasterImageData: string[], layerNames: string[], dashPatterns: DashPattern[] }> => {
+  pageNumbers?: number[],
+  languages: string = getOcrLanguages()
+): Promise<{ text: string, rasterImageData: string[], layerNames: string[], dashPatterns: DashPattern[], ocrUsed: boolean, ocrConfidence: number | null }> => {
     console.log('=== processPdfForMultimodal CALLED ===');
     console.log('File:', file.name);
     console.log('PageNumbers parameter:', pageNumbers);
@@ -196,7 +215,7 @@ export const processPdfForMultimodal = async (
     const loadingTask = pdfjsLib.getDocument(arrayBuffer);
     const pdf = await loadingTask.promise;
 
-    const text = await _loadPdfAndExtractText(pdf, onProgress, pageNumbers);
+    const { text, usedOcr, ocrConfidence } = await _loadPdfAndExtractText(pdf, onProgress, pageNumbers, languages);
 
     const pagesToProcess = pageNumbers || Array.from({ length: pdf.numPages }, (_, i) => i + 1);
     console.log('=== PAGE PROCESSING DECISION ===');
@@ -232,7 +251,7 @@ export const processPdfForMultimodal = async (
     const { layerNames, dashPatterns } = await extractPdfStructuralInfo(pdf, pagesToProcess);
 
     onProgress({ status: 'done' });
-    return { text, rasterImageData: rasterImages, layerNames, dashPatterns };
+    return { text, rasterImageData: rasterImages, layerNames, dashPatterns, ocrUsed: usedOcr, ocrConfidence };
 };
 
 /**
@@ -272,7 +291,7 @@ export const isRasterImageFile = (file: File): boolean => {
 export const processRasterImageForMultimodal = async (
   file: File,
   onProgress: ProgressCallback
-): Promise<{ text: string; rasterImageData: string[] }> => {
+): Promise<{ text: string; rasterImageData: string[]; confidence?: number }> => {
   console.log('=== processRasterImageForMultimodal CALLED ===');
   console.log('File:', file.name, 'Type:', file.type);
   
@@ -311,7 +330,7 @@ export const processRasterImageForMultimodal = async (
     // Perform OCR on the image
     onProgress({ status: 'ocr_progress', page: 1, totalPages: 1, progress: 0 });
     
-    const worker = await Tesseract.createWorker('eng', 1, {
+    const worker = await Tesseract.createWorker(getOcrLanguages(), 1, {
       logger: m => {
         if (m.status === 'recognizing text' && m.progress !== undefined) {
           onProgress({
@@ -324,7 +343,7 @@ export const processRasterImageForMultimodal = async (
       },
     });
     
-    const { data: { text } } = await worker.recognize(canvas);
+    const { data: { text, confidence } } = await worker.recognize(canvas);
     await worker.terminate();
     
     onProgress({ status: 'done' });
@@ -332,6 +351,9 @@ export const processRasterImageForMultimodal = async (
     return {
       text: text || `[Scanned image: ${file.name}]`,
       rasterImageData: [rasterImageData],
+      confidence: typeof confidence === 'number' && Number.isFinite(confidence)
+        ? confidence / 100
+        : undefined,
     };
   } finally {
     URL.revokeObjectURL(imageUrl);

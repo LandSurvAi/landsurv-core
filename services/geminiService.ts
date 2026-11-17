@@ -21,6 +21,7 @@ import { ProxyGoogleGenAI, isDemoApiKey } from "./proxyGenAI.ts";
 import { findCompetingBearingAlternatives, type ClosureBearingAlternative } from "../utils/closureAlternatives.ts";
 import { isOssBuild } from "../utils/ossMode.ts";
 import { bearingDistancePreferenceInstruction } from "./annotationPreferences.ts";
+import { buildAiOutputLanguageInstruction } from "../utils/aiOutputLanguage.ts";
 
 /**
  * Returns true for models that are only available via the Vertex AI backend proxy
@@ -645,7 +646,7 @@ When generating DXF output, your goal is to produce linework that looks like it 
       ? `\n\n**PROJECT CAD LAYER STANDARD (Single Source of Truth)**\n${cadLayerContext}\n\nALWAYS assign the \`layer\` property to every point and line you generate using the table above.`
       : '';
 
-    return `${baseInstruction}\n\n${agentInstruction}\n\n${peerManifest}\n\n${trainingInstruction}\n\n${draftingStyleInstruction}\n\n${contextInstruction}\n\n${uncertaintyInstruction}\n\n${layerContextInstruction}\n\n${responseFormattingInstruction}`;
+    return `${baseInstruction}\n\n${agentInstruction}\n\n${peerManifest}\n\n${trainingInstruction}\n\n${draftingStyleInstruction}\n\n${contextInstruction}\n\n${uncertaintyInstruction}\n\n${layerContextInstruction}\n\n${responseFormattingInstruction}\n\n${buildAiOutputLanguageInstruction(settings.aiOutputLanguage)}`;
 };
 
 const buildStationingPreferenceInstruction = (settings?: Settings): string => {

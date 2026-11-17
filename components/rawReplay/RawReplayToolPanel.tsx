@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   FileUp,
   Printer,
@@ -10,6 +10,11 @@ import { DEMO_RW5_FILE } from '../../services/rawReplay/parser';
 import type { RawSummaryRow } from '../../services/rawReplay/summary';
 import { RAW_REPLAY_ACCEPT, type EquipmentKind } from '../../services/rawReplay/types';
 import { gnssReferenceLabel } from '../../services/rawReplay/baseStations';
+import {
+  fetchHistoricalWeather,
+  resolveHistoricalWeatherContext,
+  type HistoricalWeather,
+} from '../../services/rawReplay/historicalWeather';
 import {
   formatDuration,
   type Basemap3DType,
@@ -293,6 +298,30 @@ export default function RawReplayToolPanel({ controller, onRawFileChange, onClos
     requestFocusCurrentShot,
   } = controller;
 
+  const [weather, setWeather] = useState<HistoricalWeather | null>(null);
+  const [weatherStatus, setWeatherStatus] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
+
+  useEffect(() => {
+    if (!survey) {
+      setWeather(null);
+      setWeatherStatus('idle');
+      return;
+    }
+    const abortController = new AbortController();
+    let cancelled = false;
+    setWeather(null);
+    setWeatherStatus('loading');
+    fetchHistoricalWeather(resolveHistoricalWeatherContext(survey), abortController.signal).then(result => {
+      if (cancelled) return;
+      setWeather(result);
+      setWeatherStatus(result ? 'ready' : 'unavailable');
+    });
+    return () => {
+      cancelled = true;
+      abortController.abort();
+    };
+  }, [survey]);
+
   const equipmentInFile = useMemo(() => {
     if (!survey) return [] as Array<{ kind: EquipmentKind; count: number }>;
     const counts = new Map<EquipmentKind, number>();
@@ -530,6 +559,41 @@ export default function RawReplayToolPanel({ controller, onRawFileChange, onClos
                 <SummarySection title="Job Metadata" rows={summary.jobRows} />
                 <SummarySection title="Equipment" rows={summary.equipmentRows} live />
                 <SummarySection title="Production" rows={summary.productionRows} live />
+
+                <SummarySection
+                  title="Weather at field time"
+                  rows={weatherStatus === 'ready' && weather
+                    ? [
+                      { label: 'Conditions', value: weather.conditionLabel },
+                      {
+                        label: 'Temperature',
+                        value: weather.temperatureC != null ? `${Math.round(weather.temperatureC)} °C` : '—',
+                      },
+                      {
+                        label: 'Wind',
+                        value: `${Math.round(weather.windSpeedKph)} km/h`,
+                        note: `From ${Math.round(weather.windDirectionDeg)}°`,
+                      },
+                      { label: 'Cloud cover', value: `${Math.round(weather.cloudCover * 100)}%` },
+                      {
+                        label: 'Source',
+                        value: 'Open-Meteo ERA5',
+                        note: 'Historical reanalysis · open-meteo.com · CC BY 4.0',
+                      },
+                    ]
+                    : [
+                      {
+                        label: 'Conditions',
+                        value: weatherStatus === 'unavailable' ? 'Unavailable' : 'Loading…',
+                        note: weatherStatus === 'unavailable' ? 'Clear-sky fallback' : undefined,
+                      },
+                      {
+                        label: 'Source',
+                        value: 'Open-Meteo ERA5',
+                        note: 'Historical reanalysis · CC BY 4.0',
+                      },
+                    ]}
+                />
 
                 {base && (
                   <section className="border-t border-white/[0.06] px-3 py-3">

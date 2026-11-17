@@ -347,7 +347,7 @@ export default function RawReplayCanvas({
               <section className="border-t border-white/[0.06] pt-2.5">
                 <h3 className={railSectionClass}>Tools</h3>
                 <div className="space-y-0.5">
-                  <button type="button" onClick={() => setActive3DTool('select')} aria-pressed={active3DTool === 'select'} className={toolClass('select')} title="Click 3D points and geometry to inspect. Right-drag or Ctrl-drag to orbit.">
+                  <button type="button" onClick={() => setActive3DTool('select')} aria-pressed={active3DTool === 'select'} className={toolClass('select')} title="Click 3D points and geometry to inspect. Left-drag or right-drag to orbit.">
                     <MousePointer2 className="h-3.5 w-3.5 shrink-0" />
                     <span className="flex-1 text-left">Inspect</span>
                   </button>

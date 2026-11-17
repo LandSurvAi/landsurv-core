@@ -34,6 +34,8 @@ import { detectProjectionForCoordinates, detectProjectionFromBrowser } from '../
 import { ensureCrsRegistered, searchCrs } from '../utils/crs/registry.ts';
 import { getBundledCrs } from '../utils/crs/globalCatalog.ts';
 import type { CrsDefinition } from '../utils/crs/types.ts';
+import { detectBrowserRegion } from '../utils/regions.ts';
+import RegionOnboardingBanner from './RegionOnboardingBanner.tsx';
 import { executeContactRecaptcha } from '../utils/recaptcha.ts';
 import HolidayEffects from './HolidayEffects.tsx';
 import ThanksgivingEffects from './ThanksgivingEffects.tsx';
@@ -246,6 +248,8 @@ interface InitialAgentSelectionProps {
   onExperimentalAgentPrompt?: (agent: AgentType) => void;
   onShowApiKeySettings: () => void;
   onShowUpgrade: () => void;
+  /** Opens the bundled UAE student sample with metric units and EPSG:3997. */
+  onOpenUaeSample?: () => void;
   // Info & Help props
   onShowDoc: () => void;
   onShowReleaseLog: () => void;
@@ -987,7 +991,7 @@ const Card: React.FC<{ card: Card, onClick: () => void, onToolOptionClick?: () =
 };
 
 /** Common non-US CRSs shown before the user types, so worldwide support is discoverable. */
-const POPULAR_GLOBAL_CODES = [27700, 2154, 7856, 2193, 3035, 32631];
+const POPULAR_GLOBAL_CODES = [3997, 32640, 32639, 27700, 2154, 7856, 2193];
 const POPULAR_GLOBAL_CRS = POPULAR_GLOBAL_CODES
   .map(code => getBundledCrs(code))
   .filter((def): def is CrsDefinition => Boolean(def));
@@ -1004,7 +1008,9 @@ const ProjectionMenuButton: React.FC<{
   onSelect?: (state: string, zoneName: string, epsg: number, proj4def: string, epoch?: number | null) => void;
 }> = ({ currentEpsg, currentPosition, onSelect }) => {
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<'us' | 'global'>('us');
+  const [mode, setMode] = useState<'us' | 'global'>(() =>
+    detectBrowserRegion().region === 'US' ? 'us' : 'global',
+  );
   const [stateCode, setStateCode] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [globalResults, setGlobalResults] = useState<CrsDefinition[]>([]);
@@ -1303,6 +1309,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
     onExperimentalAgentPrompt,
     onShowApiKeySettings,
     onShowUpgrade,
+    onOpenUaeSample,
     onShowDoc,
     onShowReleaseLog,
     onShowTech,
@@ -1807,6 +1814,7 @@ const InitialAgentSelection: React.FC<InitialAgentSelectionProps> = ({
 
     return (
     <div className={`flex flex-col h-full relative aesthetic-grid${isThanksgivingTheme() ? ' thanksgiving-ui' : ''}`}>
+      <RegionOnboardingBanner onOpenUaeSample={onOpenUaeSample} />
       {/* C3D Connect + API Key buttons - now rendered inline above chat bar (see scrollable section) */}
       {onShowC3DConnect && null /* moved inline */}
 

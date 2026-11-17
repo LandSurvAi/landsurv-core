@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ar" dir="rtl" data-page="ar-coordinate-conversion">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>تحويل الإحداثيات والمسافات في المشاريع الإماراتية | LandSurv.ai</title>
+  <meta name="description" content="حوّل بين إحداثيات دبي المحلية وUTM، وبين المتر والقدم، مع خطوات واضحة وقابلة للمراجعة. مصمم للمشاريع الإماراتية والطلاب." />
+  <link rel="canonical" href="https://landsurv.ai/ar/coordinate-conversion" />
+  <link rel="alternate" hreflang="ar-AE" href="https://landsurv.ai/ar/coordinate-conversion" />
+  <link rel="alternate" hreflang="en" href="https://landsurv.ai/" />
+  <link rel="alternate" hreflang="x-default" href="https://landsurv.ai/" />
+  <meta property="og:type" content="article" />
+  <meta property="og:locale" content="ar_AE" />
+  <meta property="og:title" content="تحويل الإحداثيات والمسافات في الإمارات" />
+  <meta property="og:description" content="تحويل بين الشبكات المحلية وUTM والوحدات المترية دون فقدان الدقة." />
+  <meta property="og:url" content="https://landsurv.ai/ar/coordinate-conversion" />
+  <link rel="stylesheet" href="/ar/ar.css" />
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-467H2YZ5E4"></script>
+  <script defer src="/ar/ar.js"></script>
+</head>
+<body>
+  <div class="ar-shell">
+    <header class="ar-nav">
+      <a class="brand" href="/ar/"><span class="brand-mark">L</span> LandSurv.ai</a>
+      <nav aria-label="التنقل الرئيسي">
+        <a href="/ar/">الرئيسية</a>
+        <a href="/ar/dubai-coordinates.html">إحداثيات دبي</a>
+        <a href="/ar/survey-plan.html">قراءة المخططات</a>
+        <a class="lang-switch" href="https://landsurv.ai/" hreflang="en">English</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <span class="eyebrow">دقة قبل السرعة</span>
+        <h1>تحويل الإحداثيات والمسافات في المشاريع الإماراتية</h1>
+        <p class="lead">
+          التحويل الصحيح لا يبدأ بالمعادلة، بل بتحديد الشبكة المصدر والشبكة الهدف والوحدة
+          والمنسوب. LandSurv.ai يجعل هذه الخطوات ظاهرة، ثم ينفذ التحويل ويسمح لك بمراجعة
+          النتيجة قبل التصدير.
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" data-cta="conversion-hero" href="https://landsurv.ai/?region=AE&amp;utm_source=ar_landing&amp;utm_medium=organic&amp;utm_campaign=coordinate_conversion">جرّب التحويل</a>
+          <a class="btn btn-secondary" data-cta="conversion-dubai" href="/ar/dubai-coordinates.html">دليل شبكة دبي</a>
+        </div>
+      </section>
+
+      <section>
+        <h2>أكثر التحويلات شيوعاً</h2>
+        <table>
+          <thead>
+            <tr><th>من</th><th>إلى</th><th>الاستخدام النموذجي</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>EPSG:3997 — Dubai Local TM</td><td>EPSG:4326 — WGS 84</td><td>عرض النقاط على الخرائط أو مشاركة الموقع.</td></tr>
+            <tr><td>EPSG:4326 — WGS 84</td><td>EPSG:3997 — Dubai Local TM</td><td>إدخال نقاط GNSS في مشروع محلي بدبي.</td></tr>
+            <tr><td>EPSG:3997</td><td>EPSG:32640 — UTM 40N</td><td>توحيد البيانات مع تسليم إقليمي يعتمد UTM.</td></tr>
+            <tr><td>EPSG:32639 — UTM 39N</td><td>EPSG:32640 — UTM 40N</td><td>دمج بيانات من غرب الإمارات أو السعودية.</td></tr>
+            <tr><td>متر</td><td>قدم / قدم مساحية أمريكية</td><td>قراءة مخططات قديمة أو متطلبات عميل.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>لماذا تختلف النتائج أحياناً؟</h2>
+        <div class="grid grid-3">
+          <article class="card">
+            <span class="tag">الشبكة</span>
+            <h3>اختيار EPSG خاطئ</h3>
+            <p>تحويل إلى UTM 40N بدلاً من الشبكة المحلية ينتج إحداثيات مختلفة تماماً، وليس خطأ حسابياً.</p>
+          </article>
+          <article class="card">
+            <span class="tag">المنسوب</span>
+            <h3>خلط المراجع الرأسية</h3>
+            <p>المنسوب الجيوديسي والمحلي قد يختلفان بعدة أمتار. حدد المرجع قبل الدمج.</p>
+          </article>
+          <article class="card">
+            <span class="tag">الوحدة</span>
+            <h3>القدم مقابل المتر</h3>
+            <p>القدم المساحية الأمريكية تختلف عن القدم الدولية. استخدم الوحدة المعلنة في العقد أو المخطط.</p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>سير عمل مقترح لمشروع جديد</h2>
+        <ul class="checks">
+          <li>حدد الشبكة والوحدة والمنسوب المطلوبين في التسليم.</li>
+          <li>استورد البيانات المصدر وسجّل شبكتها الأصلية.</li>
+          <li>حوّل إلى شبكة المشروع، ثم تحقق من نقطة تحكم واحدة على الأقل.</li>
+          <li>راجع المسافات والمساحات بعد التحويل، وليس الإحداثيات فقط.</li>
+          <li>صدّر مع بيانات وصفية تتضمن EPSG والوحدة والمنسوب.</li>
+        </ul>
+      </section>
+
+      <section class="cta-band">
+        <h2 style="margin-top:0">اجعل التحويل جزءاً من سير العمل</h2>
+        <p class="lead" style="margin-bottom:18px">
+          لا تعِد كتابة الأرقام يدوياً. استورد، حوّل، راجع، ثم صدّر — مع سجل واضح لما حدث.
+        </p>
+        <a class="btn btn-primary" data-cta="conversion-band" href="https://landsurv.ai/?region=AE&amp;utm_source=ar_landing&amp;utm_medium=organic&amp;utm_campaign=coordinate_conversion">ابدأ الآن</a>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>تحقق من متطلبات الجهة المنظمة قبل اعتماد أي تحويل نهائي.</p>
+      <p><a href="/ar/">العودة إلى الرئيسية</a> · <a href="https://landsurv.ai/">English</a></p>
+    </footer>
+  </div>
+</body>
+</html>
