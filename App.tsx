@@ -34836,8 +34836,8 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             }}
             onProceedWithCheckout={async (selection: CheckoutSelection) => {
               const customerEmail = selection.customerEmail?.trim().toLowerCase();
-              if (selection.servicePlan && !customerEmail) {
-                throw new Error('Enter a valid email address for service access');
+              if (!customerEmail) {
+                throw new Error('Enter a valid email address to receive your purchase confirmation');
               }
               if (customerEmail && typeof localStorage !== 'undefined') {
                 localStorage.setItem('landsurv_last_purchased_email', customerEmail);

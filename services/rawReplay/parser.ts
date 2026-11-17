@@ -46,32 +46,67 @@ const parseAngleToDecimalDegrees = (raw: string | undefined): number | undefined
   return sign * (degrees + minutes / 60 + seconds / 3600);
 };
 
+/**
+ * Numeric RW5/TDS dates carry no timezone. Build the epoch with Date.UTC so the
+ * recorded wall-clock time is identical in every viewer timezone; letting
+ * Date.parse read them would shift the clock (and the sky) by the browser zone.
+ */
+const NUMERIC_DATE = /^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/;
+const NUMERIC_DATE_TIME = /^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})[T,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})[T,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+/** A time followed by Z or +/-hh:mm is already an absolute instant. */
+const EXPLICIT_ZONE = /\d{1,2}:\d{2}(?::\d{2})?\s*(?:[zZ]|[+-]\d{2}:?\d{2})$/;
+
+const buildNumericDate = (match: RegExpMatchArray): number => {
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  let year = Number(match[3]);
+  if (year < 100) year += year < 70 ? 2000 : 1900;
+  return Date.UTC(year, month - 1, day);
+};
+
+const buildIsoDate = (match: RegExpMatchArray): number =>
+  Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+
+const timeOfDayMs = (hours: string, minutes: string, seconds?: string): number =>
+  Number(hours) * 3600000 + Number(minutes) * 60000 + Number(seconds ?? 0) * 1000;
+
 const parseDateAny = (raw: string | undefined): number | undefined => {
   if (!raw) return undefined;
   const text = raw.trim();
   if (!text) return undefined;
-  const direct = Date.parse(text);
-  if (Number.isFinite(direct)) return direct;
-  const match = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
-  if (match) {
-    const month = Number(match[1]);
-    const day = Number(match[2]);
-    let year = Number(match[3]);
-    if (year < 100) year += year < 70 ? 2000 : 1900;
-    return Date.UTC(year, month - 1, day);
+  if (!EXPLICIT_ZONE.test(text)) {
+    const isoDateTimeMatch = text.match(ISO_DATE_TIME);
+    if (isoDateTimeMatch) {
+      return buildIsoDate(isoDateTimeMatch) + timeOfDayMs(isoDateTimeMatch[4], isoDateTimeMatch[5], isoDateTimeMatch[6]);
+    }
+    const isoDateMatch = text.match(ISO_DATE);
+    if (isoDateMatch) return buildIsoDate(isoDateMatch);
+    const dateTimeMatch = text.match(NUMERIC_DATE_TIME);
+    if (dateTimeMatch) {
+      return buildNumericDate(dateTimeMatch) + timeOfDayMs(dateTimeMatch[4], dateTimeMatch[5], dateTimeMatch[6]);
+    }
+    const match = text.match(NUMERIC_DATE);
+    if (match) return buildNumericDate(match);
   }
-  return undefined;
+  const direct = Date.parse(text);
+  return Number.isFinite(direct) ? direct : undefined;
 };
 
 const parseDateAndTime = (dateText?: string, timeText?: string): number | undefined => {
   if (!dateText || !timeText) return undefined;
+  const date = parseDateAny(dateText);
+  const timeMatch = timeText.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  const dateIsLocal = NUMERIC_DATE.test(dateText.trim()) || ISO_DATE.test(dateText.trim());
+  if (date != null && timeMatch && dateIsLocal && !EXPLICIT_ZONE.test(timeText.trim())) {
+    return date + timeOfDayMs(timeMatch[1], timeMatch[2], timeMatch[3]);
+  }
   const direct = Date.parse(`${dateText} ${timeText}`);
   if (Number.isFinite(direct)) return direct;
-  const date = parseDateAny(dateText);
   if (date == null) return undefined;
-  const timeMatch = timeText.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
   if (!timeMatch) return date;
-  return date + Number(timeMatch[1]) * 3600000 + Number(timeMatch[2]) * 60000 + Number(timeMatch[3] ?? 0) * 1000;
+  return date + timeOfDayMs(timeMatch[1], timeMatch[2], timeMatch[3]);
 };
 
 interface FieldSet {

@@ -41,7 +41,7 @@ import type { ResolvedBase } from '../../services/rawReplay/baseStations';
 import { formatBearing } from '../../services/rawReplay/baseStations';
 import type { EquipmentKind, RawObservation, RawSurvey } from '../../services/rawReplay/types';
 import { resolveHeight } from '../../services/rawReplay/heights';
-import { resolveSkyContext } from '../../services/rawReplay/astronomy';
+import { resolveSkyContext, wallClockToUtcMs } from '../../services/rawReplay/astronomy';
 import { createCelestialSky, createSatelliteSkyRig, type CelestialSkyRig, type SatelliteSkyRig, type SkyState } from './celestialSky';
 import {
   DEFAULT_RAW_REPLAY_STYLE,
@@ -202,13 +202,6 @@ const EMPTY_UNDERLAYS: RasterUnderlay[] = [];
 const EMPTY_TEXT_ANNOTS: CanvasTextAnnotation[] = [];
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-
-const mixColor4 = (a: Color4, b: Color4, t: number): Color4 => new Color4(
-  a.r + (b.r - a.r) * t,
-  a.g + (b.g - a.g) * t,
-  a.b + (b.b - a.b) * t,
-  a.a + (b.a - a.a) * t,
-);
 
 /** Follow Pole distance multiplier limits around the auto-fit pole framing. */
 const FOLLOW_MIN_ZOOM = 0.85;
@@ -879,11 +872,10 @@ export default function RawReplayScene({
   const applySkyLighting = useCallback((sky: SkyState, scene: Scene) => {
     const altitude = sky.sunAltitudeDeg;
     const daylight = clamp((altitude + 6) / 18, 0, 1);
-    const twilight = clamp((altitude + 12) / 16, 0, 1);
-    const night = new Color4(0.024, 0.043, 0.067, 1);
-    const dusk = new Color4(0.20, 0.17, 0.25, 1);
-    const day = new Color4(0.39, 0.61, 0.82, 1);
-    scene.clearColor = mixColor4(mixColor4(night, dusk, twilight), day, daylight);
+    // Match the clear colour to the gradient dome's horizon so any gap and the
+    // dome itself read as one sky.
+    const horizon = sky.horizonColor;
+    scene.clearColor = new Color4(horizon.r, horizon.g, horizon.b, 1);
 
     const az = sky.sunAzimuthDeg * (Math.PI / 180);
     const alt = altitude * (Math.PI / 180);
@@ -1095,6 +1087,8 @@ export default function RawReplayScene({
       const ease = 1 - Math.exp(-dt / 42);
       const state = liveStateRef.current;
       const mapping = worldRef.current;
+      // The sky gradient follows the orbit so the camera always stays inside it.
+      celestialSkyRef.current?.syncCamera(camera.radius);
 
       // Post-shot TTLs for static simulation layers. Defaults are 0 (persist),
       // so this never changes the normal drawing view unless the user opts in.
@@ -2907,7 +2901,13 @@ export default function RawReplayScene({
     );
     celestial.root.parent = root;
     celestialSkyRef.current = celestial;
-    const resolvedSky = celestial.update(skyContext.dateMs, skyContext.latitudeDeg, skyContext.longitudeDeg);
+    const resolvedSky = celestial.update(
+      skyContext.dateMs,
+      skyContext.latitudeDeg,
+      skyContext.longitudeDeg,
+      skyContext.fieldClockMs,
+    );
+    applySkyLighting(resolvedSky, scene);
     setSkyState({
       ...resolvedSky,
       approximateLocation: skyContext.approximateLocation,
@@ -2962,6 +2962,7 @@ export default function RawReplayScene({
     centerlines,
     boundaryFiles,
     hatches,
+    applySkyLighting,
     styleSettings.pointShape,
     styleSettings.pointLineWeight,
     styleSettings.gridColor,
@@ -2990,8 +2991,17 @@ export default function RawReplayScene({
     const context = resolveSkyContext(survey);
     const index = clamp(playhead, 0, Math.max(0, survey.observations.length - 1));
     const observation = survey.observations[index];
-    const dateMs = observation?.fieldTimeMs ?? context.dateMs;
-    const sky = celestialSkyRef.current?.update(dateMs, context.latitudeDeg, context.longitudeDeg);
+    // Observation timestamps are the recorded local clock, not UTC.
+    const recordedClockMs = observation?.fieldTimeMs ?? context.fieldClockMs;
+    const dateMs = recordedClockMs != null
+      ? wallClockToUtcMs(recordedClockMs, context.longitudeDeg)
+      : Date.now();
+    const sky = celestialSkyRef.current?.update(
+      dateMs,
+      context.latitudeDeg,
+      context.longitudeDeg,
+      recordedClockMs,
+    );
     if (!sky) return;
     applySkyLighting(sky, scene);
     setSkyState({
@@ -3523,6 +3533,7 @@ export default function RawReplayScene({
           <div className="flex items-center gap-2 text-[8px] uppercase tracking-[0.14em] text-slate-500">
             <span className="text-cyan-200/80">Sky</span>
             <span>{skyState.timeLabel}</span>
+            <span className="uppercase text-slate-400">{skyState.skyPhase}</span>
             {(skyState.approximateLocation || skyState.approximateTime) && <span className="text-amber-300/80">approx</span>}
           </div>
           <div className="mt-0.5 flex items-center gap-2.5">

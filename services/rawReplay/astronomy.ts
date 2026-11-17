@@ -36,7 +36,12 @@ export interface PlanetPosition extends EquatorialCoord {
 }
 
 export interface SkyContext {
+  /** UTC instant the sky is evaluated at. */
   dateMs: number;
+  /** Field clock time recorded in the file (local civil time, no zone attached). */
+  fieldClockMs?: number;
+  /** Timezone offset estimated from the field longitude, in hours east of UTC. */
+  timezoneOffsetHours: number;
   latitudeDeg: number;
   longitudeDeg: number;
   /** No GNSS/base latitude/longitude in the file; a central-US fallback was used. */
@@ -84,6 +89,19 @@ export const greenwichSiderealTimeDeg = (dateMs: number): number => {
 /** Local sidereal time, in degrees, for an east-positive longitude. */
 export const localSiderealTimeDeg = (dateMs: number, longitudeDeg: number): number =>
   normalizeDegrees(greenwichSiderealTimeDeg(dateMs) + longitudeDeg);
+
+/**
+ * Raw files record local civil clock time with no timezone. Estimate the zone
+ * offset from the field longitude (nearest whole hour) so the sun can be
+ * placed at the recorded wall-clock time. Longitude alone ignores DST and
+ * zone boundaries, which is accurate enough for a review sky.
+ */
+export const approximateTimezoneOffsetHours = (longitudeDeg: number): number =>
+  Math.max(-12, Math.min(12, Math.round(longitudeDeg / 15)));
+
+/** Convert a recorded local wall-clock epoch into the UTC instant the sky uses. */
+export const wallClockToUtcMs = (wallClockMs: number, longitudeDeg: number): number =>
+  wallClockMs - approximateTimezoneOffsetHours(longitudeDeg) * 3600000;
 
 /** Ecliptic longitude/latitude to equatorial right ascension/declination. */
 export const eclipticToEquatorial = (
@@ -431,12 +449,16 @@ export const resolveSkyContext = (survey: RawSurvey): SkyContext => {
   )?.gnss;
   const latitude = gnss?.latitude ?? survey.base?.latitude;
   const longitude = gnss?.longitude ?? survey.base?.longitude;
-  const fieldTime = survey.stats.fieldStartMs ?? survey.job.dateMs;
+  const fieldClockMs = survey.stats.fieldStartMs ?? survey.job.dateMs;
+  const longitudeDeg = longitude ?? -98.5795;
+  const timezoneOffsetHours = approximateTimezoneOffsetHours(longitudeDeg);
   return {
-    dateMs: fieldTime ?? Date.now(),
+    dateMs: fieldClockMs != null ? wallClockToUtcMs(fieldClockMs, longitudeDeg) : Date.now(),
+    fieldClockMs,
+    timezoneOffsetHours,
     latitudeDeg: latitude ?? 39.8283,
-    longitudeDeg: longitude ?? -98.5795,
+    longitudeDeg,
     approximateLocation: latitude == null || longitude == null,
-    approximateTime: fieldTime == null,
+    approximateTime: fieldClockMs == null,
   };
 };

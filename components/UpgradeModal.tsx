@@ -94,6 +94,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
     : (typeof localStorage !== 'undefined' ? (localStorage.getItem('landsurv_last_purchased_email') || '') : '');
   const [selectedServicePlan, setSelectedServicePlan] = useState<'1M' | '3M' | '6M' | '1Y' | null>(null);
   const [selectedPackage, setSelectedPackage] = useState<'1K' | '5K' | '10K' | null>(null);
+  const [autoAddedServiceMonth, setAutoAddedServiceMonth] = useState(false);
   const [statusEmail, setStatusEmail] = useState(initialEmail);
   const [confirmEmail, setConfirmEmail] = useState('');
   const [emailStep, setEmailStep] = useState<'entry' | 'confirm'>(() => (initialEmail ? 'confirm' : 'entry'));
@@ -286,29 +287,56 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
     }
   };
 
+  const handleSelectServicePlan = (planId: '1M' | '3M' | '6M' | '1Y') => {
+    const isSelected = selectedServicePlan === planId;
+    if (isSelected && selectedPackage) {
+      // Every compute buy-in includes the 1-month service plan, so it can be
+      // upgraded but not removed while compute is selected.
+      return;
+    }
+    setSelectedServicePlan(isSelected ? null : planId);
+    setAutoAddedServiceMonth(false);
+  };
+
+  const handleSelectComputePackage = (packageId: '1K' | '5K' | '10K') => {
+    const isSelected = selectedPackage === packageId;
+    const nextPackage = isSelected ? null : packageId;
+    setSelectedPackage(nextPackage);
+
+    if (nextPackage) {
+      if (!selectedServicePlan) {
+        setSelectedServicePlan('1M');
+        setAutoAddedServiceMonth(true);
+      }
+      return;
+    }
+    if (autoAddedServiceMonth && selectedServicePlan === '1M') {
+      setSelectedServicePlan(null);
+      setAutoAddedServiceMonth(false);
+    }
+  };
+
   const handleCheckout = async () => {
     if (!selectedPackage && !selectedServicePlan) return;
     if (billingConfig && !billingConfig.checkoutEnabled) {
       setCheckoutError('Checkout is temporarily unavailable');
       return;
     }
-    if (selectedServicePlan) {
-      if (!statusEmailIsValid) {
-        setCheckoutError('Please enter a valid email address to receive your service Enabling Key');
-        setEmailStep('entry');
-        return;
-      }
-      if (!emailsMatch) {
-        setCheckoutError('Please confirm your email address so both entries match');
-        setEmailStep('confirm');
-        return;
-      }
+    if (!statusEmailIsValid) {
+      setCheckoutError('Please enter a valid email address to receive your purchase confirmation and Enabling Key');
+      setEmailStep('entry');
+      return;
+    }
+    if (!emailsMatch) {
+      setCheckoutError('Please confirm your email address so both entries match');
+      setEmailStep('confirm');
+      return;
     }
 
     try {
       setCheckoutError(null);
       setIsCheckingOut(true);
-      if (selectedServicePlan && trimmedStatusEmail && typeof localStorage !== 'undefined') {
+      if (trimmedStatusEmail && typeof localStorage !== 'undefined') {
         localStorage.setItem('landsurv_last_purchased_email', trimmedStatusEmail.toLowerCase());
         localStorage.setItem('landsurv_customer_email', trimmedStatusEmail.toLowerCase());
       }
@@ -316,7 +344,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
         await Promise.resolve(onProceedWithCheckout({
           creditPackage: selectedPackage || undefined,
           servicePlan: selectedServicePlan || undefined,
-          customerEmail: selectedServicePlan ? trimmedStatusEmail.toLowerCase() : undefined,
+          customerEmail: trimmedStatusEmail.toLowerCase(),
         }));
       } else if (selectedPackage && selectedServicePlan) {
         throw new Error('Combined checkout is unavailable');
@@ -409,7 +437,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                   <div key={plan.id} className="flex flex-col">
                     <button
                       type="button"
-                      onClick={() => setSelectedServicePlan(isSelected ? null : plan.id)}
+                      onClick={() => handleSelectServicePlan(plan.id)}
                       disabled={isCheckingOut}
                       aria-pressed={isSelected}
                       className={`group relative overflow-hidden p-2.5 text-left transition-all duration-150 cursor-pointer border-l-0 w-full ${
@@ -455,7 +483,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                             ? 'text-gray-500 group-hover:text-gray-400'
                             : 'text-gray-400'
                       }`}>
-                        {isSelected ? '✓ Selected' : hasServiceAccess ? 'Extend' : 'Continuous'}
+                        {isSelected ? (autoAddedServiceMonth ? '✓ Added with compute' : '✓ Selected') : hasServiceAccess ? 'Extend' : 'Continuous'}
                       </div>
                     </button>
                   </div>
@@ -478,7 +506,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                   ONLY REMOVES THE 4H PAUSE TIMER
                 </div>
                 <div className="text-emerald-100 text-[11px] mt-0.5">
-                  24/7 continuous access only (does not include compute credits or api keys).
+                  24/7 continuous access only (does not include compute credits).
                 </div>
               </div>
             )}
@@ -499,6 +527,10 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
               )}
             </div>
 
+            <p className="mb-1.5 text-[10px] font-semibold text-emerald-300">
+              Every compute buy-in includes Service Access — added automatically below.
+            </p>
+
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {computeBuyIns.map((buyIn) => {
                 const isSelected = selectedPackage === buyIn.id;
@@ -506,7 +538,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                   <button
                     key={buyIn.id}
                     type="button"
-                    onClick={() => setSelectedPackage(isSelected ? null : buyIn.id)}
+                    onClick={() => handleSelectComputePackage(buyIn.id)}
                     disabled={isCheckingOut}
                     aria-pressed={isSelected}
                     className={`group relative overflow-hidden rounded-lg p-2.5 text-left transition-all duration-150 cursor-pointer border-l-0 ${
@@ -529,6 +561,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                     </div>
                     <div className="mt-0.5 text-xs font-bold text-cyan-200">{buyIn.units.toLocaleString()} units</div>
                     <div className="mt-0.5 text-[10px] text-gray-400 leading-tight">{buyIn.desc}</div>
+                    <div className="mt-0.5 text-[10px] font-semibold text-emerald-300">Includes 30 days Service Access</div>
                     {isSelected && <div className="mt-0.5 text-[10px] font-bold text-pink-300">✓ Selected</div>}
                   </button>
                 );
@@ -569,6 +602,22 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
                 </div>
               </button>
             </div>
+
+            {selectedPackage && (
+              <div
+                role="status"
+                className="mt-2.5 rounded-lg border border-emerald-500/50 bg-emerald-950/40 px-3 py-2"
+              >
+                <p className="text-[11px] font-bold text-emerald-200">
+                  {autoAddedServiceMonth ? '1 month of Service Access added' : 'Service Access included'}
+                </p>
+                <p className="mt-0.5 text-[10px] leading-relaxed text-emerald-100/80">
+                  {autoAddedServiceMonth
+                    ? 'Every compute buy-in includes Service Access · 1 Month. It is selected above and itemized in your total.'
+                    : `${selectedService?.label ?? 'Your service plan'} is selected above and itemized in your total.`}
+                </p>
+              </div>
+            )}
 
             {/* Expandable Key Input Panel */}
             {showKeyInput && (
@@ -806,19 +855,30 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
 
         {/* Footer / Checkout (pinned fixed to bottom, never scrolls out of view) */}
         <div className="shrink-0 border-t border-gray-800 bg-gray-900 px-5 py-3 space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <div className="text-gray-300 font-medium">
-              {selectedServicePlan || selectedPackage ? (
-                <span>
-                  {selectedServicePlan && `Service (${selectedServicePlan})`}
-                  {selectedServicePlan && selectedPackage && ' + '}
-                  {selectedPackage && `Compute (${selectedPackage})`}
-                </span>
-              ) : (
+          <div className="flex items-start justify-between gap-3 text-xs">
+            <div className="min-w-0 space-y-0.5 font-medium text-gray-300">
+              {selectedService && (
+                <div className="flex items-baseline gap-2">
+                  <span className="truncate">
+                    Service · {selectedService.label}
+                    {autoAddedServiceMonth && ' (added with compute)'}
+                  </span>
+                  <span className="shrink-0 text-gray-400">${selectedService.price.toFixed(2)}</span>
+                </div>
+              )}
+              {selectedComputeBuyIn && (
+                <div className="flex items-baseline gap-2">
+                  <span className="truncate">
+                    Compute · {selectedComputeBuyIn.label} ({selectedComputeBuyIn.units.toLocaleString()} units)
+                  </span>
+                  <span className="shrink-0 text-gray-400">${selectedComputeBuyIn.price.toFixed(2)}</span>
+                </div>
+              )}
+              {!selectedServicePlan && !selectedPackage && (
                 <span className="text-gray-400">No plan selected</span>
               )}
             </div>
-            <div className="text-sm sm:text-base font-extrabold text-white">
+            <div className="shrink-0 text-sm sm:text-base font-extrabold text-white">
               Total: ${checkoutTotal.toFixed(2)}
             </div>
           </div>

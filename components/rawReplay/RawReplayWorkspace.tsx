@@ -25,7 +25,8 @@ interface RawReplayWorkspaceProps {
 const formatClock = (ms: number | undefined): string => {
   if (ms == null || !Number.isFinite(ms)) return '—';
   const date = new Date(ms);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+  // Raw timestamps are the recorded local clock, encoded as a stable epoch.
+  return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}:${String(date.getUTCSeconds()).padStart(2, '0')}`;
 };
 
 const formatDuration = (ms: number | undefined): string => {
