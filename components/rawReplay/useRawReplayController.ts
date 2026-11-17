@@ -164,6 +164,11 @@ export interface RawReplayStyleSettings {
   labelScale: number;
   /** Seconds callouts remain visible after the last shot; 0 persists. */
   labelTtl: number;
+
+  /** Sky clock source: the recorded field time or a forced local time. */
+  skyTimeMode: 'recorded' | 'fixed';
+  /** Local HH:MM clock used when skyTimeMode is fixed. */
+  skyTime: string;
 }
 
 export const RAW_REPLAY_STYLE_STORAGE_KEY = 'landsurv.rawReplay.style.v1';
@@ -211,6 +216,8 @@ export const DEFAULT_RAW_REPLAY_STYLE: RawReplayStyleSettings = {
   labelColor: '#ecfeff',
   labelScale: 1,
   labelTtl: 0,
+  skyTimeMode: 'recorded',
+  skyTime: '12:00',
 };
 
 export interface SetupPlaybackSummary {
@@ -401,6 +408,9 @@ const asTraceEquipmentStyles = (
   return styles;
 };
 
+const asClockTime = (value: unknown, fallback: string): string =>
+  typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : fallback;
+
 const loadRawReplayStyle = (): RawReplayStyleSettings => {
   if (typeof window === 'undefined') return DEFAULT_RAW_REPLAY_STYLE;
   try {
@@ -451,6 +461,8 @@ const loadRawReplayStyle = (): RawReplayStyleSettings => {
       labelColor: asHex(parsed.labelColor, d.labelColor),
       labelScale: asNumber(parsed.labelScale, d.labelScale, 0.6, 2.5),
       labelTtl: asNumber(parsed.labelTtl, d.labelTtl, 0, 120),
+      skyTimeMode: parsed.skyTimeMode === 'fixed' ? 'fixed' : 'recorded',
+      skyTime: asClockTime(parsed.skyTime, d.skyTime),
     };
   } catch {
     return DEFAULT_RAW_REPLAY_STYLE;

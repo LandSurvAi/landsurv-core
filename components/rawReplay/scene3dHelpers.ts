@@ -1409,8 +1409,9 @@ export interface ArticulatedPrismPoleRig {
 }
 
 /**
- * Builds a true-scale graduated red/white survey range pole (NO bipods) with a
- * pointed hardened-steel spike, side bullseye level, properly scaled 10.1" landscape
+ * Builds a true-scale two-stage telescoping prism pole (NO bipods): a full-diameter
+ * red/white outer section from the shoe to a 5 ft clamp, a narrow sliding inner
+ * section carrying the prism, side bullseye level, and properly scaled 10.1" landscape
  * Windows 11 Survey Tablet displaying the "LandSurv.ai" name wordmark, and a
  * SINGLE-SIDED directional 62 mm corner-cube retroreflector prism assembly (+Z front
  * optical aperture ONLY, solid enclosed weatherproof cast-metal rear canister on -Z).
@@ -1421,6 +1422,7 @@ export function createSurveyPoleRig(scene: Scene, parent: TransformNode): Articu
 
   const kit = getSurveyMaterialKit(scene);
   const graduatedPoleMat = createGraduatedPoleMaterial(scene);
+  const slidingPoleMat = makeMat(scene, 'mat-sliding-range-pole', '#e2e8f0', 1, 0.3, 0.26);
   const targetFrontMat = createPrismTargetPlateMaterial(scene);
   const cornerCubeMat = createCornerCubeFacetMaterial(scene);
 
@@ -1450,7 +1452,7 @@ export function createSurveyPoleRig(scene: Scene, parent: TransformNode): Articu
   shoeCollar.material = kit.knurledSteel;
   shoeCollar.isPickable = false;
 
-  // ── 2. Graduated 32 mm Survey Range Pole Shaft (NO bipods) ───────────────────
+  // ── 2. Full-diameter 32 mm Red/White Outer Pole (ground to the 5 ft clamp) ───
   const shaftGroup = new TransformNode('pole-shaft-group', scene);
   shaftGroup.parent = root;
 
@@ -1463,6 +1465,20 @@ export function createSurveyPoleRig(scene: Scene, parent: TransformNode): Articu
   poleCylinder.position.y = 0.5;
   poleCylinder.material = graduatedPoleMat;
   poleCylinder.isPickable = false;
+
+  // ── 2b. Narrow 22 mm Telescoping Upper Pole (clamp to prism) ─────────────────
+  const upperShaftGroup = new TransformNode('pole-upper-shaft-group', scene);
+  upperShaftGroup.parent = root;
+
+  const slidingPole = MeshBuilder.CreateCylinder('pole-sliding-shaft', {
+    height: 1.0,
+    diameter: 0.022,
+    tessellation: 18,
+  }, scene);
+  slidingPole.parent = upperShaftGroup;
+  slidingPole.position.y = 0.5;
+  slidingPole.material = slidingPoleMat;
+  slidingPole.isPickable = false;
 
   // Compression lock collar + side circular bullseye spirit level (uniformly scaled)
   const collarGroup = new TransformNode('pole-lock-collar-group', scene);
@@ -1761,17 +1777,23 @@ export function createSurveyPoleRig(scene: Scene, parent: TransformNode): Articu
       const shoeHeight = 0.090 * equipScale;
       shoeGroup.scaling.setAll(equipScale);
 
-      // Span graduated shaft cleanly from top of steel shoe to bottom of prism swivel base
+      // Full-diameter outer pole runs to the 5 ft clamp; the narrow inner pole
+      // slides out of it and carries the prism at the recorded rod height.
       const topClearance = 0.105 * equipScale;
-      const shaftSpan = Math.max(0.08 * equipScale, effRod - shoeHeight - topClearance);
-      shaftGroup.position.y = shoeHeight;
-      shaftGroup.scaling.set(equipScale, shaftSpan, equipScale);
+      const prismBase = effRod - topClearance;
+      const minClamp = shoeHeight + 0.18 * equipScale;
+      const maxClamp = Math.max(minClamp, prismBase - 0.16 * equipScale);
+      const clampHeight = clamp(1.524 * equipScale, minClamp, maxClamp);
 
-      collarGroup.position.y = clamp(
-        effRod * 0.68,
-        shoeHeight + 0.12 * equipScale,
-        Math.max(shoeHeight + 0.12 * equipScale, effRod - 0.18 * equipScale),
-      );
+      const lowerSpan = Math.max(0.05 * equipScale, clampHeight - shoeHeight);
+      shaftGroup.position.y = shoeHeight;
+      shaftGroup.scaling.set(equipScale, lowerSpan, equipScale);
+
+      const upperSpan = Math.max(0.05 * equipScale, prismBase - clampHeight);
+      upperShaftGroup.position.y = clampHeight;
+      upperShaftGroup.scaling.set(equipScale, upperSpan, equipScale);
+
+      collarGroup.position.y = clampHeight;
       collarGroup.scaling.setAll(equipScale);
 
       // Ergonomic chest/waist height for the 10.1" Windows Survey Tablet

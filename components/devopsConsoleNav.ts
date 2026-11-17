@@ -8,8 +8,7 @@
 
 export type DevOpsTabId =
   | 'dashboard'
-  | 'subscribers'
-  | 'apikeys'
+  | 'audience'
   | 'recordings'
   | 'deeds'
   | 'security'
@@ -24,7 +23,6 @@ export type DevOpsTabId =
   | 'rag'
   | 'prompts'
   | 'sandbox'
-  | 'legal'
   | 'calls'
   | 'deepdocs'
   | 'emails'
@@ -77,24 +75,19 @@ export const DEVOPS_TABS: DevOpsTab[] = [
     ],
   },
   {
-    id: 'subscribers',
-    label: 'Subscribers',
+    id: 'audience',
+    label: 'Audience',
     icon: '◎',
     group: 'Operate',
-    hint: 'Accounts, access and plan state',
+    hint: 'Visitors, subscribers, legal signatures and API keys',
     accent: 'cyan',
-    keywords: ['users', 'customers', 'accounts', 'stripe', 'api key', 'service access'],
-    sections: [{ label: 'Subscriber directory', keywords: ['email', 'user id', 'created', 'last seen'] }],
-  },
-  {
-    id: 'apikeys',
-    label: 'API Keys',
-    icon: '⌘',
-    group: 'Operate',
-    hint: 'Who used a key and when',
-    accent: 'cyan',
-    keywords: ['tokens', 'credentials', 'usage', 'last used', 'issue key'],
-    sections: [{ label: 'API key usage', keywords: ['key', 'owner', 'requests', 'last used'] }],
+    keywords: ['visitors', 'people', 'audience', 'fingerprint', 'device', 'subscribers', 'customers', 'accounts', 'legal', 'signatures', 'api keys', 'tokens', 'usage'],
+    sections: [
+      { label: 'Visitor directory', section: 'visitors', keywords: ['fingerprint', 'device', 'activity', 'page views', 'ip', 'user agent'] },
+      { label: 'Subscribers', section: 'subscribers', keywords: ['email', 'customers', 'accounts', 'stripe'] },
+      { label: 'Legal signatures', section: 'legal', keywords: ['tos', 'consent', 'agreements'] },
+      { label: 'API keys', section: 'apikeys', keywords: ['tokens', 'usage', 'last used', 'service access'] },
+    ],
   },
   {
     id: 'recordings',
@@ -245,16 +238,6 @@ export const DEVOPS_TABS: DevOpsTab[] = [
     accent: 'emerald',
     keywords: ['boundary', 'closure', 'math', 'calculation', 'test'],
     sections: [{ label: 'Boundary / closure calculator', keywords: ['traverse', 'misclosure', 'area'] }],
-  },
-  {
-    id: 'legal',
-    label: 'Legal',
-    icon: '✍',
-    group: 'Content',
-    hint: 'First-time agreement signatures',
-    accent: 'cyan',
-    keywords: ['terms', 'tos', 'signatures', 'consent', 'agreements'],
-    sections: [{ label: 'Legal signatures', keywords: ['tos', 'version', 'signed'] }],
   },
   {
     id: 'calls',

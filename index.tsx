@@ -10,6 +10,7 @@ import { startGlobalSettingsPolling } from './utils/globalSettings';
 import { GlobalSettingsOverlay } from './components/GlobalSettingsOverlay';
 import { PwaLifecycleOverlay } from './components/PwaLifecycleOverlay';
 import { initializeOfflineQueue } from './services/OfflineQueue';
+import { getDeviceFingerprint } from './services/deviceFingerprint';
 import { installReplayNetworkGuard } from './services/recording/networkGuard';
 import type { AppBoot } from './utils/recording/boot';
 // Import Tailwind CSS
@@ -170,16 +171,64 @@ if (!rootElement) {
 
 const root = ReactDOM.createRoot(rootElement);
 
-// Report the page load so the DevOps console can chart front-end traffic.  The
-// static host has no request counters of its own, so the shell is the sensor.
-const reportPageLoad = () => {
-  const url = '/api/presence/pageview';
+const presenceSessionId = (): string | undefined => {
   try {
-    if (navigator.sendBeacon && navigator.sendBeacon(url)) return;
+    const key = 'landsurv_presence_session';
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const generated = globalThis.crypto?.randomUUID?.()
+      || `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+    sessionStorage.setItem(key, generated);
+    return generated;
+  } catch {
+    return undefined;
+  }
+};
+
+const safeReferrer = (): string | undefined => {
+  try {
+    if (!document.referrer) return undefined;
+    const referrer = new URL(document.referrer);
+    return `${referrer.origin}${referrer.pathname}`;
+  } catch {
+    return undefined;
+  }
+};
+
+// Report the page load so the DevOps console can chart front-end traffic and
+// show every visitor in the Audience directory. The static host has no request
+// counters of its own, so the shell is the sensor.
+const reportPageLoad = async () => {
+  const url = '/api/presence/pageview';
+  const payload: Record<string, unknown> = {
+    path: window.location.pathname || '/',
+    referrer: safeReferrer(),
+    sessionId: presenceSessionId(),
+  };
+
+  try {
+    const fingerprint = await getDeviceFingerprint();
+    payload.fingerprintId = fingerprint.id;
+    payload.fingerprintSignals = fingerprint.signals;
+  } catch {
+    /* the server still records an IP + user-agent visitor */
+  }
+
+  const body = JSON.stringify(payload);
+  try {
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], { type: 'application/json' });
+      if (navigator.sendBeacon(url, blob)) return;
+    }
   } catch {
     /* fall through to fetch */
   }
-  void fetch(url, { method: 'POST', keepalive: true }).catch(() => {});
+  void fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    keepalive: true,
+  }).catch(() => {});
 };
 
 // Startup fail-safe: never let the static splash block the UI forever. The
@@ -211,7 +260,7 @@ const bootLiveApp = async (boot: AppBoot = { kind: 'live' }) => {
   );
   clearInitialLoader();
 
-  reportPageLoad();
+  void reportPageLoad();
 };
 
 if (replayId) {

@@ -36,6 +36,19 @@ export interface FingerprintSignals {
   webgl: string;
   webglVendor: string;
   webglRenderer: string;
+  fonts: string;
+  webglExtensions: string;
+  webglParameters: string;
+  clientHints: string;
+  colorGamut: string;
+  pdfViewer: boolean;
+  cookieEnabled: boolean;
+  doNotTrack: string;
+  reducedMotion: boolean;
+  storageLocal: boolean;
+  storageSession: boolean;
+  storageIndexedDb: boolean;
+  screenAvail: { width: number; height: number; availWidth: number; availHeight: number };
 }
 
 export interface DeviceFingerprint {
@@ -99,6 +112,85 @@ function hashSync(input: string): string {
   return `${h1.toString(16).padStart(8, '0')}${h2.toString(16).padStart(8, '0')}`;
 }
 
+function collectFontHash(): string {
+  if (!hasWindow()) return 'no-fonts';
+  try {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return 'no-font-context';
+    const text = 'mmmmmmmmmmlli';
+    const bases = ['monospace', 'sans-serif', 'serif'];
+    const baseWidths: Record<string, number> = {};
+    for (const base of bases) {
+      ctx.font = `72px ${base}`;
+      baseWidths[base] = ctx.measureText(text).width;
+    }
+    const families = [
+      'Arial', 'Arial Black', 'Calibri', 'Cambria', 'Candara', 'Comic Sans MS',
+      'Consolas', 'Courier New', 'Georgia', 'Helvetica', 'Impact', 'Lucida Console',
+      'Lucida Sans Unicode', 'Palatino Linotype', 'Segoe UI', 'Tahoma',
+      'Times New Roman', 'Trebuchet MS', 'Verdana', 'Roboto', 'Noto Sans',
+      'Inter', 'SF Pro Text', 'Menlo', 'Monaco', 'Ubuntu', 'Cantarell',
+    ];
+    const detected: string[] = [];
+    for (const family of families) {
+      for (const base of bases) {
+        ctx.font = `72px "${family}", ${base}`;
+        if (ctx.measureText(text).width !== baseWidths[base]) {
+          detected.push(family);
+          break;
+        }
+      }
+    }
+    return hashSync(detected.join(','));
+  } catch {
+    return 'fonts-error';
+  }
+}
+
+function storageAvailable(kind: 'localStorage' | 'sessionStorage' | 'indexedDB'): boolean {
+  if (!hasWindow()) return false;
+  try {
+    if (kind === 'indexedDB') return Boolean(window.indexedDB);
+    const storage = kind === 'localStorage' ? window.localStorage : window.sessionStorage;
+    const key = '__landsurv_probe__';
+    storage.setItem(key, '1');
+    storage.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function collectClientHints(nav: any): string {
+  const data = nav?.userAgentData;
+  if (!data) return '';
+  const brands = Array.isArray(data.brands)
+    ? data.brands.map((brand: any) => `${brand.brand}/${brand.version}`).join(',')
+    : '';
+  return [
+    brands,
+    data.mobile,
+    data.platform,
+    data.architecture,
+    data.bitness,
+    data.model,
+    data.platformVersion,
+  ].filter(value => value !== undefined && value !== null && value !== '').join('|').slice(0, 512);
+}
+
+function collectColorGamut(): string {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'unknown';
+  try {
+    for (const gamut of ['rec2020', 'p3', 'srgb']) {
+      if (window.matchMedia(`(color-gamut: ${gamut})`).matches) return gamut;
+    }
+  } catch {
+    /* ignore */
+  }
+  return 'unknown';
+}
+
 function collectCanvasHash(): string {
   if (!hasWindow()) return 'no-canvas';
   try {
@@ -125,17 +217,24 @@ function collectCanvasHash(): string {
   }
 }
 
-function collectWebglFingerprint(): { webgl: string; vendor: string; renderer: string } {
-  if (!hasWindow()) return { webgl: 'no-webgl', vendor: 'unknown', renderer: 'unknown' };
+function collectWebglFingerprint(): {
+  webgl: string;
+  vendor: string;
+  renderer: string;
+  extensions: string;
+  parameters: string;
+} {
+  if (!hasWindow()) return { webgl: 'no-webgl', vendor: 'unknown', renderer: 'unknown', extensions: 'no-webgl', parameters: 'no-webgl' };
   try {
     const canvas = document.createElement('canvas');
     const gl = (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')) as WebGLRenderingContext | null;
-    if (!gl) return { webgl: 'no-webgl', vendor: 'unknown', renderer: 'unknown' };
+    if (!gl) return { webgl: 'no-webgl', vendor: 'unknown', renderer: 'unknown', extensions: 'no-webgl', parameters: 'no-webgl' };
 
     const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
     const vendor = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) || '') : '';
     const renderer = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || '') : '';
 
+    const extensions = (gl.getSupportedExtensions() || []).slice().sort();
     const params: string[] = [
       vendor,
       renderer,
@@ -147,12 +246,19 @@ function collectWebglFingerprint(): { webgl: string; vendor: string; renderer: s
       String(gl.getParameter(gl.MAX_VERTEX_ATTRIBS) || ''),
       String(gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS) || ''),
       String(gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS) || ''),
-      (gl.getSupportedExtensions() || []).slice().sort().join(','),
     ];
 
-    return { webgl: hashSync(params.join('|')), vendor, renderer };
+    // Keep `webgl` compatible with existing cached/derived ids; expose the
+    // extension and parameter hashes separately as additional signals.
+    return {
+      webgl: hashSync([...params, extensions.join(',')].join('|')),
+      vendor,
+      renderer,
+      extensions: hashSync(extensions.join(',')),
+      parameters: hashSync(params.join('|')),
+    };
   } catch {
-    return { webgl: 'webgl-error', vendor: 'unknown', renderer: 'unknown' };
+    return { webgl: 'webgl-error', vendor: 'unknown', renderer: 'unknown', extensions: 'webgl-error', parameters: 'webgl-error' };
   }
 }
 
@@ -190,6 +296,30 @@ export function collectFingerprintSignals(): FingerprintSignals {
     webgl: webgl.webgl,
     webglVendor: webgl.vendor,
     webglRenderer: webgl.renderer,
+    fonts: collectFontHash(),
+    webglExtensions: webgl.extensions,
+    webglParameters: webgl.parameters,
+    clientHints: collectClientHints(nav),
+    colorGamut: collectColorGamut(),
+    pdfViewer: Boolean(nav.pdfViewerEnabled),
+    cookieEnabled: nav.cookieEnabled === true,
+    doNotTrack: String(nav.doNotTrack ?? ''),
+    reducedMotion: (() => {
+      try {
+        return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      } catch {
+        return false;
+      }
+    })(),
+    storageLocal: storageAvailable('localStorage'),
+    storageSession: storageAvailable('sessionStorage'),
+    storageIndexedDb: storageAvailable('indexedDB'),
+    screenAvail: {
+      width: Number(scr.width || 0),
+      height: Number(scr.height || 0),
+      availWidth: Number(scr.availWidth || 0),
+      availHeight: Number(scr.availHeight || 0),
+    },
   };
 }
 
@@ -213,6 +343,11 @@ function canonicalSignalString(signals: FingerprintSignals): string {
     signals.webgl,
     signals.webglVendor,
     signals.webglRenderer,
+    signals.fonts,
+    signals.webglExtensions,
+    signals.webglParameters,
+    signals.clientHints,
+    signals.colorGamut,
   ].join('::');
 }
 

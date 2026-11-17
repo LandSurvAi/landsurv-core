@@ -34,6 +34,7 @@ const FreeCadTrialStep: React.FC<FreeCadTrialStepProps> = ({ onBack, onStart, su
         fingerprintId: fingerprint.id,
         userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
         surface: 'welcome-free-cad',
+        fingerprintSignals: fingerprint.signals,
       };
       onStart(record);
     } catch {

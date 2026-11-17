@@ -1056,12 +1056,16 @@ export function createCornerCubeFacetMaterial(scene: Scene): PBRMaterial {
 
 /**
  * Generates a crisp graduated red/white survey range pole texture with fine
- * tenth/centimetre graduation ticks and brushed anodized bump relief.
+ * tenth/centimetre graduation ticks.
+ *
+ * Deliberately a StandardMaterial: the shaft is a long, thin cylinder and its
+ * previous PBR shader could stay unready on some GPUs, leaving the prism and
+ * collector floating with no visible pole. The simple material always renders.
  */
-export function createGraduatedPoleMaterial(scene: Scene): PBRMaterial {
-  const matName = 'pbr-graduated-range-pole';
+export function createGraduatedPoleMaterial(scene: Scene): StandardMaterial {
+  const matName = 'mat-graduated-range-pole';
   const existing = scene.getMaterialByName(matName);
-  if (existing && existing instanceof PBRMaterial) return existing;
+  if (existing && existing instanceof StandardMaterial) return existing;
 
   const width = 256;
   const height = 1024;
@@ -1088,18 +1092,12 @@ export function createGraduatedPoleMaterial(scene: Scene): PBRMaterial {
     }
   });
 
-  const kit = getSurveyMaterialKit(scene);
-  const mat = new PBRMaterial(matName, scene);
-  mat.albedoTexture = tex;
+  const mat = new StandardMaterial(matName, scene);
+  mat.diffuseTexture = tex;
   mat.emissiveTexture = tex;
-  mat.emissiveColor = new Color3(0.16, 0.16, 0.16);
-  mat.metallic = 0.22;
-  mat.roughness = 0.28;
-  mat.clearCoat.isEnabled = true;
-  mat.clearCoat.intensity = 0.65;
-  mat.clearCoat.roughness = 0.12;
-  mat.bumpTexture = kit.brushedMetalNormal;
-  mat.bumpTexture.level = 0.24;
+  mat.emissiveColor = new Color3(0.34, 0.34, 0.34);
+  mat.specularColor = new Color3(0.18, 0.18, 0.18);
+  mat.specularPower = 28;
   return mat;
 }
 

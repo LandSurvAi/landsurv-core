@@ -41,7 +41,12 @@ import type { ResolvedBase } from '../../services/rawReplay/baseStations';
 import { formatBearing } from '../../services/rawReplay/baseStations';
 import type { EquipmentKind, RawObservation, RawSurvey } from '../../services/rawReplay/types';
 import { resolveHeight } from '../../services/rawReplay/heights';
-import { resolveSkyContext, wallClockToUtcMs } from '../../services/rawReplay/astronomy';
+import { fixedSkyClockMs, resolveSkyContext, wallClockToUtcMs } from '../../services/rawReplay/astronomy';
+import {
+  fetchHistoricalWeather,
+  resolveHistoricalWeatherContext,
+  type HistoricalWeather,
+} from '../../services/rawReplay/historicalWeather';
 import { createCelestialSky, createSatelliteSkyRig, type CelestialSkyRig, type SatelliteSkyRig, type SkyState } from './celestialSky';
 import {
   DEFAULT_RAW_REPLAY_STYLE,
@@ -868,12 +873,16 @@ export default function RawReplayScene({
   } | null>(null);
   const [cursorCoords, setCursorCoords] = useState<{ e: number; n: number; z: number; snapLabel?: string } | null>(null);
 
-  /** Apply the file's sun altitude/azimuth to the scene sky, lights and shadows. */
-  const applySkyLighting = useCallback((sky: SkyState, scene: Scene) => {
+  /** Apply the file's sun altitude/azimuth and historical weather to the scene. */
+  const applySkyLighting = useCallback((
+    sky: SkyState,
+    scene: Scene,
+    weather?: HistoricalWeather | null,
+  ) => {
     const altitude = sky.sunAltitudeDeg;
     const daylight = clamp((altitude + 6) / 18, 0, 1);
-    // Match the clear colour to the gradient dome's horizon so any gap and the
-    // dome itself read as one sky.
+    const overcast = clamp(weather?.overcast ?? 0, 0, 1);
+    const precipitation = clamp(weather?.precipitationIntensity ?? 0, 0, 1);
     const horizon = sky.horizonColor;
     scene.clearColor = new Color4(horizon.r, horizon.g, horizon.b, 1);
 
@@ -888,7 +897,7 @@ export default function RawReplayScene({
     const sun = sunLightRef.current;
     if (sun) {
       sun.direction = sunDirection;
-      sun.intensity = 0.06 + daylight * 1.55;
+      sun.intensity = (0.06 + daylight * 1.55) * (1 - overcast * 0.55);
       // A below-horizon sun still has a direction and would keep rendering a
       // shadow map lit from underneath. At night that projects a large false
       // shadow across the ground; only cast when the sun is actually up.
@@ -898,18 +907,35 @@ export default function RawReplayScene({
     }
     const hemi = hemiLightRef.current;
     if (hemi) {
-      hemi.intensity = 0.20 + daylight * 0.78;
-      hemi.diffuse = Color3.Lerp(new Color3(0.36, 0.38, 0.48), new Color3(0.72, 0.84, 1), daylight);
+      hemi.intensity = (0.20 + daylight * 0.78) * (1 - overcast * 0.25);
+      const dayHemi = Color3.Lerp(new Color3(0.36, 0.38, 0.48), new Color3(0.72, 0.84, 1), daylight);
+      hemi.diffuse = Color3.Lerp(dayHemi, new Color3(0.55, 0.58, 0.62), overcast);
       hemi.groundColor = Color3.Lerp(new Color3(0.07, 0.08, 0.12), new Color3(0.22, 0.26, 0.30), daylight);
     }
     const rim = rimLightRef.current;
-    if (rim) rim.intensity = 0.08 + daylight * 0.5;
+    if (rim) rim.intensity = (0.08 + daylight * 0.5) * (1 - overcast * 0.35);
     const shadow = shadowGeneratorRef.current;
     if (shadow) shadow.darkness = 0.16 + daylight * 0.24;
     scene.ambientColor = Color3.Lerp(new Color3(0.12, 0.14, 0.18), new Color3(0.35, 0.42, 0.48), daylight);
+
+    // Aerial perspective ties the terrain edge into the sky. The sky and cloud
+    // materials opt out of fog so their gradients stay crisp.
+    scene.fogEnabled = true;
+    scene.fogMode = Scene.FOGMODE_EXP2;
+    scene.fogColor = horizon;
+    const visibilityFog = weather?.visibilityM != null
+      ? clamp(1.8 / Math.max(120, weather.visibilityM), 0.00003, 0.0009)
+      : 0;
+    scene.fogDensity = clamp(
+      Math.max(0.00008 + overcast * 0.00022 + precipitation * 0.0003, visibilityFog),
+      0.00006,
+      0.0014,
+    );
   }, []);
   const [hoverQuickView, setHoverQuickView] = useState<HoverQuickView | null>(null);
   const [skyState, setSkyState] = useState<SkyState | null>(null);
+  const [weatherState, setWeatherState] = useState<HistoricalWeather | null>(null);
+  const [weatherStatus, setWeatherStatus] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
   const [inspectedEntity, setInspectedEntity] = useState<InspectedEntity3D | null>(null);
   const [measureStart, setMeasureStart] = useState<MeasureResult3D['from'] | null>(null);
   const [measureResult, setMeasureResult] = useState<MeasureResult3D | null>(null);
@@ -1087,8 +1113,9 @@ export default function RawReplayScene({
       const ease = 1 - Math.exp(-dt / 42);
       const state = liveStateRef.current;
       const mapping = worldRef.current;
-      // The sky gradient follows the orbit so the camera always stays inside it.
-      celestialSkyRef.current?.syncCamera(camera.radius);
+      // The celestial sphere is centered on the eye so it stays around the
+      // camera in free orbit, Follow Pole and instrument POV alike.
+      celestialSkyRef.current?.syncCamera(camera.position);
 
       // Post-shot TTLs for static simulation layers. Defaults are 0 (persist),
       // so this never changes the normal drawing view unless the user opts in.
@@ -2901,13 +2928,22 @@ export default function RawReplayScene({
     );
     celestial.root.parent = root;
     celestialSkyRef.current = celestial;
+    // A forced sky time keeps the file date but replaces the clock, so the
+    // sun, gradient, stars and scene lighting all evaluate at that hour.
+    const recordedSkyClockMs = styleSettings.skyTimeMode === 'fixed'
+      ? fixedSkyClockMs(skyContext.fieldClockMs, styleSettings.skyTime) ?? skyContext.fieldClockMs
+      : skyContext.fieldClockMs;
+    const skyDateMs = recordedSkyClockMs != null
+      ? wallClockToUtcMs(recordedSkyClockMs, skyContext.longitudeDeg)
+      : skyContext.dateMs;
     const resolvedSky = celestial.update(
-      skyContext.dateMs,
+      skyDateMs,
       skyContext.latitudeDeg,
       skyContext.longitudeDeg,
-      skyContext.fieldClockMs,
+      recordedSkyClockMs,
+      weatherState,
     );
-    applySkyLighting(resolvedSky, scene);
+    applySkyLighting(resolvedSky, scene, weatherState);
     setSkyState({
       ...resolvedSky,
       approximateLocation: skyContext.approximateLocation,
@@ -2991,8 +3027,12 @@ export default function RawReplayScene({
     const context = resolveSkyContext(survey);
     const index = clamp(playhead, 0, Math.max(0, survey.observations.length - 1));
     const observation = survey.observations[index];
-    // Observation timestamps are the recorded local clock, not UTC.
-    const recordedClockMs = observation?.fieldTimeMs ?? context.fieldClockMs;
+    // Observation timestamps are the recorded local clock, not UTC. A forced
+    // sky time keeps the observation date and replaces only the clock.
+    const fileClockMs = observation?.fieldTimeMs ?? context.fieldClockMs;
+    const recordedClockMs = styleSettings.skyTimeMode === 'fixed'
+      ? fixedSkyClockMs(fileClockMs, styleSettings.skyTime) ?? fileClockMs
+      : fileClockMs;
     const dateMs = recordedClockMs != null
       ? wallClockToUtcMs(recordedClockMs, context.longitudeDeg)
       : Date.now();
@@ -3001,15 +3041,49 @@ export default function RawReplayScene({
       context.latitudeDeg,
       context.longitudeDeg,
       recordedClockMs,
+      weatherState,
     );
     if (!sky) return;
-    applySkyLighting(sky, scene);
+    applySkyLighting(sky, scene, weatherState);
     setSkyState({
       ...sky,
       approximateLocation: context.approximateLocation,
       approximateTime: context.approximateTime,
     });
-  }, [playhead, sceneReady, survey, applySkyLighting]);
+  }, [
+    playhead,
+    sceneReady,
+    survey,
+    applySkyLighting,
+    styleSettings.skyTimeMode,
+    styleSettings.skyTime,
+    weatherState,
+  ]);
+
+  // Historical weather for the recorded hour and place. Open-Meteo's ERA5
+  // archive supplies cloud cover, visibility and precipitation; failures leave
+  // the sky on its clear-sky fallback instead of blocking the replay.
+  useEffect(() => {
+    if (!sceneReady || !survey) return;
+    const skyContext = resolveSkyContext(survey);
+    const forcedClockMs = styleSettings.skyTimeMode === 'fixed'
+      ? fixedSkyClockMs(skyContext.fieldClockMs, styleSettings.skyTime) ?? undefined
+      : undefined;
+    const context = resolveHistoricalWeatherContext(survey, forcedClockMs);
+    const controller = new AbortController();
+    let cancelled = false;
+    setWeatherState(null);
+    setWeatherStatus('loading');
+    fetchHistoricalWeather(context, controller.signal).then(weather => {
+      if (cancelled) return;
+      setWeatherState(weather);
+      setWeatherStatus(weather ? 'ready' : 'unavailable');
+    });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [survey, sceneReady, styleSettings.skyTimeMode, styleSettings.skyTime]);
 
   // ── 3. Asynchronous 3D Background Map & TIN Texture Draping ─────────────────
   useEffect(() => {
@@ -3542,6 +3616,16 @@ export default function RawReplayScene({
           </div>
           <div className="mt-0.5 text-[8px] text-slate-500">
             {skyState.visiblePlanets.length > 0 ? skyState.visiblePlanets.join(' · ') : 'No planets above the horizon'}
+          </div>
+          <div
+            className="mt-0.5 max-w-[260px] truncate text-[8px] text-slate-500"
+            title={weatherState?.sourceLabel ?? 'Open-Meteo ERA5 historical reanalysis'}
+          >
+            {weatherStatus === 'loading'
+              ? 'Historical weather: loading…'
+              : weatherState
+                ? `${weatherState.conditionLabel}${weatherState.temperatureC != null ? ` · ${Math.round(weatherState.temperatureC)}°C` : ''} · ${Math.round(weatherState.windSpeedKph)} km/h · Open-Meteo`
+                : 'Historical weather unavailable · clear-sky fallback'}
           </div>
         </div>
       )}

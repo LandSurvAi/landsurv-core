@@ -103,6 +103,38 @@ export const approximateTimezoneOffsetHours = (longitudeDeg: number): number =>
 export const wallClockToUtcMs = (wallClockMs: number, longitudeDeg: number): number =>
   wallClockMs - approximateTimezoneOffsetHours(longitudeDeg) * 3600000;
 
+/**
+ * Force a local HH:MM clock onto the recorded field date so the sky can be
+ * previewed at another time of day. Without a recorded date, today's date is
+ * used. Invalid clocks return undefined and leave the file time untouched.
+ */
+export const fixedSkyClockMs = (
+  recordedClockMs: number | undefined,
+  clock: string,
+  nowMs = Date.now(),
+): number | undefined => {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(clock.trim());
+  if (!match) return undefined;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours > 23 || minutes > 59) {
+    return undefined;
+  }
+  if (recordedClockMs != null && Number.isFinite(recordedClockMs)) {
+    const recorded = new Date(recordedClockMs);
+    return Date.UTC(
+      recorded.getUTCFullYear(),
+      recorded.getUTCMonth(),
+      recorded.getUTCDate(),
+      hours,
+      minutes,
+      0,
+    );
+  }
+  const today = new Date(nowMs);
+  return Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes, 0);
+};
+
 /** Ecliptic longitude/latitude to equatorial right ascension/declination. */
 export const eclipticToEquatorial = (
   lonDeg: number,

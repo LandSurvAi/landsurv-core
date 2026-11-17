@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { getDeviceFingerprint } from '../services/deviceFingerprint.ts';
 
 /**
  * SignatureForm — reusable name/email/agree/signature capture widget.
@@ -27,6 +28,8 @@ export interface SignatureRecord {
   userAgent: string;
   advancedAiSafetyAcknowledged: boolean;
   newsletterOptIn: boolean;
+  /** Device fingerprint captured with the signature and sent to the visitor log. */
+  fingerprintId?: string;
 }
 
 export function hasSignedLegalAgreement(): boolean {
@@ -128,9 +131,22 @@ export const SignatureForm: React.FC<SignatureFormProps> = ({ onSigned, onBack, 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const canSubmit = name.trim().length >= 2 && emailValid && hasDrawn;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit || !canvasRef.current) return;
+
+    // The signature and the visitor log both use the same device fingerprint so
+    // one visitor is not counted twice across entry paths.
+    let fingerprintId: string | undefined;
+    let fingerprintSignals: unknown;
+    try {
+      const fingerprint = await getDeviceFingerprint();
+      fingerprintId = fingerprint.id;
+      fingerprintSignals = fingerprint.signals;
+    } catch {
+      /* signature still proceeds; the server records a fallback visitor id */
+    }
+
     const record: SignatureRecord = {
       name: name.trim(),
       email: email.trim().toLowerCase(),
@@ -140,6 +156,7 @@ export const SignatureForm: React.FC<SignatureFormProps> = ({ onSigned, onBack, 
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
       advancedAiSafetyAcknowledged: true,
       newsletterOptIn: true,
+      fingerprintId,
     };
     try {
       localStorage.setItem(LEGAL_AGREEMENT_STORAGE_KEY, JSON.stringify(record));
@@ -161,6 +178,9 @@ export const SignatureForm: React.FC<SignatureFormProps> = ({ onSigned, onBack, 
           agreementVersion: record.version,
           userAgent: record.userAgent,
           newsletterOptIn: record.newsletterOptIn,
+          fingerprintId,
+          fingerprintSignals,
+          surface: 'legal-signature',
         }),
       }).catch(() => {});
     } catch { /* no-op */ }

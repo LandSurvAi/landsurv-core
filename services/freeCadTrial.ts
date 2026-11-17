@@ -1,4 +1,4 @@
-import { getDeviceFingerprint } from './deviceFingerprint.ts';
+import { getDeviceFingerprint, type FingerprintSignals } from './deviceFingerprint.ts';
 import { FREE_CAD_DEED_LIMIT, FREE_CAD_PROMPT_LIMIT } from './freeCadPolicy.ts';
 import { TRIAL_TERMS_VERSION } from '../data/trialTermsContent.ts';
 
@@ -40,6 +40,8 @@ export interface TrialAcceptanceRecord {
   fingerprintId: string;
   userAgent: string;
   surface: 'welcome-free-cad';
+  /** Raw device signals so the visitor record carries the full fingerprint. */
+  fingerprintSignals?: FingerprintSignals;
 }
 
 export interface ConsumeTrialPromptResult {
@@ -282,6 +284,8 @@ export async function acceptTrialTerms(record: TrialAcceptanceRecord): Promise<v
     termsVersion: record.termsVersion,
     acceptedAt: record.acceptedAt,
     userAgent: record.userAgent,
+    surface: record.surface,
+    fingerprintSignals: record.fingerprintSignals,
   });
   const local = getLocalSnapshot(record.fingerprintId);
   const limit = clampLimit(response.data?.limit ?? local.limit);

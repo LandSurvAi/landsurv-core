@@ -813,6 +813,37 @@ export default function RawReplayToolPanel({ controller, onRawFileChange, onClos
                     </label>
 
                     <label className="flex items-center justify-between text-slate-400">
+                      <span>Sky Time</span>
+                      <select
+                        value={styleSettings.skyTimeMode}
+                        onChange={e => updateStyleSettings({ skyTimeMode: e.target.value as 'recorded' | 'fixed' })}
+                        className="rounded border border-white/10 bg-[#070c12] px-2 py-1 text-[10px] text-slate-200 outline-none"
+                      >
+                        <option value="recorded">Recorded file time</option>
+                        <option value="fixed">Force time of day</option>
+                      </select>
+                    </label>
+
+                    {styleSettings.skyTimeMode === 'fixed' && (
+                      <label className="flex items-center justify-between text-slate-400">
+                        <span>Sky Clock</span>
+                        <input
+                          type="time"
+                          value={styleSettings.skyTime}
+                          onChange={e => updateStyleSettings({ skyTime: e.target.value })}
+                          className="rounded border border-white/10 bg-[#070c12] px-2 py-1 text-[10px] text-cyan-200 outline-none"
+                          aria-label="Raw Replay forced sky time"
+                        />
+                      </label>
+                    )}
+
+                    {styleSettings.skyTimeMode === 'fixed' && (
+                      <p className="text-[8px] leading-4 text-slate-500">
+                        Keeps the file date; the sun, stars, sky gradient and scene lighting follow this local time.
+                      </p>
+                    )}
+
+                    <label className="flex items-center justify-between text-slate-400">
                       <span>Vertical Exaggeration</span>
                       <select
                         value={verticalExaggeration}
