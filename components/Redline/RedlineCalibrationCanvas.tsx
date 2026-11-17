@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { SessionFile } from '../../types';
+import { ensurePdfWorkerConfigured } from '../../utils/pdfWorker.ts';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  'https://esm.sh/pdfjs-dist@5.4.394/build/pdf.worker.mjs';
+ensurePdfWorkerConfigured(pdfjsLib);
 
 export interface CalibrationPick {
   /** Top-left page space, in PDF points. */

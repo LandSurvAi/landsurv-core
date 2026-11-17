@@ -1,6 +1,9 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
+import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
+
+ensurePdfWorkerConfigured(pdfjsLib);
 import { type SessionFile, type PdfHighlight, useHighlights } from '../types.ts';
 import { PlusIcon, MinusIcon, ChevronLeftIcon, ChevronRightIcon, ListBulletIcon, XMarkIcon, FullscreenIcon, ExitFullscreenIcon, RotateCcwIcon, RotateCwIcon } from './icons.tsx';
 import { useDocumentScrollLock } from '../hooks/useDocumentScrollLock.ts';

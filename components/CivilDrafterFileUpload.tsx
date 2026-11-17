@@ -17,8 +17,9 @@ import {
 import * as pdfjsLib from 'pdfjs-dist';
 import { useAppState, useErrorReporter } from '../contexts/AppStateContext';
 import { useGlobalSettings } from '../utils/globalSettings.ts';
+import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@5.4.394/build/pdf.worker.mjs`;
+ensurePdfWorkerConfigured(pdfjsLib);
 
 interface CivilDrafterFileUploadProps {
   onFileUploaded: (content: string, fileName: string) => void;

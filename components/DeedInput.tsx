@@ -9,8 +9,9 @@ import { exampleDeedContent } from '../assets/example.deed';
 import { SessionFile } from '../types';
 import * as pdfjsLib from 'pdfjs-dist';
 import { useAppState } from '../contexts/AppStateContext.tsx';
+import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@5.4.394/build/pdf.worker.mjs`;
+ensurePdfWorkerConfigured(pdfjsLib);
 
 interface DeedInputProps {
   onDeedSubmitted: (file: SessionFile) => void;

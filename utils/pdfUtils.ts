@@ -3,9 +3,9 @@ import Tesseract from 'tesseract.js';
 import type { PageViewport } from 'pdfjs-dist';
 import type { RenderParameters } from 'pdfjs-dist/types/src/display/api.js';
 import { getOcrLanguages } from './ocrLanguages.ts';
+import { ensurePdfWorkerConfigured } from './pdfWorker.ts';
 
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@5.4.394/build/pdf.worker.mjs`;
+ensurePdfWorkerConfigured(pdfjsLib);
 
 export interface OcrProgress {
   status: 'initializing' | 'extracting_text' | 'ocr_progress' | 'done';
@@ -94,6 +94,60 @@ export const extractPdfStructuralInfo = async (
   return { layerNames: Array.from(new Set(layerNames)), dashPatterns: Array.from(dashPatterns) };
 };
 
+const OCR_WORKER_READY_TIMEOUT_MS = 20_000;
+
+/**
+ * Tesseract downloads language traineddata before it accepts work and has no
+ * timeout of its own. Without a bound, a slow or unavailable language pack
+ * (e.g. Arabic on a Gulf document) leaves the upload spinner waiting forever.
+ * Try the requested languages, then fall back to English.
+ */
+const createOcrWorker = async (
+  languages: string,
+  onProgress: ProgressCallback,
+  currentPage: () => number,
+  totalPages: number,
+): Promise<Awaited<ReturnType<typeof Tesseract.createWorker>>> => {
+  const primary = languages.trim() || 'eng';
+  const candidates = primary === 'eng' ? ['eng'] : [primary, 'eng'];
+  let lastError: unknown = null;
+
+  for (const candidate of candidates) {
+    const pending = Tesseract.createWorker(candidate, 1, {
+      logger: m => {
+        if (m.status === 'recognizing text' && m.progress !== undefined) {
+          onProgress({
+            status: 'ocr_progress',
+            page: currentPage(),
+            totalPages,
+            progress: m.progress,
+          });
+        }
+      },
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        pending,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`OCR language data (${candidate}) did not load within ${OCR_WORKER_READY_TIMEOUT_MS / 1000}s.`));
+          }, OCR_WORKER_READY_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      lastError = err;
+      // A worker that finishes loading after the timeout must not leak.
+      void pending.then(worker => worker.terminate().catch(() => {})).catch(() => {});
+      console.warn(`[pdfUtils] OCR language "${candidate}" unavailable; trying the next option.`, err);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('The OCR engine could not start.');
+};
+
 const performOcrOnPdfPages = async (
   pdf: pdfjsLib.PDFDocumentProxy,
   onProgress: ProgressCallback,
@@ -106,18 +160,12 @@ const performOcrOnPdfPages = async (
   const pagesToProcess = pageNumbers || Array.from({ length: pdf.numPages }, (_, i) => i + 1);
   let currentPageForLogger = 0;
   
-  const worker = await Tesseract.createWorker(languages, 1, {
-    logger: m => {
-        if (m.status === 'recognizing text' && m.progress !== undefined) {
-            onProgress({
-                status: 'ocr_progress',
-                page: currentPageForLogger,
-                totalPages: pagesToProcess.length,
-                progress: m.progress,
-            });
-        }
-    },
-  });
+  const worker = await createOcrWorker(
+    languages,
+    onProgress,
+    () => currentPageForLogger,
+    pagesToProcess.length,
+  );
 
   for (const i of pagesToProcess) {
     currentPageForLogger = i;
@@ -330,18 +378,7 @@ export const processRasterImageForMultimodal = async (
     // Perform OCR on the image
     onProgress({ status: 'ocr_progress', page: 1, totalPages: 1, progress: 0 });
     
-    const worker = await Tesseract.createWorker(getOcrLanguages(), 1, {
-      logger: m => {
-        if (m.status === 'recognizing text' && m.progress !== undefined) {
-          onProgress({
-            status: 'ocr_progress',
-            page: 1,
-            totalPages: 1,
-            progress: m.progress,
-          });
-        }
-      },
-    });
+    const worker = await createOcrWorker(getOcrLanguages(), onProgress, () => 1, 1);
     
     const { data: { text, confidence } } = await worker.recognize(canvas);
     await worker.terminate();

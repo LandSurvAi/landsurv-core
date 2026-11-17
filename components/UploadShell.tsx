@@ -290,7 +290,19 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({
         style={{ background: 'radial-gradient(ellipse at 50% 0%, var(--up-accent-soft), transparent 70%)' }}
       />
       {id && (
-        <input ref={inputRef} id={id} type="file" className="hidden" accept={accept} multiple={multiple} onClick={(e) => e.stopPropagation()} onChange={(e) => onFiles(e.target.files)} />
+        <input
+          ref={inputRef}
+          id={id}
+          type="file"
+          className="hidden"
+          accept={accept}
+          multiple={multiple}
+          onClick={(e) => {
+            e.stopPropagation();
+            (e.currentTarget as HTMLInputElement).value = '';
+          }}
+          onChange={(e) => onFiles(e.target.files)}
+        />
       )}
       <span
         className={`relative ${isEmbedded ? 'mb-2 h-8 w-8' : 'mb-3 h-11 w-11'} flex items-center justify-center rounded-lg border transition-colors group-hover:border-[color:var(--up-accent)]`}

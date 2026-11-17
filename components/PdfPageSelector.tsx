@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { useAppState } from '../contexts/AppStateContext.tsx';
+import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@5.4.394/build/pdf.worker.mjs`;
+ensurePdfWorkerConfigured(pdfjsLib);
 
 interface PdfPageSelectorProps {
   file: File;
@@ -132,13 +133,14 @@ const PdfPageSelector: React.FC<PdfPageSelectorProps> = ({ file, onSelect, onCan
     onSelect(sortedPages);
   };
 
+  useEffect(() => {
+    if (numPages === 1 && !expandedPreview) {
+      onSelect([1]);
+    }
+  }, [numPages, expandedPreview, onSelect]);
+
   if (numPages === 1) {
     // Auto-select single page without showing modal
-    if (!expandedPreview) {
-      useEffect(() => {
-        onSelect([1]);
-      }, [onSelect]);
-    }
     return null;
   }
 

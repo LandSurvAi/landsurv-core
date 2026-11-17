@@ -11,8 +11,9 @@ import {
   type StandardsComplianceCheckSelection,
 } from '../types';
 import { processPdfForMultimodal } from '../utils/pdfUtils';
+import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@5.4.394/build/pdf.worker.mjs';
+ensurePdfWorkerConfigured(pdfjsLib);
 
 interface StandardsComplianceInputProps {
   onSessionStart: (payload: {

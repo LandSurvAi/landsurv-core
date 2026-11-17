@@ -1,8 +1,5 @@
 import type { RasterAsset, RasterUnderlay, RasterUnderlayAnchor, RasterUnderlayTransform } from '../types.ts';
-
-// Same worker CDN used by utils/pdfUtils.ts. Kept local so underlay import
-// does not pull in the OCR pipeline.
-const PDFJS_WORKER_SRC = `https://esm.sh/pdfjs-dist@5.4.394/build/pdf.worker.mjs`;
+import { PDFJS_WORKER_SRC } from './pdfWorker.ts';
 
 /** Longest raster edge produced when a PDF page is imported as an underlay. */
 const MAX_PDF_RASTER_EDGE = 2600;

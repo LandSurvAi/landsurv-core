@@ -138,13 +138,21 @@ async function processImageWithTesseract(imageBase64: string): Promise<OCRProces
 
     console.log('[OCRClient] Starting Tesseract recognition...');
 
-    const result = await Tesseract.recognize(imageUrl, getOcrLanguages(), {
-      logger: (m: any) => {
-        if (m.status === 'recognizing') {
-          console.log(`[OCRClient] Tesseract progress: ${Math.round(m.progress * 100)}%`);
-        }
-      },
-    });
+    const logProgress = (m: any) => {
+      if (m.status === 'recognizing') {
+        console.log(`[OCRClient] Tesseract progress: ${Math.round(m.progress * 100)}%`);
+      }
+    };
+    const preferredLanguage = getOcrLanguages();
+    let result;
+    try {
+      result = await Tesseract.recognize(imageUrl, preferredLanguage, { logger: logProgress });
+    } catch (err) {
+      // A missing/slow language pack must not fail document OCR outright.
+      if (preferredLanguage === 'eng') throw err;
+      console.warn(`[OCRClient] Language pack "${preferredLanguage}" failed; retrying with English.`, err);
+      result = await Tesseract.recognize(imageUrl, 'eng', { logger: logProgress });
+    }
 
     const tableText = result.data.text || '';
     const tables = planTableParser.parseTableStructureFromText(tableText);

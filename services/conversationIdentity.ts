@@ -105,7 +105,21 @@ export function resolveConversationIdentity(
 }
 
 /** Domain actions that a called-in specialist should get first refusal on. */
-const ACTION_VERB_RE = /\b(draw|draft|design|create|add|make|build|generate|compute|calculate|label|annotate|apply|update|change|move|copy|delete|remove|import|export|connect|fix|adjust|set|place|plot|run|process|extract|synthesize|renumber|rotate|scale|offset|stake|analyze|audit|check)\b/i;
+const ACTION_VERB_RE = /\b(draw|draft|design|create|add|make|build|generate|compute|calculate|label|annotate|apply|update|change|move|copy|delete|remove|import|export|connect|fix|adjust|set|place|plot|run|process|extract|synthesize|renumber|rotate|scale|offset|stake|analyze|audit|check|read|summarize|parse|interpret|review|inspect|describe|explain|list|find|locate|identify)\b/i;
+
+/** Workspace-level meta questions that belong to the LSAI orchestrator even when a specialist is called in. */
+const WORKSPACE_META_QUESTION_RE = /\b(what\s+files?\s+(?:are|is)\s+loaded|which\s+files?\s+(?:are|is)\s+loaded|what\s+agents?\b|which\s+agent\b|who\s+are\s+you\b|what\s+can\s+you\s+do\b)\b/i;
+
+/** Document-centric specialists whose uploaded sheets/deeds/drawings only exist in their own context. */
+const DOCUMENT_SPECIALIST_AGENTS = new Set<AgentType>([
+  AgentType.DEED_READER,
+  AgentType.CIVIL_PLAN_EXPERT,
+  AgentType.DXF_ANALYZER,
+  AgentType.TITLE_SEARCH,
+  AgentType.STANDARDS_COMPLIANCE,
+  AgentType.REDLINE_AGENT,
+  AgentType.IMAGE_ANALYZER,
+]);
 
 /** Elliptical follow-ups that should stay with the last specialist used. */
 const FOLLOW_UP_RE = /\b(it|that|this|those|these|them|same|again|also|instead|now)\b/i;
@@ -129,11 +143,19 @@ export function shouldRelayToCalledIn(
 ): boolean {
   if (!calledInAgent || calledInAgent === AgentType.LSVZ_AGENT) return false;
   if (!isChatCapableAgent(calledInAgent)) return false;
+  if (WORKSPACE_META_QUESTION_RE.test(query)) return false;
 
   if (lastRelayAgent === calledInAgent && isFollowUpQuery(query)) return true;
 
   const route = routeIntent(query, calledInAgent);
   if (route.primary?.agent === calledInAgent) return true;
+
+  // Document-centric specialists hold the uploaded PDF/deed/DXF/images in their
+  // own multimodal context; LSAI only sees a lightweight manifest. Keep
+  // document questions and extraction requests with the called-in specialist.
+  if (DOCUMENT_SPECIALIST_AGENTS.has(calledInAgent)) {
+    return true;
+  }
 
   // No specialist owns the request, but it is clearly a domain action rather
   // than a project question: give the called-in agent the first attempt.

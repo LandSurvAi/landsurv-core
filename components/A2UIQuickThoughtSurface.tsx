@@ -27,6 +27,9 @@ import { BoundaryDeedIntake } from './BoundaryDeedIntake.tsx';
 import { A2UIBoundarySummary } from './A2UIBoundarySummary.tsx';
 import { DockModeControl } from './DockModeControl.tsx';
 import { LegendQuickActions } from './LegendQuickActions.tsx';
+import type { OcrProgress } from '../utils/pdfUtils.ts';
+
+const A2UIPdfPagePicker = React.lazy(() => import('./A2UIPdfPagePicker.tsx'));
 import type { A2UIQuickThoughtBreakdown } from '../services/a2uiQuickThought.ts';
 import { closeCanvasFlashInput, flashCanvasMessage, openCanvasFlashForInputForm } from '../services/canvasFlashes.ts';
 import { isSurfaceNameField, projectInputChoices } from '../services/projectInputChoices.ts';
@@ -484,6 +487,7 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
   const pointFolderInputRef = useRef<HTMLInputElement | null>(null);
   const rawFileInputRef = useRef<HTMLInputElement>(null);
   const civilFileInputRef = useRef<HTMLInputElement>(null);
+  const civilPdfInputRef = useRef<HTMLInputElement>(null);
   const dxfFileInputRef = useRef<HTMLInputElement>(null);
   const clFileInputRef = useRef<HTMLInputElement>(null);
   const gisFileInputRef = useRef<HTMLInputElement>(null);
@@ -506,6 +510,15 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
 
   // Deed / Title Search paste state
   const [pastedDeedText, setPastedDeedText] = useState('');
+
+  // Quick Thought PDF / raster-image intake state for Civil Drafter & Civil Plan Expert
+  const [quickPdfMode, setQuickPdfMode] = useState<'civil-drafter' | 'plan-expert' | null>(null);
+  const [quickPdfFiles, setQuickPdfFiles] = useState<File[]>([]);
+  const [quickPdfSelections, setQuickPdfSelections] = useState<Record<number, number[]>>({});
+  const [quickPdfPageIdx, setQuickPdfPageIdx] = useState<number | null>(null);
+  const [quickPdfBusy, setQuickPdfBusy] = useState(false);
+  const [quickPdfProgress, setQuickPdfProgress] = useState<string | null>(null);
+  const [quickPdfError, setQuickPdfError] = useState<string | null>(null);
 
   // GIS URL state
   const [gisLayerUrl, setGisLayerUrl] = useState('');
@@ -695,6 +708,148 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
     }
   }, [handlePointFilesSelected]);
 
+  const isPdfUploadFile = (file: File) =>
+    file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+
+  const isRasterUploadFile = (file: File) =>
+    /^image\/(?:png|jpeg|gif|bmp|webp|tiff)$/i.test(file.type) ||
+    /\.(?:png|jpe?g|gif|bmp|webp|tiff?)$/i.test(file.name);
+
+  const formatQuickOcrProgress = (p: OcrProgress): string => {
+    if (p.status === 'extracting_text') return 'extracting text';
+    if (p.status === 'ocr_progress') {
+      const pct = typeof p.progress === 'number' ? ` (${Math.round(p.progress * 100)}%)` : '';
+      return `OCR page ${p.page ?? 1}/${p.totalPages ?? 1}${pct}`;
+    }
+    if (p.status === 'done') return 'finishing';
+    return 'reading PDF';
+  };
+
+  const finalizeQuickPlanFiles = useCallback(
+    async (
+      mode: 'civil-drafter' | 'plan-expert',
+      filesToProcess: File[],
+      selections: Record<number, number[]>,
+    ) => {
+      if (filesToProcess.length === 0) return;
+      setQuickPdfBusy(true);
+      setQuickPdfError(null);
+      try {
+        const { processPdfForMultimodal, processRasterImageForMultimodal } = await import('../utils/pdfUtils.ts');
+        const processed: SessionFile[] = [];
+        for (let i = 0; i < filesToProcess.length; i++) {
+          const file = filesToProcess[i];
+          setQuickPdfProgress(`Reading ${i + 1}/${filesToProcess.length}: ${file.name}`);
+          const fileData = await readFileAsDataUrl(file);
+          if (isPdfUploadFile(file)) {
+            const pages = selections[i];
+            const result = await processPdfForMultimodal(
+              file,
+              update => setQuickPdfProgress(`${file.name} · ${formatQuickOcrProgress(update)}`),
+              pages,
+            );
+            processed.push({
+              name: file.name,
+              content: result.text.trim() || `PDF Plan: ${file.name}`,
+              fileData,
+              rasterImageData: result.rasterImageData,
+              pdfLayerNames: result.layerNames,
+              pdfDashPatterns: result.dashPatterns,
+              selectedPages: pages ?? Array.from({ length: Math.max(1, result.rasterImageData.length) }, (_, idx) => idx + 1),
+            });
+          } else if (isRasterUploadFile(file)) {
+            const result = await processRasterImageForMultimodal(
+              file,
+              update => setQuickPdfProgress(`${file.name} · ${formatQuickOcrProgress(update)}`),
+            );
+            processed.push({
+              name: file.name,
+              content: result.text.trim() || `Plan Image: ${file.name}`,
+              fileData,
+              rasterImageData: result.rasterImageData,
+              selectedPages: [1],
+            });
+          }
+        }
+        if (processed.length === 0) {
+          setQuickPdfError('No readable PDF or image plan files were found.');
+          return;
+        }
+        setQuickPdfFiles([]);
+        setQuickPdfSelections({});
+        setQuickPdfPageIdx(null);
+        setQuickPdfMode(null);
+        if (mode === 'civil-drafter') {
+          host.onCivilDrafterPdfUploaded?.(processed);
+        } else {
+          host.onPlansSubmitted?.(processed);
+        }
+      } catch (err) {
+        setQuickPdfError(err instanceof Error ? err.message : 'Could not process PDF file.');
+      } finally {
+        setQuickPdfBusy(false);
+        setQuickPdfProgress(null);
+      }
+    },
+    [host],
+  );
+
+  const beginQuickPlanUpload = useCallback(
+    (files: File[], mode: 'civil-drafter' | 'plan-expert') => {
+      if (quickPdfBusy || files.length === 0) return;
+      const supported = files.filter(f =>
+        mode === 'civil-drafter' ? isPdfUploadFile(f) || isRasterUploadFile(f) : isPdfUploadFile(f),
+      );
+      if (supported.length === 0) {
+        setQuickPdfMode(mode);
+        setQuickPdfError(
+          mode === 'civil-drafter'
+            ? 'Please choose a PDF plan or PNG/JPG/TIFF scan.'
+            : 'Please choose one or more PDF plan sheets.',
+        );
+        return;
+      }
+      setQuickPdfMode(mode);
+      setQuickPdfError(null);
+      const firstPdf = supported.findIndex(isPdfUploadFile);
+      if (firstPdf >= 0) {
+        setQuickPdfFiles(supported);
+        setQuickPdfSelections({});
+        setQuickPdfPageIdx(firstPdf);
+        return;
+      }
+      void finalizeQuickPlanFiles(mode, supported, {});
+    },
+    [finalizeQuickPlanFiles, quickPdfBusy],
+  );
+
+  const handleQuickPdfPagesConfirmed = useCallback(
+    (pages: number[]) => {
+      if (quickPdfPageIdx === null || !quickPdfMode) return;
+      const nextSelections = { ...quickPdfSelections, [quickPdfPageIdx]: pages };
+      setQuickPdfSelections(nextSelections);
+      const nextIdx = quickPdfFiles.findIndex(
+        (file, idx) => idx > quickPdfPageIdx && isPdfUploadFile(file) && !nextSelections[idx],
+      );
+      if (nextIdx >= 0) {
+        setQuickPdfPageIdx(nextIdx);
+        return;
+      }
+      setQuickPdfPageIdx(null);
+      void finalizeQuickPlanFiles(quickPdfMode, quickPdfFiles, nextSelections);
+    },
+    [finalizeQuickPlanFiles, quickPdfFiles, quickPdfMode, quickPdfPageIdx, quickPdfSelections],
+  );
+
+  const cancelQuickPdfPicker = useCallback(() => {
+    if (quickPdfBusy) return;
+    setQuickPdfFiles([]);
+    setQuickPdfSelections({});
+    setQuickPdfPageIdx(null);
+    setQuickPdfMode(null);
+    setQuickPdfError(null);
+  }, [quickPdfBusy]);
+
   const handleComplianceFile = useCallback(
     async (file: File) => {
       if (!host.onStandardsComplianceSessionStart) {
@@ -703,11 +858,19 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
       }
       if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) return;
       const fileData = await readFileAsDataUrl(file);
+      const { processPdfForMultimodal } = await import('../utils/pdfUtils.ts');
+      const result = await processPdfForMultimodal(file, () => {});
       setComplianceDroppedSubject({
         name: file.name,
-        content: `Subject PDF: ${file.name}`,
+        content: result.text.trim() || `Subject PDF: ${file.name}`,
         fileData,
-        selectedPages: [1],
+        rasterImageData: result.rasterImageData,
+        pdfLayerNames: result.layerNames,
+        pdfDashPatterns: result.dashPatterns,
+        selectedPages: Array.from(
+          { length: Math.max(1, result.rasterImageData.length) },
+          (_, i) => i + 1,
+        ),
       });
     },
     [host.onStandardsComplianceSessionStart, onOpenConversation],
@@ -1067,43 +1230,113 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
               data-testid="quick-thought-civil-file-input"
               type="file"
               className="hidden"
-              accept=".raw,.txt,.csv,.pts,.pnezd,text/plain"
+              accept=".raw,.txt,.csv,.pts,.pnezd,.pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff,text/plain,application/pdf,image/*"
+              onClick={e => {
+                (e.currentTarget as HTMLInputElement).value = '';
+              }}
               onChange={async e => {
                 const file = e.target.files?.[0];
                 e.target.value = '';
                 if (!file) return;
+                if (isPdfUploadFile(file) || isRasterUploadFile(file)) {
+                  if (host.onCivilDrafterPdfUploaded) {
+                    beginQuickPlanUpload([file], 'civil-drafter');
+                  } else {
+                    onOpenConversation();
+                  }
+                  return;
+                }
                 const content = await readFileAsText(file);
                 host.onCivilDrafterFileUploaded?.(content, file.name);
               }}
             />
-            <div className="grid grid-cols-1 gap-1.5">
-              <button
-                type="button"
-                data-no-drag
-                onClick={() => civilFileInputRef.current?.click()}
-                className={primaryBtnClass}
+            <input
+              ref={civilPdfInputRef}
+              data-testid="quick-thought-civil-pdf-input"
+              type="file"
+              className="hidden"
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff,application/pdf,image/*"
+              onClick={e => {
+                (e.currentTarget as HTMLInputElement).value = '';
+              }}
+              onChange={e => {
+                const selected = Array.from(e.target.files ?? []);
+                e.target.value = '';
+                if (selected.length === 0) return;
+                if (host.onCivilDrafterPdfUploaded) {
+                  beginQuickPlanUpload([selected[0]], 'civil-drafter');
+                } else {
+                  onOpenConversation();
+                }
+              }}
+            />
+            {quickPdfMode === 'civil-drafter' && quickPdfPageIdx !== null && quickPdfFiles[quickPdfPageIdx] ? (
+              <React.Suspense
+                fallback={
+                  <div className="rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-[10px] text-white/60">
+                    Reading PDF pages…
+                  </div>
+                }
               >
-                Upload point / .RAW file
-              </button>
-              {(host.existingPointCount ?? 0) > 0 && host.onCivilDrafterUseExistingPoints && (
-                <button
-                  type="button"
-                  data-no-drag
-                  onClick={() => host.onCivilDrafterUseExistingPoints?.()}
-                  className={btnClass}
-                >
-                  Use existing points ({host.existingPointCount})
-                </button>
-              )}
-              <button
-                type="button"
-                data-no-drag
-                onClick={onOpenConversation}
-                className={btnClass}
-              >
-                Upload PDF plan sheet
-              </button>
-            </div>
+                <A2UIPdfPagePicker
+                  file={quickPdfFiles[quickPdfPageIdx]}
+                  onConfirm={handleQuickPdfPagesConfirmed}
+                  onCancel={cancelQuickPdfPicker}
+                  busy={quickPdfBusy}
+                />
+              </React.Suspense>
+            ) : (
+              <>
+                {quickPdfMode === 'civil-drafter' && quickPdfBusy && (
+                  <div className="flex items-center gap-2 rounded border border-fuchsia-400/30 bg-fuchsia-400/10 px-2.5 py-1.5 text-[10px] text-fuchsia-100">
+                    <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-fuchsia-300 border-t-transparent" />
+                    <span className="truncate font-mono">{quickPdfProgress ?? 'Processing PDF…'}</span>
+                  </div>
+                )}
+                {quickPdfMode === 'civil-drafter' && quickPdfError && (
+                  <p className="rounded border border-rose-400/30 bg-rose-500/10 px-2 py-1 text-[10px] text-rose-200">
+                    {quickPdfError}
+                  </p>
+                )}
+                <div className="grid grid-cols-1 gap-1.5">
+                  <button
+                    type="button"
+                    data-no-drag
+                    disabled={quickPdfBusy}
+                    onClick={() => civilFileInputRef.current?.click()}
+                    className={primaryBtnClass}
+                  >
+                    Upload point / .RAW file
+                  </button>
+                  {(host.existingPointCount ?? 0) > 0 && host.onCivilDrafterUseExistingPoints && (
+                    <button
+                      type="button"
+                      data-no-drag
+                      disabled={quickPdfBusy}
+                      onClick={() => host.onCivilDrafterUseExistingPoints?.()}
+                      className={btnClass}
+                    >
+                      Use existing points ({host.existingPointCount})
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    data-no-drag
+                    disabled={quickPdfBusy}
+                    onClick={() => {
+                      if (host.onCivilDrafterPdfUploaded) {
+                        civilPdfInputRef.current?.click();
+                      } else {
+                        onOpenConversation();
+                      }
+                    }}
+                    className={btnClass}
+                  >
+                    Upload PDF plan sheet
+                  </button>
+                </div>
+              </>
+            )}
             <OpenChatFooter onOpenConversation={onOpenConversation} />
           </div>
         );
@@ -1278,36 +1511,65 @@ export const A2UIQuickThoughtSurface: React.FC<A2UIQuickThoughtSurfaceProps> = (
               multiple
               className="hidden"
               accept=".pdf,application/pdf"
-              onChange={async e => {
+              onClick={e => {
+                (e.currentTarget as HTMLInputElement).value = '';
+              }}
+              onChange={e => {
                 const selected = Array.from(e.target.files ?? []);
                 e.target.value = '';
                 if (selected.length === 0) return;
                 if (host.onPlansSubmitted) {
-                  const processed: SessionFile[] = [];
-                  for (const file of selected) {
-                    const fileData = await readFileAsDataUrl(file);
-                    processed.push({ name: file.name, content: `PDF Plan: ${file.name}`, fileData, selectedPages: [1] });
-                  }
-                  host.onPlansSubmitted(processed);
+                  beginQuickPlanUpload(selected, 'plan-expert');
                 } else {
                   onOpenConversation();
                 }
               }}
             />
-            <button
-              type="button"
-              data-no-drag
-              onClick={() => {
-                if (host.onPlansSubmitted) {
-                  planFileInputRef.current?.click();
-                } else {
-                  onOpenConversation();
+            {quickPdfMode === 'plan-expert' && quickPdfPageIdx !== null && quickPdfFiles[quickPdfPageIdx] ? (
+              <React.Suspense
+                fallback={
+                  <div className="rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-[10px] text-white/60">
+                    Reading PDF pages…
+                  </div>
                 }
-              }}
-              className={`${primaryBtnClass} w-full`}
-            >
-              Upload PDF plan sheets
-            </button>
+              >
+                <A2UIPdfPagePicker
+                  file={quickPdfFiles[quickPdfPageIdx]}
+                  onConfirm={handleQuickPdfPagesConfirmed}
+                  onCancel={cancelQuickPdfPicker}
+                  busy={quickPdfBusy}
+                />
+              </React.Suspense>
+            ) : (
+              <>
+                {quickPdfMode === 'plan-expert' && quickPdfBusy && (
+                  <div className="flex items-center gap-2 rounded border border-cyan-400/30 bg-cyan-400/10 px-2.5 py-1.5 text-[10px] text-cyan-100">
+                    <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-cyan-300 border-t-transparent" />
+                    <span className="truncate font-mono">{quickPdfProgress ?? 'Processing PDF plan…'}</span>
+                  </div>
+                )}
+                {quickPdfMode === 'plan-expert' && quickPdfError && (
+                  <p className="rounded border border-rose-400/30 bg-rose-500/10 px-2 py-1 text-[10px] text-rose-200">
+                    {quickPdfError}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  data-no-drag
+                  disabled={quickPdfBusy}
+                  onClick={() => {
+                    if (host.onPlansSubmitted) {
+                      planFileInputRef.current?.click();
+                    } else {
+                      onOpenConversation();
+                    }
+                  }}
+                  className={`${primaryBtnClass} w-full`}
+                >
+                  Upload PDF plan sheets
+                </button>
+              </>
+            )}
             <OpenChatFooter onOpenConversation={onOpenConversation} />
           </div>
         );

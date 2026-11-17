@@ -124,8 +124,11 @@ const AGENT_CAPABILITY_PHRASES: Partial<Record<AgentType, string[]>> = {
     'disturbance', 'slope area',
   ],
   [AgentType.CIVIL_PLAN_EXPERT]: [
-    'plan review', 'read the plan', 'what does the plan say', 'plan sheet', 'detail sheet',
-    'typical section', 'notes on the plan',
+    'plan review', 'read the plan', 'what does the plan say', 'plan sheet', 'plan sheets',
+    'detail sheet', 'typical section', 'notes on the plan', 'general notes', 'sheet notes',
+    'coordinate table', 'work point', 'work points', 'point schedule', 'curve table', 'line table',
+    'sanitary manhole', 'storm drain network', 'invert elevation', 'rim elevation',
+    'from the plan', 'on the plan', 'on the sheet', 'from the sheet',
   ],
   [AgentType.STANDARDS_COMPLIANCE]: [
     'compliance', 'standards check', 'drafting standard', 'layer standard', 'linetype standard',

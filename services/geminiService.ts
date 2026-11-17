@@ -1064,8 +1064,8 @@ When you generate linework, your JSON MUST include BOTH a \`points\` array AND a
 \`\`\`
 
 **CRITICAL: You MUST output the points array containing the coordinates for every point referenced in the lines array.** The raw file you're given contains the point data - extract the northing, easting, elevation, and description for each point that appears in your lines, and include them in the points array. Without this, the lines cannot be drawn on the canvas.
-- ONLY include points in the \`points\` array when referencing existing survey points from the uploaded file or point database, OR when calculating genuine mathematical offsets.
-- NEVER invent fictitious survey points across lawns, open ground, or between boundary markers where no field shots were taken!
+- When working from field survey points (.raw / point database), ONLY include points in the \`points\` array when referencing existing survey points from the uploaded file or point database, OR when calculating genuine mathematical offsets — NEVER invent fictitious survey points across lawns, open ground, or between boundary markers where no field shots were taken!
+- **PDF PLAN / COORDINATE TABLE MODE:** When PDF plan sheet(s) or coordinate-table scans are provided in \`FILES\` context (with attached page images) and field survey shots are absent for the requested feature, extract coordinates, bearings/distances, lot boundaries, centerlines, utilities, or plan geometry directly from the PDF text and plan sheet images, and emit the computed \`points\` and \`lines\` arrays in \`RESULT\` JSON so they draw on the canvas.
 - For aerial imagery tracing, use \`featureTraces\` where the host automatically projects visual coordinates onto the project plane without you having to fabricate point coordinates.
 
 **REQUIRED LINE PROPERTIES:**
@@ -2584,14 +2584,25 @@ ${bearingDistancePreferenceInstruction()}`;
         // HIGH default because it is the standard reasoning model.
         const argonThinkingLevel = settings.argonReasoning === 'high' ? 'HIGH' : 'LOW';
         const isHydrogenModel = modelForAgent === DEFAULT_GEMINI_MODEL;
+        // Deed and plan extraction are bounded transcription tasks: read the
+        // document, return JSON. HIGH thinking on those turns only adds
+        // minutes of latency and can spend the output budget before the JSON
+        // is emitted, so document agents stay on MEDIUM.
+        const isDocumentExtractionAgent = agentType === AgentType.DEED_READER
+          || agentType === AgentType.CIVIL_PLAN_EXPERT;
         const gemini4ThinkingLevel = isArgonModel
           ? argonThinkingLevel
-          : isHydrogenModel ? 'HIGH' : 'MEDIUM';
+          : isHydrogenModel
+            ? (isDocumentExtractionAgent ? 'MEDIUM' : 'HIGH')
+            : 'MEDIUM';
         let vertexGenerationConfig: Record<string, unknown> = isGeminiVertexModel
           ? {
               thinkingConfig: { thinkingLevel: gemini4ThinkingLevel },
               mediaResolution: 'MEDIA_RESOLUTION_MEDIUM',
-              ...(isArgonModel ? { maxOutputTokens: 64000 } : {}),
+              // Thinking tokens count against maxOutputTokens. Give both
+              // reasoning models the full ceiling so a deed parse is never cut
+              // off before its RESULT JSON is produced.
+              ...(isArgonModel || isHydrogenModel ? { maxOutputTokens: 64000 } : {}),
             }
           : {};
 
@@ -2796,12 +2807,23 @@ export const selectContextSources = async (query: string, model: string, userApi
  * Failure modes return a minimal `{ fileName, tracts: [] }` shell so the UI
  * can still render and the user can fall back to the legacy "Compute All".
  */
+/** A deed summary must never hold the deed panel open indefinitely. */
+const DEED_SUMMARY_TIMEOUT_MS = 45_000;
+
 export const summarizeDeed = async (
     file: SessionFile,
     model: string,
     userApiKey?: string,
 ): Promise<DeedSummary> => {
     const ai = getAi(userApiKey);
+
+    // This single-shot call goes straight to the public Generative Language
+    // API (or the demo proxy), which does not serve Vertex-only Gemini 3.x/4.x
+    // models. Route those to the direct fallback instead of letting every deed
+    // submission fail its summary pass.
+    const directModel = isClaudeModel(model) || isVertexOnlyModel(model)
+        ? DIRECT_FALLBACK_MODEL
+        : model;
 
     const promptText = `You are a deed-summarizer. Read the deed text (and pages, if provided) and return ONLY a JSON object describing the document — DO NOT extract any bearings, distances, courses, points, or lines.
 
@@ -2858,11 +2880,20 @@ ${file.content || '(no text — see attached pages)'}`;
     };
 
     try {
-        const response = await ai.models.generateContent({
-            model,
-            contents: [{ role: 'user', parts }],
-            config: { responseMimeType: 'application/json' },
-        });
+        const response = await Promise.race([
+            ai.models.generateContent({
+                model: directModel,
+                contents: [{ role: 'user', parts }],
+                config: { responseMimeType: 'application/json' },
+            }),
+            new Promise<null>((resolve) => {
+                setTimeout(() => resolve(null), DEED_SUMMARY_TIMEOUT_MS);
+            }),
+        ]);
+        if (!response) {
+            console.warn('[summarizeDeed] timed out after %dms — returning fallback summary.', DEED_SUMMARY_TIMEOUT_MS);
+            return fallback;
+        }
         const raw = (response.text || '').trim();
         if (!raw) return fallback;
         // Strip accidental markdown fences if the model misbehaves.

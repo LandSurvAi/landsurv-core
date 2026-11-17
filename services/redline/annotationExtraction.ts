@@ -10,9 +10,9 @@ import * as pdfjsLib from 'pdfjs-dist';
 import type { RedlineMarkup, RedlineMarkupKind, RedlineSheet } from '../../types';
 import { extractRedlineVisualMarkups } from '../geminiService';
 import { buildDeepVisionMarkup, isDeepVisionDuplicate } from './deepVisionMarkup';
+import { ensurePdfWorkerConfigured } from '../../utils/pdfWorker.ts';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  'https://esm.sh/pdfjs-dist@5.4.394/build/pdf.worker.mjs';
+ensurePdfWorkerConfigured(pdfjsLib);
 
 export interface RedlineSourceFile {
   name: string;

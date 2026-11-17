@@ -160,13 +160,21 @@ async function extractUsingTesseract(imageData: Uint8Array | Blob | File): Promi
       imageUrl = URL.createObjectURL(blob);
     }
 
-    const result = await Tesseract.recognize(imageUrl, getOcrLanguages(), {
-      logger: (m) => {
-        if (m.status === 'recognizing') {
-          console.log(`[OCR] Tesseract progress: ${Math.round(m.progress * 100)}%`);
-        }
-      },
-    });
+    const logProgress = (m: { status: string; progress: number }) => {
+      if (m.status === 'recognizing') {
+        console.log(`[OCR] Tesseract progress: ${Math.round(m.progress * 100)}%`);
+      }
+    };
+    const preferredLanguage = getOcrLanguages();
+    let result;
+    try {
+      result = await Tesseract.recognize(imageUrl, preferredLanguage, { logger: logProgress });
+    } catch (err) {
+      // A missing/slow language pack must not fail OCR outright.
+      if (preferredLanguage === 'eng') throw err;
+      console.warn(`[OCR] Language pack "${preferredLanguage}" failed; retrying with English.`, err);
+      result = await Tesseract.recognize(imageUrl, 'eng', { logger: logProgress });
+    }
 
     const text = result.data.text || '';
     const tables = parseTablesFromText(text);

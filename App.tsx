@@ -2185,11 +2185,20 @@ const AppContent = () => {
    *  preview anchors where the user wants (instead of (0,0)). */
   const pendingTractPobRef = useRef<{ easting: number; northing: number } | null>(null);
 
+  const clearPendingDeedComputation = useCallback(() => {
+    setComputingTractIds(new Set());
+    pendingTractIdRef.current = null;
+    pendingTractIdsRef.current = [];
+    pendingTractPobRef.current = null;
+    pendingDeedDrawRef.current = false;
+    pendingDeedDrawIdsRef.current = [];
+  }, []);
+
   /** Publish/refresh the chat-hosted deed summary surface. The message carries
    *  a summary snapshot for session reload; live tract/file status comes from
    *  the A2UI host context so the card stays linked to the traverse pipeline. */
   const publishBoundarySummaryToChat = useCallback((summary: DeedSummary | null) => {
-    setDeedChatHistory(prev => {
+    const upsertSummaryMessage = (prev: import('./types.ts').ChatMessage[]) => {
       const existingIndex = prev.findIndex(msg => msg.a2ui?.kind === 'deed-summary');
       if (!summary) {
         return existingIndex >= 0 ? prev.filter((_, index) => index !== existingIndex) : prev;
@@ -2199,6 +2208,7 @@ const AppContent = () => {
         text: `Deed summary ready — ${summary.tracts.length} description${summary.tracts.length === 1 ? '' : 's'} detected. Choose which ones to process below.`,
         quickThoughtLabel: 'Deed summary',
         quickThoughtText: `${summary.tracts.length} description${summary.tracts.length === 1 ? '' : 's'} detected in ${summary.fileName}. Review and process them when you're ready.`,
+        behaviorAgent: AgentType.DEED_READER,
         a2ui: {
           kind: 'deed-summary',
           agent: AgentType.DEED_READER,
@@ -2213,8 +2223,10 @@ const AppContent = () => {
         return next;
       }
       return [...prev, message];
-    });
-  }, [setDeedChatHistory]);
+    };
+    setDeedChatHistory(upsertSummaryMessage);
+    setLsvzChatHistory(upsertSummaryMessage);
+  }, [setDeedChatHistory, setLsvzChatHistory]);
 
   // Legal Writer panel state � populated when "Write Legal" is pressed on a
   // boundary file; cleared when user navigates away. The panel itself owns
@@ -3488,6 +3500,17 @@ const AppContent = () => {
             message.a2ui.status !== 'dismissed',
           );
           if (alreadyAsking) return prev;
+        }
+        const last = prev.length > 0 ? prev[prev.length - 1] : null;
+        if (
+          !isRawReplay &&
+          last &&
+          (last.behaviorAgent === activeAgent ||
+            last.relay?.agent === activeAgent ||
+            last.a2ui?.agent === activeAgent ||
+            last.callInEvent?.agent === activeAgent)
+        ) {
+          return prev;
         }
         return [
           ...prev,
@@ -5315,6 +5338,36 @@ const AppContent = () => {
   }, [rawIntakeOpen, rawFile, showRawReplay]);
   
   // Civil Drafter file upload handler - similar to RAW Crawler but uses intelligent linework generation
+  const mirrorSpecialistUploadToVisibleChat = useCallback((
+    specialist: AgentType,
+    summaryLabel: string,
+    text: string,
+  ) => {
+    const plainBody = text
+      .replace(/<[^>]+>/g, '')
+      .replace(/^Hello!\s*I['’]m\s+the\s+[^.!]+\s*[.!]\s*/i, '')
+      .trim();
+    setLsvzChatHistory(prev => [
+      ...markPendingA2UICompleted(prev, summaryLabel),
+      {
+        role: MessageRole.MODEL,
+        text,
+        quickThoughtLabel: `${agentConfig[specialist]?.label || specialist} · Loaded`,
+        quickThoughtText: plainBody || `Loaded ${summaryLabel}.`,
+        behaviorAgent: specialist,
+        ...(settings.forceAgent
+          ? {}
+          : {
+              relay: {
+                agent: specialist,
+                status: 'complete' as const,
+                model: resolveModelForAgent(specialist, activeModel),
+              },
+            }),
+      },
+    ]);
+  }, [activeModel, resolveModelForAgent, setLsvzChatHistory, settings.forceAgent]);
+
   const handleCivilDrafterFileUploaded = useCallback((content: string, name: string) => {
     try {
         // Get training DXF if one has been marked for training
@@ -5334,15 +5387,17 @@ const AppContent = () => {
               console.warn('[Civil Drafter] AI chat deferred:', chatErr);
             }
             setRawFile({ name, content });
+            const replaceMsg = trainingDxf 
+                ? `The <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent has loaded <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${name}"</strong>. I'm using <strong>"${trainingDxf.name}"</strong> as my drafting template.`
+                : `The <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent has loaded <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${name}"</strong>.`;
             setCivilDrafterChatHistory(prev => [
                 ...markPendingA2UICompleted(prev, name),
                 { 
                     role: MessageRole.MODEL, 
-                    text: trainingDxf 
-                        ? `The <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent has loaded <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${name}"</strong>. I'm using <strong>"${trainingDxf.name}"</strong> as my drafting template.`
-                        : `The <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">Civil Drafter</strong> agent has loaded <strong style="color: ${agentThemeColors[AgentType.CIVIL_DRAFTER]};">"${name}"</strong>.`
+                    text: replaceMsg,
                 }
             ]);
+            mirrorSpecialistUploadToVisibleChat(AgentType.CIVIL_DRAFTER, name, replaceMsg);
             // Replace working points with parsed points from new file
             if (parsedPoints.length > 0) {
                 setPointLists(prev => {
@@ -5378,15 +5433,17 @@ const AppContent = () => {
           console.warn('[Civil Drafter] AI chat deferred (no API key configured):', chatErr);
         }
         setRawFile({ name, content });
+        const welcomeMsg = trainingDxf
+            ? buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I have loaded <strong>"${name}"</strong> and will draft against <strong>"${trainingDxf.name}"</strong> as the reference for your drafting conventions.`)
+            : buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I have loaded <strong>"${name}"</strong>. Ask me to extract linework, identify road corridors and building footprints, or annotate the drawing.`);
         setCivilDrafterChatHistory(prev => [
             ...markPendingA2UICompleted(prev, name),
             {
                 role: MessageRole.MODEL,
-                text: trainingDxf
-                    ? buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I have loaded <strong>"${name}"</strong> and will draft against <strong>"${trainingDxf.name}"</strong> as the reference for your drafting conventions.`)
-                    : buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I have loaded <strong>"${name}"</strong>. Ask me to extract linework, identify road corridors and building footprints, or annotate the drawing.`),
+                text: welcomeMsg,
             }
         ]);
+        mirrorSpecialistUploadToVisibleChat(AgentType.CIVIL_DRAFTER, name, welcomeMsg);
         
         // Add parsed points to canvas
         if (parsedPoints.length > 0) {
@@ -5425,13 +5482,15 @@ const AppContent = () => {
         setPlanFiles(files);
         setPdfViewerFiles(files);
         const summaryLabel = files.map(f => f.name).join(', ');
+        const pdfWelcomeMsg = buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I have loaded <strong>${files.length} PDF plan(s)</strong> and will use them as the basis for linework generation.`);
         setCivilDrafterChatHistory(prev => [
             ...markPendingA2UICompleted(prev, summaryLabel),
             {
                 role: MessageRole.MODEL,
-                text: buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I have loaded <strong>${files.length} PDF plan(s)</strong> and will use them as the basis for linework generation.`),
+                text: pdfWelcomeMsg,
             }
         ]);
+        mirrorSpecialistUploadToVisibleChat(AgentType.CIVIL_DRAFTER, summaryLabel, pdfWelcomeMsg);
         setSuggestedQuestions([
             'Draw the road edges as parallel lines',
             'Create centerline from the plan',
@@ -5476,12 +5535,14 @@ const AppContent = () => {
         const newChat = startChatWithOverride(AgentType.CIVIL_DRAFTER, content, trainingDxf);
         setCivilDrafterChat(newChat);
         setRawFile({ name, content });
+        const existingPtsMsg = trainingDxf
+            ? buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I am working from the <strong>${existingPoints.length} points</strong> already loaded, using <strong>"${trainingDxf.name}"</strong> as the drafting template.`)
+            : buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I am working from the <strong>${existingPoints.length} points</strong> already loaded. Ask me to draft road edges, building footprints, or other linework from this data.`);
         setCivilDrafterChatHistory([{
             role: MessageRole.MODEL,
-            text: trainingDxf
-                ? buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I am working from the <strong>${existingPoints.length} points</strong> already loaded, using <strong>"${trainingDxf.name}"</strong> as the drafting template.`)
-                : buildAgentWelcome(AgentType.CIVIL_DRAFTER, `I am working from the <strong>${existingPoints.length} points</strong> already loaded. Ask me to draft road edges, building footprints, or other linework from this data.`),
+            text: existingPtsMsg,
         }]);
+        mirrorSpecialistUploadToVisibleChat(AgentType.CIVIL_DRAFTER, `${existingPoints.length} loaded points`, existingPtsMsg);
 
         setSuggestedQuestions([
             'Draw the road edges as parallel lines',
@@ -5858,13 +5919,15 @@ const AppContent = () => {
             setDeedFile(file);
             clearHighlights(); // Clear old highlights
             setPdfViewerFiles(file.fileData ? [file] : null);
+            const replaceDeedMsg = `The <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">Boundary Agent</strong> has loaded <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">"${file.name}"</strong>.`;
             setDeedChatHistory(prev => [
                 ...markPendingA2UICompleted(prev, file.name),
                 { 
                     role: MessageRole.MODEL, 
-                    text: `The <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">Boundary Agent</strong> has loaded <strong style="color: ${agentThemeColors[AgentType.DEED_READER]};">"${file.name}"</strong>.`
+                    text: replaceDeedMsg,
                 }
             ]);
+            mirrorSpecialistUploadToVisibleChat(AgentType.DEED_READER, file.name, replaceDeedMsg);
             setIsAddingData(false);
             showView('canvas');
             setIsBoundaryAlignmentOpen(false);
@@ -5910,13 +5973,15 @@ const AppContent = () => {
       }
       setDeedFile(file);
       setPdfViewerFiles(file.fileData ? [file] : null);
+      const deedWelcomeMsg = buildAgentWelcome(AgentType.DEED_READER, `I have loaded the deed description from <strong>"${file.name}"</strong> and am ready to draft the parcel.`);
       setDeedChatHistory(prev => [
           ...markPendingA2UICompleted(prev, file.name),
           {
               role: MessageRole.MODEL,
-              text: buildAgentWelcome(AgentType.DEED_READER, `I have loaded the deed description from <strong>"${file.name}"</strong> and am ready to draft the parcel.`),
+              text: deedWelcomeMsg,
           }
       ]);
+      mirrorSpecialistUploadToVisibleChat(AgentType.DEED_READER, file.name, deedWelcomeMsg);
       const questions = deedSuggestedQuestionsText.split('\n').filter(q => q.trim() !== '');
       setSuggestedQuestions(questions);
       
@@ -6416,13 +6481,15 @@ const AppContent = () => {
             }
             setPlanFiles(combinedFiles);
             setPdfViewerFiles(combinedFiles);
+            const addedPlanMsg = `Added <strong style="color: ${agentThemeColors[AgentType.CIVIL_PLAN_EXPERT]};">${files.length} new plan(s)</strong>. I will now consider all <strong style="color: ${agentThemeColors[AgentType.CIVIL_PLAN_EXPERT]};">${combinedFiles.length} plans</strong> in my analysis.`;
             setPlanExpertChatHistory(prev => [
                 ...markPendingA2UICompleted(prev, summaryLabel),
                 { 
                     role: MessageRole.MODEL, 
-                    text: `Added <strong style="color: ${agentThemeColors[AgentType.CIVIL_PLAN_EXPERT]};">${files.length} new plan(s)</strong>. I will now consider all <strong style="color: ${agentThemeColors[AgentType.CIVIL_PLAN_EXPERT]};">${combinedFiles.length} plans</strong> in my analysis.`
+                    text: addedPlanMsg,
                 }
             ]);
+            mirrorSpecialistUploadToVisibleChat(AgentType.CIVIL_PLAN_EXPERT, summaryLabel, addedPlanMsg);
             setIsAddingData(false);
             return;
         }
@@ -6437,13 +6504,15 @@ const AppContent = () => {
       }
       setPlanFiles(files);
       setPdfViewerFiles(files);
+      const planWelcomeMsg = buildAgentWelcome(AgentType.CIVIL_PLAN_EXPERT, `I have loaded and processed <strong>${files.length} plan sheet(s)</strong>. Ask me to extract dimensions, annotations, or design data from the sheets.`);
       setPlanExpertChatHistory(prev => [
           ...markPendingA2UICompleted(prev, summaryLabel),
           {
               role: MessageRole.MODEL,
-              text: buildAgentWelcome(AgentType.CIVIL_PLAN_EXPERT, `I have loaded and processed <strong>${files.length} plan sheet(s)</strong>. Ask me to extract dimensions, annotations, or design data from the sheets.`),
+              text: planWelcomeMsg,
           }
       ]);
+      mirrorSpecialistUploadToVisibleChat(AgentType.CIVIL_PLAN_EXPERT, summaryLabel, planWelcomeMsg);
       setSuggestedQuestions([
           "Plot the storm drain network.",
           "Draw lot 5 and label its dimensions.",
@@ -16237,27 +16306,47 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         effectiveIntakeAgent === AgentType.STORMWATER_AGENT ? stormwaterChatHistory :
         effectiveIntakeAgent === AgentType.DIRT_VOLUME_AGENT ? dirtVolumeChatHistory :
         lsvzChatHistory;
-      const lastIntakeMsg = currentHistoryForIntake.length > 0
+      const specialistLastMsg = currentHistoryForIntake.length > 0
         ? currentHistoryForIntake[currentHistoryForIntake.length - 1]
         : null;
-      const a2uiResolution = classifyA2UIIntakeReply(query, effectiveIntakeAgent, lastIntakeMsg);
+      const visibleLastMsg = lsvzChatHistory.length > 0
+        ? lsvzChatHistory[lsvzChatHistory.length - 1]
+        : null;
+      const a2uiResolution =
+        classifyA2UIIntakeReply(query, effectiveIntakeAgent, specialistLastMsg) ??
+        (visibleLastMsg && visibleLastMsg !== specialistLastMsg
+          ? classifyA2UIIntakeReply(query, effectiveIntakeAgent, visibleLastMsg)
+          : null);
 
       if (a2uiResolution && intakeSetHistory) {
         if (a2uiResolution.action === 'show-upload-widget') {
+          const uploadMsg: ChatMessage = {
+            role: MessageRole.MODEL,
+            text: a2uiResolution.replyText,
+            behaviorAgent: a2uiResolution.agent,
+            a2ui: {
+              kind: 'upload-widget',
+              agent: a2uiResolution.agent,
+              widgetType: a2uiResolution.widgetType,
+              status: 'expanded',
+            },
+          };
           intakeSetHistory(prev => [
             ...markPendingA2UICompleted(prev),
             { role: MessageRole.USER, text: query },
-            {
-              role: MessageRole.MODEL,
-              text: a2uiResolution.replyText,
-              a2ui: {
-                kind: 'upload-widget',
-                agent: a2uiResolution.agent,
-                widgetType: a2uiResolution.widgetType,
-                status: 'expanded',
-              },
-            },
+            uploadMsg,
           ]);
+          if (effectiveIntakeAgent !== AgentType.LSVZ_AGENT && visibleBehaviorAgentRef.current !== effectiveIntakeAgent) {
+            setLsvzChatHistory(prev => [
+              ...markPendingA2UICompleted(prev),
+              { role: MessageRole.USER, text: query },
+              uploadMsg,
+            ]);
+          }
+          if (a2uiResolution.agent !== activeAgent) {
+            setInitializedAgents(prev => new Set(prev).add(a2uiResolution.agent));
+            setActiveAgent(a2uiResolution.agent);
+          }
           return;
         }
 
@@ -17741,6 +17830,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         const consumed = await consumeTrialPrompt({ kind: trialIsDeed ? 'deed' : 'general' });
         setTrialSnapshot(consumed.snapshot);
         if (!consumed.allowed) {
+          if (trialIsDeed) clearPendingDeedComputation();
           if (consumed.reason === 'deed-limit') {
             setFreeCadExplainer({
               title: 'Free CAD deed prompts used',
@@ -17796,6 +17886,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // allowance; free-tier exhaustion is handled by the deed-credit checks.
     const deedFreeTierEligible = requestedAgent === AgentType.DEED_READER && !isOssBuild();
     if (!hasAnyInferenceKey && !deedFreeTierEligible && !isFreeCadActive) {
+      if (requestedAgent === AgentType.DEED_READER) clearPendingDeedComputation();
       setShowApiKeyModal(true);
       return;
     }
@@ -17811,6 +17902,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           message: 'Your LandSurv Enabling Key is active and will be used for this session.',
         });
       } else {
+        if (requestedAgent === AgentType.DEED_READER) clearPendingDeedComputation();
         setShowApiKeyConfirmation(true);
         addNotification({
           kind: 'api-key',
@@ -17958,6 +18050,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
         setInitializedAgents(prev => new Set(prev).add(agent));
       } catch (initErr: any) {
+        if (agent === AgentType.DEED_READER) clearPendingDeedComputation();
         const initErrMsg = initErr?.message || String(initErr);
         console.error(`[handleSendMessage] Failed to auto-initialize chat for ${agent}:`, initErrMsg);
         setError(initErrMsg);
@@ -17979,6 +18072,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     console.log('[handleSendMessage] chat:', chat, 'setHistory:', !!setHistory, 'query:', query);
     
     if (!chat || query.trim() === '' || !setHistory) {
+      if (agent === AgentType.DEED_READER) clearPendingDeedComputation();
       console.log('[handleSendMessage] Exiting early - chat:', !!chat, 'query valid:', query.trim() !== '', 'setHistory:', !!setHistory);
       return;
     }
@@ -18154,7 +18248,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         query.includes('**AUTO DRAFT') ||
         query.includes('**STAGE ') ||
         pendingAutoDraftImagesRef.current.length > 0;
-      const handoff = agent !== AgentType.LSVZ_AGENT && !isAutoDraftTurn
+      const isLoadedDocumentTurn =
+        (agent === AgentType.CIVIL_PLAN_EXPERT && Boolean(planFiles && planFiles.length > 0)) ||
+        (agent === AgentType.DEED_READER && Boolean(deedFile));
+      const handoff = agent !== AgentType.LSVZ_AGENT && !isAutoDraftTurn && !isLoadedDocumentTurn
         ? resolveIntentHandoff(query, agent)
         : null;
       if (handoff && handoff.agent !== agent) {
@@ -18792,13 +18889,17 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         }
     }
 
-    if ((agent === AgentType.DEED_READER && deedFile?.rasterImageData) || (agent === AgentType.CIVIL_PLAN_EXPERT && planFiles?.some(f => f.rasterImageData)) || (agent === AgentType.STANDARDS_COMPLIANCE && (standardsComplianceSubjectFile?.rasterImageData || standardsComplianceControlFile?.rasterImageData))) {
-        const parts: Part[] = [{ text: query }];
+    if (
+      (agent === AgentType.DEED_READER && deedFile?.rasterImageData) ||
+      (agent === AgentType.CIVIL_PLAN_EXPERT && planFiles?.some(f => f.rasterImageData)) ||
+      (agent === AgentType.CIVIL_DRAFTER && planFiles?.some(f => f.rasterImageData)) ||
+      (agent === AgentType.STANDARDS_COMPLIANCE && (standardsComplianceSubjectFile?.rasterImageData || standardsComplianceControlFile?.rasterImageData))
+    ) {
         const filesToProcess: SessionFile[] = [];
 
         if (agent === AgentType.DEED_READER && deedFile) {
             filesToProcess.push(deedFile);
-        } else if (agent === AgentType.CIVIL_PLAN_EXPERT && planFiles) {
+        } else if ((agent === AgentType.CIVIL_PLAN_EXPERT || agent === AgentType.CIVIL_DRAFTER) && planFiles) {
             filesToProcess.push(...planFiles);
         } else if (agent === AgentType.STANDARDS_COMPLIANCE) {
             // Control pages first (reference), then subject pages, so free-form
@@ -18807,13 +18908,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             if (standardsComplianceSubjectFile) filesToProcess.push(standardsComplianceSubjectFile);
         }
 
+        const pdfImageParts: Part[] = [];
         for (const file of filesToProcess) {
             if (file.rasterImageData && Array.isArray(file.rasterImageData)) {
                 for (const imageData of file.rasterImageData) {
                     const [header, base64Data] = imageData.split(',');
                     const mimeTypeMatch = header.match(/:(.*?);/);
                     if (mimeTypeMatch && mimeTypeMatch[1] && base64Data) {
-                        parts.push({
+                        pdfImageParts.push({
                             inlineData: {
                                 mimeType: mimeTypeMatch[1],
                                 data: base64Data
@@ -18823,9 +18925,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 }
             }
         }
-        
-        if (parts.length > 1) {
-            queryToSend = parts;
+
+        if (pdfImageParts.length > 0) {
+            queryToSend = typeof queryToSend === 'string'
+                ? [{ text: queryToSend }, ...pdfImageParts]
+                : [...queryToSend, ...pdfImageParts];
         }
     }
 
@@ -19152,6 +19256,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
 
     } catch (err) {
+      if (agent === AgentType.DEED_READER) clearPendingDeedComputation();
       skipFinallyUpdate = true;
       if (stopGenerationRef.current) {
         console.log("Stream stopped by user.");
@@ -19193,9 +19298,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       setIsLoading(false);
       const wasStopped = stopGenerationRef.current;
       stopGenerationRef.current = false;
+      if (wasStopped && agent === AgentType.DEED_READER) {
+        clearPendingDeedComputation();
+      }
 
       // Check if response was empty (e.g. model produced no text or stream ended prematurely)
       if (!wasStopped && !skipFinallyUpdate && fullResponse.trim() === '') {
+        if (agent === AgentType.DEED_READER) clearPendingDeedComputation();
         skipFinallyUpdate = true;
         const emptyMsg = `⚠️ **No response received from the model.**\n\n- If running locally with Vertex AI, ensure backend ADC credentials (or GCP_PROJECT_ID) are configured, or switch to direct API keys in **Settings → AI Provider Keys**.\n- If using high-reasoning models, the output token limit may have been consumed during thinking.`;
         setHistory(prev => {
@@ -19461,6 +19570,9 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           : { options: [], datasetTooLarge: false, totalCount: 0 };
 
       // Only update history if we didn't already handle it in an early return
+      if (!skipFinallyUpdate && !jsonContentToParse && agent === AgentType.DEED_READER) {
+        clearPendingDeedComputation();
+      }
       if (!skipFinallyUpdate) {
         const zoningSourceLedger = agent === AgentType.ZONING_AGENT
           ? buildZoningSourceLedger({
@@ -22722,6 +22834,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             showView('closurereport');
           } else if (visualDataFound && activeVisualPanel !== 'cutsheet' && activeVisualPanel !== 'profile') {
             showView('canvas');
+          }
+
+          if (agent === AgentType.DEED_READER && !skipFinallyUpdate && !hasParsedBoundaryGeometry(parsedJson)) {
+            clearPendingDeedComputation();
           }
 
 

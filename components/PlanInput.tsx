@@ -7,8 +7,9 @@ import PdfPageSelector from './PdfPageSelector';
 import { type SessionFile } from '../types';
 import * as pdfjsLib from 'pdfjs-dist';
 import { useAppState } from '../contexts/AppStateContext.tsx';
+import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@5.4.394/build/pdf.worker.mjs`;
+ensurePdfWorkerConfigured(pdfjsLib);
 
 interface PlanInputProps {
   onPlansSubmitted: (files: SessionFile[]) => void;

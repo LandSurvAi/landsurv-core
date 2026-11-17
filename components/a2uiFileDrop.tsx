@@ -239,11 +239,32 @@ export async function routeA2UIFileDrop(
         /\.(?:raw|txt|csv|pts|pnezd)$/i.test(file.name) || file.type.startsWith('text/');
       if (isPdfFile(file)) {
         const fileData = await readFileAsDataUrl(file);
+        const { processPdfForMultimodal } = await import('../utils/pdfUtils.ts');
+        const result = await processPdfForMultimodal(file, () => {});
         host.onCivilDrafterPdfUploaded?.([
           {
             name: file.name,
-            content: `PDF Plan: ${file.name}`,
+            content: result.text.trim() || `PDF Plan: ${file.name}`,
             fileData,
+            rasterImageData: result.rasterImageData,
+            pdfLayerNames: result.layerNames,
+            pdfDashPatterns: result.dashPatterns,
+            selectedPages: Array.from(
+              { length: Math.max(1, result.rasterImageData.length) },
+              (_, i) => i + 1,
+            ),
+          },
+        ]);
+      } else if (isImageFile(file)) {
+        const fileData = await readFileAsDataUrl(file);
+        const { processRasterImageForMultimodal } = await import('../utils/pdfUtils.ts');
+        const result = await processRasterImageForMultimodal(file, () => {});
+        host.onCivilDrafterPdfUploaded?.([
+          {
+            name: file.name,
+            content: result.text.trim() || `Plan Image: ${file.name}`,
+            fileData,
+            rasterImageData: result.rasterImageData,
             selectedPages: [1],
           },
         ]);
@@ -267,14 +288,24 @@ export async function routeA2UIFileDrop(
     }
     case 'plan-upload': {
       if (!host.onPlansSubmitted) return;
+      const pdfCandidates = files.filter(isPdfFile);
+      if (pdfCandidates.length === 0) return;
+      const { processPdfForMultimodal } = await import('../utils/pdfUtils.ts');
       const processed: SessionFile[] = [];
-      for (const candidate of files.filter(isPdfFile)) {
+      for (const candidate of pdfCandidates) {
         const fileData = await readFileAsDataUrl(candidate);
+        const result = await processPdfForMultimodal(candidate, () => {});
         processed.push({
           name: candidate.name,
-          content: `PDF Plan: ${candidate.name}`,
+          content: result.text.trim() || `PDF Plan: ${candidate.name}`,
           fileData,
-          selectedPages: [1],
+          rasterImageData: result.rasterImageData,
+          pdfLayerNames: result.layerNames,
+          pdfDashPatterns: result.dashPatterns,
+          selectedPages: Array.from(
+            { length: Math.max(1, result.rasterImageData.length) },
+            (_, i) => i + 1,
+          ),
         });
       }
       if (processed.length > 0) host.onPlansSubmitted(processed);
