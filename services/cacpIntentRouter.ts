@@ -409,13 +409,28 @@ export function resolveIntentHandoff(request: string, currentAgent: AgentType): 
 const DRAFTING_ACTION_RE = /\b(?:draw|draft|sketch|plot|trace|connect|join|render|lay\s?out|design|model|synthesi[sz]e|generate|create|build|extract|make|add|put|place|construct|pave|widen|realign|label|annotate|hatch)\w*\b/i;
 const DRAFTING_OBJECT_RE = /\b(?:line|lines|linework|polyline|polylines|feature|features|shot|shots|edge|edges|bank|toe|curb|curbs|gutter|gutters|ditch|ditches|swale|swales|fence|treeline|tree\s?line|road|roads|roadway|street|streets|corridor|corridors|centerline|centerlines|boundary|boundaries|contour|contours|pavement|sidewalk|sidewalks|building|buildings|footprint|footprints|parcel|parcels|lot|lots|utility|utilities|pipe|pipes|profile|profiles|driveway|driveways|circle|circles|arc|arcs|polygon|polygons|star|stars|symbol|symbols|label|labels|annotation|annotations|hatch|hatches|right[\s-]?of[\s-]?way)\b/i;
 
+/**
+ * A short "draw it" follow-up. The object is a pronoun because the figure was
+ * described or computed on the previous turn; the shape is known even though
+ * this message names no object. It is still drafting work.
+ */
+const DRAW_FOLLOW_UP_RE =
+  /^(?:please\s+|can\s+you\s+|could\s+you\s+|now\s+|go\s+ahead\s+and\s+|just\s+)*(?:draw|plot|sketch|draft|render)\s+(?:it|that|this|these|those|them|the\s+(?:figure|shape|parcel|trapezoid|polygon|result|drawing))\b/i;
+
+export function isDrawFollowUpRequest(request: string): boolean {
+  const text = (request || '').trim();
+  return text.length > 0 && text.length <= 80 && DRAW_FOLLOW_UP_RE.test(text);
+}
+
 /** True when the request asks for drawing geometry rather than point-data work. */
 export function isDraftingAuthoringRequest(request: string): boolean {
   const text = (request || '').trim();
   if (!text) return false;
   // Deed parsing/plotting is Boundary Agent work, not CAD linework authoring.
   if (isDeedBoundaryRequest(text)) return false;
-  if (!DRAFTING_ACTION_RE.test(text) || !DRAFTING_OBJECT_RE.test(text)) return false;
+  // "draw it" after a computed figure names no object but is drafting work;
+  // the layer/report/point exclusions below still apply.
+  if (!isDrawFollowUpRequest(text) && (!DRAFTING_ACTION_RE.test(text) || !DRAFTING_OBJECT_RE.test(text))) return false;
   // These are CAD-management or reporting tasks even when they mention a
   // drafting object (e.g. "create a layer for roads", "road cost report").
   if (/\b(?:layer|layers|linetype|line\s?type|color|colour|text\s?style|drafting\s?style|symbol\s?library|report|summary|schedule|estimate|quantity|cost|analysis|table)\b/i.test(text)) {

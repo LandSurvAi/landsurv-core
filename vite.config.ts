@@ -1,6 +1,24 @@
 ﻿import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import * as fs from 'fs';
+import * as path from 'path';
+
+/**
+ * PDF.js loads its worker, WASM decoders, CMaps, standard fonts and ICC
+ * profiles at runtime. In a Vite build those files live in node_modules and
+ * are not part of the bundle, so production asked for /wasm/... and got the
+ * SPA index.html instead. Copy them into public/pdfjs for dev and build.
+ */
+const copyPdfjsAssets = () => {
+    const sourceRoot = path.resolve('node_modules/pdfjs-dist');
+    const targetRoot = path.resolve('public/pdfjs');
+    for (const dir of ['wasm', 'cmaps', 'standard_fonts', 'iccs']) {
+        const source = path.join(sourceRoot, dir);
+        if (fs.existsSync(source)) {
+            fs.cpSync(source, path.join(targetRoot, dir), { recursive: true });
+        }
+    }
+};
 
 export default defineConfig(({ mode }) => {
     // Try to get GEMINI_API_KEY from multiple sources:
@@ -91,6 +109,15 @@ export default defineConfig(({ mode }) => {
       plugins: [
         react(),
         {
+          name: 'landsurv-pdfjs-assets',
+          configureServer() {
+            copyPdfjsAssets();
+          },
+          buildStart() {
+            copyPdfjsAssets();
+          },
+        },
+        {
           name: 'landsurv-local-metadata',
           apply: 'serve',
           transformIndexHtml(html) {
@@ -112,6 +139,15 @@ export default defineConfig(({ mode }) => {
             rinex: './rinex.html',
           },
           output: {
+            // Browsers refuse a module worker served as application/octet-stream.
+            // Emit the PDF.js worker (and any other .mjs asset) as .js so static
+            // hosts without an .mjs MIME mapping still load it correctly.
+            assetFileNames: (assetInfo) => {
+              const fileName = assetInfo.names?.[0] ?? '';
+              return fileName.endsWith('.mjs')
+                ? 'assets/[name]-[hash].js'
+                : 'assets/[name]-[hash][extname]';
+            },
             manualChunks: {
               // Vendor chunks to reduce main bundle size
               'react': ['react', 'react-dom'],

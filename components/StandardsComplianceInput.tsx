@@ -11,7 +11,7 @@ import {
   type StandardsComplianceCheckSelection,
 } from '../types';
 import { processPdfForMultimodal } from '../utils/pdfUtils';
-import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
+import { ensurePdfWorkerConfigured, PDFJS_DOCUMENT_OPTIONS } from '../utils/pdfWorker.ts';
 
 ensurePdfWorkerConfigured(pdfjsLib);
 
@@ -105,7 +105,7 @@ const StandardsComplianceInput: React.FC<StandardsComplianceInputProps> = ({
   ) => {
     try {
       const arrayBuffer = await file.arrayBuffer();
-      const loadingTask = pdfjsLib.getDocument(arrayBuffer);
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, ...PDFJS_DOCUMENT_OPTIONS });
       const pdf = await loadingTask.promise;
       if (pdf.numPages <= 1) {
         const next: FileWithPages = { file, pages: [1] };

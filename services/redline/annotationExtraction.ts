@@ -10,7 +10,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import type { RedlineMarkup, RedlineMarkupKind, RedlineSheet } from '../../types';
 import { extractRedlineVisualMarkups } from '../geminiService';
 import { buildDeepVisionMarkup, isDeepVisionDuplicate } from './deepVisionMarkup';
-import { ensurePdfWorkerConfigured } from '../../utils/pdfWorker.ts';
+import { ensurePdfWorkerConfigured, PDFJS_DOCUMENT_OPTIONS } from '../../utils/pdfWorker.ts';
 
 ensurePdfWorkerConfigured(pdfjsLib);
 
@@ -185,7 +185,7 @@ export async function extractRedlinePackage(
 
     let pdf: pdfjsLib.PDFDocumentProxy | null = null;
     try {
-      pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+      pdf = await pdfjsLib.getDocument({ data: bytes, ...PDFJS_DOCUMENT_OPTIONS }).promise;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'could not open the PDF';
       warnings.push(

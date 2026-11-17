@@ -9,7 +9,7 @@ import { exampleDeedContent } from '../assets/example.deed';
 import { SessionFile } from '../types';
 import * as pdfjsLib from 'pdfjs-dist';
 import { useAppState } from '../contexts/AppStateContext.tsx';
-import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
+import { ensurePdfWorkerConfigured, PDFJS_DOCUMENT_OPTIONS } from '../utils/pdfWorker.ts';
 
 ensurePdfWorkerConfigured(pdfjsLib);
 
@@ -80,7 +80,7 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
         if (isPdf) {
           try {
             const arrayBuffer = await file.arrayBuffer();
-            const loadingTask = pdfjsLib.getDocument(arrayBuffer);
+            const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, ...PDFJS_DOCUMENT_OPTIONS });
             const pdf = await loadingTask.promise;
             
             console.log('DeedInput.handleFiles - PDF:', file.name, 'Pages:', pdf.numPages);

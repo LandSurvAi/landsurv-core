@@ -541,7 +541,7 @@ import { useUndoShortcuts } from './hooks/useUndoShortcuts.ts';
 import HistoryPanel from './components/HistoryPanel.tsx';
 import { UndoHistoryQuickPicker } from './components/UndoHistoryQuickPicker.tsx';
 import { useHistorySkills } from './services/historySkillHandlers.ts';
-import { resolveDraftingDelegateTarget, resolveIntentHandoff, shouldHandoffLsvzDrafting } from './services/cacpIntentRouter.ts';
+import { isDrawFollowUpRequest, resolveDraftingDelegateTarget, resolveIntentHandoff, shouldHandoffLsvzDrafting } from './services/cacpIntentRouter.ts';
 import { AppStateProvider, useAppState } from './contexts/AppStateContext.tsx';
 import { CadManagerProvider, useCadManager } from './contexts/CadManagerContext.tsx';
 import {
@@ -18571,7 +18571,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       }
     }
     
-    if (isRelayTurn) {
+    // A bare "draw it"/"plot that" follow-up carries no geometry of its own.
+    // The drafting pre-router sends it to the Civil Drafter, so that drafter
+    // must see the LSAI turn that computed the figure before it can draw it.
+    if (isRelayTurn || (agent === AgentType.CIVIL_DRAFTER && isDrawFollowUpRequest(query))) {
       const recentTurns = lsvzChatHistory
         .slice(-6)
         .map(message => `${message.role === MessageRole.USER ? 'User' : 'LSAI'}: ${(message.result || message.text || '').replace(/<[^>]+>/g, ' ').trim()}`)

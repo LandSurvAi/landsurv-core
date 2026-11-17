@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { useAppState } from '../contexts/AppStateContext.tsx';
-import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
+import { ensurePdfWorkerConfigured, PDFJS_DOCUMENT_OPTIONS } from '../utils/pdfWorker.ts';
 
 ensurePdfWorkerConfigured(pdfjsLib);
 
@@ -30,7 +30,7 @@ const PdfPageSelector: React.FC<PdfPageSelectorProps> = ({ file, onSelect, onCan
     const loadPdf = async () => {
       try {
         const arrayBuffer = await file.arrayBuffer();
-        const loadingTask = pdfjsLib.getDocument(arrayBuffer);
+        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, ...PDFJS_DOCUMENT_OPTIONS });
         const pdf = await loadingTask.promise;
         
         setPdfDoc(pdf);

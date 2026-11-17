@@ -3,7 +3,7 @@ import Tesseract from 'tesseract.js';
 import type { PageViewport } from 'pdfjs-dist';
 import type { RenderParameters } from 'pdfjs-dist/types/src/display/api.js';
 import { getOcrLanguages } from './ocrLanguages.ts';
-import { ensurePdfWorkerConfigured } from './pdfWorker.ts';
+import { ensurePdfWorkerConfigured, PDFJS_DOCUMENT_OPTIONS } from './pdfWorker.ts';
 
 ensurePdfWorkerConfigured(pdfjsLib);
 
@@ -239,7 +239,7 @@ export const extractTextFromPdf = async (
 ): Promise<string> => {
   onProgress({ status: 'initializing' });
   const arrayBuffer = await file.arrayBuffer();
-  const loadingTask = pdfjsLib.getDocument(arrayBuffer);
+  const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, ...PDFJS_DOCUMENT_OPTIONS });
   const pdf = await loadingTask.promise;
   const { text } = await _loadPdfAndExtractText(pdf, onProgress, pageNumbers, languages);
   onProgress({ status: 'done' });
@@ -260,7 +260,7 @@ export const processPdfForMultimodal = async (
     
     onProgress({ status: 'initializing' });
     const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument(arrayBuffer);
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, ...PDFJS_DOCUMENT_OPTIONS });
     const pdf = await loadingTask.promise;
 
     const { text, usedOcr, ocrConfidence } = await _loadPdfAndExtractText(pdf, onProgress, pageNumbers, languages);

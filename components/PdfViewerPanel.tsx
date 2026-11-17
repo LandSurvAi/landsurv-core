@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
+import { ensurePdfWorkerConfigured, PDFJS_DOCUMENT_OPTIONS } from '../utils/pdfWorker.ts';
 
 ensurePdfWorkerConfigured(pdfjsLib);
 import { type SessionFile, type PdfHighlight, useHighlights } from '../types.ts';
@@ -297,7 +297,7 @@ export const PdfViewerPanel: React.FC<PdfViewerPanelProps> = ({ files, onClose, 
     if (!currentFile || !currentFile.fileData) return;
     // Reset cache when the file changes (page objects belong to a pdfDoc).
     textContentCacheRef.current.clear();
-    const loadingTask = pdfjsLib.getDocument({ data: atob(currentFile.fileData.split(',')[1] || '') });
+    const loadingTask = pdfjsLib.getDocument({ data: atob(currentFile.fileData.split(',')[1] || ''), ...PDFJS_DOCUMENT_OPTIONS });
     loadingTask.promise.then(pdf => {
       setPdfDoc(pdf);
       setNumPages(pdf.numPages);

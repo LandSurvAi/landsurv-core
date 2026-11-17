@@ -7,7 +7,7 @@ import PdfPageSelector from './PdfPageSelector';
 import { type SessionFile } from '../types';
 import * as pdfjsLib from 'pdfjs-dist';
 import { useAppState } from '../contexts/AppStateContext.tsx';
-import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
+import { ensurePdfWorkerConfigured, PDFJS_DOCUMENT_OPTIONS } from '../utils/pdfWorker.ts';
 
 ensurePdfWorkerConfigured(pdfjsLib);
 
@@ -46,7 +46,7 @@ const PlanInput: React.FC<PlanInputProps> = ({ onPlansSubmitted, onGoBack, backB
         for (const file of pdfFiles) {
           try {
             const arrayBuffer = await file.arrayBuffer();
-            const loadingTask = pdfjsLib.getDocument(arrayBuffer);
+            const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, ...PDFJS_DOCUMENT_OPTIONS });
             const pdf = await loadingTask.promise;
             
             console.log('PlanInput.handleFiles - Detected file:', file.name, 'with', pdf.numPages, 'pages');

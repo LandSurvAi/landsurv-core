@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { SessionFile } from '../../types';
-import { ensurePdfWorkerConfigured } from '../../utils/pdfWorker.ts';
+import { ensurePdfWorkerConfigured, PDFJS_DOCUMENT_OPTIONS } from '../../utils/pdfWorker.ts';
 
 ensurePdfWorkerConfigured(pdfjsLib);
 
@@ -62,7 +62,7 @@ export const RedlineCalibrationCanvas: React.FC<RedlineCalibrationCanvasProps> =
       setLoading(true);
       setError(null);
       try {
-        const pdf = await pdfjsLib.getDocument({ data: base64Bytes(file.fileData!) }).promise;
+        const pdf = await pdfjsLib.getDocument({ data: base64Bytes(file.fileData!), ...PDFJS_DOCUMENT_OPTIONS }).promise;
         const page = await pdf.getPage(pageIndex + 1);
         const base = page.getViewport({ scale: 1 });
         const available = Math.max(320, container.clientWidth || 640);

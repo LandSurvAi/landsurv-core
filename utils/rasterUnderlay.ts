@@ -1,5 +1,5 @@
 import type { RasterAsset, RasterUnderlay, RasterUnderlayAnchor, RasterUnderlayTransform } from '../types.ts';
-import { PDFJS_WORKER_SRC } from './pdfWorker.ts';
+import { PDFJS_WORKER_SRC, PDFJS_DOCUMENT_OPTIONS } from './pdfWorker.ts';
 
 /** Longest raster edge produced when a PDF page is imported as an underlay. */
 const MAX_PDF_RASTER_EDGE = 2600;
@@ -47,7 +47,7 @@ export const readPdfPageAsset = async (file: File, pageNumber = 1): Promise<Rast
   const pdfjsLib = await import('pdfjs-dist');
   pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_SRC;
   const buffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const pdf = await pdfjsLib.getDocument({ data: buffer, ...PDFJS_DOCUMENT_OPTIONS }).promise;
   try {
     const pageIndex = Math.max(1, Math.min(pdf.numPages, Math.round(pageNumber) || 1));
     const page = await pdf.getPage(pageIndex);

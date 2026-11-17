@@ -17,7 +17,7 @@ import {
 import * as pdfjsLib from 'pdfjs-dist';
 import { useAppState, useErrorReporter } from '../contexts/AppStateContext';
 import { useGlobalSettings } from '../utils/globalSettings.ts';
-import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
+import { ensurePdfWorkerConfigured, PDFJS_DOCUMENT_OPTIONS } from '../utils/pdfWorker.ts';
 
 ensurePdfWorkerConfigured(pdfjsLib);
 
@@ -164,7 +164,7 @@ const CivilDrafterFileUpload: React.FC<CivilDrafterFileUploadProps> = ({
       if (onPdfUploaded) {
         try {
           const arrayBuffer = await file.arrayBuffer();
-          const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+          const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, ...PDFJS_DOCUMENT_OPTIONS }).promise;
           if (pdf.numPages === 1) {
             await processPdf(file, [1]);
           } else {

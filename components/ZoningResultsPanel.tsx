@@ -11,7 +11,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import { ensurePdfWorkerConfigured, PDFJS_DOCUMENT_OPTIONS } from '../utils/pdfWorker.ts';
 import {
   Building2, MapPin, Search, Loader2, CheckCircle2, AlertCircle,
   ExternalLink, Ruler, Maximize2, ShieldCheck, ChevronDown, ChevronUp,
@@ -673,11 +673,9 @@ interface MapInfo {
 // <object type="application/pdf"> embed, which silently fell back to "PDF
 // preview unavailable" in browsers/webviews without a native PDF plugin.
 // ---------------------------------------------------------------------------
-if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-  // Use the locally bundled worker asset so preview rendering works without
-  // third-party worker hosts and respects strict CSP deployments.
-  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-}
+// Use the locally bundled worker asset so preview rendering works without
+// third-party worker hosts and respects strict CSP deployments.
+ensurePdfWorkerConfigured(pdfjsLib);
 const _pdfPreviewCache = new Map<string, string>(); // url → rendered data URL
 
 const PdfMapPreview: React.FC<{ url: string; place?: string }> = ({ url, place }) => {
@@ -696,7 +694,7 @@ const PdfMapPreview: React.FC<{ url: string; place?: string }> = ({ url, place }
         const r = await fetch(src, { signal: AbortSignal.timeout(45_000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const buf = await r.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        const pdf = await pdfjsLib.getDocument({ data: buf, ...PDFJS_DOCUMENT_OPTIONS }).promise;
         try {
           const pg = await pdf.getPage(1);
           const base = pg.getViewport({ scale: 1 });

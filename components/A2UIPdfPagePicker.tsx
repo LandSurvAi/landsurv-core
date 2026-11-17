@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import { ensurePdfWorkerConfigured } from '../utils/pdfWorker.ts';
+import { ensurePdfWorkerConfigured, PDFJS_DOCUMENT_OPTIONS } from '../utils/pdfWorker.ts';
 
 ensurePdfWorkerConfigured(pdfjsLib);
 
@@ -50,7 +50,7 @@ export const A2UIPdfPagePicker: React.FC<A2UIPdfPagePickerProps> = ({
       setError(null);
       try {
         const arrayBuffer = await file.arrayBuffer();
-        pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+        pdf = await pdfjsLib.getDocument({ data: arrayBuffer, ...PDFJS_DOCUMENT_OPTIONS }).promise;
         if (cancelled) return;
         setNumPages(pdf.numPages);
 

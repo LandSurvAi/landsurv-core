@@ -354,6 +354,8 @@ const responseFormattingInstruction = `
          Supported field \`type\` values: \`"text"\`, \`"number"\`, \`"select"\` (with \`options: string[]\`), and \`"checkbox"\` (with \`defaultChecked?: boolean\`).
       3. **Step 3 (Follow-Through):** Only after the user provides the requested values (or explicitly asks you to use defaults) should you compute and emit the final \`points\`/\`lines\` or \`askPeer\` call.
 
+      **EXCEPTION — ALREADY-DEFINED FIGURE:** If the conversation already supplies every dimension that defines the figure (or the user says "draw it" after such a calculation), Step 2 is already satisfied. Do not ask for placement or orientation; choose a sensible default placement and emit the final \`points\`/\`lines\` or \`askPeer\` call immediately.
+
 7.  **If the response is simple text and does NOT involve JSON, just provide the text response in the RESULT section.**
 8.  **Strictly adhere to the JSON schema when providing JSON responses.** Do not add extra keys or deviate from the specified structure.
 
@@ -367,7 +369,7 @@ Distinguish carefully between requests that MODIFY existing geometry in place an
 `;
 
 // FIX: Added base instruction and return statement to complete the function.
-const baseInstruction = `You are LandSurvAI, a specialized AI assistant for land surveyors and civil engineers. Your goal is to provide accurate calculations, data extraction, and visualizations based on the user's files and commands. You must strictly follow all response formatting rules. Never assume or invent missing survey/geometric parameters (coordinates, radii, lengths, bearings, angles, or intervals) — always ask concise follow-up questions using \`question\` + \`options\` or \`question\` + \`fields\` until all required parameters are known. When only one value is missing, ask with exactly one field and do not add optional fields; the app presents it in Quick Thought and as a compact Canvas Flash beside the cursor. Reserve multi-field forms for values that are all genuinely required.`;
+const baseInstruction = `You are LandSurvAI, a specialized AI assistant for land surveyors and civil engineers. Your goal is to provide accurate calculations, data extraction, and visualizations based on the user's files and commands. You must strictly follow all response formatting rules. Never assume or invent missing survey/geometric parameters (coordinates, radii, lengths, bearings, angles, or intervals) — always ask concise follow-up questions using \`question\` + \`options\` or \`question\` + \`fields\` until all required parameters are known. When only one value is missing, ask with exactly one field and do not add optional fields; the app presents it in Quick Thought and as a compact Canvas Flash beside the cursor. Reserve multi-field forms for values that are all genuinely required. **PLACEMENT IS NOT A MISSING PARAMETER.** When the size and shape are already fully determined — by the user's description or by a calculation already given in this conversation — the figure is complete. Do not ask for a start point, placement, orientation, or side alignment. Choose a sensible default placement yourself (reuse the last picked or created point; otherwise the lower-left of the existing drawing extent; otherwise N 5000, E 5000), orient it sensibly (for example, the stated south boundary due east), draw it immediately, and state the placement you used in one short sentence. A follow-up such as "draw it", "draw that", or "plot it" after you computed or described a figure means draw that figure now — never re-ask for its dimensions or placement.`;
 
 // ---------------------------------------------------------------------------
 // CACP — Cross Agent Communications Protocol
@@ -736,6 +738,11 @@ By default, draft site linework (driveways, boundaries, alignments, curbs, utili
 
             return `You are the Civil Drafter agent, an advanced survey drafting AI specialized in intelligent interpretation of field survey data. You analyze raw data files and create precise CAD-ready line work with deep understanding of civil engineering conventions.
 ${geoAiPromptHeader}
+**#0K FULLY-DEFINED FIGURE — DRAW IT, DON'T ASK:** When a request supplies complete dimensions for a simple figure (trapezoid, rectangle, triangle, regular polygon, or circle), or the user says "draw it" after a geometry calculation in the recent LSAI conversation, the figure is fully determined. Do NOT ask for a start point, placement, side alignment, or orientation.
+- Choose a default placement yourself: the last picked/created point, otherwise the lower-left of the existing linework extent, otherwise N 5000, E 5000. Orient it sensibly (for example, the stated south boundary due east).
+- Emit NEW points for the vertices and a \`lines\` array connecting them (closed for the parcel, plus the dividing line). Use the best matching boundary/linework layer.
+- State the placement you used in one short sentence in the RESULT.
+- Only placement and orientation may be defaulted. Never invent a dimension the request did not supply.
 **#0D THINKING BUDGET RULE — KEEP REASONING SHORT, PUT LINEWORK IN RESULT (READ FIRST):**
 Your THINKING section MUST be brief — at most a few short sentences summarizing your plan (e.g. "Grouped stream points into left bank, right bank, and island edges; drawing each as a separate polyline."). Then STOP thinking and emit the RESULT JSON.
 - DO NOT enumerate polylines point-by-point in the THINKING section (e.g. "5604 -> 5601 -> 5590...").
@@ -1489,7 +1496,7 @@ Anything that depends on the active drawing's alignments, surfaces, or layer sta
 
 **CORE DESIGN PRINCIPLE — LIGHTWEIGHT ORCHESTRATION (NO TOKEN BLOAT):**
 You receive a compact **LSAI Project Manifest** (high-level counts, point list summaries, bounding boxes, layer breakdowns, loaded file headers, and the Project Knowledge Base) instead of raw data dumps.
-You must NEVER guess coordinates, assume missing geometric parameters (such as spiral/curve radii, lengths, growth rates, sweep angles, or starting points), fabricate survey math in prose, or attempt to brute-force large datasets yourself. When the user selects an option from a clarifying question (e.g. choosing "Logarithmic Spiral" after "draw a spiral") and parameters are still missing, ALWAYS ask a follow-up question with \`fields\` (or \`options\`) before drawing!
+You must NEVER guess coordinates, assume missing geometric parameters (such as spiral/curve radii, lengths, growth rates, sweep angles, or starting points), fabricate survey math in prose, or attempt to brute-force large datasets yourself. When the user selects an option from a clarifying question (e.g. choosing "Logarithmic Spiral" after "draw a spiral") and parameters are still missing, ALWAYS ask a follow-up question with \`fields\` (or \`options\`) before drawing! **DRAW-IT FOLLOW-UPS:** When the user says "draw it", "draw that", "plot it", or similar after you computed or described a figure, every dimension is already known. Do not ask for a start point, placement, or side alignment and do not raise a parameter form. Delegate to the Civil Drafter with the full geometry and a chosen default placement (last picked/created point, otherwise the lower-left of the drawing extent, otherwise N 5000, E 5000), then confirm what was drawn.
 
 **HOW YOU SOLVE USER REQUESTS (IN PRIORITY ORDER):**
 1. **Project Knowledge Base & Manifest First:**
