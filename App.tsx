@@ -189,6 +189,7 @@ import { buildDeedSummaryFromDescriptions, hasParsedBoundaryGeometry, type Descr
 import { setBootstrapStatus } from './utils/zoningBootstrap.ts';
 import { extractStreamingPointsAndLines } from './utils/streamingJsonParser.ts';
 import { isDemoApiKey } from './services/proxyGenAI.ts';
+import { resolveFreeCadTrialGate } from './services/freeCadMetering.ts';
 import { setBearingDistanceMode } from './services/annotationPreferences.ts';
 import { buildPointLabelAnnotations, describeLabelAllResult } from './services/annotationStudio.ts';
 import { APP_VERSION as APP_VERSION_CONST } from './utils/appVersion.ts';
@@ -1638,7 +1639,7 @@ const AppContent = () => {
   const [cadEntryMode, setCadEntryMode] = useState<CadEntryMode>(() => readCadEntryMode());
   const [trialSnapshot, setTrialSnapshot] = useState<FreeCadTrialSnapshot | null>(() => getCachedTrialSnapshot());
   const [freeCadBlockNotice, setFreeCadBlockNotice] = useState<string | null>(null);
-  const [freeCadExplainer, setFreeCadExplainer] = useState<{ title: string; message: string; actionLabel?: string } | null>(null);
+  const [freeCadExplainer, setFreeCadExplainer] = useState<{ title: string; message: string; actionLabel?: string; action?: 'upgrade' | 'legal' } | null>(null);
   const [trialUseNotice, setTrialUseNotice] = useState<{ key: number; remaining: number } | null>(null);
   const [showFreeCadTrialGate, setShowFreeCadTrialGate] = useState(false);
   const pendingFreeCadActionRef = useRef<{ kind: 'deed' } | { kind: 'agent'; agent: AgentType } | null>(null);
@@ -17862,7 +17863,19 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     // be drafted at any time until the allowance runs out.
     // Free CAD trial: capability-blocked agents never reach a provider, and
     // metered agents spend one of the 20 lifetime prompts (one per user prompt).
-    if (isFreeCadActive) {
+    // A verified LandSurv enabling key, active service access, or superuser is a
+    // paid entitlement and never spends the Free CAD trial allowance (§13.4).
+    const { metered: trialMetered, hasStoredByokKey } = resolveFreeCadTrialGate({
+      isFreeCadActive,
+      isSuperUser,
+      hasLandSurvKey,
+      hasServiceAccess,
+      userApiKey: settings.userApiKey,
+      openaiApiKey: settings.openaiApiKey,
+      xaiApiKey: settings.xaiApiKey,
+      anthropicApiKey: settings.anthropicApiKey,
+    });
+    if (trialMetered) {
       const trialAgent = agentOverride ?? forcedAgent ?? activeAgent;
       if (!isInternalFollowUp) {
         const trialIsDeed = trialAgent === AgentType.DEED_READER;
@@ -17873,8 +17886,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           if (consumed.reason === 'deed-limit') {
             setFreeCadExplainer({
               title: 'Free CAD deed prompts used',
-              message: 'Your 5 free deed prompts are used. You can still draw, edit, save, and export your work. Deed processing needs a key or Business CAD.',
-              actionLabel: 'Unlock deed processing',
+              message: hasStoredByokKey
+                ? 'Your 5 free deed prompts are used. Your API key is saved, but Free CAD keeps deed processing on the trial allowance until you sign the Terms of Service once. Signing moves this device to Business CAD and uses your key.'
+                : 'Your 5 free deed prompts are used. You can still draw, edit, save, and export your work. Deed processing needs a key or Business CAD.',
+              actionLabel: hasStoredByokKey ? 'Use my saved key' : 'Unlock deed processing',
+              action: hasStoredByokKey ? 'legal' : 'upgrade',
             });
             return;
           }
@@ -17888,9 +17904,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
           setFreeCadExplainer({
             title: consumed.reason === 'exhausted' ? 'CAD remains free — inference paused' : 'Inference is paused',
             message: consumed.reason === 'exhausted'
-              ? 'Your 20 free assistant questions are used. Keep drawing, editing, saving, and exporting — CAD remains free. Only inference is paused. Add a key or move to Business CAD when you want the assistant back.'
+              ? hasStoredByokKey
+                ? 'Your 20 free assistant questions are used. Your API key is saved, but Free CAD runs on the trial until you sign the Terms of Service once. Signing moves this device to Business CAD and uses your key, so inference keeps working. Drawing, editing, saving, and exporting stay available either way.'
+                : 'Your 20 free assistant questions are used. Keep drawing, editing, saving, and exporting — CAD remains free. Only inference is paused. Add a key or move to Business CAD when you want the assistant back.'
               : 'We could not verify your free prompt count. Keep drawing, editing, saving, and exporting — CAD remains free. Inference is paused until the trial counter is reachable.',
-            actionLabel: 'Unlock inference',
+            actionLabel: hasStoredByokKey ? 'Use my saved key' : 'Unlock inference',
+            action: hasStoredByokKey ? 'legal' : 'upgrade',
           });
           return;
         }
@@ -34874,7 +34893,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
               actionLabel={freeCadExplainer.actionLabel}
               onClose={() => setFreeCadExplainer(null)}
               onOpenIntake={() => {
+                const target = freeCadExplainer.action;
                 setFreeCadExplainer(null);
+                if (target === 'legal') {
+                  openLegalGateForBusiness();
+                  return;
+                }
                 openFreeCadPlan();
               }}
             />
