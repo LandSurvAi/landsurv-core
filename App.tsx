@@ -194,7 +194,8 @@ import { setBearingDistanceMode } from './services/annotationPreferences.ts';
 import { buildPointLabelAnnotations, describeLabelAllResult } from './services/annotationStudio.ts';
 import { APP_VERSION as APP_VERSION_CONST } from './utils/appVersion.ts';
 import { buildCadManagerSessionState, createSessionZip, generateSessionFileName, toAliasRecord } from './utils/sessionZip.ts';
-import { isFileSaveCanceled, pickSessionFileHandle, writeBlobToFileHandle, type NativeSaveFileHandle } from './utils/nativeFileSave.ts';
+import { isFileSaveCanceled, pickSaveFileHandle, pickSessionFileHandle, writeBlobToFileHandle, type NativeSaveFileHandle } from './utils/nativeFileSave.ts';
+import { triggerDownload } from './utils/download.ts';
 import { isOssBuild } from './utils/ossMode.ts';
 import { useExperimentalAgentEnabled } from './hooks/useExperimentalAgentEnabled.ts';
 import { useParametricAssociations } from './hooks/useParametricAssociations.ts';
@@ -840,7 +841,7 @@ const useMediaQuery = (query: string): boolean => {
 };
 
 const AUTO_MODEL_OPTION = 'auto';
-// Gemini 4 Hydrogen is the standard reasoning model; Gemini 4 Argon is the
+// Gemini 4 Hydrogen is the standard reasoning model; Gemini 4 Carbon is the
 // explicit High Thinking tier, but its own reasoning defaults to Fast.
 const CURRENT_GEMINI_MODEL = DEFAULT_GEMINI_MODEL;
 const AUTO_FAST_GEMINI_MODEL = AUTO_FAST_MODEL;
@@ -880,6 +881,7 @@ const getModelDisplayLabel = (modelName: string): string => (
   : modelName === CURRENT_GEMINI_MODEL ? 'Gemini 4 Hydrogen'
   : modelName === 'gemini-3.7-flash' ? 'Gemini 3.7 Flash'
   : modelName === 'gemini-3.8-flash' ? 'Gemini 3.8 Flash'
+  : modelName === 'gemini-4-carbon' ? 'Gemini 4 Carbon'
   : modelName === 'gemini-4-argon' ? 'Gemini 4 Argon'
   : modelName === AUTO_FAST_GEMINI_MODEL ? 'Gemini 3.5 Flash Lite'
   : modelName === OPENAI_FLAGSHIP_MODEL ? 'GPT-5.6 Terra (your OpenAI key)'
@@ -1158,40 +1160,6 @@ const readSessionFileFromBrowserFile = async (file: File): Promise<SessionFile> 
 const uniqueTinExportName = (tin: TinSurface, format: 'landxml' | 'native'): string => {
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
     return `${tinSurfaceFileBaseName(tin)}_${stamp}.${format === 'native' ? 'tin' : 'xml'}`;
-};
-
-const triggerDownload = (blob: Blob, fileName: string) => {
-    if (!blob || !(blob instanceof Blob)) {
-        throw new Error('Download failed: no data was produced.');
-    }
-    if (blob.size === 0) {
-        throw new Error('Download failed: the generated file is empty (0 bytes).');
-    }
-
-    const safeName = (fileName && fileName.trim()) || 'download';
-
-    const legacySave = (navigator as unknown as {
-        msSaveOrOpenBlob?: (b: Blob, name: string) => boolean;
-    }).msSaveOrOpenBlob;
-    if (typeof legacySave === 'function') {
-        legacySave.call(navigator, blob, safeName);
-        return;
-    }
-
-    const url = URL.createObjectURL(blob);
-    try {
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = safeName;
-        link.rel = 'noopener';
-        link.style.display = 'none';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    } finally {
-        // Defer revocation so the browser has time to begin the download.
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
-    }
 };
 
 // FIX: Changed to a named export to resolve the module resolution error in index.tsx.
@@ -23915,7 +23883,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
   }, [activeModel, confirmFableSelection, handleReset]);
 
   // Normal uses the Auto fast/Hydrogen routing. High Thinking pins every agent
-  // to the configured high-reasoning model (Argon by default). Clear legacy
+  // to the configured high-reasoning model (Carbon by default). Clear legacy
   // per-agent overrides so the command-bar choice applies globally.
   const handleModelModeSelect = useCallback((mode: 'normal' | 'high') => {
     if (mode === 'high' && !confirmFableSelection(autoHighThinkingModel)) return;
@@ -27202,6 +27170,22 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         setIsDxfExportModalOpen(false);
         return;
     }
+    // Ask for the destination before generating the DXF: the File System Access
+    // picker only opens during the click that started the export, and a large
+    // drawing can take long enough to lose that activation. Without a picker the
+    // export lands in Downloads instead of the folder the user has in mind.
+    let targetHandle: NativeSaveFileHandle | null = null;
+    try {
+        const picked = await pickSaveFileHandle(options.fileName, 'dxf');
+        if (picked.status === 'canceled') return;
+        if (picked.status === 'picked') targetHandle = picked.handle;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : 'Could not open the save dialog.';
+        console.error('[handleExportDxf] Save dialog failed:', err);
+        setError(`DXF Export Error: ${message}`);
+        return;
+    }
+
     try {
         let dxfOptions = options;
         if (options.includePointStyleNames) {
@@ -27236,13 +27220,24 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             agentAnnotMode,
         );
         const blob = new Blob([dxfContent], { type: 'application/dxf;charset=utf-8' });
-        triggerDownload(blob, options.fileName);
+        if (targetHandle) {
+            await writeBlobToFileHandle(targetHandle, blob);
+        } else {
+            triggerDownload(blob, options.fileName);
+            addNotification({
+                kind: 'file-export',
+                severity: 'info',
+                title: 'DXF saved to Downloads',
+                message: `${options.fileName} went to your browser's Downloads folder because this browser could not open the save dialog.`,
+                autoDismissMs: 10000,
+            });
+        }
     } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred during DXF generation.';
         setError(`DXF Export Error: ${errorMessage}`);
     }
     setIsDxfExportModalOpen(false);
-  }, [points, visibleLines, visibleCenterlines, settings, customSymbols, contourLabels, parcelLabels, parcelLabelFormatter, parcelCadTextStyles, annotationCategories, dimensions, hatches, cadManagerState.standard?.hatches, agentAnnotMode, pointStudioState, pointLists]);
+  }, [points, visibleLines, visibleCenterlines, settings, customSymbols, contourLabels, parcelLabels, parcelLabelFormatter, parcelCadTextStyles, annotationCategories, dimensions, hatches, cadManagerState.standard?.hatches, agentAnnotMode, pointStudioState, pointLists, addNotification]);
 
 
    const handleExportPoints = useCallback((format: 'csv' | 'txt_comma' | 'txt_space') => {
@@ -27287,6 +27282,14 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     if (!isSessionActive) return false;
 
     const savedAt = new Date().toISOString();
+    // The Save dialog freezes its preview timestamp when it opens so the name
+    // cannot drift while the user fills in the form. Use that frozen value for
+    // the file name (so it matches the preview) and keep `savedAt` — the real
+    // packaging time — for the manifest.
+    const requestedNameTimestamp = saveOptions?.savedAt ? new Date(saveOptions.savedAt) : null;
+    const fileNameTimestamp = requestedNameTimestamp && !Number.isNaN(requestedNameTimestamp.getTime())
+      ? requestedNameTimestamp.toISOString()
+      : savedAt;
     const sessionCadManagerState = buildCadManagerSessionState(cadManagerContext.state, savedAt);
     const suggestedName = generateSessionFileName(
       jobInfo.jobName,
@@ -27295,7 +27298,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         ...saveOptions,
         jobNumber: jobInfo.jobNo,
         activeAgent,
-        savedAt,
+        savedAt: fileNameTimestamp,
       }
     );
 
@@ -27496,6 +27499,13 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
             await writeBlobToFileHandle(targetHandle, blob);
         } else {
             triggerDownload(blob, suggestedName);
+            addNotification({
+                kind: 'session-save',
+                severity: 'info',
+                title: 'Project saved to Downloads',
+                message: `${suggestedName} went to your browser's Downloads folder because this browser could not open the save dialog.`,
+                autoDismissMs: 10000,
+            });
         }
         setIsSessionSaveModalOpen(false);
         return true;
@@ -27522,6 +27532,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     dismissedPointWorkflowKey, rasterUnderlayWorkflowStarted, rasterUnderlayWorkflowPanelSeen,
     dismissedRasterUnderlayWorkflowKey,
     setIsSessionSaveModalOpen,
+    addNotification,
     timeline.getSerializableDocument
   ]);
 

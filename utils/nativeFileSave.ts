@@ -12,6 +12,8 @@ export interface NativeSaveFileHandle {
   createWritable: () => Promise<{
     write: (data: Blob) => Promise<void>;
     close: () => Promise<void>;
+    /** Discards the stream without committing partial data (Chrome 93+). */
+    abort?: () => Promise<void>;
   }>;
 }
 
@@ -48,12 +50,27 @@ export const isFileSaveCanceled = (error: unknown): boolean => {
   return (error as { name?: unknown }).name === 'AbortError';
 };
 
+/** Native file types the app can write straight to disk. */
+export type SaveFileKind = 'lsvz' | 'dxf';
+
+const SAVE_FILE_TYPES: Record<SaveFileKind, { description: string; accept: Record<string, string[]> }> = {
+  lsvz: {
+    description: 'LandSurv.ai project archive',
+    accept: { 'application/zip': ['.lsvz'] },
+  },
+  dxf: {
+    description: 'AutoCAD drawing exchange format',
+    accept: { 'application/dxf': ['.dxf'] },
+  },
+};
+
 /**
- * Ask for a destination `.lsvz` handle. Cancellation is returned as a result so
+ * Ask for a destination file handle. Cancellation is returned as a result so
  * callers can leave their dialogs open instead of turning it into an error.
  */
-export async function pickSessionFileHandle(
+export async function pickSaveFileHandle(
   suggestedName: string,
+  kind: SaveFileKind = 'lsvz',
 ): Promise<SaveFilePickerResult> {
   const picker = getSavePicker();
   if (!picker) return { status: 'unsupported' };
@@ -61,12 +78,7 @@ export async function pickSessionFileHandle(
   try {
     const handle = await picker.call(window, {
       suggestedName,
-      types: [
-        {
-          description: 'LandSurv.ai project archive',
-          accept: { 'application/zip': ['.lsvz'] },
-        },
-      ],
+      types: [SAVE_FILE_TYPES[kind]],
     });
     return { status: 'picked', handle };
   } catch (error) {
@@ -85,6 +97,10 @@ export async function pickSessionFileHandle(
   }
 }
 
+/** Ask for a destination `.lsvz` handle. */
+export const pickSessionFileHandle = (suggestedName: string): Promise<SaveFilePickerResult> =>
+  pickSaveFileHandle(suggestedName, 'lsvz');
+
 /** Write a generated project archive into an already-picked file. */
 export async function writeBlobToFileHandle(
   handle: NativeSaveFileHandle,
@@ -99,9 +115,11 @@ export async function writeBlobToFileHandle(
     await writable.write(blob);
     await writable.close();
   } catch (error) {
-    // Close a partially written stream so the browser does not keep a lock.
+    // Discard the partial stream. Calling close() here would commit whatever
+    // was written and leave a truncated file behind at the destination.
     try {
-      await writable.close();
+      if (typeof writable.abort === 'function') await writable.abort();
+      else await writable.close();
     } catch {
       /* already closed or canceled */
     }

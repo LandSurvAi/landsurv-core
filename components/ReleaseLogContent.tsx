@@ -2,6 +2,14 @@
 
 const releases = [
     {
+        version: "26.11.18.01",
+        date: "November 18, 2026",
+        highlights: [
+            "📐 DXF Imports Now Keep IntelliCAD Curves, Labels and Fills: Polyline vertices are read in record order, so an optional bulge on one vertex no longer shifts every later arc and turns curved cul-de-sacs into faceted chords or long crossing lines. The importer now expands ellipses, splines, TEXT/MTEXT labels, and nested or arrayed block inserts, and reads hatch boundary paths into solid or tinted pattern fills with island cut-outs. Block attributes honor INSERT ATTRIB values over ATTDEF defaults, including layer-0 and BYBLOCK inheritance.",
+            "🗺️ DXF Model Space Opens Clean: Paper-space sheet borders, viewports and title blocks are skipped whenever the file also contains model-space geometry, and entities carrying a 210/220/230 extrusion are transformed through the DXF arbitrary axis algorithm so mirrored and rotated geometry lands in the right place. Imported drawings now open with their true curves, area labels, fills and block annotation instead of stray sheet content.",
+        ],
+    },
+    {
         version: "26.11.17.01",
         date: "November 17, 2026",
         highlights: [

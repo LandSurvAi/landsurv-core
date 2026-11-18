@@ -89,6 +89,7 @@ const MODEL_LABELS: Record<string, string> = {
   'gemini-3.7-flash': 'Gemini 3.7 Flash',
   'gemini-3.8-flash': 'Gemini 3.8 Flash',
   'gemini-4-hydrogen': 'Gemini 4 Hydrogen',
+  'gemini-4-carbon': 'Gemini 4 Carbon',
   'gemini-4-argon': 'Gemini 4 Argon',
   'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
   'claude-sonnet-5': 'Claude Sonnet 5',

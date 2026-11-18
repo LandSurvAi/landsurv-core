@@ -141,10 +141,10 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
   settingsSummary,
   onOpenFullscreen,
   activeModel,
-  availableModels = ['auto', 'gemini-4-hydrogen', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5'],
+  availableModels = ['auto', 'gemini-4-carbon', 'gemini-4-hydrogen', 'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5'],
   onModelChange,
   autoHighThinkingModel,
-  autoHighThinkingOptions = ['gemini-4-argon', 'gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5'],
+  autoHighThinkingOptions = ['gemini-4-carbon', 'gemini-4-argon', 'gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5'],
   onAutoHighThinkingModelChange,
   onApplyClusterProjection,
   projectBboxWgs84,
@@ -839,7 +839,7 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
               </label>
               <select
                 id="a2ui-high-thinking"
-                value={autoHighThinkingModel || 'gemini-4-argon'}
+                value={autoHighThinkingModel || 'gemini-4-carbon'}
                 onChange={e => onAutoHighThinkingModelChange(e.target.value)}
                 className={inputClass}
               >
@@ -854,7 +854,7 @@ export const A2UISettingsSurface: React.FC<A2UISettingsSurfaceProps> = ({
 
           <div>
             <label htmlFor="a2ui-argon-reasoning" className="mb-1 block text-[9.5px] font-semibold uppercase tracking-wider text-slate-400">
-              Argon Reasoning
+              High-Thinking Reasoning
             </label>
             <select
               id="a2ui-argon-reasoning"

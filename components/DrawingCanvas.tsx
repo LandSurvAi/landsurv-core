@@ -8383,6 +8383,46 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
         // Draw lines
         // Keep steep-slope geometry behind contours and design lines so contour
         // generations remain readable after steep-slope analysis.
+        // Imported CAD hatches (DXF HATCH) sit below linework so their boundaries
+        // and neighbouring entities remain readable. This pass runs inside the
+        // world-space transform, so paths use raw world coordinates.
+        {
+            const importedHatches = lines.filter(
+                line => line.type === 'dxf-hatch' && !line.hidden && line.fillPaths && line.fillPaths.length > 0
+            );
+            for (const hatch of importedHatches) {
+                ctx.beginPath();
+                for (const path of hatch.fillPaths!) {
+                    if (path.length < 3) continue;
+                    ctx.moveTo(path[0].x, path[0].y);
+                    for (let i = 1; i < path.length; i++) {
+                        ctx.lineTo(path[i].x, path[i].y);
+                    }
+                    ctx.closePath();
+                }
+
+                const fillColor = resolveCadEntityColor(hatch, layerColorLookup)
+                    || (isLightTheme ? '#111827' : '#E2E8F0');
+                ctx.save();
+                if (hatch.hatchSolid) {
+                    ctx.globalAlpha = 0.28;
+                    ctx.fillStyle = fillColor;
+                    ctx.fill('evenodd');
+                } else {
+                    // Pattern definitions are not reproduced; tint the region and
+                    // keep its boundary so the area still reads as hatched.
+                    ctx.globalAlpha = 0.12;
+                    ctx.fillStyle = fillColor;
+                    ctx.fill('evenodd');
+                    ctx.globalAlpha = 0.55;
+                    ctx.strokeStyle = fillColor;
+                    ctx.lineWidth = 1 * inverseScale;
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+        }
+
         const orderedLines = [...lines].sort((a, b) => {
             const aSteep = a.type === 'steep-slope' ? 0 : 1;
             const bSteep = b.type === 'steep-slope' ? 0 : 1;
@@ -11589,6 +11629,37 @@ export const DrawingCanvas = forwardRef<DrawingCanvasHandles, DrawingCanvasProps
                     }
                     ctx.restore();
                 }
+            }
+        }
+
+        // CAD TEXT/MTEXT labels imported from DXF. These anchors carry text only,
+        // so the linework passes skip them and they are drawn here in world units.
+        {
+            const importedTextLabels = lines.filter(l => l.type === 'dxf-text' && l.labelText && !l.hidden);
+            for (const l of importedTextLabels) {
+                const anchor = l.fromPt
+                    ?? (pointMap.get(l.from) ? { x: pointMap.get(l.from)!.easting, y: pointMap.get(l.from)!.northing } : null);
+                if (!anchor) continue;
+
+                const worldHeight = l.labelHeight && l.labelHeight > 0 ? l.labelHeight : 2.5;
+                const fontSize = worldHeight * transform.scale;
+                if (fontSize < 3 || fontSize > 320) continue;
+
+                const screen = worldToScreen(anchor.x, anchor.y);
+                if (screen.x < -200 || screen.x > canvas.clientWidth + 200 || screen.y < -100 || screen.y > canvas.clientHeight + 100) continue;
+
+                ctx.save();
+                ctx.translate(screen.x, screen.y);
+                if (l.labelRotation) ctx.rotate((-l.labelRotation * Math.PI) / 180);
+                ctx.font = `${fontSize}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.lineWidth = Math.max(1, fontSize * 0.12);
+                ctx.strokeStyle = isLightTheme ? 'rgba(255,255,255,0.9)' : 'rgba(8,12,24,0.9)';
+                ctx.fillStyle = resolveCadEntityColor(l, layerColorLookup) || (isLightTheme ? '#111827' : '#E2E8F0');
+                ctx.strokeText(l.labelText!, 0, 0);
+                ctx.fillText(l.labelText!, 0, 0);
+                ctx.restore();
             }
         }
 

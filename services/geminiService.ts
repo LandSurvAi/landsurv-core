@@ -43,7 +43,7 @@ export const AUTO_FAST_MODEL = 'gemini-3.5-flash-lite';
 export const DEFAULT_GEMINI_MODEL = 'gemini-4-hydrogen';
 /** Model pinned when the user selects the High Thinking command-bar mode.
  *  Its own reasoning defaults to Fast; High Thinking is opt-in in Settings. */
-export const DEFAULT_HIGH_THINKING_GEMINI_MODEL = 'gemini-4-argon';
+export const DEFAULT_HIGH_THINKING_GEMINI_MODEL = 'gemini-4-carbon';
 export const DIRECT_FALLBACK_MODEL = 'gemini-2.5-flash';
 const resolveDirectGenerateModel = (requestedModel?: string | null): string => {
   if (!requestedModel || requestedModel === 'auto') return DIRECT_FALLBACK_MODEL;
@@ -51,7 +51,7 @@ const resolveDirectGenerateModel = (requestedModel?: string | null): string => {
     ? DIRECT_FALLBACK_MODEL
     : requestedModel;
 };
-export const AUTO_HIGH_THINKING_MODELS = [DEFAULT_HIGH_THINKING_GEMINI_MODEL, DEFAULT_GEMINI_MODEL, 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5'] as const;
+export const AUTO_HIGH_THINKING_MODELS = [DEFAULT_HIGH_THINKING_GEMINI_MODEL, 'gemini-4-argon', DEFAULT_GEMINI_MODEL, 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5'] as const;
 export const STANDARDS_COMPLIANCE_MODEL = DEFAULT_GEMINI_MODEL;
 
 type ChatStreamArgs = { message: string | Array<Part | { text: string }> };
@@ -2451,7 +2451,7 @@ export const getModelForAgent = (agentType: AgentType, defaultModel: string): st
 /**
  * Normal Auto routing: Flash-Lite for light work and Gemini 4 Hydrogen for
  * complex reasoning. High Thinking is a separate global mode that pins the
- * configured high-thinking model (Gemini 4 Argon by default).
+ * configured high-thinking model (Gemini 4 Carbon by default).
  */
 export const getAutoModelForAgent = (agentType: AgentType): string => (
   AUTO_COMPLEX_AGENTS.has(agentType) ? DEFAULT_GEMINI_MODEL : AUTO_FAST_MODEL
@@ -2591,10 +2591,12 @@ ${bearingDistancePreferenceInstruction()}`;
         // 2.x shape silently produces empty responses, which breaks the JSON handoff
         // for the Civil Plan Expert. So we only apply this Gemini-3/4-safe default for
         // Gemini Vertex models; non-Gemini publishers get an empty config by default.
-        const isArgonModel = modelForAgent === DEFAULT_HIGH_THINKING_GEMINI_MODEL;
-        // Argon is opt-in reasoning: Fast (LOW) is the default, and only an
-        // explicit High Thinking choice raises it to HIGH. Hydrogen keeps its
-        // HIGH default because it is the standard reasoning model.
+        // Gemini 4 Carbon (the High Thinking default) and its Argon
+        // predecessor are opt-in reasoning: Fast (LOW) is the default, and
+        // only an explicit High Thinking choice raises them to HIGH. Hydrogen
+        // keeps its HIGH default because it is the standard reasoning model.
+        const isGemini4HighThinkingModel = modelForAgent === DEFAULT_HIGH_THINKING_GEMINI_MODEL
+          || modelForAgent === 'gemini-4-argon';
         const argonThinkingLevel = settings.argonReasoning === 'high' ? 'HIGH' : 'LOW';
         const isHydrogenModel = modelForAgent === DEFAULT_GEMINI_MODEL;
         // Deed and plan extraction are bounded transcription tasks: read the
@@ -2603,7 +2605,7 @@ ${bearingDistancePreferenceInstruction()}`;
         // is emitted, so document agents stay on MEDIUM.
         const isDocumentExtractionAgent = agentType === AgentType.DEED_READER
           || agentType === AgentType.CIVIL_PLAN_EXPERT;
-        const gemini4ThinkingLevel = isArgonModel
+        const gemini4ThinkingLevel = isGemini4HighThinkingModel
           ? argonThinkingLevel
           : isHydrogenModel
             ? (isDocumentExtractionAgent ? 'MEDIUM' : 'HIGH')
@@ -2615,7 +2617,7 @@ ${bearingDistancePreferenceInstruction()}`;
               // Thinking tokens count against maxOutputTokens. Give both
               // reasoning models the full ceiling so a deed parse is never cut
               // off before its RESULT JSON is produced.
-              ...(isArgonModel || isHydrogenModel ? { maxOutputTokens: 64000 } : {}),
+              ...(isGemini4HighThinkingModel || isHydrogenModel ? { maxOutputTokens: 64000 } : {}),
             }
           : {};
 

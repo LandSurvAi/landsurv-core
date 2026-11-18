@@ -29,17 +29,18 @@ export const triggerDownload = (blob: Blob, fileName: string): void => {
     }
 
     const url = URL.createObjectURL(blob);
-    try {
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = safeName;
-        link.rel = 'noopener';
-        link.style.display = 'none';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    } finally {
-        // Defer revocation so the browser has time to begin the download.
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
-    }
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = safeName;
+    link.rel = 'noopener';
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    // Defer removal and revocation. Removing the anchor or revoking the object
+    // URL in the same task can cancel the download before the browser starts
+    // streaming it, which shows up as "Save did nothing".
+    setTimeout(() => {
+        link.remove();
+        URL.revokeObjectURL(url);
+    }, 10000);
+    link.click();
 };

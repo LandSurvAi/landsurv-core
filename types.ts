@@ -1100,9 +1100,13 @@ export interface SurveyLine {
   color?: string;
   /** Optional polygon fill path (used by steep-slope filled triangles). */
   fillPath?: Array<{ x: number, y: number, z: number }>;
+  /** Closed polygon loops for an imported CAD hatch (DXF HATCH), world coordinates. */
+  fillPaths?: Array<Array<{ x: number, y: number, z: number }>>;
+  /** True when the imported hatch is a solid fill rather than a pattern. */
+  hatchSolid?: boolean;
   bearing?: string;
   distance?: string;
-  type?: 'baseline' | 'breakline' | 'inclusion' | 'exclusion' | 'shrinkwrap-preview' | 'contour-major' | 'contour-minor' | 'parcel' | 'flood' | 'bfe' | 'fema-cross-section' | 'fema-firm-panel' | 'fema-political' | 'fema-lomr' | 'fema-loma' | 'fema-water' | 'fema-limwa' | 'fema-levee' | 'fema-structure' | 'fema-dune' | 'fema-hydrology' | 'fema-boundary' | 'fema-other' | 'fema-point' | 'soils' | 'steep-slope' | 'tin-edge' | 'road-paint';
+  type?: 'baseline' | 'breakline' | 'inclusion' | 'exclusion' | 'shrinkwrap-preview' | 'contour-major' | 'contour-minor' | 'parcel' | 'flood' | 'bfe' | 'fema-cross-section' | 'fema-firm-panel' | 'fema-political' | 'fema-lomr' | 'fema-loma' | 'fema-water' | 'fema-limwa' | 'fema-levee' | 'fema-structure' | 'fema-dune' | 'fema-hydrology' | 'fema-boundary' | 'fema-other' | 'fema-point' | 'soils' | 'steep-slope' | 'tin-edge' | 'road-paint' | 'dxf-text' | 'dxf-hatch';
   fromPt?: { x: number, y: number, z: number };
   toPt?: { x: number, y: number, z: number };
   // Curve parameters (for closure calculations and plotting)
@@ -1117,6 +1121,8 @@ export interface SurveyLine {
   curveDirection?: 'left' | 'right';
   labelOffset?: { x: number; y: number }; // Offset for B&D label in world coordinates
   labelRotation?: number; // Rotation angle for B&D label (0 or 180 degrees)
+  /** World-unit text height for imported CAD annotation (DXF TEXT/MTEXT). */
+  labelHeight?: number;
   layer?: string; // CAD layer name for export
   /** Parcel key for linework fetched from a county parcel layer. */
   parcelId?: string;
@@ -2256,7 +2262,7 @@ export interface Settings {
      * layer names, EPSG codes, and coordinates always stay in Latin script.
      */
     aiOutputLanguage?: 'en' | 'ar' | 'auto';
-    /** Gemini 4 Argon reasoning: Fast by default, with High Thinking as an opt-in. */
+    /** Gemini 4 Carbon/Argon reasoning: Fast by default, with High Thinking as an opt-in. */
     argonReasoning?: 'fast' | 'high';
     /** Baseline / Stationing & CL auto-point and annotation preferences. */
     stationing?: StationingSettings;

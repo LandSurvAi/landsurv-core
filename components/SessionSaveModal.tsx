@@ -45,20 +45,28 @@ const SessionSaveModal: React.FC<SessionSaveModalProps> = ({
 }) => {
   const [options, setOptions] = useState<SessionSaveOptions>(() => defaultOptionsFromProps(defaultFileName, defaultAuthor, jobNumber, activeAgent));
   const [isSaving, setIsSaving] = useState(false);
+  // Frozen when the dialog opens so the preview cannot tick while the user
+  // fills in the form; the saved name must match the name the preview promised.
+  const [savedAt, setSavedAt] = useState(() => new Date().toISOString());
 
   useEffect(() => {
     if (!isOpen) return;
     setOptions(defaultOptionsFromProps(defaultFileName, defaultAuthor, jobNumber, activeAgent));
   }, [isOpen, defaultFileName, defaultAuthor, jobNumber, activeAgent]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    setSavedAt(new Date().toISOString());
+  }, [isOpen]);
+
   const previewFileName = useMemo(() => {
     return generateSessionFileName(jobName, associatedFiles, {
       ...options,
       jobNumber,
       activeAgent,
-      savedAt: new Date().toISOString(),
+      savedAt,
     });
-  }, [jobName, associatedFiles, options, jobNumber, activeAgent]);
+  }, [jobName, associatedFiles, options, jobNumber, activeAgent, savedAt]);
 
   if (!isOpen) return null;
 
@@ -72,6 +80,7 @@ const SessionSaveModal: React.FC<SessionSaveModalProps> = ({
       ...options,
       jobNumber,
       activeAgent,
+      savedAt,
     });
     // Only take over the button state when the host actually returns a
     // promise (the native picker/archive path). Synchronous hosts stay inert.

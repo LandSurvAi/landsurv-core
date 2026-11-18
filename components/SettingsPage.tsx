@@ -107,6 +107,7 @@ const getSelectorModelLabel = (modelName: string): string => (
     : modelName === 'gemini-3.7-flash' ? 'Gemini 3.7 Flash'
     : modelName === 'gemini-3.8-flash' ? 'Gemini 3.8 Flash'
     : modelName === 'gemini-4-hydrogen' ? 'Gemini 4 Hydrogen'
+    : modelName === 'gemini-4-carbon' ? 'Gemini 4 Carbon'
     : modelName === 'gemini-4-argon' ? 'Gemini 4 Argon'
     : modelName === 'gemini-3.5-flash-lite' ? 'Gemini 3.5 Flash Lite'
     : modelName === 'gpt-5.6-terra' ? 'GPT-5.6 Terra (your OpenAI key)'
@@ -602,10 +603,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             ))}
                         </select>
                         <p className="text-xs text-gray-500 mt-1">
-                            {activeModel === AUTO_SELECTOR_OPTION && `Normal mode uses Gemini 3.5 Flash Lite for quick tasks and Gemini 4 Hydrogen for complex agents. High Thinking uses ${getSelectorModelLabel(autoHighThinkingModel || 'gemini-4-argon')}.`}
+                            {activeModel === AUTO_SELECTOR_OPTION && `Normal mode uses Gemini 3.5 Flash Lite for quick tasks and Gemini 4 Hydrogen for complex agents. High Thinking uses ${getSelectorModelLabel(autoHighThinkingModel || 'gemini-4-carbon')}.`}
                             {activeModel === 'gemini-3.7-flash' && 'Gemini 3.7 Flash via Vertex AI backend'}
                             {activeModel === 'gemini-3.8-flash' && 'Gemini 3.8 Flash via Vertex AI backend'}
                             {activeModel === 'gemini-4-hydrogen' && 'Gemini 4 Hydrogen (standard reasoning) via Vertex AI backend'}
+                            {activeModel === 'gemini-4-carbon' && 'Gemini 4 Carbon (most capable) via Vertex AI backend — set its reasoning below'}
                             {activeModel === 'gemini-4-argon' && 'Gemini 4 Argon via Vertex AI backend — set its reasoning below'}
                             {activeModel.startsWith('claude-') && (settings.anthropicApiKey?.trim() ? 'Anthropic Claude via your own Anthropic key (browser-direct)' : 'Anthropic Claude via Vertex AI backend')}
                             {/^(gpt-|o\d|chatgpt-)/i.test(activeModel) && 'OpenAI via your own OpenAI key (browser-direct)'}
@@ -619,19 +621,19 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         </label>
                         <select
                             id="autoThinkingSelector"
-                            value={autoHighThinkingModel || 'gemini-4-argon'}
+                            value={autoHighThinkingModel || 'gemini-4-carbon'}
                             onChange={e => onAutoHighThinkingModelChange?.(e.target.value)}
                             className={`w-full bg-gray-700 border border-gray-600 rounded-md p-2 text-sm text-gray-200 focus:outline-none focus:ring-2 ${themeFocusRing} light-theme:bg-white light-theme:border-gray-300 light-theme:text-gray-900`}
                         >
-                            {(autoHighThinkingOptions || ['gemini-4-argon', 'gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']).map(model => (
+                            {(autoHighThinkingOptions || ['gemini-4-carbon', 'gemini-4-argon', 'gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']).map(model => (
                                 <option key={model} value={model}>{getSelectorModelLabel(model)}</option>
                             ))}
                         </select>
-                        <p className="text-xs text-gray-500 mt-1">Used when High Thinking is selected in the command bar. Gemini 4 Argon is the default model.</p>
+                        <p className="text-xs text-gray-500 mt-1">Used when High Thinking is selected in the command bar. Gemini 4 Carbon is the default model.</p>
                     </div>
                     <div>
                         <label htmlFor="argonReasoningSelector" className="flex items-center gap-2 text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">
-                            Argon Reasoning
+                            High-Thinking Reasoning
                             <CogIcon className="w-4 h-4 text-gray-500" />
                         </label>
                         <select
@@ -643,7 +645,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             <option value="fast">Fast (default) — light reasoning</option>
                             <option value="high">High Thinking — deeper reasoning</option>
                         </select>
-                        <p className="text-xs text-gray-500 mt-1">Gemini 4 Argon runs Fast by default to keep latency and thinking-token use low. Choose High Thinking only when the task needs deeper reasoning.</p>
+                        <p className="text-xs text-gray-500 mt-1">Gemini 4 Carbon and Argon run Fast by default to keep latency and thinking-token use low. Choose High Thinking only when the task needs deeper reasoning.</p>
                     </div>
                     <div>
                         <label htmlFor="aiOutputLanguage" className="block text-sm font-medium text-gray-400 mb-1 light-theme:text-gray-500">AI Output Language</label>
