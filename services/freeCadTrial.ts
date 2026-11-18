@@ -309,7 +309,15 @@ export async function refreshTrialStatus(): Promise<FreeCadTrialSnapshot> {
     return getLocalSnapshot(null);
   }
 
-  const response = await postJson<ServerStatusResponse>('/api/trial/status', { fingerprintId });
+  let response = await postJson<ServerStatusResponse>('/api/trial/status', { fingerprintId });
+  // A failed /api/trial/accept leaves a valid local record with no server row.
+  // Replay the acceptance once the ledger is reachable so the first prompt does
+  // not fail with 409 TRIAL_NOT_ACCEPTED.
+  if (response.ok && response.data?.accepted === false && hasAcceptedTrialTerms()) {
+    if (await reacceptWithLocalRecord(fingerprintId)) {
+      response = await postJson<ServerStatusResponse>('/api/trial/status', { fingerprintId });
+    }
+  }
   if (response.ok && response.data) {
     const snapshot = buildSnapshot({
       used: response.data.used,
@@ -330,6 +338,30 @@ export async function refreshTrialStatus(): Promise<FreeCadTrialSnapshot> {
   return cached ?? getLocalSnapshot(fingerprintId);
 }
 
+/**
+ * A failed /api/trial/accept (network hiccup, deploy in flight, cleared server
+ * ledger) leaves a valid acceptance in localStorage but none on the server,
+ * and every later consume answers 409 TRIAL_NOT_ACCEPTED. Re-post the record we
+ * already hold — never a new acceptance — so the user is not dead-ended.
+ */
+async function reacceptWithLocalRecord(fingerprintId: string): Promise<boolean> {
+  const record = getTrialAcceptanceRecord();
+  if (!record || !record.acceptedAt || record.termsVersion !== TRIAL_TERMS_VERSION) return false;
+  const response = await postJson<Record<string, unknown>>('/api/trial/accept', {
+    fingerprintId,
+    termsVersion: record.termsVersion,
+    acceptedAt: record.acceptedAt,
+    userAgent: record.userAgent,
+    surface: record.surface,
+    fingerprintSignals: record.fingerprintSignals,
+  });
+  if (!response.ok) return false;
+  if (record.fingerprintId !== fingerprintId) {
+    writeJson(ACCEPTANCE_KEY, { ...record, fingerprintId });
+  }
+  return true;
+}
+
 export async function consumeTrialPrompt(
   options?: { kind?: 'general' | 'deed' },
 ): Promise<ConsumeTrialPromptResult> {
@@ -340,10 +372,18 @@ export async function consumeTrialPrompt(
     return { allowed: false, snapshot, reason: 'error' };
   }
 
-  const response = await postJson<ServerStatusResponse & { allowed?: boolean; turnId?: string; expiresAt?: string }>(
-    '/api/trial/consume',
-    { fingerprintId, termsVersion: TRIAL_TERMS_VERSION, kind: isDeed ? 'deed' : 'general' },
-  );
+  const consumeBody = { fingerprintId, termsVersion: TRIAL_TERMS_VERSION, kind: isDeed ? 'deed' : 'general' };
+  const consumePath = '/api/trial/consume';
+  type ConsumeResponse = ServerStatusResponse & { allowed?: boolean; turnId?: string; expiresAt?: string };
+  let response = await postJson<ConsumeResponse>(consumePath, consumeBody);
+
+  const failureCode = response.data?.code;
+  if (
+    (failureCode === 'TRIAL_NOT_ACCEPTED' || failureCode === 'TRIAL_TERMS_STALE') &&
+    (await reacceptWithLocalRecord(fingerprintId))
+  ) {
+    response = await postJson<ConsumeResponse>(consumePath, consumeBody);
+  }
 
   if (response.data) {
     const snapshot = buildSnapshot({

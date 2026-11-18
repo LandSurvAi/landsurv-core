@@ -1,18 +1,31 @@
 /**
  * Service Worker for LandSurv.ai
- * Provides app-shell caching plus safe offline fallbacks.
+ *
+ * Scope: static shell assets only. API calls, non-GET requests, and everything
+ * cross-origin are released to the browser untouched, so a stale worker can
+ * never sit in front of inference.
+ *
+ * `/` and `/index.html` are served `Cache-Control: no-store`, so they are not
+ * precached: adding them made the install step fail with `net::ERR_CACHE_MISS`
+ * and left the worker without an offline shell.
  */
 
-const CACHE_VERSION = 'v1.39.0';
+const CACHE_VERSION = 'v1.40.0';
 const APP_SHELL_CACHE = `landsurv-shell-${CACHE_VERSION}`;
 const STATIC_ASSET_CACHE = `landsurv-static-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `landsurv-runtime-${CACHE_VERSION}`;
 const OFFLINE_FALLBACK_URL = '/offline.html';
 
-const APP_SHELL_URLS = ['/', '/index.html', OFFLINE_FALLBACK_URL, '/manifest.webmanifest', '/favicon-32.png', '/favicon-192.png', '/favicon-512.png'];
+const APP_SHELL_URLS = [
+  OFFLINE_FALLBACK_URL,
+  '/manifest.webmanifest',
+  '/favicon-32.png',
+  '/favicon-192.png',
+  '/favicon-512.png',
+];
 
 const isSameOrigin = (url) => url.origin === self.location.origin;
-const isApiRequest = (url) => url.pathname.startsWith('/api/');
+const isApiRequest = (url) => url.pathname === '/api' || url.pathname.startsWith('/api/');
 const isNavigationRequest = (request) => request.mode === 'navigate' || request.headers.get('accept')?.includes('text/html');
 const isStaticAssetRequest = (request) => {
   return request.destination === 'font' ||
@@ -20,24 +33,39 @@ const isStaticAssetRequest = (request) => {
     request.destination === 'manifest';
 };
 
+/** Only original, successful, non-partial responses belong in the cache. */
+const canCache = (response) => Boolean(response && response.ok && response.status === 200 && response.type === 'basic');
+
 const cachePutSafe = async (cacheName, request, response) => {
-  if (!response || !response.ok) {
+  if (!canCache(response)) {
     return;
   }
 
-  const cache = await caches.open(cacheName);
-  await cache.put(request, response.clone());
+  try {
+    const cache = await caches.open(cacheName);
+    await cache.put(request, response.clone());
+  } catch (error) {
+    // Quota errors and uncacheable responses (Vary: *, partial content) must
+    // never turn an otherwise good network response into a failed request.
+    console.log('[SW] Cache write skipped:', error);
+  }
 };
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
       const shellCache = await caches.open(APP_SHELL_CACHE);
-      try {
-        await shellCache.addAll(APP_SHELL_URLS);
-      } catch (error) {
-        console.log('[SW] Shell precache failed; continuing with runtime caching:', error);
-      }
+      // Add one by one: addAll() rejects the whole batch when a single URL is
+      // missing, which used to abort the precache entirely.
+      await Promise.all(
+        APP_SHELL_URLS.map(async (url) => {
+          try {
+            await shellCache.add(url);
+          } catch (error) {
+            console.log(`[SW] Precache skipped for ${url}:`, error);
+          }
+        })
+      );
     })()
   );
 

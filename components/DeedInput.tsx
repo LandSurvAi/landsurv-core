@@ -210,13 +210,13 @@ const DeedInput: React.FC<DeedInputProps> = ({ onDeedSubmitted, onDeedBatchSubmi
             throw new Error(`Unsupported file type: ${file.type}`);
           }
 
-          if (!text || text.trim().length === 0) {
+          if ((!text || text.trim().length === 0) && (!rasterImageData || rasterImageData.length === 0)) {
             throw new Error(`No text could be extracted from ${file.name}. The file might be corrupted, empty, or too low quality.`);
           }
 
           processedFiles.push({
             name: file.name,
-            content: text,
+            content: text && text.trim().length > 0 ? text : `(Scanned document: ${file.name} — see attached page images)`,
             fileData,
             rasterImageData,
             selectedPages: pages,

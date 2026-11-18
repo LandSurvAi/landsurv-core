@@ -81,12 +81,12 @@ async function processDeedFile(
     const fileData = await readFileAsDataUrl(file);
     const { processPdfForMultimodal } = await import('../utils/pdfUtils.ts');
     const result = await processPdfForMultimodal(file, onProgress, selectedPages);
-    if (!result.text.trim()) {
+    if (!result.text.trim() && result.rasterImageData.length === 0) {
       throw new Error(`No text could be extracted from ${file.name}.`);
     }
     return {
       name: file.name,
-      content: result.text,
+      content: result.text.trim() ? result.text : `(Scanned document: ${file.name} — see attached page images)`,
       fileData,
       rasterImageData: result.rasterImageData,
       pdfLayerNames: result.layerNames,
@@ -99,12 +99,12 @@ async function processDeedFile(
     const fileData = await readFileAsDataUrl(file);
     const { processRasterImageForMultimodal } = await import('../utils/pdfUtils.ts');
     const result = await processRasterImageForMultimodal(file, onProgress);
-    if (!result.text.trim()) {
+    if (!result.text.trim() && result.rasterImageData.length === 0) {
       throw new Error(`No text could be extracted from ${file.name}.`);
     }
     return {
       name: file.name,
-      content: result.text,
+      content: result.text.trim() ? result.text : `(Scanned document: ${file.name} — see attached page images)`,
       fileData,
       rasterImageData: result.rasterImageData,
     };

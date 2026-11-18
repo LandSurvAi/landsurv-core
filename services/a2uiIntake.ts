@@ -520,7 +520,8 @@ const EXPLICIT_UPLOAD_CMD_RE =
 export function classifyA2UIIntakeReply(
   query: string,
   activeAgent: AgentType,
-  lastMessage?: ChatMessage | null
+  lastMessage?: ChatMessage | null,
+  options?: { hasDeedLoaded?: boolean }
 ): A2UIReplyResolution | null {
   const trimmed = query.trim();
   if (!trimmed) return null;
@@ -728,8 +729,13 @@ export function classifyA2UIIntakeReply(
   }
 
   // LSAI's empty-workspace Quick Thought uses "Process a deed" as a direct
-  // intake action; it should open the deed widget even with no prompt loaded.
-  if (/^(?:process|upload|analyze|read)\s+(?:a\s+|the\s+)?deed$/i.test(trimmed)) {
+  // intake action; it should open the deed widget when no deed is loaded yet.
+  // Once a deed is loaded, only an explicit "upload" asks for a new file so
+  // "process/analyze/read the deed" proceeds to AI inference.
+  if (
+    /^upload\s+(?:a\s+|the\s+)?deed$/i.test(trimmed) ||
+    (!options?.hasDeedLoaded && /^(?:process|analyze|read)\s+(?:a\s+|the\s+)?deed$/i.test(trimmed))
+  ) {
     return {
       action: 'show-upload-widget',
       widgetType: 'deed-upload',

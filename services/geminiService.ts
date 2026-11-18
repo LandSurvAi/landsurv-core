@@ -45,6 +45,12 @@ export const DEFAULT_GEMINI_MODEL = 'gemini-4-hydrogen';
  *  Its own reasoning defaults to Fast; High Thinking is opt-in in Settings. */
 export const DEFAULT_HIGH_THINKING_GEMINI_MODEL = 'gemini-4-argon';
 export const DIRECT_FALLBACK_MODEL = 'gemini-2.5-flash';
+const resolveDirectGenerateModel = (requestedModel?: string | null): string => {
+  if (!requestedModel || requestedModel === 'auto') return DIRECT_FALLBACK_MODEL;
+  return isClaudeModel(requestedModel) || isVertexOnlyModel(requestedModel)
+    ? DIRECT_FALLBACK_MODEL
+    : requestedModel;
+};
 export const AUTO_HIGH_THINKING_MODELS = [DEFAULT_HIGH_THINKING_GEMINI_MODEL, DEFAULT_GEMINI_MODEL, 'gemini-3.8-flash', 'gemini-3.7-flash', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5'] as const;
 export const STANDARDS_COMPLIANCE_MODEL = DEFAULT_GEMINI_MODEL;
 
@@ -2678,7 +2684,7 @@ export const extractZoningDistrictsFromMap = async (
         const ai = getAi(userApiKey);
         const prompt = `This is an official municipal ZONING MAP. Read its legend / district key and list EVERY zoning district shown. Codes verbatim from the legend (e.g. R-1, RC, V-1, MU). Include overlay districts. Return ONLY JSON: {"zoningDistricts":[{"code":"R-1","name":"Single-Family Residential"}]}. If you cannot read any districts, return {"zoningDistricts":[]}. No prose.`;
         const response = await ai.models.generateContent({
-            model,
+            model: resolveDirectGenerateModel(model),
             contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data: base64Data } }, { text: prompt }] }],
             config: { responseMimeType: 'application/json' },
         });
@@ -2717,11 +2723,7 @@ export const extractRedlineVisualMarkups = async (input: {
     const match = /^data:(image\/[a-zA-Z+]+);base64,(.+)$/.exec(input.imageDataUrl);
     if (!match) throw new Error('The rendered plan page is not a usable image.');
     const ai = getAi(input.userApiKey);
-    const model = !input.model || input.model === 'auto'
-        ? AUTO_FAST_MODEL
-        : isClaudeModel(input.model) || isVertexOnlyModel(input.model)
-            ? AUTO_FAST_MODEL
-            : input.model;
+    const model = resolveDirectGenerateModel(input.model);
     const prompt = `You are reading one marked-up civil plan sheet for the LandSurv.ai Redline Agent.
 
 Find ONLY reviewer markup added on top of the plan: revision clouds, freehand circles or strike marks, highlights, arrows/leaders, callout boxes, and sticky-note comments. Do NOT report the plan's printed linework, title block, printed labels, dimensions, legend, or ordinary drawing text.
@@ -2784,7 +2786,7 @@ export const selectContextSources = async (query: string, model: string, userApi
 
     try {
         const response = await ai.models.generateContent({
-            model: model,
+            model: resolveDirectGenerateModel(model),
             contents: prompt,
             config: {
                 responseMimeType: "application/json",
@@ -3072,7 +3074,7 @@ Return ONLY the JSON object, no markdown or explanation.
 `;
     
     const response = await ai.models.generateContent({
-        model: DEFAULT_GEMINI_MODEL,
+        model: DIRECT_FALLBACK_MODEL,
         contents: prompt,
         config: {
             responseMimeType: "application/json",
@@ -3185,7 +3187,7 @@ Return ONLY the JSON object, no markdown or explanation.
 `;
 
     const response = await ai.models.generateContent({
-        model: DEFAULT_GEMINI_MODEL,
+        model: DIRECT_FALLBACK_MODEL,
         contents: prompt,
         config: { responseMimeType: 'application/json' },
     });
@@ -3502,7 +3504,7 @@ ${file.content || '(No extracted text; inspect the attached page images.)'}`;
   }
 
   const response = await ai.models.generateContent({
-    model: isClaudeModel(model) || isVertexOnlyModel(model) ? AUTO_FAST_MODEL : model,
+    model: resolveDirectGenerateModel(model),
     contents: [{ role: 'user', parts }],
     config: { responseMimeType: 'application/json' },
   });
@@ -3597,7 +3599,7 @@ Return ONLY JSON in this exact shape:
   pushImages(input.subjectImages);
 
   const response = await ai.models.generateContent({
-    model: isClaudeModel(model) || isVertexOnlyModel(model) ? AUTO_FAST_MODEL : model,
+    model: resolveDirectGenerateModel(model),
     contents: [{ role: 'user', parts }],
     config: { responseMimeType: 'application/json' },
   });

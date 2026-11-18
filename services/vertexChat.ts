@@ -81,10 +81,14 @@ export class VertexChat {
     const freeMode = isFreeCadMode();
     const trialTurn = freeMode ? getActiveTrialTurnId() : null;
     const trialDevice = freeMode ? (await getDeviceFingerprint().catch(() => null)) : null;
-    const freeCadHeaders = freeMode
+    // Only declare Free CAD mode when a live trial turn is held. The backend
+    // rejects `x-landsurv-app-mode: free` without one (HTTP 402), which broke
+    // internal agent follow-ups and support calls on deployed builds where the
+    // backend proxy is the only inference path.
+    const freeCadHeaders = freeMode && trialTurn
       ? {
         'x-landsurv-app-mode': 'free',
-        ...(trialTurn ? { 'x-landsurv-trial-turn': trialTurn } : {}),
+        'x-landsurv-trial-turn': trialTurn,
         ...(trialDevice?.id ? { 'x-landsurv-device': trialDevice.id } : {}),
       }
       : {};

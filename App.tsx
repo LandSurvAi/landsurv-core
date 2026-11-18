@@ -311,7 +311,12 @@ import {
   type FreeCadTrialSnapshot,
   type TrialAcceptanceRecord,
 } from './services/freeCadTrial.ts';
-import { loadFreeCadDraft, scheduleFreeCadDraftSave } from './services/freeCadDraft.ts';
+import {
+  cancelScheduledFreeCadDraftSave,
+  clearFreeCadDraft,
+  loadFreeCadDraft,
+  scheduleFreeCadDraftSave,
+} from './services/freeCadDraft.ts';
 import FloatingPanel from './components/FloatingPanel.tsx';
 import { DockModeControl, type DockMode } from './components/DockModeControl.tsx';
 import FloodPanel from './components/FloodPanel.tsx';
@@ -5950,9 +5955,25 @@ const AppContent = () => {
                 if (summary.tracts.length > 0) {
                   logActionToFieldbook(`Deed summary: detected ${summary.tracts.length} description(s) — ${summary.tracts.map(t => t.tractId).join(', ')}.`);
                 }
-                // Summary-first: never auto-extract, even for a single
-                // description. The A2UI deed summary card stays in chat and the
-                // user chooses when to compute calls.
+                if (summary.tracts.length === 1) {
+                  const singleTract = summary.tracts[0];
+                  const tractId = singleTract.tractId || 'Main Parcel';
+                  pendingTractIdRef.current = tractId;
+                  pendingTractIdsRef.current = [tractId];
+                  pendingTractPobRef.current = null;
+                  setComputingTractIds(new Set([tractId]));
+                  const pageHint = singleTract.sourcePage != null ? ` (source page ${singleTract.sourcePage})` : '';
+                  const nameHint = singleTract.tractName ? ` ("${singleTract.tractName}")` : '';
+                  logActionToFieldbook(`Single deed description detected (${tractId}) — automatically computing boundary geometry...`);
+                  setTimeout(() => {
+                    void handleSendMessageRef.current?.(
+                      `Extract ONLY ${tractId}${nameHint}${pageHint} from this deed. ` +
+                      `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${tractId}", points, lines }]) for this tract only. ` +
+                      `Do not include any other tract.`,
+                      AgentType.DEED_READER
+                    );
+                  }, 0);
+                }
               } catch (err) {
                 if (deedSummaryRequestRef.current !== summaryRequestId) return;
                 console.warn('[handleDeedSubmitted/replace] summarizeDeed threw:', err);
@@ -6016,8 +6037,25 @@ const AppContent = () => {
           if (summary.tracts.length > 0) {
             logActionToFieldbook(`Deed summary: detected ${summary.tracts.length} description(s) — ${summary.tracts.map(t => t.tractId).join(', ')}.`);
           }
-          // Summary-first: leave the deed summary card in chat and wait for
-          // the user to process the description (no auto-extraction).
+          if (summary.tracts.length === 1) {
+            const singleTract = summary.tracts[0];
+            const tractId = singleTract.tractId || 'Main Parcel';
+            pendingTractIdRef.current = tractId;
+            pendingTractIdsRef.current = [tractId];
+            pendingTractPobRef.current = null;
+            setComputingTractIds(new Set([tractId]));
+            const pageHint = singleTract.sourcePage != null ? ` (source page ${singleTract.sourcePage})` : '';
+            const nameHint = singleTract.tractName ? ` ("${singleTract.tractName}")` : '';
+            logActionToFieldbook(`Single deed description detected (${tractId}) — automatically computing boundary geometry...`);
+            setTimeout(() => {
+              void handleSendMessageRef.current?.(
+                `Extract ONLY ${tractId}${nameHint}${pageHint} from this deed. ` +
+                `Return JSON with points[] and lines[] (or boundaries: [{ tractId: "${tractId}", points, lines }]) for this tract only. ` +
+                `Do not include any other tract.`,
+                AgentType.DEED_READER
+              );
+            }, 0);
+          }
         } catch (err) {
           if (deedSummaryRequestRef.current !== summaryRequestId) return;
           console.warn('[handleDeedSubmitted] summarizeDeed threw:', err);
@@ -6874,7 +6912,7 @@ const AppContent = () => {
     if (!standardsComplianceSubjectFile) return null;
     const subjectImages = standardsComplianceSubjectFile.rasterImageData;
     if (!subjectImages || subjectImages.length === 0) return null;
-    if (!settings.userApiKey) return null;
+    if (!settings.userApiKey && isOssBuild()) return null;
 
     const ctx = computeStandardsAuditContext(mode);
     const model = getModelForAgent(AgentType.STANDARDS_COMPLIANCE, activeModel);
@@ -16312,10 +16350,11 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
       const visibleLastMsg = lsvzChatHistory.length > 0
         ? lsvzChatHistory[lsvzChatHistory.length - 1]
         : null;
+      const intakeOpts = { hasDeedLoaded: Boolean(deedFile) };
       const a2uiResolution =
-        classifyA2UIIntakeReply(query, effectiveIntakeAgent, specialistLastMsg) ??
+        classifyA2UIIntakeReply(query, effectiveIntakeAgent, specialistLastMsg, intakeOpts) ??
         (visibleLastMsg && visibleLastMsg !== specialistLastMsg
-          ? classifyA2UIIntakeReply(query, effectiveIntakeAgent, visibleLastMsg)
+          ? classifyA2UIIntakeReply(query, effectiveIntakeAgent, visibleLastMsg, intakeOpts)
           : null);
 
       if (a2uiResolution && intakeSetHistory) {
@@ -17921,8 +17960,10 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     const effectiveActiveAgent = identity.behaviorAgent;
     const calledInAgent = identity.calledInAgent;
     const lastRelayAgent = [...lsvzChatHistory].reverse().find(message => message.relay)?.relay?.agent ?? null;
+    const hasDrafterPdfPlans =
+      calledInAgent === AgentType.CIVIL_DRAFTER && Boolean(planFiles && planFiles.length > 0);
     const relayTurn = !agentOverride && !forcedAgent && !!calledInAgent
-      && shouldRelayToCalledIn(query, calledInAgent, lastRelayAgent);
+      && (hasDrafterPdfPlans || shouldRelayToCalledIn(query, calledInAgent, lastRelayAgent));
     const agent = agentOverride ?? forcedAgent ?? (relayTurn ? calledInAgent! : AgentType.LSVZ_AGENT);
     const isRelayTurn = relayTurn && !agentOverride && !forcedAgent && agent !== AgentType.LSVZ_AGENT;
     let chat: Chat | null = null;
@@ -18249,7 +18290,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
         query.includes('**STAGE ') ||
         pendingAutoDraftImagesRef.current.length > 0;
       const isLoadedDocumentTurn =
-        (agent === AgentType.CIVIL_PLAN_EXPERT && Boolean(planFiles && planFiles.length > 0)) ||
+        ((agent === AgentType.CIVIL_PLAN_EXPERT || agent === AgentType.CIVIL_DRAFTER) && Boolean(planFiles && planFiles.length > 0)) ||
         (agent === AgentType.DEED_READER && Boolean(deedFile));
       const handoff = agent !== AgentType.LSVZ_AGENT && !isAutoDraftTurn && !isLoadedDocumentTurn
         ? resolveIntentHandoff(query, agent)
@@ -27469,6 +27510,12 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
     setIsNewProjectPromptOpen(false);
     setIsSavingBeforeNewProject(false);
     setIsSessionSaveModalOpen(false);
+    // An explicit New Project must also drop the trial autosave. Otherwise the
+    // next Free CAD entry (or a reload inside the 2s debounce) restores the
+    // project the user just discarded, and a pending save can re-write the
+    // pre-reset snapshot after the canvas is already blank.
+    cancelScheduledFreeCadDraftSave();
+    clearFreeCadDraft();
     handleReset();
   }, [handleReset]);
 
@@ -34981,11 +35028,7 @@ Ask me about permitted uses, setbacks, height limits, or overlay districts.`;
                 }
 
                 const frontendUrl = window.location.origin;
-                const backendUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-                  ? '/api'
-                  : 'https://landsurv-backend-237999774959.us-west1.run.app';
-                
-                const fullUrl = `${backendUrl}/api/billing/purchase-credits`;
+                const fullUrl = `/api/billing/purchase-credits`;
                 
                 const resp = await fetch(fullUrl, {
                   method: 'POST',

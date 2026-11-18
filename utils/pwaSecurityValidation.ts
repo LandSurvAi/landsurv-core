@@ -79,8 +79,12 @@ export const validateHTTPSEnforcement = (): boolean => {
  */
 export const validateOfflineFallback = async (): Promise<boolean> => {
   try {
-    const cache = await caches.open('landsurv-shell-v1.37.0');
-    const offlinePage = await cache.match('/offline.html');
+    // Cache names are versioned by public/sw.js; find the current shell cache
+    // instead of pinning a version that a later release renames.
+    const cacheNames = await caches.keys();
+    const shellCacheName = cacheNames.find((name) => name.startsWith('landsurv-shell-'));
+    const cache = shellCacheName ? await caches.open(shellCacheName) : null;
+    const offlinePage = cache ? await cache.match('/offline.html') : null;
 
     if (!offlinePage) {
       console.warn('[PWA] Offline fallback page not found in cache.');

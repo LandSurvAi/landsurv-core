@@ -206,7 +206,8 @@ const _loadPdfAndExtractText = async (
   pdf: pdfjsLib.PDFDocumentProxy,
   onProgress: ProgressCallback,
   pageNumbers?: number[],
-  languages: string = getOcrLanguages()
+  languages: string = getOcrLanguages(),
+  allowOcrFailureFallback = false,
 ): Promise<{ text: string; usedOcr: boolean; ocrConfidence: number | null }> => {
     onProgress({ status: 'extracting_text' });
     let allText = '';
@@ -224,9 +225,14 @@ const _loadPdfAndExtractText = async (
     }
     if (allText.trim().length < 100) { 
         usedOcr = true;
-        const ocr = await performOcrOnPdfPages(pdf, onProgress, pageNumbers, languages);
-        allText = ocr.text;
-        ocrConfidence = ocr.confidence;
+        try {
+            const ocr = await performOcrOnPdfPages(pdf, onProgress, pageNumbers, languages);
+            allText = ocr.text;
+            ocrConfidence = ocr.confidence;
+        } catch (ocrErr) {
+            if (!allowOcrFailureFallback) throw ocrErr;
+            console.warn('[pdfUtils] OCR fallback failed; proceeding with rasterized page images for multimodal vision.', ocrErr);
+        }
     }
     return { text: allText, usedOcr, ocrConfidence };
 };
@@ -263,7 +269,7 @@ export const processPdfForMultimodal = async (
     const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, ...PDFJS_DOCUMENT_OPTIONS });
     const pdf = await loadingTask.promise;
 
-    const { text, usedOcr, ocrConfidence } = await _loadPdfAndExtractText(pdf, onProgress, pageNumbers, languages);
+    const { text, usedOcr, ocrConfidence } = await _loadPdfAndExtractText(pdf, onProgress, pageNumbers, languages, true);
 
     const pagesToProcess = pageNumbers || Array.from({ length: pdf.numPages }, (_, i) => i + 1);
     console.log('=== PAGE PROCESSING DECISION ===');

@@ -41,20 +41,30 @@ const STREAM_ENDPOINT = '/api/demo/gemini/stream';
  */
 async function proxyHeaders(apiKey: string): Promise<Record<string, string>> {
   const key = apiKey.trim();
+  let deviceId = '';
+  if (!key || isFreeCadMode()) {
+    try {
+      deviceId = (await getDeviceFingerprint()).id;
+    } catch {
+      deviceId = '';
+    }
+  }
+
   const trialHeaders: Record<string, string> = {};
   if (isFreeCadMode()) {
-    trialHeaders['x-landsurv-app-mode'] = 'free';
     const turn = getActiveTrialTurnId();
-    if (turn) trialHeaders['x-landsurv-trial-turn'] = turn;
+    // The backend hard-rejects `x-landsurv-app-mode: free` without a live trial
+    // turn (HTTP 402). Internal agent follow-ups and single-shot support helpers
+    // run without one, so only declare free mode when we hold a turn; otherwise
+    // the request falls through to the device free tier below.
+    if (turn) {
+      trialHeaders['x-landsurv-app-mode'] = 'free';
+      trialHeaders['x-landsurv-trial-turn'] = turn;
+      if (deviceId) trialHeaders['x-landsurv-device'] = deviceId;
+    }
   }
   if (key) {
     return { 'Content-Type': 'application/json', ...trialHeaders, Authorization: `Bearer ${key}` };
-  }
-  let deviceId = '';
-  try {
-    deviceId = (await getDeviceFingerprint()).id;
-  } catch {
-    deviceId = '';
   }
   return {
     'Content-Type': 'application/json',
@@ -79,7 +89,11 @@ function describeProxyError(status: number, errText: string): string {
   return `Demo Gemini proxy error (${status}): ${errText}`;
 }
 
-async function postProxy(url: string, apiKey: string, body: unknown): Promise<Response> {
+async function postProxy(
+  url: string,
+  apiKey: string,
+  body: unknown,
+): Promise<Response> {
   let response = await fetch(url, {
     method: 'POST',
     headers: await proxyHeaders(apiKey),
